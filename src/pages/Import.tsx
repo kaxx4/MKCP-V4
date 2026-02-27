@@ -5,10 +5,11 @@ import clsx from "clsx";
 import { parseMasters } from "../parser/masterParser";
 import { parseTransactions } from "../parser/transactionParser";
 import { useDataStore } from "../store/dataStore";
-import { saveData } from "../db/idb";
-import { serializeParsedData } from "../utils/serialize";
+import { saveData, loadData, createBackup, saveToStore, loadFromStore } from "../db/idb";
+import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
 import type { ParsedData, ImportWarning } from "../types/canonical";
 import { useToast } from "../components/Toast";
+import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
 
 interface ImportReport {
   items: number;
@@ -75,28 +76,33 @@ export default function ImportPage() {
   }
 
   async function runImport() {
-    if (!mastersFile || !txFile) {
-      toast("Please select both masters and transactions files", "warn");
+    if (!txFile) {
+      toast("Please select at least a transactions file", "warn");
       return;
     }
     setImporting(true);
     setDebugLog([]);
     try {
-      let mastersRaw: unknown;
+      let mastersRaw: unknown | null = null;
       let txRaw: unknown;
 
-      addLog(`Reading masters file: ${mastersFile.name} (${(mastersFile.size / 1024).toFixed(0)} KB)`);
-      // Handle UTF-16 encoded files (Tally Prime export)
-      try {
-        mastersRaw = JSON.parse(await mastersFile.text());
-        addLog("Masters file parsed (UTF-8)");
-      } catch {
-        addLog("UTF-8 failed, trying UTF-16...");
-        // Try UTF-16 via ArrayBuffer
-        const buf = await mastersFile.arrayBuffer();
-        const decoder = new TextDecoder("utf-16");
-        mastersRaw = JSON.parse(decoder.decode(buf));
-        addLog("Masters file parsed (UTF-16)");
+      // Parse masters file if provided
+      if (mastersFile) {
+        addLog(`Reading masters file: ${mastersFile.name} (${(mastersFile.size / 1024).toFixed(0)} KB)`);
+        // Handle UTF-16 encoded files (Tally Prime export)
+        try {
+          mastersRaw = JSON.parse(await mastersFile.text());
+          addLog("Masters file parsed (UTF-8)");
+        } catch {
+          addLog("UTF-8 failed, trying UTF-16...");
+          // Try UTF-16 via ArrayBuffer
+          const buf = await mastersFile.arrayBuffer();
+          const decoder = new TextDecoder("utf-16");
+          mastersRaw = JSON.parse(decoder.decode(buf));
+          addLog("Masters file parsed (UTF-16)");
+        }
+      } else {
+        addLog("No masters file — will use existing data");
       }
 
       addLog(`Reading transactions file: ${txFile.name} (${(txFile.size / 1024).toFixed(0)} KB)`);
@@ -111,7 +117,8 @@ export default function ImportPage() {
         addLog("Transactions file parsed (UTF-16)");
       }
 
-      await runImportFromParsed(mastersRaw, txRaw, [mastersFile.name, txFile.name]);
+      const sourceFiles = mastersFile ? [mastersFile.name, txFile.name] : [txFile.name];
+      await runImportFromParsed(mastersRaw, txRaw, sourceFiles);
     } catch (e) {
       addLog(`ERROR: ${String(e)}`);
       toast(`Import failed: ${String(e)}`, "error");
@@ -120,10 +127,34 @@ export default function ImportPage() {
     }
   }
 
-  async function runImportFromParsed(mastersRaw: unknown, txRaw: unknown, sourceFiles: string[]) {
-    addLog("Parsing masters (items, ledgers)...");
-    const { company, items, ledgers, warnings: mw } = parseMasters(mastersRaw);
-    addLog(`Parsed ${items.size} items, ${ledgers.size} ledgers (${mw.length} warnings)`);
+  async function runImportFromParsed(mastersRaw: unknown | null, txRaw: unknown, sourceFiles: string[]) {
+    let items: Map<string, any>;
+    let ledgers: Map<string, any>;
+    let company: any | null = null;
+    let mw: ImportWarning[] = [];
+
+    if (mastersRaw) {
+      addLog("Parsing masters (items, ledgers)...");
+      const parsed = parseMasters(mastersRaw);
+      company = parsed.company;
+      items = parsed.items;
+      ledgers = parsed.ledgers;
+      mw = parsed.warnings;
+      addLog(`Parsed ${items.size} items, ${ledgers.size} ledgers (${mw.length} warnings)`);
+    } else {
+      addLog("No masters file — using existing data...");
+      const existingRaw = await loadData<unknown>("parsedData");
+      if (existingRaw) {
+        const existing = deserializeParsedData(existingRaw);
+        items = existing.items;
+        ledgers = existing.ledgers;
+        company = existing.company;
+        addLog(`Using existing: ${items.size} items, ${ledgers.size} ledgers`);
+      } else {
+        toast("No existing masters data found. Please upload a masters file.", "error");
+        throw new Error("No masters data available");
+      }
+    }
 
     addLog("Parsing transactions (vouchers)...");
     const { vouchers, warnings: tw } = parseTransactions(txRaw);
@@ -166,8 +197,50 @@ export default function ImportPage() {
 
   async function acceptData() {
     if (!pendingData) return;
+
+    // 1. Backup existing data before overwriting
+    const existingRaw = await loadData("parsedData");
+    if (existingRaw) {
+      const dateLabel = new Date().toISOString().slice(0, 10);
+      const backupKey = await createBackup(existingRaw, `pre-import_${dateLabel}`);
+      addLog(`Backup created: ${backupKey}`);
+    }
+
+    // 2. Load previous predictions for scoring
+    const prevSnapshot = await loadFromStore<PredictionSnapshot>("predictions", "latest");
+
+    // 3. Merge new data into store
     mergeData(pendingData);
+    const merged = useDataStore.getState().data!;
     await saveData("parsedData", serializeParsedData(pendingData));
+
+    // 4. Score previous predictions against new data
+    if (prevSnapshot && prevSnapshot.predictions.length > 0) {
+      const accuracy = scorePredictions(prevSnapshot.predictions, pendingData.vouchers, "Sales");
+      if (accuracy.length > 0) {
+        const avgDateScore = accuracy.reduce((s, a) => s + a.dateAccuracyScore, 0) / accuracy.length;
+        const avgItemScore = accuracy.reduce((s, a) => s + a.itemAccuracyScore, 0) / accuracy.length;
+
+        // Store accuracy results
+        const accuracyKey = `accuracy_${new Date().toISOString().slice(0, 10)}`;
+        await saveToStore("predictions", accuracyKey, accuracy);
+
+        addLog(`Prediction accuracy: dates ${(avgDateScore * 100).toFixed(0)}%, items ${(avgItemScore * 100).toFixed(0)}%`);
+        toast(
+          `Prediction accuracy: dates ${(avgDateScore * 100).toFixed(0)}%, items ${(avgItemScore * 100).toFixed(0)}%`,
+          avgDateScore > 0.5 ? "success" : "warn"
+        );
+      }
+    }
+
+    // 5. Generate fresh predictions with all data and save
+    const freshPredictions = generatePredictions(merged.vouchers, merged.items, "Sales");
+    await saveToStore("predictions", "latest", {
+      generatedAt: new Date().toISOString(),
+      predictions: freshPredictions,
+    });
+    addLog(`Generated ${freshPredictions.length} fresh predictions`);
+
     toast(`Imported ${report!.items} items, ${report!.ledgers} ledgers, ${report!.vouchers} vouchers`, "success");
     navigate("/orders");
   }
@@ -196,8 +269,8 @@ export default function ImportPage() {
         <DropZoneCard
           zone="masters"
           file={mastersFile}
-          label="masters.json"
-          subtitle="Stock items + Ledgers"
+          label="masters.json (Optional)"
+          subtitle={mastersFile ? "Stock items + Ledgers" : "Optional — uses existing if skipped"}
           dragOver={dragOver === "masters"}
           onDrop={(e) => handleDrop("masters", e)}
           onDragOver={(e) => { e.preventDefault(); setDragOver("masters"); }}
@@ -221,7 +294,7 @@ export default function ImportPage() {
       <div className="flex gap-3 mb-6">
         <button
           onClick={runImport}
-          disabled={!mastersFile || !txFile || importing}
+          disabled={!txFile || importing}
           className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-5 py-2.5 rounded-lg transition"
         >
           {importing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}

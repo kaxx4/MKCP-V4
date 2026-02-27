@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Search, Plus, Minus, Trash2, Download, X, Upload, Package } from "lucide-react";
 import Fuse from "fuse.js";
 import * as XLSX from "xlsx";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ResponsiveContainer,
   BarChart,
@@ -17,7 +18,7 @@ import {
 import { useDataStore } from "../store/dataStore";
 import { useUIStore } from "../store/uiStore";
 import { useOrderStore } from "../store/orderStore";
-import { getCurrentStock, computeMonthlyBuckets, suggestedReorder } from "../engine/inventory";
+import { getCurrentStock, computeMonthlyBuckets, suggestedReorder, buildVoucherIndex } from "../engine/inventory";
 import { toDisplay, fromDisplay } from "../engine/unitEngine";
 import { UnitToggle } from "../components/UnitToggle";
 import { fmtNum } from "../utils/format";
@@ -31,12 +32,22 @@ export default function Orders() {
   const { lines: orderLines, setLine, removeLine, clearAll, getAllLines } = useOrderStore();
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("ALL");
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [orderQty, setOrderQty] = useState("");
+  const [focusedItemId, setFocusedItemId] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const qtyRef = useRef<HTMLInputElement>(null);
+  const orderInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 150);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -73,16 +84,32 @@ export default function Orders() {
     [allItems]
   );
 
+  // Build voucher index for O(V_item) instead of O(V) lookup
+  const voucherIndex = useMemo(() => {
+    if (!data) return new Map();
+    return buildVoucherIndex(data.vouchers);
+  }, [data]);
+
+  // Cache stock calculations for all items
+  const stockCache = useMemo(() => {
+    if (!data) return new Map<string, number>();
+    const cache = new Map<string, number>();
+    for (const item of allItems) {
+      cache.set(item.itemId, getCurrentStock(item, data.vouchers));
+    }
+    return cache;
+  }, [data, allItems]);
+
   const filteredItems = useMemo(() => {
     let result = allItems;
     if (groupFilter !== "ALL") result = result.filter((i) => i.group === groupFilter);
-    if (search.trim()) {
-      const searchResult = fuse.search(search.trim());
+    if (debouncedSearch.trim()) {
+      const searchResult = fuse.search(debouncedSearch.trim());
       const ids = new Set(searchResult.map((r) => r.item.itemId));
       result = result.filter((i) => ids.has(i.itemId));
     }
     return result;
-  }, [allItems, search, groupFilter, fuse]);
+  }, [allItems, debouncedSearch, groupFilter, fuse]);
 
   const selectedItem = useMemo(
     () => (selectedItemId ? data?.items.get(selectedItemId) ?? null : null),
@@ -134,6 +161,67 @@ export default function Orders() {
       ratePerBase: 0,
     });
     setOrderQty("");
+  }
+
+  function updateOrderLine(itemId: string, value: string) {
+    const item = data?.items.get(itemId);
+    if (!item) return;
+
+    const displayVal = parseFloat(value) || 0;
+    if (displayVal <= 0) {
+      removeLine(itemId);
+      return;
+    }
+
+    const qtyBase = fromDisplay(item, displayVal, unitMode);
+    setLine(itemId, {
+      itemId,
+      itemName: item.name,
+      baseUnit: item.baseUnit,
+      pkgUnit: item.pkgUnit,
+      unitsPerPkg: item.unitsPerPkg,
+      qtyBase,
+      ratePerBase: 0,
+    });
+  }
+
+  function handleOrderInputKeyDown(e: React.KeyboardEvent, itemId: string, items: CanonicalItem[]) {
+    const currentIdx = items.findIndex(i => i.itemId === itemId);
+
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const nextItem = items[currentIdx + 1];
+      if (nextItem) {
+        const nextInput = orderInputRefs.current[nextItem.itemId];
+        if (nextInput) {
+          nextInput.focus();
+          nextInput.select();
+          setFocusedItemId(nextItem.itemId);
+        }
+      }
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const nextItem = items[currentIdx + 1];
+      if (nextItem) {
+        const nextInput = orderInputRefs.current[nextItem.itemId];
+        if (nextInput) {
+          nextInput.focus();
+          nextInput.select();
+          setFocusedItemId(nextItem.itemId);
+        }
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const prevItem = items[currentIdx - 1];
+      if (prevItem) {
+        const prevInput = orderInputRefs.current[prevItem.itemId];
+        if (prevInput) {
+          prevInput.focus();
+          prevInput.select();
+          setFocusedItemId(prevItem.itemId);
+        }
+      }
+    }
   }
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent, items: CanonicalItem[]) => {
@@ -210,6 +298,22 @@ export default function Orders() {
 
   const orderLinesList = getAllLines();
 
+  // Track focused item for graph
+  const focusedItem = useMemo(() => {
+    if (!focusedItemId) return selectedItem;
+    return data?.items.get(focusedItemId) ?? selectedItem;
+  }, [focusedItemId, selectedItem, data]);
+
+  const focusedStock = useMemo(() => {
+    if (!focusedItem || !data) return 0;
+    return getCurrentStock(focusedItem, data.vouchers);
+  }, [focusedItem, data]);
+
+  const focusedMonthlyBuckets = useMemo(() => {
+    if (!focusedItem || !data) return [];
+    return computeMonthlyBuckets(focusedItem, data.vouchers, 8);
+  }, [focusedItem, data]);
+
   return (
     <div className="flex flex-col h-[calc(100vh-112px)] gap-0">
       {/* Top 3-panel area */}
@@ -238,58 +342,79 @@ export default function Orders() {
               ))}
             </select>
           </div>
-          <div className="flex-1 overflow-y-auto">
-            {filteredItems.map((item) => {
-              const stock = getCurrentStock(item, data.vouchers);
-              const isSelected = item.itemId === selectedItemId;
-              const inOrder = !!orderLines[item.itemId];
-              const stockDisp = toDisplay(item, stock, unitMode);
+          <div ref={parentRef} className="flex-1 overflow-y-auto">
+            {(() => {
+              const virtualizer = useVirtualizer({
+                count: filteredItems.length,
+                getScrollElement: () => parentRef.current,
+                estimateSize: () => 58,
+                overscan: 15,
+              });
+
               return (
-                <div
-                  key={item.itemId}
-                  onClick={() => selectItem(item)}
-                  className={clsx(
-                    "px-3 py-2.5 cursor-pointer border-b border-bg-border/50 transition-colors",
-                    isSelected ? "bg-accent/15 border-l-2 border-l-accent" : "hover:bg-bg-border/30"
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-1">
-                    <span className={clsx("text-xs font-sans truncate", isSelected ? "text-accent font-medium" : "text-primary")}>
-                      {item.name}
-                    </span>
-                    {inOrder && <span className="text-accent text-xs">●</span>}
-                  </div>
-                  <div className="flex items-center justify-between mt-0.5">
-                    <span className="text-muted text-xs truncate">{item.group}</span>
-                    <span className={clsx("text-xs font-mono", getStockColor(item, stock))}>
-                      {stockDisp.formatted}
-                    </span>
-                  </div>
+                <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
+                  {virtualizer.getVirtualItems().map((virtualRow) => {
+                    const item = filteredItems[virtualRow.index];
+                    const stock = stockCache.get(item.itemId) ?? 0;
+                    const isSelected = item.itemId === selectedItemId;
+                    const inOrder = !!orderLines[item.itemId];
+                    const stockDisp = toDisplay(item, stock, unitMode);
+                    return (
+                      <div
+                        key={item.itemId}
+                        onClick={() => selectItem(item)}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                        className={clsx(
+                          "px-3 py-2.5 cursor-pointer border-b border-bg-border/50 transition-colors",
+                          isSelected ? "bg-accent/15 border-l-2 border-l-accent" : "hover:bg-bg-border/30"
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className={clsx("text-sm font-sans truncate", isSelected ? "text-accent font-medium" : "text-primary")}>
+                            {item.name}
+                          </span>
+                          {inOrder && <span className="text-accent text-xs">●</span>}
+                        </div>
+                        <div className="flex items-center justify-between mt-0.5">
+                          <span className="text-muted text-sm truncate">{item.group}</span>
+                          <span className={clsx("text-sm font-mono", getStockColor(item, stock))}>
+                            {stockDisp.formatted}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               );
-            })}
+            })()}
           </div>
         </div>
 
-        {/* CENTER: Item Detail */}
+        {/* CENTER: Item Detail & Graph */}
         <div className="flex-1 flex flex-col bg-bg min-h-0">
-          {selectedItem ? (
+          {focusedItem ? (
             <div className="p-4 flex flex-col gap-4 overflow-y-auto">
               <div>
-                <h2 className="text-lg font-bold text-primary leading-tight">{selectedItem.name}</h2>
-                <div className="text-muted text-xs mt-0.5">{selectedItem.group} · {selectedItem.baseUnit}{selectedItem.pkgUnit ? ` · ${selectedItem.unitsPerPkg}/${selectedItem.pkgUnit}` : ""}</div>
+                <h2 className="text-lg font-bold text-primary leading-tight">{focusedItem.name}</h2>
+                <div className="text-muted text-xs mt-0.5">{focusedItem.group} · {focusedItem.baseUnit}{focusedItem.pkgUnit ? ` · ${focusedItem.unitsPerPkg}/${focusedItem.pkgUnit}` : ""}</div>
               </div>
 
               {/* Mini KPIs */}
-              {monthlyBuckets.length > 0 && (() => {
-                const last = monthlyBuckets[monthlyBuckets.length - 1]!;
+              {focusedMonthlyBuckets.length > 0 && (() => {
+                const last = focusedMonthlyBuckets[focusedMonthlyBuckets.length - 1]!;
                 return (
                   <div className="grid grid-cols-4 gap-2">
                     {[
-                      { label: "Opening", val: toDisplay(selectedItem, last.openingQtyBase, unitMode).formatted, color: "text-muted" },
-                      { label: "In", val: toDisplay(selectedItem, last.inwardsBase, unitMode).formatted, color: "text-success" },
-                      { label: "Out", val: toDisplay(selectedItem, last.outwardsBase, unitMode).formatted, color: "text-danger" },
-                      { label: "Closing", val: toDisplay(selectedItem, currentStock, unitMode).formatted, color: currentStock <= 0 ? "text-danger" : "text-primary" },
+                      { label: "Opening", val: toDisplay(focusedItem, last.openingQtyBase, unitMode).formatted, color: "text-muted" },
+                      { label: "In", val: toDisplay(focusedItem, last.inwardsBase, unitMode).formatted, color: "text-success" },
+                      { label: "Out", val: toDisplay(focusedItem, last.outwardsBase, unitMode).formatted, color: "text-danger" },
+                      { label: "Closing", val: toDisplay(focusedItem, focusedStock, unitMode).formatted, color: focusedStock <= 0 ? "text-danger" : "text-primary" },
                     ].map(({ label, val, color }) => (
                       <div key={label} className="bg-bg-card border border-bg-border rounded-lg p-2 text-center">
                         <div className={`text-sm font-mono font-semibold ${color}`}>{val}</div>
@@ -300,16 +425,42 @@ export default function Orders() {
                 );
               })()}
 
+              {/* Monthly data table */}
+              {focusedMonthlyBuckets.length > 0 && (
+                <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-bg-border">
+                        {["Month", "Opening", "In", "Out", "Closing"].map((h) => (
+                          <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {focusedMonthlyBuckets.map((b) => (
+                        <tr key={b.yearMonth} className="border-b border-bg-border/50">
+                          <td className="px-3 py-1.5 text-muted">{b.label}</td>
+                          <td className="px-3 py-1.5 font-mono text-primary">{toDisplay(focusedItem, b.openingQtyBase, unitMode).formatted}</td>
+                          <td className="px-3 py-1.5 font-mono text-success">{toDisplay(focusedItem, b.inwardsBase, unitMode).formatted}</td>
+                          <td className="px-3 py-1.5 font-mono text-danger">{toDisplay(focusedItem, b.outwardsBase, unitMode).formatted}</td>
+                          <td className="px-3 py-1.5 font-mono text-primary font-semibold">{toDisplay(focusedItem, b.closingQtyBase, unitMode).formatted}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
               {/* Chart */}
-              {monthlyBuckets.length > 0 && (
+              {focusedMonthlyBuckets.length > 0 && (
                 <div className="bg-bg-card border border-bg-border rounded-xl p-3">
                   <div className="text-xs text-muted mb-2 font-medium">8-Month History</div>
                   <ResponsiveContainer width="100%" height={180}>
-                    <ComposedChart data={monthlyBuckets.map((b) => ({
+                    <ComposedChart data={focusedMonthlyBuckets.map((b) => ({
                       label: b.label,
-                      in: toDisplay(selectedItem, b.inwardsBase, unitMode).value,
-                      out: toDisplay(selectedItem, b.outwardsBase, unitMode).value,
-                      closing: toDisplay(selectedItem, b.closingQtyBase, unitMode).value,
+                      in: toDisplay(focusedItem, b.inwardsBase, unitMode).value,
+                      out: toDisplay(focusedItem, b.outwardsBase, unitMode).value,
+                      closing: toDisplay(focusedItem, b.closingQtyBase, unitMode).value,
                     }))}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} />
@@ -326,32 +477,6 @@ export default function Orders() {
                 </div>
               )}
 
-              {/* Monthly data table */}
-              {monthlyBuckets.length > 0 && (
-                <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-bg-border">
-                        {["Month", "Opening", "In", "Out", "Closing"].map((h) => (
-                          <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {monthlyBuckets.map((b) => (
-                        <tr key={b.yearMonth} className="border-b border-bg-border/50">
-                          <td className="px-3 py-1.5 text-muted">{b.label}</td>
-                          <td className="px-3 py-1.5 font-mono text-primary">{toDisplay(selectedItem, b.openingQtyBase, unitMode).formatted}</td>
-                          <td className="px-3 py-1.5 font-mono text-success">{toDisplay(selectedItem, b.inwardsBase, unitMode).formatted}</td>
-                          <td className="px-3 py-1.5 font-mono text-danger">{toDisplay(selectedItem, b.outwardsBase, unitMode).formatted}</td>
-                          <td className="px-3 py-1.5 font-mono text-primary font-semibold">{toDisplay(selectedItem, b.closingQtyBase, unitMode).formatted}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
             </div>
           ) : (
             <div className="flex items-center justify-center h-full text-muted text-sm">
@@ -360,146 +485,84 @@ export default function Orders() {
           )}
         </div>
 
-        {/* RIGHT: Order Editor & Summary */}
+        {/* RIGHT: Order Entry (All Items) */}
         <div className="w-[28%] flex flex-col border-l border-bg-border bg-bg-card min-h-0">
-          {/* Order Entry - Top */}
-          <div className="p-4 border-b border-bg-border">
-            <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
+            <div className="flex items-center gap-3">
               <span className="text-sm font-semibold text-primary">Order Entry</span>
+              <span className="text-xs text-muted font-mono">{orderLinesList.length} items</span>
+            </div>
+            <div className="flex gap-2">
               <UnitToggle />
+              <button onClick={exportCSV} className="flex items-center gap-1.5 text-xs bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-2 py-1.5 rounded-lg transition">
+                <Download size={12} />
+              </button>
+              <button onClick={exportXLSX} className="flex items-center gap-1.5 text-xs bg-accent hover:bg-accent-hover text-white px-2 py-1.5 rounded-lg transition">
+                <Download size={12} />
+              </button>
+              <button onClick={clearAll} className="text-xs bg-danger/20 hover:bg-danger/30 text-danger px-2 py-1.5 rounded-lg transition">
+                <Trash2 size={12} />
+              </button>
             </div>
-            {selectedItem ? (
-              <div className="space-y-3">
-                <div className="text-xs text-primary font-medium truncate">{selectedItem.name}</div>
-                <div className="text-xs text-muted">
-                  Stock: <span className={clsx("font-mono", currentStock <= 0 ? "text-danger" : "text-success")}>
-                    {toDisplay(selectedItem, currentStock, unitMode).formatted}
-                  </span>
-                </div>
-                {suggested > 0 && (
-                  <div className="text-xs text-muted">
-                    Suggested: <button
-                      onClick={() => setOrderQty(String(toDisplay(selectedItem, suggested, unitMode).value))}
-                      className="text-accent font-mono hover:underline"
-                    >
-                      {toDisplay(selectedItem, suggested, unitMode).formatted}
-                    </button>
-                  </div>
-                )}
-
-                {/* Qty input */}
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      const v = Math.max(0, (parseFloat(orderQty) || 0) - 1);
-                      setOrderQty(String(v));
-                    }}
-                    className="bg-bg border border-bg-border rounded p-1.5 text-muted hover:text-primary"
-                  >
-                    <Minus size={14} />
-                  </button>
-                  <input
-                    ref={qtyRef}
-                    value={orderQty}
-                    onChange={(e) => setOrderQty(e.target.value)}
-                    onKeyDown={(e) => {
-                      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") addToOrder();
-                    }}
-                    placeholder="Qty"
-                    className="flex-1 bg-bg border border-bg-border rounded-lg px-3 py-2 text-primary font-mono text-sm text-center outline-none focus:border-accent/60"
-                  />
-                  <button
-                    onClick={() => setOrderQty(String((parseFloat(orderQty) || 0) + 1))}
-                    className="bg-bg border border-bg-border rounded p-1.5 text-muted hover:text-primary"
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-
-                {/* Preview */}
-                {orderQty && parseFloat(orderQty) > 0 && (
-                  <div className="text-xs text-muted bg-bg rounded-lg p-2 font-mono">
-                    {(() => {
-                      const dv = parseFloat(orderQty) || 0;
-                      const baseQty = fromDisplay(selectedItem, dv, unitMode);
-                      const altMode = unitMode === "BASE" ? "PKG" : "BASE";
-                      const altDisp = toDisplay(selectedItem, baseQty, altMode);
-                      return (
-                        <>
-                          <div className="text-primary">{fmtNum(dv)} {toDisplay(selectedItem, baseQty, unitMode).label}</div>
-                          {selectedItem.pkgUnit && <div className="text-accent">= {altDisp.formatted}</div>}
-                        </>
-                      );
-                    })()}
-                  </div>
-                )}
-
-                <button
-                  onClick={addToOrder}
-                  disabled={!orderQty || parseFloat(orderQty) <= 0}
-                  className="w-full bg-accent hover:bg-accent-hover disabled:opacity-50 text-white font-semibold py-2 rounded-lg transition text-sm flex items-center justify-center gap-2"
-                >
-                  <Plus size={14} />
-                  {orderLines[selectedItem.itemId] ? "Update Order" : "Add to Order"}
-                </button>
-              </div>
-            ) : (
-              <div className="text-muted text-xs text-center py-8">Select an item first</div>
-            )}
           </div>
-
-          {/* Order Summary - Bottom */}
-          {orderLinesList.length > 0 && (
-            <div className="flex-1 flex flex-col min-h-0 border-t border-bg-border">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-semibold text-primary">Order Summary</span>
-                  <span className="text-xs text-muted font-mono">{orderLinesList.length} items</span>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={exportCSV} className="flex items-center gap-1.5 text-xs bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-2 py-1.5 rounded-lg transition">
-                    <Download size={12} />
-                  </button>
-                  <button onClick={exportXLSX} className="flex items-center gap-1.5 text-xs bg-accent hover:bg-accent-hover text-white px-2 py-1.5 rounded-lg transition">
-                    <Download size={12} />
-                  </button>
-                  <button onClick={clearAll} className="text-xs bg-danger/20 hover:bg-danger/30 text-danger px-2 py-1.5 rounded-lg transition">
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto min-h-0">
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-bg-card">
-                    <tr className="border-b border-bg-border">
-                      {["Item", "Qty", ""].map((h) => (
-                        <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>
-                      ))}
+          <div className="flex-1 overflow-y-auto min-h-0">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                <tr>
+                  <th className="text-left text-muted px-3 py-2 font-medium">Item</th>
+                  <th className="text-left text-muted px-3 py-2 font-medium w-24">Order Qty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredItems.map((item) => {
+                  const orderLine = orderLines[item.itemId];
+                  const orderQtyValue = orderLine ? toDisplay(item, orderLine.qtyBase, unitMode).value : 0;
+                  const hasOrder = orderQtyValue > 0;
+                  return (
+                    <tr
+                      key={item.itemId}
+                      className={clsx(
+                        "border-b border-bg-border/50 hover:bg-bg-border/20 transition-colors",
+                        focusedItemId === item.itemId && "bg-accent/10"
+                      )}
+                    >
+                      <td className="px-3 py-2 text-primary truncate max-w-[140px]" title={item.name}>
+                        {item.name}
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          ref={(el) => orderInputRefs.current[item.itemId] = el}
+                          type="text"
+                          inputMode="decimal"
+                          value={orderQtyValue || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            updateOrderLine(item.itemId, val);
+                          }}
+                          onFocus={() => {
+                            setFocusedItemId(item.itemId);
+                            setSelectedItemId(item.itemId);
+                          }}
+                          onBlur={() => {
+                            if (focusedItemId === item.itemId) {
+                              // Small delay to allow navigation
+                              setTimeout(() => setFocusedItemId(null), 100);
+                            }
+                          }}
+                          onKeyDown={(e) => handleOrderInputKeyDown(e, item.itemId, filteredItems)}
+                          placeholder="0"
+                          className={clsx(
+                            "w-full bg-bg border border-bg-border rounded px-2 py-1 font-mono text-sm text-center outline-none focus:border-accent/60 transition-all",
+                            hasOrder ? "font-bold text-accent" : "text-muted"
+                          )}
+                        />
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {orderLinesList.map((line) => {
-                      const item = data.items.get(line.itemId);
-                      const disp = toDisplay(item ?? null, line.qtyBase, unitMode);
-                      return (
-                        <tr key={line.itemId} className="border-b border-bg-border/50 hover:bg-bg-border/20">
-                          <td className="px-3 py-2 text-primary truncate max-w-[140px]" title={line.itemName}>{line.itemName}</td>
-                          <td className="px-3 py-2 font-mono text-primary text-xs">
-                            {fmtNum(disp.value, 2)} <span className="text-muted">{disp.label}</span>
-                          </td>
-                          <td className="px-3 py-2">
-                            <button onClick={() => removeLine(line.itemId)} className="text-muted hover:text-danger">
-                              <X size={12} />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>

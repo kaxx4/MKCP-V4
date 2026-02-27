@@ -1,11 +1,13 @@
-import { useState, useRef } from "react";
-import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw } from "lucide-react";
+import clsx from "clsx";
 import { useUIStore } from "../store/uiStore";
 import { useDataStore } from "../store/dataStore";
 import { useOverrideStore } from "../store/overrideStore";
-import { clearAllData } from "../db/idb";
+import { clearAllData, listBackups, loadBackup, deleteBackup, exportBackupAsJSON } from "../db/idb";
 import { useToast } from "../components/Toast";
 import { exportUnitsToExcel, importUnitsFromExcel } from "../utils/unitExcelHandler";
+import { deserializeParsedData } from "../utils/serialize";
 
 export default function Settings() {
   const { unitMode, toggleUnitMode, fyYear, setFyYear, coverMonths, setCoverMonths, leadTimeMonths, setLeadTimeMonths, defaultCreditDays, setDefaultCreditDays } = useUIStore();
@@ -14,7 +16,66 @@ export default function Settings() {
   const { toast } = useToast();
   const [confirmClear, setConfirmClear] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [backups, setBackups] = useState<Array<{ key: string; label: string; createdAt: string }>>([]);
+  const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load backups on mount
+  useEffect(() => {
+    loadBackupsList();
+  }, []);
+
+  async function loadBackupsList() {
+    const list = await listBackups();
+    setBackups(list);
+  }
+
+  async function handleRestoreBackup(key: string) {
+    if (confirmRestore !== key) {
+      setConfirmRestore(key);
+      return;
+    }
+
+    try {
+      const backupData = await loadBackup(key);
+      if (!backupData) {
+        toast("Backup not found", "error");
+        return;
+      }
+
+      const parsedData = deserializeParsedData(backupData);
+      clearData();
+      useDataStore.getState().setData(parsedData);
+
+      toast("Backup restored successfully", "success");
+      setConfirmRestore(null);
+    } catch (err) {
+      toast(`Restore failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    }
+  }
+
+  async function handleDownloadBackup(key: string) {
+    try {
+      const blob = await exportBackupAsJSON(key);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${key}.json`;
+      a.click();
+      toast("Backup downloaded", "success");
+    } catch (err) {
+      toast(`Download failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    }
+  }
+
+  async function handleDeleteBackup(key: string) {
+    try {
+      await deleteBackup(key);
+      await loadBackupsList();
+      toast("Backup deleted", "info");
+    } catch (err) {
+      toast(`Delete failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    }
+  }
 
   async function handleClearData() {
     if (!confirmClear) {
@@ -208,6 +269,73 @@ export default function Settings() {
           className="flex items-center gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-4 py-2 rounded-lg transition text-sm">
           <Download size={14} />Export Audit Log
         </button>
+      </Section>
+
+      {/* Backup Management */}
+      <Section title="Backup Management">
+        <div className="space-y-3">
+          <p className="text-xs text-muted">
+            Backups are created automatically before each import. You can restore, download, or delete them here.
+          </p>
+          {backups.length === 0 ? (
+            <p className="text-sm text-muted italic">No backups available</p>
+          ) : (
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {backups.map((backup) => (
+                <div
+                  key={backup.key}
+                  className="flex items-center justify-between bg-bg border border-bg-border rounded-lg p-3 text-sm"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Archive size={14} className="text-accent flex-shrink-0" />
+                      <span className="font-medium text-primary truncate">{backup.label}</span>
+                    </div>
+                    <p className="text-xs text-muted mt-1">
+                      {new Date(backup.createdAt).toLocaleString("en-IN", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 ml-4">
+                    <button
+                      onClick={() => handleRestoreBackup(backup.key)}
+                      className={clsx(
+                        "flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition",
+                        confirmRestore === backup.key
+                          ? "bg-success/20 border border-success text-success"
+                          : "bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary"
+                      )}
+                    >
+                      <RotateCcw size={12} />
+                      {confirmRestore === backup.key ? "Confirm?" : "Restore"}
+                    </button>
+                    <button
+                      onClick={() => handleDownloadBackup(backup.key)}
+                      className="flex items-center gap-1 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg text-xs transition"
+                    >
+                      <Download size={12} />
+                      Download
+                    </button>
+                    <button
+                      onClick={() => handleDeleteBackup(backup.key)}
+                      className="flex items-center gap-1 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger px-3 py-1.5 rounded-lg text-xs transition"
+                    >
+                      <Trash2 size={12} />
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {backups.length > 20 && (
+            <p className="text-xs text-warn">
+              You have {backups.length} backups. Consider deleting old ones to save space.
+            </p>
+          )}
+        </div>
       </Section>
 
       {/* Clear Data */}
