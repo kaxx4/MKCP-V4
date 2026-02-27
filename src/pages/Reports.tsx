@@ -4,8 +4,7 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line,
 } from "recharts";
 import { useDataStore } from "../store/dataStore";
-import { computeOutstandingInvoices } from "../engine/financial";
-import { getCurrentStock, computeMonthlyBuckets, getMonthRange } from "../engine/inventory";
+import { getCurrentStock } from "../engine/inventory";
 import { monthlyTotals } from "../engine/financial";
 import { toDisplay } from "../engine/unitEngine";
 import { useUIStore } from "../store/uiStore";
@@ -13,29 +12,15 @@ import { fmtINR, fmtNum } from "../utils/format";
 import { Upload, BarChart2 } from "lucide-react";
 import clsx from "clsx";
 
-const TABS = ["AR Aging", "AP Aging", "Inventory", "Sales Trend", "Top Items"] as const;
+const TABS = ["Inventory", "Sales Trend", "Top Items"] as const;
 type Tab = typeof TABS[number];
 
 export default function Reports() {
   const navigate = useNavigate();
   const { data } = useDataStore();
   const { unitMode } = useUIStore();
-  const [tab, setTab] = useState<Tab>("AR Aging");
+  const [tab, setTab] = useState<Tab>("Inventory");
 
-  const invoices = useMemo(() => {
-    if (!data) return [];
-    return computeOutstandingInvoices(data.vouchers, data.ledgers);
-  }, [data]);
-
-  const arAging = useMemo(() => {
-    const r = invoices.filter((i) => i.type === "receivable");
-    return buildAgingTable(r);
-  }, [invoices]);
-
-  const apAging = useMemo(() => {
-    const r = invoices.filter((i) => i.type === "payable");
-    return buildAgingTable(r);
-  }, [invoices]);
 
   const inventoryRows = useMemo(() => {
     if (!data) return [];
@@ -99,16 +84,6 @@ export default function Reports() {
         ))}
       </div>
 
-      {/* AR Aging */}
-      {tab === "AR Aging" && (
-        <AgingTable title="Accounts Receivable Aging" rows={arAging} />
-      )}
-
-      {/* AP Aging */}
-      {tab === "AP Aging" && (
-        <AgingTable title="Accounts Payable Aging" rows={apAging} />
-      )}
-
       {/* Inventory Valuation */}
       {tab === "Inventory" && (
         <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
@@ -158,7 +133,7 @@ export default function Reports() {
               <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
               <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
                 labelStyle={{ color: "#0f172a" }} formatter={(v: number) => [fmtINR(v), "Sales"]} />
-              <Line type="monotone" dataKey="amount" stroke="#f59e0b" strokeWidth={2} dot={{ fill: "#f59e0b", r: 3 }} />
+              <Line type="monotone" dataKey="amount" stroke="#3b82f6" strokeWidth={2} dot={{ fill: "#3b82f6", r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -202,71 +177,6 @@ export default function Reports() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function buildAgingTable(invoices: ReturnType<typeof computeOutstandingInvoices>) {
-  const parties: Record<string, { name: string; current: number; "1-30": number; "31-60": number; "61-90": number; "90+": number }> = {};
-  for (const inv of invoices) {
-    if (!parties[inv.partyLedgerId]) {
-      parties[inv.partyLedgerId] = { name: inv.partyName, current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
-    }
-    parties[inv.partyLedgerId]![inv.agingBucket] += inv.outstanding;
-  }
-  return Object.values(parties).sort((a, b) => {
-    const ta = a.current + a["1-30"] + a["31-60"] + a["61-90"] + a["90+"];
-    const tb = b.current + b["1-30"] + b["31-60"] + b["61-90"] + b["90+"];
-    return tb - ta;
-  });
-}
-
-function AgingTable({ title, rows }: { title: string; rows: ReturnType<typeof buildAgingTable> }) {
-  const buckets = ["current", "1-30", "31-60", "61-90", "90+"] as const;
-  const totals = { current: 0, "1-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
-  for (const r of rows) {
-    for (const b of buckets) totals[b] += r[b];
-  }
-  const grand = buckets.reduce((s, b) => s + totals[b], 0);
-
-  return (
-    <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-      <div className="px-4 py-3 border-b border-bg-border flex justify-between">
-        <h3 className="font-semibold text-primary">{title}</h3>
-        <span className="text-muted font-mono text-sm">Total: {fmtINR(grand)}</span>
-      </div>
-      <div className="overflow-auto max-h-[60vh]">
-        <table className="w-full text-xs">
-          <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
-            <tr>
-              <th className="text-left text-muted px-4 py-2 font-medium">Party</th>
-              {buckets.map((b) => <th key={b} className="text-right text-muted px-4 py-2 font-medium">{b}</th>)}
-              <th className="text-right text-muted px-4 py-2 font-medium">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, i) => {
-              const total = buckets.reduce((s, b) => s + row[b], 0);
-              return (
-                <tr key={i} className="border-b border-bg-border/50 hover:bg-bg-border/20">
-                  <td className="px-4 py-2 text-primary max-w-[200px] truncate">{row.name}</td>
-                  {buckets.map((b) => (
-                    <td key={b} className={clsx("px-4 py-2 font-mono text-right", row[b] > 0 ? (b === "current" ? "text-success" : b === "1-30" ? "text-warn" : "text-danger") : "text-muted")}>
-                      {row[b] > 0 ? fmtINR(row[b]) : "-"}
-                    </td>
-                  ))}
-                  <td className="px-4 py-2 font-mono font-semibold text-right text-primary">{fmtINR(total)}</td>
-                </tr>
-              );
-            })}
-            <tr className="border-t-2 border-bg-border bg-bg-border/20">
-              <td className="px-4 py-2 font-medium text-muted">TOTAL</td>
-              {buckets.map((b) => <td key={b} className="px-4 py-2 font-mono font-bold text-right text-primary">{fmtINR(totals[b])}</td>)}
-              <td className="px-4 py-2 font-mono font-bold text-right text-accent">{fmtINR(grand)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }

@@ -20,7 +20,6 @@ const NAV_ITEMS = [
   { path: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { path: "/orders", icon: ShoppingCart, label: "Orders" },
   { path: "/invoices", icon: FileText, label: "Invoices" },
-  { path: "/ledgers", icon: BookOpen, label: "Ledgers" },
   { path: "/reports", icon: BarChart2, label: "Reports" },
   { path: "/edit", icon: Pencil, label: "Edit Units" },
   { path: "/settings", icon: Settings, label: "Settings" },
