@@ -4,17 +4,17 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line,
 } from "recharts";
 import { useDataStore } from "../store/dataStore";
-import { getCurrentStock } from "../engine/inventory";
+import { getCurrentStock, computeItemTurnover, type ItemTurnoverData } from "../engine/inventory";
 import { monthlyTotals } from "../engine/financial";
 import { toDisplay } from "../engine/unitEngine";
 import { useUIStore } from "../store/uiStore";
 import { fmtINR, fmtNum } from "../utils/format";
-import { Upload, BarChart2, TrendingUp, ChevronDown, ChevronRight } from "lucide-react";
+import { Upload, BarChart2, TrendingUp, ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react";
 import clsx from "clsx";
 import { loadFromStore } from "../db/idb";
 import { generatePredictions, type PartyOrderPattern, type PredictionSnapshot, type PredictionAccuracy } from "../engine/prediction";
 
-const TABS = ["Inventory", "Sales Trend", "Top Items", "Predictions"] as const;
+const TABS = ["Inventory", "Sales Trend", "Top Items", "Turnover", "Predictions"] as const;
 type Tab = typeof TABS[number];
 
 export default function Reports() {
@@ -26,6 +26,10 @@ export default function Reports() {
   const [predictions, setPredictions] = useState<PartyOrderPattern[]>([]);
   const [expandedParty, setExpandedParty] = useState<string | null>(null);
   const [accuracyData, setAccuracyData] = useState<PredictionAccuracy[] | null>(null);
+  const [turnoverPeriod, setTurnoverPeriod] = useState<number>(12);
+  const [turnoverSort, setTurnoverSort] = useState<"ratio-desc" | "ratio-asc" | "doi-asc" | "doi-desc" | "cogs-desc" | "name">("ratio-desc");
+  const [turnoverGroupFilter, setTurnoverGroupFilter] = useState("ALL");
+  const [turnoverClassFilter, setTurnoverClassFilter] = useState<"ALL" | "fast" | "moderate" | "slow" | "dead">("ALL");
 
   // Load predictions when tab changes to Predictions
   useEffect(() => {
@@ -87,6 +91,45 @@ export default function Reports() {
     }
     return Object.values(itemData).sort((a, b) => b.qty - a.qty).slice(0, 10);
   }, [data]);
+
+  const turnoverData = useMemo(() => {
+    if (!data) return [];
+    return computeItemTurnover(data.items, data.vouchers, turnoverPeriod);
+  }, [data, turnoverPeriod]);
+
+  const turnoverGroups = useMemo(() => {
+    const gs = new Set(turnoverData.map(t => t.group));
+    return ["ALL", ...Array.from(gs).sort()];
+  }, [turnoverData]);
+
+  const filteredTurnover = useMemo(() => {
+    let result = turnoverData;
+    if (turnoverGroupFilter !== "ALL") result = result.filter(t => t.group === turnoverGroupFilter);
+    if (turnoverClassFilter !== "ALL") result = result.filter(t => t.classification === turnoverClassFilter);
+
+    // Sort
+    switch (turnoverSort) {
+      case "ratio-desc": result = [...result].sort((a, b) => b.turnoverRatio - a.turnoverRatio); break;
+      case "ratio-asc": result = [...result].sort((a, b) => a.turnoverRatio - b.turnoverRatio); break;
+      case "doi-asc": result = [...result].sort((a, b) => (isFinite(a.daysOfInventory) ? a.daysOfInventory : 99999) - (isFinite(b.daysOfInventory) ? b.daysOfInventory : 99999)); break;
+      case "doi-desc": result = [...result].sort((a, b) => (isFinite(b.daysOfInventory) ? b.daysOfInventory : 99999) - (isFinite(a.daysOfInventory) ? a.daysOfInventory : 99999)); break;
+      case "cogs-desc": result = [...result].sort((a, b) => b.cogsValue - a.cogsValue); break;
+      case "name": result = [...result].sort((a, b) => a.name.localeCompare(b.name)); break;
+    }
+    return result;
+  }, [turnoverData, turnoverGroupFilter, turnoverClassFilter, turnoverSort]);
+
+  const turnoverSummary = useMemo(() => {
+    if (!turnoverData.length) return { fast: 0, moderate: 0, slow: 0, dead: 0, avgRatio: 0, totalCOGS: 0, totalAvgInv: 0 };
+    const fast = turnoverData.filter(t => t.classification === "fast").length;
+    const moderate = turnoverData.filter(t => t.classification === "moderate").length;
+    const slow = turnoverData.filter(t => t.classification === "slow").length;
+    const dead = turnoverData.filter(t => t.classification === "dead").length;
+    const totalCOGS = turnoverData.reduce((s, t) => s + t.cogsValue, 0);
+    const totalAvgInv = turnoverData.reduce((s, t) => s + t.avgInventoryValue, 0);
+    const avgRatio = totalAvgInv > 0 ? totalCOGS / totalAvgInv : 0;
+    return { fast, moderate, slow, dead, avgRatio: Math.round(avgRatio * 100) / 100, totalCOGS, totalAvgInv };
+  }, [turnoverData]);
 
   if (!data) {
     return (
@@ -204,6 +247,204 @@ export default function Reports() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Inventory Turnover */}
+      {tab === "Turnover" && (
+        <div className="space-y-4">
+          {/* Controls row */}
+          <div className="flex items-center justify-between flex-wrap gap-3 bg-bg-card border border-bg-border rounded-xl p-4">
+            <div className="flex items-center gap-3">
+              <RefreshCw size={16} className="text-accent" />
+              <h3 className="font-semibold text-primary">Inventory Turnover Analysis</h3>
+              <select
+                value={turnoverPeriod}
+                onChange={(e) => setTurnoverPeriod(Number(e.target.value))}
+                className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none"
+              >
+                <option value={3}>Last 3 Months</option>
+                <option value={6}>Last 6 Months</option>
+                <option value={12}>Last 12 Months</option>
+              </select>
+              <select
+                value={turnoverGroupFilter}
+                onChange={(e) => setTurnoverGroupFilter(e.target.value)}
+                className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none"
+              >
+                {turnoverGroups.map(g => <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>)}
+              </select>
+              <select
+                value={turnoverClassFilter}
+                onChange={(e) => setTurnoverClassFilter(e.target.value as typeof turnoverClassFilter)}
+                className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none"
+              >
+                <option value="ALL">All Classifications</option>
+                <option value="fast">⚡ Fast Moving</option>
+                <option value="moderate">✓ Moderate</option>
+                <option value="slow">⏳ Slow Moving</option>
+                <option value="dead">🪫 Dead Stock</option>
+              </select>
+            </div>
+            <button
+              onClick={() => {
+                const rows = [
+                  ["Item", "Group", "Unit", "Turnover Ratio", "Days of Inventory", "COGS Value", "Avg Inventory Value", "Outward Qty", "Inward Qty", "Opening Qty", "Closing Qty", "Classification"],
+                  ...filteredTurnover.map(t => [
+                    t.name, t.group, t.baseUnit,
+                    t.turnoverRatio, isFinite(t.daysOfInventory) ? t.daysOfInventory : "∞",
+                    t.cogsValue.toFixed(0), t.avgInventoryValue.toFixed(0),
+                    t.totalOutwardQty.toFixed(0), t.totalInwardQty.toFixed(0),
+                    t.openingQty.toFixed(0), t.closingQty.toFixed(0), t.classification
+                  ])
+                ];
+                const csv = rows.map(r => r.join(",")).join("\n");
+                const blob = new Blob([csv], { type: "text/csv" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `turnover_${turnoverPeriod}mo_${new Date().toISOString().slice(0, 10)}.csv`;
+                a.click();
+              }}
+              className="flex items-center gap-2 bg-bg border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-4 py-2 rounded-lg transition text-sm"
+            >
+              <Download size={14} />Export CSV
+            </button>
+          </div>
+
+          {/* Summary KPIs */}
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-accent">{turnoverSummary.avgRatio}x</div>
+              <div className="text-muted text-xs mt-1">Overall Ratio</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-primary">{fmtINR(turnoverSummary.totalCOGS)}</div>
+              <div className="text-muted text-xs mt-1">Total COGS</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-primary">{fmtINR(turnoverSummary.totalAvgInv)}</div>
+              <div className="text-muted text-xs mt-1">Avg Inventory</div>
+            </div>
+            <div className="bg-bg-card border border-success/40 rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-success">{turnoverSummary.fast}</div>
+              <div className="text-muted text-xs mt-1">⚡ Fast</div>
+            </div>
+            <div className="bg-bg-card border border-accent/40 rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-accent">{turnoverSummary.moderate}</div>
+              <div className="text-muted text-xs mt-1">✓ Moderate</div>
+            </div>
+            <div className="bg-bg-card border border-warn/40 rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-warn">{turnoverSummary.slow}</div>
+              <div className="text-muted text-xs mt-1">⏳ Slow</div>
+            </div>
+            <div className="bg-bg-card border border-danger/40 rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-danger">{turnoverSummary.dead}</div>
+              <div className="text-muted text-xs mt-1">🪫 Dead</div>
+            </div>
+          </div>
+
+          {/* Chart: Top 15 by Turnover Ratio (horizontal bar) */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+              <h3 className="font-semibold text-primary mb-3 text-sm">Top 15 — Fastest Moving Items</h3>
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart
+                  data={[...turnoverData].sort((a, b) => b.turnoverRatio - a.turnoverRatio).slice(0, 15).map(t => ({
+                    name: t.name.length > 20 ? t.name.slice(0, 20) + "…" : t.name,
+                    ratio: t.turnoverRatio,
+                  }))}
+                  layout="vertical"
+                  barSize={14}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} />
+                  <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 10, fill: "#64748b" }} />
+                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number) => [`${v}x`, "Turnover"]} />
+                  <Bar dataKey="ratio" fill="#2563eb" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+              <h3 className="font-semibold text-primary mb-3 text-sm">Bottom 15 — Slowest / Dead Stock</h3>
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart
+                  data={[...turnoverData].filter(t => t.avgInventoryValue > 0).sort((a, b) => a.turnoverRatio - b.turnoverRatio).slice(0, 15).map(t => ({
+                    name: t.name.length > 20 ? t.name.slice(0, 20) + "…" : t.name,
+                    doi: isFinite(t.daysOfInventory) ? t.daysOfInventory : 999,
+                  }))}
+                  layout="vertical"
+                  barSize={14}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} label={{ value: "Days", position: "insideBottom", fontSize: 10, fill: "#64748b" }} />
+                  <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 10, fill: "#64748b" }} />
+                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number) => [v >= 999 ? "∞" : `${v} days`, "Days of Inventory"]} />
+                  <Bar dataKey="doi" fill="#ef4444" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Full table */}
+          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between">
+              <h3 className="font-semibold text-primary">All Items ({filteredTurnover.length})</h3>
+              <select
+                value={turnoverSort}
+                onChange={(e) => setTurnoverSort(e.target.value as typeof turnoverSort)}
+                className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-xs text-primary outline-none"
+              >
+                <option value="ratio-desc">Turnover ↑ (Fastest first)</option>
+                <option value="ratio-asc">Turnover ↓ (Slowest first)</option>
+                <option value="doi-asc">Days of Inv ↑ (Shortest first)</option>
+                <option value="doi-desc">Days of Inv ↓ (Longest first)</option>
+                <option value="cogs-desc">COGS ↓ (Highest value first)</option>
+                <option value="name">Name A-Z</option>
+              </select>
+            </div>
+            <div className="overflow-auto max-h-[60vh]">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                  <tr>
+                    {["Item", "Group", "Turnover", "DOI", "COGS", "Avg Inv", "Out Qty", "In Qty", "Opening", "Closing", "Class"].map((h) => (
+                      <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTurnover.map((t) => {
+                    const classColor = {
+                      fast: "bg-success/10 text-success",
+                      moderate: "bg-accent/10 text-accent",
+                      slow: "bg-warn/10 text-warn",
+                      dead: "bg-danger/10 text-danger",
+                    }[t.classification];
+                    const classLabel = { fast: "⚡ Fast", moderate: "✓ Moderate", slow: "⏳ Slow", dead: "🪫 Dead" }[t.classification];
+
+                    return (
+                      <tr key={t.itemId} className="border-b border-bg-border/50 hover:bg-bg-border/20">
+                        <td className="px-4 py-2 text-primary max-w-[200px] truncate" title={t.name}>{t.name}</td>
+                        <td className="px-4 py-2 text-muted text-xs">{t.group}</td>
+                        <td className="px-4 py-2 font-mono font-semibold text-primary">{t.turnoverRatio}x</td>
+                        <td className="px-4 py-2 font-mono text-muted text-xs">
+                          {isFinite(t.daysOfInventory) ? `${t.daysOfInventory}d` : "∞"}
+                        </td>
+                        <td className="px-4 py-2 font-mono text-primary text-xs">{fmtINR(t.cogsValue)}</td>
+                        <td className="px-4 py-2 font-mono text-muted text-xs">{fmtINR(t.avgInventoryValue)}</td>
+                        <td className="px-4 py-2 font-mono text-danger text-xs">{fmtNum(t.totalOutwardQty, 0)}</td>
+                        <td className="px-4 py-2 font-mono text-success text-xs">{fmtNum(t.totalInwardQty, 0)}</td>
+                        <td className="px-4 py-2 font-mono text-muted text-xs">{fmtNum(t.openingQty, 0)}</td>
+                        <td className="px-4 py-2 font-mono text-primary text-xs">{fmtNum(t.closingQty, 0)}</td>
+                        <td className="px-4 py-2">
+                          <span className={clsx("text-xs px-2 py-0.5 rounded-full font-medium", classColor)}>{classLabel}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
