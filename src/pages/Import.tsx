@@ -1,0 +1,387 @@
+import { useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical } from "lucide-react";
+import clsx from "clsx";
+import { parseMasters } from "../parser/masterParser";
+import { parseTransactions } from "../parser/transactionParser";
+import { useDataStore } from "../store/dataStore";
+import { saveData } from "../db/idb";
+import { serializeParsedData } from "../utils/serialize";
+import type { ParsedData, ImportWarning } from "../types/canonical";
+import { useToast } from "../components/Toast";
+
+interface ImportReport {
+  items: number;
+  ledgers: number;
+  vouchers: number;
+  warnings: ImportWarning[];
+  reconErrors: string[];
+}
+
+type DropZone = "masters" | "transactions";
+
+export default function ImportPage() {
+  const navigate = useNavigate();
+  const { mergeData } = useDataStore();
+  const { toast } = useToast();
+
+  const [mastersFile, setMastersFile] = useState<File | null>(null);
+  const [txFile, setTxFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [report, setReport] = useState<ImportReport | null>(null);
+  const [pendingData, setPendingData] = useState<ParsedData | null>(null);
+  const [dragOver, setDragOver] = useState<DropZone | null>(null);
+  const [debugLog, setDebugLog] = useState<string[]>([]);
+
+  const handleDrop = useCallback((zone: DropZone, e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(null);
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    if (zone === "masters") setMastersFile(file);
+    else setTxFile(file);
+  }, []);
+
+  const handleFileSelect = (zone: DropZone, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    if (zone === "masters") setMastersFile(file);
+    else setTxFile(file);
+    e.target.value = "";
+  };
+
+  const addLog = (msg: string) => {
+    setDebugLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+  };
+
+  async function loadSampleData() {
+    try {
+      setImporting(true);
+      setDebugLog([]);
+      addLog("Fetching sample data...");
+      const [mRes, tRes] = await Promise.all([
+        fetch("/sample/masters.json"),
+        fetch("/sample/transactions.json"),
+      ]);
+      addLog("Sample files downloaded");
+      const [mRaw, tRaw] = await Promise.all([mRes.json(), tRes.json()]);
+      addLog("JSON parsed successfully");
+      await runImportFromParsed(mRaw, tRaw, ["sample/masters.json", "sample/transactions.json"]);
+    } catch (e) {
+      addLog(`ERROR: ${e}`);
+      toast(`Failed to load sample data: ${e}`, "error");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function runImport() {
+    if (!mastersFile || !txFile) {
+      toast("Please select both masters and transactions files", "warn");
+      return;
+    }
+    setImporting(true);
+    setDebugLog([]);
+    try {
+      let mastersRaw: unknown;
+      let txRaw: unknown;
+
+      addLog(`Reading masters file: ${mastersFile.name} (${(mastersFile.size / 1024).toFixed(0)} KB)`);
+      // Handle UTF-16 encoded files (Tally Prime export)
+      try {
+        mastersRaw = JSON.parse(await mastersFile.text());
+        addLog("Masters file parsed (UTF-8)");
+      } catch {
+        addLog("UTF-8 failed, trying UTF-16...");
+        // Try UTF-16 via ArrayBuffer
+        const buf = await mastersFile.arrayBuffer();
+        const decoder = new TextDecoder("utf-16");
+        mastersRaw = JSON.parse(decoder.decode(buf));
+        addLog("Masters file parsed (UTF-16)");
+      }
+
+      addLog(`Reading transactions file: ${txFile.name} (${(txFile.size / 1024).toFixed(0)} KB)`);
+      try {
+        txRaw = JSON.parse(await txFile.text());
+        addLog("Transactions file parsed (UTF-8)");
+      } catch {
+        addLog("UTF-8 failed, trying UTF-16...");
+        const buf = await txFile.arrayBuffer();
+        const decoder = new TextDecoder("utf-16");
+        txRaw = JSON.parse(decoder.decode(buf));
+        addLog("Transactions file parsed (UTF-16)");
+      }
+
+      await runImportFromParsed(mastersRaw, txRaw, [mastersFile.name, txFile.name]);
+    } catch (e) {
+      addLog(`ERROR: ${String(e)}`);
+      toast(`Import failed: ${String(e)}`, "error");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function runImportFromParsed(mastersRaw: unknown, txRaw: unknown, sourceFiles: string[]) {
+    addLog("Parsing masters (items, ledgers)...");
+    const { company, items, ledgers, warnings: mw } = parseMasters(mastersRaw);
+    addLog(`Parsed ${items.size} items, ${ledgers.size} ledgers (${mw.length} warnings)`);
+
+    addLog("Parsing transactions (vouchers)...");
+    const { vouchers, warnings: tw } = parseTransactions(txRaw);
+    addLog(`Parsed ${vouchers.length} vouchers (${tw.length} warnings)`);
+
+    addLog("Running voucher reconciliation checks...");
+    const reconErrors: string[] = [];
+    for (const v of vouchers) {
+      const ledgerLines = v.lines.filter((l) => l.type === "ledger");
+      const debits = ledgerLines.filter((l) => l.isDebit).reduce((s, l) => s + (l.amount ?? 0), 0);
+      const credits = ledgerLines.filter((l) => !l.isDebit).reduce((s, l) => s + (l.amount ?? 0), 0);
+      if (Math.abs(debits - credits) > 1 && ledgerLines.length > 1) {
+        reconErrors.push(
+          `${v.voucherType} ${v.voucherNumber} (${v.date}): Dr=${debits.toFixed(0)} Cr=${credits.toFixed(0)}`
+        );
+      }
+    }
+    addLog(`Found ${reconErrors.length} reconciliation issues`);
+
+    const data: ParsedData = {
+      company: company ?? { name: "MK Cycles", fyStartMonth: 4 },
+      items,
+      ledgers,
+      vouchers,
+      importedAt: new Date().toISOString(),
+      sourceFiles,
+      warnings: [...mw, ...tw],
+    };
+
+    addLog("✓ Import complete — review summary below");
+    setPendingData(data);
+    setReport({
+      items: items.size,
+      ledgers: ledgers.size,
+      vouchers: vouchers.length,
+      warnings: data.warnings,
+      reconErrors: reconErrors.slice(0, 20),
+    });
+  }
+
+  async function acceptData() {
+    if (!pendingData) return;
+    mergeData(pendingData);
+    await saveData("parsedData", serializeParsedData(pendingData));
+    toast(`Imported ${report!.items} items, ${report!.ledgers} ledgers, ${report!.vouchers} vouchers`, "success");
+    navigate("/orders");
+  }
+
+  function downloadReport() {
+    if (!report) return;
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "import_report.json";
+    a.click();
+  }
+
+  const warns = report?.warnings.filter((w) => w.severity === "warn") ?? [];
+  const fatals = report?.warnings.filter((w) => w.severity === "fatal") ?? [];
+
+  return (
+    <div className="max-w-4xl mx-auto">
+      <div className="mb-8">
+        <h1 className="text-2xl font-bold text-primary mb-1">Import Tally Data</h1>
+        <p className="text-muted text-sm">Upload your exported JSON files from Tally Prime</p>
+      </div>
+
+      {/* Drop Zones */}
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        <DropZoneCard
+          zone="masters"
+          file={mastersFile}
+          label="masters.json"
+          subtitle="Stock items + Ledgers"
+          dragOver={dragOver === "masters"}
+          onDrop={(e) => handleDrop("masters", e)}
+          onDragOver={(e) => { e.preventDefault(); setDragOver("masters"); }}
+          onDragLeave={() => setDragOver(null)}
+          onSelect={(e) => handleFileSelect("masters", e)}
+        />
+        <DropZoneCard
+          zone="transactions"
+          file={txFile}
+          label="transactions.json"
+          subtitle="Vouchers (Sales, Purchase, etc.)"
+          dragOver={dragOver === "transactions"}
+          onDrop={(e) => handleDrop("transactions", e)}
+          onDragOver={(e) => { e.preventDefault(); setDragOver("transactions"); }}
+          onDragLeave={() => setDragOver(null)}
+          onSelect={(e) => handleFileSelect("transactions", e)}
+        />
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex gap-3 mb-6">
+        <button
+          onClick={runImport}
+          disabled={!mastersFile || !txFile || importing}
+          className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-5 py-2.5 rounded-lg transition"
+        >
+          {importing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+          {importing ? "Importing..." : "Parse Files"}
+        </button>
+        <button
+          onClick={loadSampleData}
+          disabled={importing}
+          className="flex items-center gap-2 bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary font-medium px-5 py-2.5 rounded-lg transition"
+        >
+          <FlaskConical size={16} />
+          Load Sample Data
+        </button>
+      </div>
+
+      {/* Debug Log */}
+      {debugLog.length > 0 && (
+        <div className="bg-bg-card border border-bg-border rounded-xl p-4 mb-6">
+          <h3 className="text-sm font-semibold text-primary mb-2 flex items-center gap-2">
+            <Info size={14} />
+            Import Progress Log
+          </h3>
+          <div className="bg-bg border border-bg-border rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-xs">
+            {debugLog.map((log, idx) => (
+              <div key={idx} className={clsx(
+                "py-0.5",
+                log.includes("ERROR") ? "text-danger" : log.includes("✓") ? "text-success" : "text-muted"
+              )}>
+                {log}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Report */}
+      {report && (
+        <div className="bg-bg-card border border-bg-border rounded-xl p-6 space-y-4">
+          <h2 className="text-lg font-semibold text-primary">Import Summary</h2>
+
+          {/* Stats */}
+          <div className="grid grid-cols-3 gap-4">
+            {[
+              { label: "Items", value: report.items, color: "text-success" },
+              { label: "Ledgers", value: report.ledgers, color: "text-accent" },
+              { label: "Vouchers", value: report.vouchers, color: "text-primary" },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="bg-bg border border-bg-border rounded-lg p-4 text-center">
+                <div className={`text-3xl font-mono font-bold ${color}`}>{value.toLocaleString("en-IN")}</div>
+                <div className="text-muted text-sm mt-1">{label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Reconciliation errors */}
+          {report.reconErrors.length > 0 && (
+            <div className="bg-warn/10 border border-warn/30 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2 text-warn font-medium text-sm">
+                <AlertTriangle size={14} />
+                {report.reconErrors.length} Reconciliation Issue(s)
+              </div>
+              <ul className="space-y-1">
+                {report.reconErrors.slice(0, 5).map((e, i) => (
+                  <li key={i} className="text-muted text-xs font-mono">{e}</li>
+                ))}
+                {report.reconErrors.length > 5 && (
+                  <li className="text-muted text-xs">... and {report.reconErrors.length - 5} more</li>
+                )}
+              </ul>
+            </div>
+          )}
+
+          {/* Warnings */}
+          {(warns.length > 0 || fatals.length > 0) && (
+            <div className="bg-bg border border-bg-border rounded-lg p-4 max-h-48 overflow-y-auto">
+              <div className="text-muted text-sm font-medium mb-2">
+                Warnings: {warns.length} warn, {fatals.length} fatal
+              </div>
+              {fatals.map((w, i) => (
+                <div key={i} className="flex items-start gap-2 text-danger text-xs font-mono mb-1">
+                  <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+                  <span>[{w.context}] {w.message}</span>
+                </div>
+              ))}
+              {warns.slice(0, 10).map((w, i) => (
+                <div key={i} className="flex items-start gap-2 text-warn text-xs font-mono mb-1">
+                  <Info size={12} className="mt-0.5 flex-shrink-0" />
+                  <span>[{w.context}] {w.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Accept button */}
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={acceptData}
+              className="flex items-center gap-2 bg-success hover:bg-success/80 text-white font-semibold px-6 py-2.5 rounded-lg transition"
+            >
+              <CheckCircle size={16} />
+              Accept & Continue to Orders
+            </button>
+            <button
+              onClick={downloadReport}
+              className="flex items-center gap-2 bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-5 py-2.5 rounded-lg transition text-sm"
+            >
+              Download Report
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface DropZoneCardProps {
+  zone: DropZone;
+  file: File | null;
+  label: string;
+  subtitle: string;
+  dragOver: boolean;
+  onDrop: (e: React.DragEvent) => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
+  onSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}
+
+function DropZoneCard({ zone, file, label, subtitle, dragOver, onDrop, onDragOver, onDragLeave, onSelect }: DropZoneCardProps) {
+  return (
+    <label
+      className={clsx(
+        "border-2 border-dashed rounded-xl p-6 flex flex-col items-center gap-3 cursor-pointer transition",
+        dragOver
+          ? "border-accent bg-accent/10"
+          : file
+          ? "border-success/50 bg-success/5"
+          : "border-bg-border hover:border-accent/50 bg-bg-card"
+      )}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+    >
+      <input
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={onSelect}
+        data-zone={zone}
+      />
+      {file ? (
+        <CheckCircle size={32} className="text-success" />
+      ) : (
+        <FileJson size={32} className="text-muted" />
+      )}
+      <div className="text-center">
+        <div className="font-mono text-sm font-medium text-primary">{label}</div>
+        <div className="text-muted text-xs mt-1">{subtitle}</div>
+        {file && <div className="text-success text-xs mt-2 truncate max-w-[180px]">{file.name}</div>}
+        {!file && <div className="text-muted text-xs mt-2">Drop file or click to select</div>}
+      </div>
+    </label>
+  );
+}
