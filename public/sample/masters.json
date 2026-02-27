@@ -1,0 +1,1760 @@
+{
+  "tallymessage": [
+    {
+      "metadata": {
+        "type": "Company",
+        "name": "MK CYCLES"
+      },
+      "name": "MK CYCLES",
+      "gstin": "19AADCM6953C1ZE",
+      "fystart": 4
+    },
+    {
+      "metadata": {
+        "type": "Stock Item",
+        "name": "BABY CAR CIVIC",
+        "reservedname": ""
+      },
+      "oldauditentryids": [
+        {
+          "metadata": true,
+          "type": "Number"
+        },
+        "-1"
+      ],
+      "guid": "353d02e0-63aa-11d7-8d44-d4bc1970ad56-00002be9",
+      "parent": "TRICYCLE DASH ( 950300 @ 12/ 5 %)",
+      "category": "\u0004 Not Applicable",
+      "enteredby": "k",
+      "gstapplicable": "\u0004 Applicable",
+      "taxclassificationname": "\u0004 Not Applicable",
+      "gsttypeofsupply": "Goods",
+      "costingmethod": "Avg. Cost",
+      "valuationmethod": "Avg. Price",
+      "baseunits": "PC",
+      "additionalunits": "\u0004 Not Applicable",
+      "exciseitemclassification": "\u0004 Not Applicable",
+      "vatbaseunit": "PC",
+      "iscostcentreson": false,
+      "isbatchwiseon": false,
+      "isperishableon": false,
+      "isentrytaxapplicable": false,
+      "iscosttrackingon": false,
+      "isupdatingtargetid": false,
+      "isdeleted": false,
+      "issecurityonwhenentered": true,
+      "asoriginal": true,
+      "israteinclusivevat": false,
+      "ignorephysicaldifference": false,
+      "ignorenegativestock": false,
+      "treatsalesasmanufactured": false,
+      "treatpurchasesasconsumed": false,
+      "treatrejectsasscrap": false,
+      "hasmfgdate": false,
+      "allowuseofexpireditems": false,
+      "ignorebatches": false,
+      "ignoregodowns": false,
+      "adjdiffinfirstsaleledger": false,
+      "adjdiffinfirstpurcledger": false,
+      "calconmrp": false,
+      "excludejrnlforvaluation": false,
+      "ismrpincloftax": false,
+      "isaddltaxexempt": false,
+      "issupplementrydutyon": false,
+      "gvatisexciseappl": false,
+      "isadditionaltax": false,
+      "iscessexempted": false,
+      "reorderashigher": false,
+      "minorderashigher": false,
+      "isexcisecalculateonmrp": false,
+      "inclusivetax": false,
+      "gstcalcslabonmrp": false,
+      "modifymrprate": false,
+      "alterid": " 54671",
+      "denominator": " 1",
+      "rateofvat": "0",
+      "vatbaseno": " 1",
+      "vattrailno": " 1",
+      "vatactualratio": " 1",
+      "openingbalance": " 9 PC",
+      "openingvalue": "-18720.00",
+      "openingrate": "2080.00/PC",
+      "updateddatetime": "20260209105408000",
+      "gstdetails": [
+        {
+          "applicablefrom": "20220401",
+          "srcofgstdetails": "As per Company/Stock Group",
+          "gstcalcslabonmrp": false,
+          "isreversechargeapplicable": false,
+          "isnongstgoods": false,
+          "gstineligibleitc": true,
+          "includeexpforslabcalc": false,
+          "statewisedetails": [
+            {
+              "statename": "\u0004 Any",
+              "ratedetails": [
+                {
+                  "gstratedutyhead": "CGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "SGST/UTGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "IGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "Cess",
+                  "gstratevaluationtype": "\u0004 Not Applicable"
+                },
+                {
+                  "gstratedutyhead": "State Cess",
+                  "gstratevaluationtype": "Based on Value"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "hsndetails": [
+        {
+          "applicablefrom": "20220401",
+          "srcofhsndetails": "As per Company/Stock Group"
+        }
+      ],
+      "languagename": [
+        {
+          "name": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "BABY CAR CIVIC"
+          ],
+          "languageid": " 1033"
+        }
+      ],
+      "fullpricelist": [
+        {
+          "date": "20200401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "2455.36/PC"
+            }
+          ]
+        },
+        {
+          "date": "20220401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "2455.36/PC"
+            }
+          ]
+        },
+        {
+          "date": "20230401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "2455.36/PC"
+            }
+          ]
+        },
+        {
+          "date": "20240401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "2455.36/PC"
+            }
+          ]
+        },
+        {
+          "date": "20250401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "2455.36/PC"
+            }
+          ]
+        }
+      ],
+      "batchallocations": [
+        {
+          "godownname": "Main Location",
+          "batchname": "Primary Batch",
+          "openingbalance": " 9 PC",
+          "openingvalue": "-18720.00",
+          "openingrate": "2080.00/PC"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "type": "Stock Item",
+        "name": "BABY CAR F1 RIDE ON",
+        "reservedname": ""
+      },
+      "oldauditentryids": [
+        {
+          "metadata": true,
+          "type": "Number"
+        },
+        "-1"
+      ],
+      "guid": "353d02e0-63aa-11d7-8d44-d4bc1970ad56-00002eeb",
+      "parent": "TRICYCLE DASH ( 950300 @ 18% )",
+      "category": "\u0004 Not Applicable",
+      "enteredby": "k",
+      "gstapplicable": "\u0004 Applicable",
+      "taxclassificationname": "\u0004 Not Applicable",
+      "gsttypeofsupply": "Goods",
+      "exciseapplicability": "\u0004 Applicable",
+      "vatapplicable": "\u0004 Not Applicable",
+      "costingmethod": "Avg. Cost",
+      "valuationmethod": "Avg. Price",
+      "baseunits": "PC",
+      "additionalunits": "\u0004 Not Applicable",
+      "exciseitemclassification": "\u0004 Not Applicable",
+      "iscostcentreson": false,
+      "isbatchwiseon": false,
+      "isperishableon": false,
+      "isentrytaxapplicable": false,
+      "iscosttrackingon": false,
+      "isupdatingtargetid": false,
+      "isdeleted": false,
+      "issecurityonwhenentered": true,
+      "asoriginal": true,
+      "israteinclusivevat": false,
+      "ignorephysicaldifference": false,
+      "ignorenegativestock": false,
+      "treatsalesasmanufactured": false,
+      "treatpurchasesasconsumed": false,
+      "treatrejectsasscrap": false,
+      "hasmfgdate": false,
+      "allowuseofexpireditems": false,
+      "ignorebatches": false,
+      "ignoregodowns": false,
+      "adjdiffinfirstsaleledger": false,
+      "adjdiffinfirstpurcledger": false,
+      "calconmrp": false,
+      "excludejrnlforvaluation": false,
+      "ismrpincloftax": false,
+      "isaddltaxexempt": false,
+      "issupplementrydutyon": false,
+      "gvatisexciseappl": false,
+      "isadditionaltax": false,
+      "iscessexempted": false,
+      "reorderashigher": false,
+      "minorderashigher": false,
+      "isexcisecalculateonmrp": false,
+      "inclusivetax": false,
+      "gstcalcslabonmrp": false,
+      "modifymrprate": false,
+      "alterid": " 54673",
+      "denominator": " 1",
+      "rateofvat": "0",
+      "openingbalance": " 21 PC",
+      "openingvalue": "-20622.00",
+      "openingrate": "982.00/PC",
+      "updateddatetime": "20260209105408000",
+      "gstdetails": [
+        {
+          "applicablefrom": "20220401",
+          "srcofgstdetails": "As per Company/Stock Group",
+          "gstcalcslabonmrp": false,
+          "isreversechargeapplicable": false,
+          "isnongstgoods": false,
+          "gstineligibleitc": true,
+          "includeexpforslabcalc": false,
+          "statewisedetails": [
+            {
+              "statename": "\u0004 Any",
+              "ratedetails": [
+                {
+                  "gstratedutyhead": "CGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "SGST/UTGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "IGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "Cess",
+                  "gstratevaluationtype": "\u0004 Not Applicable"
+                },
+                {
+                  "gstratedutyhead": "State Cess",
+                  "gstratevaluationtype": "Based on Value"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "hsndetails": [
+        {
+          "applicablefrom": "20220401",
+          "srcofhsndetails": "As per Company/Stock Group"
+        }
+      ],
+      "languagename": [
+        {
+          "name": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "BABY CAR F1 RIDE ON"
+          ],
+          "languageid": " 1033"
+        }
+      ],
+      "fullpricelist": [
+        {
+          "date": "20200401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1053.57/PC"
+            }
+          ]
+        },
+        {
+          "date": "20220401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1059.32/PC"
+            }
+          ]
+        },
+        {
+          "date": "20230401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1076.27/PC"
+            }
+          ]
+        },
+        {
+          "date": "20240401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1076.27/PC"
+            }
+          ]
+        },
+        {
+          "date": "20250401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1076.27/PC"
+            }
+          ]
+        }
+      ],
+      "batchallocations": [
+        {
+          "godownname": "Main Location",
+          "batchname": "Primary Batch",
+          "openingbalance": " 21 PC",
+          "openingvalue": "-20622.00",
+          "openingrate": "982.00/PC"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "type": "Stock Item",
+        "name": "BABY CAR TRANSFORMERS",
+        "reservedname": ""
+      },
+      "oldauditentryids": [
+        {
+          "metadata": true,
+          "type": "Number"
+        },
+        "-1"
+      ],
+      "guid": "353d02e0-63aa-11d7-8d44-d4bc1970ad56-00002b81",
+      "parent": "TRICYCLE DASH ( 950300 @ 18% )",
+      "category": "\u0004 Not Applicable",
+      "enteredby": "k",
+      "gstapplicable": "\u0004 Applicable",
+      "taxclassificationname": "\u0004 Not Applicable",
+      "gsttypeofsupply": "Goods",
+      "exciseapplicability": "\u0004 Applicable",
+      "vatapplicable": "\u0004 Not Applicable",
+      "costingmethod": "Avg. Cost",
+      "valuationmethod": "Avg. Price",
+      "baseunits": "PC",
+      "additionalunits": "\u0004 Not Applicable",
+      "exciseitemclassification": "\u0004 Not Applicable",
+      "iscostcentreson": false,
+      "isbatchwiseon": false,
+      "isperishableon": false,
+      "isentrytaxapplicable": false,
+      "iscosttrackingon": false,
+      "isupdatingtargetid": false,
+      "isdeleted": false,
+      "issecurityonwhenentered": true,
+      "asoriginal": true,
+      "israteinclusivevat": false,
+      "ignorephysicaldifference": false,
+      "ignorenegativestock": false,
+      "treatsalesasmanufactured": false,
+      "treatpurchasesasconsumed": false,
+      "treatrejectsasscrap": false,
+      "hasmfgdate": false,
+      "allowuseofexpireditems": false,
+      "ignorebatches": false,
+      "ignoregodowns": false,
+      "adjdiffinfirstsaleledger": false,
+      "adjdiffinfirstpurcledger": false,
+      "calconmrp": false,
+      "excludejrnlforvaluation": false,
+      "ismrpincloftax": false,
+      "isaddltaxexempt": false,
+      "issupplementrydutyon": false,
+      "gvatisexciseappl": false,
+      "isadditionaltax": false,
+      "iscessexempted": false,
+      "reorderashigher": false,
+      "minorderashigher": false,
+      "isexcisecalculateonmrp": false,
+      "inclusivetax": false,
+      "gstcalcslabonmrp": false,
+      "modifymrprate": false,
+      "alterid": " 55226",
+      "denominator": " 1",
+      "rateofvat": "0",
+      "openingbalance": " 44 PC",
+      "openingvalue": "-52272.00",
+      "openingrate": "1188.00/PC",
+      "updateddatetime": "20260209110704000",
+      "gstdetails": [
+        {
+          "applicablefrom": "20220728",
+          "calculationtype": "On Value",
+          "taxability": "Taxable",
+          "srcofgstdetails": "Specify Details Here",
+          "gstcalcslabonmrp": false,
+          "isreversechargeapplicable": false,
+          "isnongstgoods": false,
+          "gstineligibleitc": false,
+          "includeexpforslabcalc": false,
+          "statewisedetails": [
+            {
+              "statename": "\u0004 Any",
+              "ratedetails": [
+                {
+                  "gstratedutyhead": "CGST",
+                  "gstratevaluationtype": "Based on Value",
+                  "gstrate": " 9"
+                },
+                {
+                  "gstratedutyhead": "SGST/UTGST",
+                  "gstratevaluationtype": "Based on Value",
+                  "gstrate": " 9"
+                },
+                {
+                  "gstratedutyhead": "IGST",
+                  "gstratevaluationtype": "Based on Value",
+                  "gstrate": " 18"
+                },
+                {
+                  "gstratedutyhead": "Cess",
+                  "gstratevaluationtype": "\u0004 Not Applicable"
+                },
+                {
+                  "gstratedutyhead": "State Cess",
+                  "gstratevaluationtype": "Based on Value"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "applicablefrom": "20220820",
+          "calculationtype": "On Value",
+          "taxability": "Taxable",
+          "srcofgstdetails": "Specify Details Here",
+          "gstcalcslabonmrp": false,
+          "isreversechargeapplicable": false,
+          "isnongstgoods": false,
+          "gstineligibleitc": false,
+          "includeexpforslabcalc": false,
+          "statewisedetails": [
+            {
+              "statename": "\u0004 Any",
+              "ratedetails": [
+                {
+                  "gstratedutyhead": "CGST",
+                  "gstratevaluationtype": "Based on Value",
+                  "gstrate": " 9"
+                },
+                {
+                  "gstratedutyhead": "SGST/UTGST",
+                  "gstratevaluationtype": "Based on Value",
+                  "gstrate": " 9"
+                },
+                {
+                  "gstratedutyhead": "IGST",
+                  "gstratevaluationtype": "Based on Value",
+                  "gstrate": " 18"
+                },
+                {
+                  "gstratedutyhead": "Cess",
+                  "gstratevaluationtype": "\u0004 Not Applicable"
+                },
+                {
+                  "gstratedutyhead": "State Cess",
+                  "gstratevaluationtype": "Based on Value"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "applicablefrom": "20250922",
+          "srcofgstdetails": "As per Company/Stock Group",
+          "gstcalcslabonmrp": false,
+          "isreversechargeapplicable": false,
+          "isnongstgoods": false,
+          "gstineligibleitc": true,
+          "includeexpforslabcalc": false,
+          "statewisedetails": [
+            {
+              "statename": "\u0004 Any",
+              "ratedetails": [
+                {
+                  "gstratedutyhead": "CGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "SGST/UTGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "IGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "Cess",
+                  "gstratevaluationtype": "\u0004 Not Applicable"
+                },
+                {
+                  "gstratedutyhead": "State Cess",
+                  "gstratevaluationtype": "Based on Value"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "hsndetails": [
+        {
+          "applicablefrom": "20220728",
+          "hsncode": "950300",
+          "hsn": "BABY TRICYCLE",
+          "srcofhsndetails": "Specify Details Here"
+        },
+        {
+          "applicablefrom": "20220820",
+          "hsncode": "950300",
+          "hsn": "BABY TRICYCLE",
+          "srcofhsndetails": "Specify Details Here"
+        },
+        {
+          "applicablefrom": "20250922",
+          "srcofhsndetails": "As per Company/Stock Group"
+        }
+      ],
+      "languagename": [
+        {
+          "name": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "BABY CAR TRANSFORMERS"
+          ],
+          "languageid": " 1033"
+        }
+      ],
+      "fullpricelist": [
+        {
+          "date": "20190401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "990.18/PC"
+            }
+          ]
+        },
+        {
+          "date": "20200401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1178.57/PC"
+            }
+          ]
+        },
+        {
+          "date": "20220401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1262.71/PC"
+            }
+          ]
+        },
+        {
+          "date": "20230401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1305.08/PC"
+            }
+          ]
+        },
+        {
+          "date": "20240401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1093.22/PC"
+            }
+          ]
+        },
+        {
+          "date": "20250401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1279.66/PC"
+            }
+          ]
+        }
+      ],
+      "batchallocations": [
+        {
+          "godownname": "Main Location",
+          "batchname": "Primary Batch",
+          "openingbalance": " 44 PC",
+          "openingvalue": "-52272.00",
+          "openingrate": "1188.00/PC"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "type": "Stock Item",
+        "name": "BABY ROCKER MONKEY RIDE ON",
+        "reservedname": ""
+      },
+      "oldauditentryids": [
+        {
+          "metadata": true,
+          "type": "Number"
+        },
+        "-1"
+      ],
+      "guid": "353d02e0-63aa-11d7-8d44-d4bc1970ad56-00002b92",
+      "parent": "TRICYCLE DASH ( 950300 @ 18% )",
+      "category": "\u0004 Not Applicable",
+      "enteredby": "k",
+      "gstapplicable": "\u0004 Applicable",
+      "taxclassificationname": "\u0004 Not Applicable",
+      "gsttypeofsupply": "Goods",
+      "exciseapplicability": "\u0004 Applicable",
+      "vatapplicable": "\u0004 Applicable",
+      "costingmethod": "Avg. Cost",
+      "valuationmethod": "Avg. Price",
+      "baseunits": "PC",
+      "additionalunits": "\u0004 Not Applicable",
+      "exciseitemclassification": "\u0004 Not Applicable",
+      "vatbaseunit": "PC",
+      "vattrailunit": "PIECES",
+      "iscostcentreson": false,
+      "isbatchwiseon": false,
+      "isperishableon": false,
+      "isentrytaxapplicable": false,
+      "iscosttrackingon": false,
+      "isupdatingtargetid": false,
+      "isdeleted": false,
+      "issecurityonwhenentered": true,
+      "asoriginal": true,
+      "israteinclusivevat": false,
+      "ignorephysicaldifference": false,
+      "ignorenegativestock": false,
+      "treatsalesasmanufactured": false,
+      "treatpurchasesasconsumed": false,
+      "treatrejectsasscrap": false,
+      "hasmfgdate": false,
+      "allowuseofexpireditems": false,
+      "ignorebatches": false,
+      "ignoregodowns": false,
+      "adjdiffinfirstsaleledger": false,
+      "adjdiffinfirstpurcledger": false,
+      "calconmrp": false,
+      "excludejrnlforvaluation": false,
+      "ismrpincloftax": false,
+      "isaddltaxexempt": false,
+      "issupplementrydutyon": false,
+      "gvatisexciseappl": false,
+      "isadditionaltax": false,
+      "iscessexempted": false,
+      "reorderashigher": false,
+      "minorderashigher": false,
+      "isexcisecalculateonmrp": false,
+      "inclusivetax": false,
+      "gstcalcslabonmrp": false,
+      "modifymrprate": false,
+      "alterid": " 54678",
+      "denominator": " 1",
+      "rateofvat": "0",
+      "vatbaseno": " 1",
+      "vattrailno": " 1",
+      "vatactualratio": " 1",
+      "openingbalance": " 32 PC",
+      "openingvalue": "-21920.00",
+      "openingrate": "685.00/PC",
+      "updateddatetime": "20260209105408000",
+      "gstdetails": [
+        {
+          "applicablefrom": "20220905",
+          "calculationtype": "On Value",
+          "taxability": "Taxable",
+          "srcofgstdetails": "Specify Details Here",
+          "gstcalcslabonmrp": false,
+          "isreversechargeapplicable": false,
+          "isnongstgoods": false,
+          "gstineligibleitc": false,
+          "includeexpforslabcalc": false,
+          "statewisedetails": [
+            {
+              "statename": "\u0004 Any",
+              "ratedetails": [
+                {
+                  "gstratedutyhead": "CGST",
+                  "gstratevaluationtype": "Based on Value",
+                  "gstrate": " 9"
+                },
+                {
+                  "gstratedutyhead": "SGST/UTGST",
+                  "gstratevaluationtype": "Based on Value",
+                  "gstrate": " 9"
+                },
+                {
+                  "gstratedutyhead": "IGST",
+                  "gstratevaluationtype": "Based on Value",
+                  "gstrate": " 18"
+                },
+                {
+                  "gstratedutyhead": "Cess",
+                  "gstratevaluationtype": "\u0004 Not Applicable"
+                },
+                {
+                  "gstratedutyhead": "State Cess",
+                  "gstratevaluationtype": "Based on Value"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "applicablefrom": "20250922",
+          "srcofgstdetails": "As per Company/Stock Group",
+          "gstcalcslabonmrp": false,
+          "isreversechargeapplicable": false,
+          "isnongstgoods": false,
+          "gstineligibleitc": true,
+          "includeexpforslabcalc": false,
+          "statewisedetails": [
+            {
+              "statename": "\u0004 Any",
+              "ratedetails": [
+                {
+                  "gstratedutyhead": "CGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "SGST/UTGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "IGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "Cess",
+                  "gstratevaluationtype": "\u0004 Not Applicable"
+                },
+                {
+                  "gstratedutyhead": "State Cess",
+                  "gstratevaluationtype": "Based on Value"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "hsndetails": [
+        {
+          "applicablefrom": "20220905",
+          "hsncode": "950300",
+          "hsn": "BABY TRICYCLE",
+          "srcofhsndetails": "Specify Details Here"
+        },
+        {
+          "applicablefrom": "20250922",
+          "srcofhsndetails": "As per Company/Stock Group"
+        }
+      ],
+      "languagename": [
+        {
+          "name": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "BABY ROCKER MONKEY RIDE ON"
+          ],
+          "languageid": " 1033"
+        }
+      ],
+      "fullpricelist": [
+        {
+          "date": "20190401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "682.14/PC"
+            }
+          ]
+        },
+        {
+          "date": "20200401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "785.71/PC"
+            }
+          ]
+        },
+        {
+          "date": "20220401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "771.19/PC"
+            }
+          ]
+        },
+        {
+          "date": "20230401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "771.19/PC"
+            }
+          ]
+        },
+        {
+          "date": "20240401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "771.19/PC"
+            }
+          ]
+        },
+        {
+          "date": "20250401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "771.19/PC"
+            }
+          ]
+        }
+      ],
+      "batchallocations": [
+        {
+          "godownname": "Main Location",
+          "batchname": "Primary Batch",
+          "openingbalance": " 32 PC",
+          "openingvalue": "-21920.00",
+          "openingrate": "685.00/PC"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "type": "Stock Item",
+        "name": "BABY SCOOTER POWER RANGER",
+        "reservedname": ""
+      },
+      "oldauditentryids": [
+        {
+          "metadata": true,
+          "type": "Number"
+        },
+        "-1"
+      ],
+      "guid": "353d02e0-63aa-11d7-8d44-d4bc1970ad56-0000293f",
+      "parent": "TRICYCLE DASH ( 950300 @ 12/ 5 %)",
+      "category": "\u0004 Not Applicable",
+      "enteredby": "k",
+      "gstapplicable": "\u0004 Applicable",
+      "taxclassificationname": "\u0004 Not Applicable",
+      "gsttypeofsupply": "Goods",
+      "exciseapplicability": "\u0004 Applicable",
+      "vatapplicable": "\u0004 Not Applicable",
+      "costingmethod": "Avg. Cost",
+      "valuationmethod": "Avg. Price",
+      "baseunits": "PC",
+      "additionalunits": "\u0004 Not Applicable",
+      "exciseitemclassification": "\u0004 Not Applicable",
+      "iscostcentreson": false,
+      "isbatchwiseon": false,
+      "isperishableon": false,
+      "isentrytaxapplicable": false,
+      "iscosttrackingon": false,
+      "isupdatingtargetid": false,
+      "isdeleted": false,
+      "issecurityonwhenentered": true,
+      "asoriginal": true,
+      "israteinclusivevat": false,
+      "ignorephysicaldifference": false,
+      "ignorenegativestock": false,
+      "treatsalesasmanufactured": false,
+      "treatpurchasesasconsumed": false,
+      "treatrejectsasscrap": false,
+      "hasmfgdate": false,
+      "allowuseofexpireditems": false,
+      "ignorebatches": false,
+      "ignoregodowns": false,
+      "adjdiffinfirstsaleledger": false,
+      "adjdiffinfirstpurcledger": false,
+      "calconmrp": false,
+      "excludejrnlforvaluation": false,
+      "ismrpincloftax": false,
+      "isaddltaxexempt": false,
+      "issupplementrydutyon": false,
+      "gvatisexciseappl": false,
+      "isadditionaltax": false,
+      "iscessexempted": false,
+      "reorderashigher": false,
+      "minorderashigher": false,
+      "isexcisecalculateonmrp": false,
+      "inclusivetax": false,
+      "gstcalcslabonmrp": false,
+      "modifymrprate": false,
+      "alterid": " 55227",
+      "denominator": " 1",
+      "rateofvat": "0",
+      "openingbalance": " 12 PC",
+      "openingvalue": "-15468.00",
+      "openingrate": "1289.00/PC",
+      "updateddatetime": "20260209110704000",
+      "gstdetails": [
+        {
+          "applicablefrom": "20220401",
+          "srcofgstdetails": "As per Company/Stock Group",
+          "gstcalcslabonmrp": false,
+          "isreversechargeapplicable": false,
+          "isnongstgoods": false,
+          "gstineligibleitc": true,
+          "includeexpforslabcalc": false,
+          "statewisedetails": [
+            {
+              "statename": "\u0004 Any",
+              "ratedetails": [
+                {
+                  "gstratedutyhead": "CGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "SGST/UTGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "IGST",
+                  "gstratevaluationtype": "Based on Value"
+                },
+                {
+                  "gstratedutyhead": "Cess",
+                  "gstratevaluationtype": "\u0004 Not Applicable"
+                },
+                {
+                  "gstratedutyhead": "State Cess",
+                  "gstratevaluationtype": "Based on Value"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "hsndetails": [
+        {
+          "applicablefrom": "20220401",
+          "srcofhsndetails": "As per Company/Stock Group"
+        }
+      ],
+      "languagename": [
+        {
+          "name": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "BABY SCOOTER POWER RANGER"
+          ],
+          "languageid": " 1033"
+        }
+      ],
+      "fullpricelist": [
+        {
+          "date": "20190401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1074.11/PC"
+            }
+          ]
+        },
+        {
+          "date": "20200401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1406.25/PC"
+            }
+          ]
+        },
+        {
+          "date": "20220401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1410.71/PC"
+            }
+          ]
+        },
+        {
+          "date": "20230401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1401.79/PC"
+            }
+          ]
+        },
+        {
+          "date": "20240401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1400.00/PC"
+            }
+          ]
+        },
+        {
+          "date": "20250401",
+          "pricelevel": "DEALER",
+          "pricelevellist": [
+            {
+              "rate": "1371.43/PC"
+            }
+          ]
+        }
+      ],
+      "batchallocations": [
+        {
+          "godownname": "Main Location",
+          "batchname": "Primary Batch",
+          "openingbalance": " 12 PC",
+          "openingvalue": "-15468.00",
+          "openingrate": "1289.00/PC"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "type": "Ledger",
+        "name": "ACHARIYA CYCLE STORES (MANGLAMARO)",
+        "reservedname": ""
+      },
+      "oldmailingname": [
+        {
+          "metadata": true,
+          "type": "String"
+        },
+        "ACHARIYA CYCLE STORES"
+      ],
+      "oldaddress": [
+        {
+          "metadata": true,
+          "type": "String"
+        },
+        "MANGLAMARO",
+        "( PAN: AFLPA4406Q )"
+      ],
+      "oldauditentryids": [
+        {
+          "metadata": true,
+          "type": "Number"
+        },
+        "-1"
+      ],
+      "startingfrom": "20240401",
+      "createddate": "20181031",
+      "alteredon": "20240712",
+      "guid": "353d02e0-63aa-11d7-8d44-d4bc1970ad56-0000119e",
+      "currencyname": "Rs",
+      "email": "pabitra.acharyya@gmail.com",
+      "priorstatename": "West Bengal",
+      "incometaxnumber": "AFLPA4406Q",
+      "vattinnumber": "19853147044",
+      "gstregistrationtype": "Regular",
+      "pricelevel": "DEALER",
+      "parent": "SUNDRY DEBTORS (EG)",
+      "enteredby": "k",
+      "alteredby": "k",
+      "typeofupdateactivity": "Split",
+      "objectupdateaction": "Alter",
+      "createdby": "k",
+      "taxclassificationname": "\u0004 Not Applicable",
+      "taxtype": "Others",
+      "billcreditperiod": "15 Days",
+      "countryofresidence": "India",
+      "oldpincode": "721434",
+      "gsttype": "\u0004 Not Applicable",
+      "appropriatefor": "\u0004 Not Applicable",
+      "partygstin": "19AFLPA4406Q1Z4",
+      "gsttypeofsupply": "Services",
+      "gstnatureofsupply": "\u0004 Not Applicable",
+      "oldledstatename": "West Bengal",
+      "vatdealernature": "VAT Dealer",
+      "servicecategory": "\u0004 Not Applicable",
+      "exciseledgerclassification": "Default",
+      "excisedutytype": "\u0004 Not Applicable",
+      "excisenatureofpurchase": "\u0004 Not Applicable",
+      "ledgerfbtcategory": "\u0004 Not Applicable",
+      "oldcountryname": "India",
+      "isbillwiseon": true,
+      "iscostcentreson": false,
+      "isintereston": false,
+      "allowinmobile": false,
+      "iscosttrackingon": false,
+      "isbeneficiarycodeon": false,
+      "isexportonvchcreate": false,
+      "plasincomeexpense": false,
+      "isupdatingtargetid": false,
+      "isdeleted": false,
+      "issecurityonwhenentered": true,
+      "asoriginal": true,
+      "iscondensed": false,
+      "affectsstock": false,
+      "israteinclusivevat": false,
+      "forpayroll": false,
+      "isabcenabled": false,
+      "iscreditdayschkon": false,
+      "interestonbillwise": false,
+      "overrideinterest": false,
+      "overrideadvinterest": false,
+      "useforvat": false,
+      "ignoretdsexempt": false,
+      "istcsapplicable": false,
+      "istdsapplicable": false,
+      "isfbtapplicable": false,
+      "isgstapplicable": false,
+      "isexciseapplicable": false,
+      "istdsexpense": false,
+      "isedliapplicable": false,
+      "isrelatedparty": false,
+      "useforesieligibility": false,
+      "isinterestincllastday": false,
+      "appropriatetaxvalue": false,
+      "isbehaveasduty": false,
+      "interestincldayofaddition": false,
+      "interestincldayofdeduction": false,
+      "isothterritoryassessee": false,
+      "ignoremismatchwithwarning": false,
+      "useasnotionalbank": false,
+      "behaveaspaymentgateway": false,
+      "overridecreditlimit": false,
+      "isagainstformc": false,
+      "ischequeprintingenabled": false,
+      "ispayupload": false,
+      "ispaybatchonlysal": false,
+      "isbnfcodesupported": false,
+      "allowexportwitherrors": false,
+      "considerpurchaseforexport": false,
+      "istransporter": false,
+      "isecashledger": false,
+      "usefornotionalitc": false,
+      "isecommoperator": false,
+      "overridebasedonrealization": false,
+      "isecdiffinsdate": false,
+      "showinpayslip": false,
+      "useforgratuity": false,
+      "istdsprojected": false,
+      "issalarymulfile": false,
+      "forservicetax": false,
+      "isinputcredit": false,
+      "isexempted": false,
+      "isabatementapplicable": false,
+      "isstxparty": false,
+      "isstxnonrealizedtype": false,
+      "useforkkc": false,
+      "useforsbc": false,
+      "isusedforcvd": false,
+      "ledbelongstonontaxable": false,
+      "isexcisemerchantexporter": false,
+      "ispartyexempted": false,
+      "issezparty": false,
+      "tdsdeducteeisspecialrate": false,
+      "isechequesupported": false,
+      "iseddsupported": false,
+      "hasechequedeliverymode": false,
+      "hasechequedeliveryto": false,
+      "hasechequeprintlocation": false,
+      "hasechequepayablelocation": false,
+      "hasechequebanklocation": false,
+      "hasedddeliverymode": false,
+      "hasedddeliveryto": false,
+      "haseddprintlocation": false,
+      "haseddpayablelocation": false,
+      "haseddbanklocation": false,
+      "isebankingenabled": false,
+      "isexportfileencrypted": false,
+      "isbatchenabled": false,
+      "isproductcodebased": false,
+      "haseddcity": false,
+      "hasechequecity": false,
+      "isfilenameformatsupported": false,
+      "hasclientcode": false,
+      "payinsisbatchapplicable": false,
+      "payinsisfilenumapp": false,
+      "issalarytransgroupedforbrs": false,
+      "isebankingsupported": false,
+      "isscbuae": false,
+      "isbankstatusapp": false,
+      "issalarygrouped": false,
+      "useforpurchasetax": false,
+      "bankisreconcileperfectmatches": false,
+      "ispymtadvonline": false,
+      "ispymtadvccenabled": false,
+      "isincludepymtadvbillwise": false,
+      "audited": false,
+      "sortposition": " 1000",
+      "alterid": " 48342",
+      "openingbalance": "-464038.00",
+      "updateddatetime": "20250821153155000",
+      "languagename": [
+        {
+          "name": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "ACHARIYA CYCLE STORES (MANGLAMARO)"
+          ],
+          "languageid": " 1033"
+        }
+      ],
+      "billallocations": [
+        {
+          "billdate": "20240319",
+          "name": "1078/23-24",
+          "billcreditperiod": "15 Days",
+          "isadvance": false,
+          "openingbalance": "-464038.00"
+        }
+      ],
+      "ledgstregdetails": [
+        {
+          "applicablefrom": "20220401",
+          "gstregistrationtype": "Regular",
+          "state": "West Bengal",
+          "placeofsupply": "West Bengal",
+          "gstin": "19AFLPA4406Q1Z4",
+          "isothterritoryassessee": false,
+          "considerpurchaseforexport": false,
+          "istransporter": false,
+          "iscommonparty": false
+        }
+      ],
+      "ledmailingdetails": [
+        {
+          "address": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "MANGLAMARO",
+            "( PAN: AFLPA4406Q )"
+          ],
+          "applicablefrom": "20220401",
+          "pincode": "721434",
+          "mailingname": "ACHARIYA CYCLE STORES",
+          "state": "West Bengal",
+          "country": "India"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "type": "Ledger",
+        "name": "AMRIT SALES ( INDIA )",
+        "reservedname": ""
+      },
+      "oldmailingname": [
+        {
+          "metadata": true,
+          "type": "String"
+        },
+        "AMRIT SALES ( INDIA )"
+      ],
+      "oldaddress": [
+        {
+          "metadata": true,
+          "type": "String"
+        },
+        "INDUSTRIAL AREA - C, JASPAL BANGAR ROAD",
+        "LUDHIANA : 141010"
+      ],
+      "oldauditentryids": [
+        {
+          "metadata": true,
+          "type": "Number"
+        },
+        "-1"
+      ],
+      "startingfrom": "20240401",
+      "createddate": "20240215",
+      "alteredon": "20240712",
+      "guid": "353d02e0-63aa-11d7-8d44-d4bc1970ad56-0000408a",
+      "currencyname": "Rs",
+      "priorstatename": "Punjab",
+      "incometaxnumber": "GJEPS5772Q",
+      "gstregistrationtype": "Regular",
+      "vatdealertype": "Regular",
+      "parent": "Sundry Creditors",
+      "enteredby": "k",
+      "alteredby": "k",
+      "typeofupdateactivity": "Split",
+      "objectupdateaction": "Alter",
+      "createdby": "k",
+      "taxclassificationname": "\u0004 Not Applicable",
+      "taxtype": "Others",
+      "countryofresidence": "India",
+      "oldpincode": "141010",
+      "ledgerphone": "7652948695",
+      "ledgermobile": "7009402701",
+      "gsttype": "\u0004 Not Applicable",
+      "appropriatefor": "\u0004 Not Applicable",
+      "partygstin": "03GJEPS5772Q1ZC",
+      "gsttypeofsupply": "Services",
+      "gstnatureofsupply": "\u0004 Not Applicable",
+      "oldledstatename": "Punjab",
+      "servicecategory": "\u0004 Not Applicable",
+      "exciseledgerclassification": "\u0004 Not Applicable",
+      "excisedutytype": "\u0004 Not Applicable",
+      "excisenatureofpurchase": "\u0004 Not Applicable",
+      "ledgerfbtcategory": "\u0004 Not Applicable",
+      "oldcountryname": "India",
+      "isbillwiseon": false,
+      "iscostcentreson": false,
+      "isintereston": false,
+      "allowinmobile": false,
+      "iscosttrackingon": false,
+      "isbeneficiarycodeon": false,
+      "isexportonvchcreate": false,
+      "plasincomeexpense": false,
+      "isupdatingtargetid": false,
+      "isdeleted": false,
+      "issecurityonwhenentered": true,
+      "asoriginal": true,
+      "iscondensed": false,
+      "affectsstock": false,
+      "israteinclusivevat": false,
+      "forpayroll": false,
+      "isabcenabled": false,
+      "iscreditdayschkon": false,
+      "interestonbillwise": false,
+      "overrideinterest": false,
+      "overrideadvinterest": false,
+      "useforvat": false,
+      "ignoretdsexempt": false,
+      "istcsapplicable": false,
+      "istdsapplicable": false,
+      "isfbtapplicable": false,
+      "isgstapplicable": false,
+      "isexciseapplicable": false,
+      "istdsexpense": false,
+      "isedliapplicable": false,
+      "isrelatedparty": false,
+      "useforesieligibility": false,
+      "isinterestincllastday": false,
+      "appropriatetaxvalue": false,
+      "isbehaveasduty": false,
+      "interestincldayofaddition": false,
+      "interestincldayofdeduction": false,
+      "isothterritoryassessee": false,
+      "ignoremismatchwithwarning": false,
+      "useasnotionalbank": false,
+      "behaveaspaymentgateway": false,
+      "overridecreditlimit": false,
+      "isagainstformc": false,
+      "ischequeprintingenabled": true,
+      "ispayupload": false,
+      "ispaybatchonlysal": false,
+      "isbnfcodesupported": false,
+      "allowexportwitherrors": false,
+      "considerpurchaseforexport": false,
+      "istransporter": false,
+      "isecashledger": false,
+      "usefornotionalitc": false,
+      "isecommoperator": false,
+      "overridebasedonrealization": false,
+      "isecdiffinsdate": false,
+      "showinpayslip": false,
+      "useforgratuity": false,
+      "istdsprojected": false,
+      "issalarymulfile": false,
+      "forservicetax": false,
+      "isinputcredit": false,
+      "isexempted": false,
+      "isabatementapplicable": false,
+      "isstxparty": false,
+      "isstxnonrealizedtype": false,
+      "useforkkc": false,
+      "useforsbc": false,
+      "isusedforcvd": false,
+      "ledbelongstonontaxable": false,
+      "isexcisemerchantexporter": false,
+      "ispartyexempted": false,
+      "issezparty": false,
+      "tdsdeducteeisspecialrate": false,
+      "isechequesupported": false,
+      "iseddsupported": false,
+      "hasechequedeliverymode": false,
+      "hasechequedeliveryto": false,
+      "hasechequeprintlocation": false,
+      "hasechequepayablelocation": false,
+      "hasechequebanklocation": false,
+      "hasedddeliverymode": false,
+      "hasedddeliveryto": false,
+      "haseddprintlocation": false,
+      "haseddpayablelocation": false,
+      "haseddbanklocation": false,
+      "isebankingenabled": false,
+      "isexportfileencrypted": false,
+      "isbatchenabled": false,
+      "isproductcodebased": false,
+      "haseddcity": false,
+      "hasechequecity": false,
+      "isfilenameformatsupported": false,
+      "hasclientcode": false,
+      "payinsisbatchapplicable": false,
+      "payinsisfilenumapp": false,
+      "issalarytransgroupedforbrs": false,
+      "isebankingsupported": false,
+      "isscbuae": false,
+      "isbankstatusapp": false,
+      "issalarygrouped": false,
+      "useforpurchasetax": false,
+      "bankisreconcileperfectmatches": false,
+      "ispymtadvonline": false,
+      "ispymtadvccenabled": false,
+      "isincludepymtadvbillwise": false,
+      "audited": false,
+      "sortposition": " 1000",
+      "alterid": " 48573",
+      "openingbalance": "207200.00",
+      "updateddatetime": "20250821153204000",
+      "languagename": [
+        {
+          "name": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "AMRIT SALES ( INDIA )"
+          ],
+          "languageid": " 1033"
+        }
+      ],
+      "ledgstregdetails": [
+        {
+          "applicablefrom": "20220401",
+          "gstregistrationtype": "Regular",
+          "state": "Punjab",
+          "placeofsupply": "Punjab",
+          "gstin": "03GJEPS5772Q1ZC",
+          "isothterritoryassessee": false,
+          "considerpurchaseforexport": false,
+          "istransporter": false,
+          "iscommonparty": false
+        }
+      ],
+      "ledmailingdetails": [
+        {
+          "address": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "INDUSTRIAL AREA - C, JASPAL BANGAR ROAD",
+            "LUDHIANA : 141010"
+          ],
+          "applicablefrom": "20220401",
+          "pincode": "141010",
+          "mailingname": "AMRIT SALES ( INDIA )",
+          "state": "Punjab",
+          "country": "India"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "type": "Ledger",
+        "name": "ASIAN CYCLE INDUSTRIES",
+        "reservedname": ""
+      },
+      "oldmailingname": [
+        {
+          "metadata": true,
+          "type": "String"
+        },
+        "ASIAN CYCLE INDUSTRIES"
+      ],
+      "oldaddress": [
+        {
+          "metadata": true,
+          "type": "String"
+        },
+        "939, FOCAL POINT ROAD",
+        "SHERPUR, LUDHIANA",
+        "LUDHIANA-141010"
+      ],
+      "oldauditentryids": [
+        {
+          "metadata": true,
+          "type": "Number"
+        },
+        "-1"
+      ],
+      "startingfrom": "20240401",
+      "createddate": "20181031",
+      "alteredon": "20251018",
+      "guid": "353d02e0-63aa-11d7-8d44-d4bc1970ad56-00001698",
+      "currencyname": "Rs",
+      "email": "ASIANCYCLES1@GMAIL.COM",
+      "priorstatename": "Punjab",
+      "vattinnumber": "'03021074026",
+      "gstregistrationtype": "Regular",
+      "parent": "Sundry Creditors",
+      "enteredby": "k",
+      "alteredby": "k",
+      "objectupdateaction": "Alter",
+      "createdby": "k",
+      "taxclassificationname": "\u0004 Not Applicable",
+      "taxtype": "Others",
+      "billcreditperiod": "30 Days",
+      "countryofresidence": "India",
+      "oldpincode": "141010",
+      "ledgercountryisdcode": "+91",
+      "gsttype": "\u0004 Not Applicable",
+      "appropriatefor": "\u0004 Not Applicable",
+      "partygstin": "03AAGFA7358F1ZN",
+      "gsttypeofsupply": "Services",
+      "gstnatureofsupply": "\u0004 Not Applicable",
+      "oldledstatename": "Punjab",
+      "vatdealernature": "VAT Dealer",
+      "servicecategory": "\u0004 Not Applicable",
+      "exciseledgerclassification": "Default",
+      "excisedutytype": "\u0004 Not Applicable",
+      "excisenatureofpurchase": "\u0004 Not Applicable",
+      "ledgerfbtcategory": "\u0004 Not Applicable",
+      "oldcountryname": "India",
+      "isbillwiseon": true,
+      "iscostcentreson": false,
+      "isintereston": false,
+      "allowinmobile": false,
+      "iscosttrackingon": false,
+      "isbeneficiarycodeon": false,
+      "isexportonvchcreate": false,
+      "plasincomeexpense": false,
+      "isupdatingtargetid": false,
+      "isdeleted": false,
+      "issecurityonwhenentered": true,
+      "asoriginal": true,
+      "iscondensed": false,
+      "affectsstock": false,
+      "israteinclusivevat": false,
+      "forpayroll": false,
+      "isabcenabled": false,
+      "iscreditdayschkon": false,
+      "interestonbillwise": false,
+      "overrideinterest": false,
+      "overrideadvinterest": false,
+      "useforvat": false,
+      "ignoretdsexempt": false,
+      "istcsapplicable": false,
+      "istdsapplicable": false,
+      "isfbtapplicable": false,
+      "isgstapplicable": false,
+      "isexciseapplicable": false,
+      "istdsexpense": false,
+      "isedliapplicable": false,
+      "isrelatedparty": false,
+      "useforesieligibility": false,
+      "isinterestincllastday": false,
+      "appropriatetaxvalue": false,
+      "isbehaveasduty": false,
+      "interestincldayofaddition": false,
+      "interestincldayofdeduction": false,
+      "isothterritoryassessee": false,
+      "ignoremismatchwithwarning": false,
+      "useasnotionalbank": false,
+      "behaveaspaymentgateway": false,
+      "overridecreditlimit": false,
+      "isagainstformc": false,
+      "ischequeprintingenabled": false,
+      "ispayupload": false,
+      "ispaybatchonlysal": false,
+      "isbnfcodesupported": false,
+      "allowexportwitherrors": false,
+      "considerpurchaseforexport": false,
+      "istransporter": false,
+      "isecashledger": false,
+      "usefornotionalitc": false,
+      "isecommoperator": false,
+      "overridebasedonrealization": false,
+      "isecdiffinsdate": false,
+      "showinpayslip": false,
+      "useforgratuity": false,
+      "istdsprojected": false,
+      "issalarymulfile": false,
+      "forservicetax": false,
+      "isinputcredit": false,
+      "isexempted": false,
+      "isabatementapplicable": false,
+      "isstxparty": false,
+      "isstxnonrealizedtype": false,
+      "useforkkc": false,
+      "useforsbc": false,
+      "isusedforcvd": false,
+      "ledbelongstonontaxable": false,
+      "isexcisemerchantexporter": false,
+      "ispartyexempted": false,
+      "issezparty": false,
+      "tdsdeducteeisspecialrate": false,
+      "isechequesupported": false,
+      "iseddsupported": false,
+      "hasechequedeliverymode": false,
+      "hasechequedeliveryto": false,
+      "hasechequeprintlocation": false,
+      "hasechequepayablelocation": false,
+      "hasechequebanklocation": false,
+      "hasedddeliverymode": false,
+      "hasedddeliveryto": false,
+      "haseddprintlocation": false,
+      "haseddpayablelocation": false,
+      "haseddbanklocation": false,
+      "isebankingenabled": false,
+      "isexportfileencrypted": false,
+      "isbatchenabled": false,
+      "isproductcodebased": false,
+      "haseddcity": false,
+      "hasechequecity": false,
+      "isfilenameformatsupported": false,
+      "hasclientcode": false,
+      "payinsisbatchapplicable": false,
+      "payinsisfilenumapp": false,
+      "issalarytransgroupedforbrs": false,
+      "isebankingsupported": false,
+      "isscbuae": false,
+      "isbankstatusapp": false,
+      "issalarygrouped": false,
+      "useforpurchasetax": false,
+      "bankisreconcileperfectmatches": false,
+      "ispymtadvonline": false,
+      "ispymtadvccenabled": false,
+      "isincludepymtadvbillwise": false,
+      "audited": false,
+      "sortposition": " 1000",
+      "alterid": " 53328",
+      "openingbalance": "363888.00",
+      "updateddatetime": "20251018090009000",
+      "languagename": [
+        {
+          "name": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "ASIAN CYCLE INDUSTRIES"
+          ],
+          "languageid": " 1033"
+        }
+      ],
+      "ledgstregdetails": [
+        {
+          "applicablefrom": "20220401",
+          "gstregistrationtype": "Regular",
+          "state": "Punjab",
+          "placeofsupply": "Punjab",
+          "gstin": "03AAGFA7358F1ZN",
+          "isothterritoryassessee": false,
+          "considerpurchaseforexport": false,
+          "istransporter": false,
+          "iscommonparty": false
+        }
+      ],
+      "ledmailingdetails": [
+        {
+          "address": [
+            {
+              "metadata": true,
+              "type": "String"
+            },
+            "939, FOCAL POINT ROAD",
+            "SHERPUR, LUDHIANA",
+            "LUDHIANA-141010"
+          ],
+          "applicablefrom": "20220401",
+          "pincode": "141010",
+          "mailingname": "ASIAN CYCLE INDUSTRIES",
+          "state": "Punjab",
+          "country": "India"
+        }
+      ],
+      "contactdetails": [
+        {
+          "name": "Primary Mobile No.",
+          "countryisdcode": "+91",
+          "isdefaultwhatsappnum": true
+        }
+      ]
+    }
+  ]
+}
