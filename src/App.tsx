@@ -52,6 +52,9 @@ function AppRoutes() {
               }
             }
           }
+
+          // Load default overrides from repo if nothing exists
+          await useOverrideStore.getState().loadDefaults();
         } catch (e) {
           console.error("Failed to restore data from IDB:", e);
         }
