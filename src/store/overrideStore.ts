@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { UnitOverride, RateOverride, AuditEntry } from "../types/canonical";
+import { saveToStore } from "../db/idb";
 
 interface OverrideState {
   units: Record<string, UnitOverride>;
@@ -23,6 +24,9 @@ export const useOverrideStore = create<OverrideState>()(
       setUnitOverride: (itemId, ov) => {
         set((s) => ({ units: { ...s.units, [itemId]: ov } }));
         get().addAudit({ type: "unit_override", itemId, newValue: ov, at: new Date().toISOString(), by: "user" });
+        // Also persist to IDB
+        const units = get().units;
+        saveToStore("unitOverrides", "latest", units).catch(console.error);
       },
       setRateOverride: (itemId, ov) => {
         set((s) => ({ rates: { ...s.rates, [itemId]: ov } }));

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import clsx from "clsx";
 import type { ReactNode } from "react";
 
@@ -11,7 +12,7 @@ interface KPICardProps {
   danger?: boolean;
 }
 
-export function KPICard({ title, value, sub, icon, trend, accent, danger }: KPICardProps) {
+export const KPICard = memo(function KPICard({ title, value, sub, icon, trend, accent, danger }: KPICardProps) {
   return (
     <div
       className={clsx(
@@ -43,4 +44,4 @@ export function KPICard({ title, value, sub, icon, trend, accent, danger }: KPIC
       )}
     </div>
   );
-}
+});

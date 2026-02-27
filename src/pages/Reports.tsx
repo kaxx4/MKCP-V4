@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line,
@@ -9,10 +9,12 @@ import { monthlyTotals } from "../engine/financial";
 import { toDisplay } from "../engine/unitEngine";
 import { useUIStore } from "../store/uiStore";
 import { fmtINR, fmtNum } from "../utils/format";
-import { Upload, BarChart2 } from "lucide-react";
+import { Upload, BarChart2, TrendingUp, ChevronDown, ChevronRight } from "lucide-react";
 import clsx from "clsx";
+import { loadFromStore } from "../db/idb";
+import { generatePredictions, type PartyOrderPattern, type PredictionSnapshot, type PredictionAccuracy } from "../engine/prediction";
 
-const TABS = ["Inventory", "Sales Trend", "Top Items"] as const;
+const TABS = ["Inventory", "Sales Trend", "Top Items", "Predictions"] as const;
 type Tab = typeof TABS[number];
 
 export default function Reports() {
@@ -20,7 +22,35 @@ export default function Reports() {
   const { data } = useDataStore();
   const { unitMode } = useUIStore();
   const [tab, setTab] = useState<Tab>("Inventory");
+  const [predictionType, setPredictionType] = useState<"Sales" | "Purchase">("Sales");
+  const [predictions, setPredictions] = useState<PartyOrderPattern[]>([]);
+  const [expandedParty, setExpandedParty] = useState<string | null>(null);
+  const [accuracyData, setAccuracyData] = useState<PredictionAccuracy[] | null>(null);
 
+  // Load predictions when tab changes to Predictions
+  useEffect(() => {
+    if (tab === "Predictions" && data) {
+      (async () => {
+        const snapshot = await loadFromStore<PredictionSnapshot>("predictions", "latest");
+        if (snapshot) {
+          const filtered = snapshot.predictions.filter(p => {
+            const firstVoucher = data.vouchers.find(v => v.partyLedgerId === p.partyLedgerId);
+            return firstVoucher?.voucherType === predictionType;
+          });
+          setPredictions(filtered);
+        } else {
+          // Generate fresh predictions if none exist
+          const fresh = generatePredictions(data.vouchers, data.items, predictionType);
+          setPredictions(fresh);
+        }
+
+        // Try to load latest accuracy data
+        const today = new Date().toISOString().slice(0, 10);
+        const accuracy = await loadFromStore<PredictionAccuracy[]>("predictions", `accuracy_${today}`);
+        setAccuracyData(accuracy ?? null);
+      })();
+    }
+  }, [tab, predictionType, data]);
 
   const inventoryRows = useMemo(() => {
     if (!data) return [];
@@ -174,6 +204,149 @@ export default function Reports() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Predictions */}
+      {tab === "Predictions" && (
+        <div className="space-y-4">
+          {/* Type toggle and summary */}
+          <div className="flex items-center justify-between bg-bg-card border border-bg-border rounded-xl p-4">
+            <div className="flex items-center gap-4">
+              <h3 className="font-semibold text-primary">Order Predictions</h3>
+              <select
+                value={predictionType}
+                onChange={(e) => setPredictionType(e.target.value as "Sales" | "Purchase")}
+                className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none"
+              >
+                <option value="Sales">Sales Orders</option>
+                <option value="Purchase">Purchase Orders</option>
+              </select>
+            </div>
+            <div className="flex gap-6 text-sm">
+              <div className="text-muted">
+                <span className="font-semibold text-primary">{predictions.length}</span> parties analyzed
+              </div>
+              <div className="text-muted">
+                <span className="font-semibold text-success">{predictions.filter(p => p.daysUntilPredicted >= 0 && p.daysUntilPredicted <= 30).length}</span> upcoming (30d)
+              </div>
+              <div className="text-muted">
+                <span className="font-semibold text-danger">{predictions.filter(p => p.isOverdue).length}</span> overdue
+              </div>
+            </div>
+          </div>
+
+          {/* Accuracy summary if available */}
+          {accuracyData && accuracyData.length > 0 && (
+            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+              <h3 className="font-semibold text-primary mb-2 flex items-center gap-2">
+                <TrendingUp size={16} />
+                Prediction Accuracy (Latest Batch)
+              </h3>
+              <div className="grid grid-cols-3 gap-4 mt-3">
+                <div className="bg-bg border border-bg-border rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-accent">
+                    {(accuracyData.reduce((s, a) => s + a.dateAccuracyScore, 0) / accuracyData.length * 100).toFixed(0)}%
+                  </div>
+                  <div className="text-muted text-xs mt-1">Date Accuracy</div>
+                </div>
+                <div className="bg-bg border border-bg-border rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-success">
+                    {(accuracyData.reduce((s, a) => s + a.itemAccuracyScore, 0) / accuracyData.length * 100).toFixed(0)}%
+                  </div>
+                  <div className="text-muted text-xs mt-1">Item Accuracy</div>
+                </div>
+                <div className="bg-bg border border-bg-border rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-primary">{accuracyData.length}</div>
+                  <div className="text-muted text-xs mt-1">Parties Scored</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Predictions table */}
+          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-bg-border">
+              <h3 className="font-semibold text-primary">Party Predictions (sorted by urgency)</h3>
+            </div>
+            <div className="overflow-auto max-h-[60vh]">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                  <tr>
+                    {["", "Party", "Last Order", "Avg Interval", "Predicted Next", "Confidence", "Top Items"].map((h) => (
+                      <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {predictions.map((pred) => {
+                    const isExpanded = expandedParty === pred.partyLedgerId;
+                    const dateColor = pred.isOverdue ? "text-danger" : pred.daysUntilPredicted <= 7 ? "text-warn" : "text-success";
+                    return (
+                      <>
+                        <tr
+                          key={pred.partyLedgerId}
+                          className="border-b border-bg-border/50 hover:bg-bg-border/20 cursor-pointer"
+                          onClick={() => setExpandedParty(isExpanded ? null : pred.partyLedgerId)}
+                        >
+                          <td className="px-4 py-2">
+                            {isExpanded ? <ChevronDown size={14} className="text-muted" /> : <ChevronRight size={14} className="text-muted" />}
+                          </td>
+                          <td className="px-4 py-2 text-primary font-medium">{pred.partyName}</td>
+                          <td className="px-4 py-2 font-mono text-muted text-xs">{pred.lastOrderDate}</td>
+                          <td className="px-4 py-2 font-mono text-muted text-xs">{pred.avgIntervalDays}d ± {pred.stdDevDays}d</td>
+                          <td className={clsx("px-4 py-2 font-mono font-medium text-xs", dateColor)}>
+                            {pred.predictedNextDate} ({pred.daysUntilPredicted > 0 ? `in ${pred.daysUntilPredicted}d` : `${Math.abs(pred.daysUntilPredicted)}d ago`})
+                          </td>
+                          <td className="px-4 py-2">
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 h-2 bg-bg-border rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-accent transition-all"
+                                  style={{ width: `${pred.confidence * 100}%` }}
+                                />
+                              </div>
+                              <span className="text-xs font-mono text-muted w-10">{(pred.confidence * 100).toFixed(0)}%</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2 text-muted text-xs">{pred.topItems.length} items</td>
+                        </tr>
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-3 bg-bg-border/10">
+                              <div className="space-y-2">
+                                <h4 className="font-semibold text-primary text-xs mb-2">Predicted Items:</h4>
+                                <div className="grid grid-cols-2 gap-2">
+                                  {pred.topItems.map((item) => (
+                                    <div key={item.itemId} className="bg-bg-card border border-bg-border rounded-lg p-2 text-xs">
+                                      <div className="font-medium text-primary truncate">{item.itemName}</div>
+                                      <div className="flex items-center justify-between mt-1">
+                                        <span className="text-muted">Predicted: <span className="font-mono text-primary">{item.predictedQtyBase}</span></span>
+                                        <span className={clsx("font-mono text-xs px-1.5 py-0.5 rounded",
+                                          item.trend === "up" ? "bg-success/10 text-success" :
+                                          item.trend === "down" ? "bg-danger/10 text-danger" :
+                                          "bg-muted/10 text-muted"
+                                        )}>
+                                          {item.trend === "up" ? "↗" : item.trend === "down" ? "↘" : "→"} {item.trend}
+                                        </span>
+                                      </div>
+                                      <div className="text-muted text-xs mt-1">
+                                        Avg: {item.avgQtyBase} · Last: {item.lastQtyBase} · Freq: {item.frequency}x
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

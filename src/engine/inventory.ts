@@ -1,5 +1,25 @@
 import type { CanonicalVoucher, CanonicalItem, MonthBucket } from "../types/canonical";
 
+export type VoucherIndex = Map<string, CanonicalVoucher[]>;
+
+/**
+ * Build an index of vouchers by itemId for O(V_item) instead of O(V) lookup.
+ * Pre-filters out cancelled and optional vouchers.
+ */
+export function buildVoucherIndex(vouchers: CanonicalVoucher[]): VoucherIndex {
+  const idx = new Map<string, CanonicalVoucher[]>();
+  for (const v of vouchers) {
+    if (v.isCancelled || v.isOptional) continue;
+    for (const line of v.lines) {
+      if (line.type !== "inventory" || !line.itemId) continue;
+      let arr = idx.get(line.itemId);
+      if (!arr) { arr = []; idx.set(line.itemId, arr); }
+      arr.push(v);
+    }
+  }
+  return idx;
+}
+
 /** Returns the last N months as "YYYY-MM" strings, newest last */
 export function getMonthRange(nMonths: number, asOfDate?: Date): string[] {
   const end = asOfDate ?? new Date();
@@ -127,4 +147,96 @@ export function suggestedReorder(
   const avg = avgMonthlyOutward(item, vouchers);
   const needed = avg * leadTimeMonths - currentStock;
   return Math.max(Math.ceil(needed), minReorder);
+}
+
+/**
+ * Get current stock using voucher index (optimized)
+ */
+export function getCurrentStockIndexed(item: CanonicalItem, voucherIndex: VoucherIndex): number {
+  let running = item.openingQtyBase;
+  const itemVouchers = voucherIndex.get(item.itemId) ?? [];
+
+  for (const v of itemVouchers) {
+    for (const line of v.lines) {
+      if (line.type !== "inventory" || line.itemId !== item.itemId) continue;
+      const qty = line.qtyBase ?? 0;
+      if (["Sales", "Credit Note"].includes(v.voucherType)) {
+        running -= qty;
+      } else if (["Purchase", "Debit Note"].includes(v.voucherType)) {
+        running += qty;
+      } else if (v.voucherType === "Stock Journal") {
+        running += qty;
+      }
+    }
+  }
+  return running;
+}
+
+/**
+ * Compute monthly buckets using voucher index (optimized)
+ */
+export function computeMonthlyBucketsIndexed(
+  item: CanonicalItem,
+  voucherIndex: VoucherIndex,
+  nMonths: number = 8,
+  asOfDate?: Date
+): MonthBucket[] {
+  const months = getMonthRange(nMonths + 1, asOfDate);
+  const monthlyIn: Record<string, number> = {};
+  const monthlyOut: Record<string, number> = {};
+
+  const itemVouchers = voucherIndex.get(item.itemId) ?? [];
+
+  for (const v of itemVouchers) {
+    const ym = v.date.slice(0, 7);
+    for (const line of v.lines) {
+      if (line.type !== "inventory" || line.itemId !== item.itemId) continue;
+      const qty = line.qtyBase ?? 0;
+      if (
+        v.voucherType === "Sales" ||
+        v.voucherType === "Credit Note"
+      ) {
+        monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
+      } else if (
+        v.voucherType === "Purchase" ||
+        v.voucherType === "Debit Note"
+      ) {
+        monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
+      } else if (v.voucherType === "Stock Journal") {
+        if (qty > 0) monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
+        else monthlyOut[ym] = (monthlyOut[ym] ?? 0) + Math.abs(qty);
+      }
+    }
+  }
+
+  const result: MonthBucket[] = [];
+  let running = item.openingQtyBase;
+
+  const firstMonth = months[0]!;
+  const allMonthsWithMovements = new Set([...Object.keys(monthlyIn), ...Object.keys(monthlyOut)]);
+  const preRangeMonths = Array.from(allMonthsWithMovements).filter((m) => m < firstMonth).sort();
+
+  for (const pm of preRangeMonths) {
+    running += (monthlyIn[pm] ?? 0) - (monthlyOut[pm] ?? 0);
+  }
+
+  for (const ym of months) {
+    const inw = monthlyIn[ym] ?? 0;
+    const out = monthlyOut[ym] ?? 0;
+    const closing = running + inw - out;
+
+    if (ym !== months[0]) {
+      result.push({
+        yearMonth: ym,
+        label: getMonthLabel(ym),
+        openingQtyBase: running,
+        inwardsBase: inw,
+        outwardsBase: out,
+        closingQtyBase: closing,
+      });
+    }
+    running = closing;
+  }
+
+  return result;
 }
