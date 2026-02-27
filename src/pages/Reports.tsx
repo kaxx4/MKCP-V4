@@ -9,7 +9,7 @@ import { monthlyTotals } from "../engine/financial";
 import { toDisplay } from "../engine/unitEngine";
 import { useUIStore } from "../store/uiStore";
 import { fmtINR, fmtNum } from "../utils/format";
-import { Upload, BarChart2, TrendingUp, ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react";
+import { Upload, BarChart2, TrendingUp, ChevronDown, ChevronRight, Download, RefreshCw, Calendar, Filter } from "lucide-react";
 import clsx from "clsx";
 import { loadFromStore } from "../db/idb";
 import { generatePredictions, type PartyOrderPattern, type PredictionSnapshot, type PredictionAccuracy } from "../engine/prediction";
@@ -30,6 +30,10 @@ export default function Reports() {
   const [turnoverSort, setTurnoverSort] = useState<"ratio-desc" | "ratio-asc" | "doi-asc" | "doi-desc" | "cogs-desc" | "name">("ratio-desc");
   const [turnoverGroupFilter, setTurnoverGroupFilter] = useState("ALL");
   const [turnoverClassFilter, setTurnoverClassFilter] = useState<"ALL" | "fast" | "moderate" | "slow" | "dead">("ALL");
+  const [predictionDateFilter, setPredictionDateFilter] = useState<"all" | "overdue" | "week" | "month" | "custom">("all");
+  const [predictionConfidenceFilter, setPredictionConfidenceFilter] = useState<number>(0);
+  const [predictionCustomStartDate, setPredictionCustomStartDate] = useState<string>("");
+  const [predictionCustomEndDate, setPredictionCustomEndDate] = useState<string>("");
 
   // Load predictions when tab changes to Predictions
   useEffect(() => {
@@ -478,6 +482,73 @@ export default function Reports() {
             </div>
           </div>
 
+          {/* Advanced Filters */}
+          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Filter size={16} className="text-accent" />
+              <h3 className="font-semibold text-primary">Advanced Filters</h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+              {/* Date Range Filter */}
+              <div>
+                <label className="text-xs text-muted mb-1 block">Date Range</label>
+                <select
+                  value={predictionDateFilter}
+                  onChange={(e) => setPredictionDateFilter(e.target.value as typeof predictionDateFilter)}
+                  className="w-full bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none"
+                >
+                  <option value="all">All Dates</option>
+                  <option value="overdue">Overdue Only</option>
+                  <option value="week">Next 7 Days</option>
+                  <option value="month">Next 30 Days</option>
+                  <option value="custom">Custom Range</option>
+                </select>
+              </div>
+
+              {/* Confidence Filter */}
+              <div>
+                <label className="text-xs text-muted mb-1 block">Min Confidence: {predictionConfidenceFilter}%</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={predictionConfidenceFilter}
+                  onChange={(e) => setPredictionConfidenceFilter(Number(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+
+              {/* Custom Start Date */}
+              {predictionDateFilter === "custom" && (
+                <>
+                  <div>
+                    <label className="text-xs text-muted mb-1 block flex items-center gap-1">
+                      <Calendar size={12} />Start Date
+                    </label>
+                    <input
+                      type="date"
+                      value={predictionCustomStartDate}
+                      onChange={(e) => setPredictionCustomStartDate(e.target.value)}
+                      className="w-full bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted mb-1 block flex items-center gap-1">
+                      <Calendar size={12} />End Date
+                    </label>
+                    <input
+                      type="date"
+                      value={predictionCustomEndDate}
+                      onChange={(e) => setPredictionCustomEndDate(e.target.value)}
+                      className="w-full bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
           {/* Accuracy summary if available */}
           {accuracyData && accuracyData.length > 0 && (
             <div className="bg-bg-card border border-bg-border rounded-xl p-4">
@@ -508,8 +579,39 @@ export default function Reports() {
 
           {/* Predictions table */}
           <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-bg-border">
+            <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between">
               <h3 className="font-semibold text-primary">Party Predictions (sorted by urgency)</h3>
+              <div className="text-muted text-xs">
+                Showing <span className="font-semibold text-primary">{
+                  predictions.filter(pred => {
+                    // Apply filters
+                    // Confidence filter
+                    if (pred.confidence * 100 < predictionConfidenceFilter) return false;
+
+                    // Date range filter
+                    const predDate = new Date(pred.predictedNextDate);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+
+                    if (predictionDateFilter === "overdue") {
+                      if (!pred.isOverdue) return false;
+                    } else if (predictionDateFilter === "week") {
+                      const weekFromNow = new Date(today);
+                      weekFromNow.setDate(weekFromNow.getDate() + 7);
+                      if (predDate < today || predDate > weekFromNow) return false;
+                    } else if (predictionDateFilter === "month") {
+                      const monthFromNow = new Date(today);
+                      monthFromNow.setDate(monthFromNow.getDate() + 30);
+                      if (predDate < today || predDate > monthFromNow) return false;
+                    } else if (predictionDateFilter === "custom") {
+                      if (predictionCustomStartDate && predDate < new Date(predictionCustomStartDate)) return false;
+                      if (predictionCustomEndDate && predDate > new Date(predictionCustomEndDate)) return false;
+                    }
+
+                    return true;
+                  }).length
+                }</span> of {predictions.length}
+              </div>
             </div>
             <div className="overflow-auto max-h-[60vh]">
               <table className="w-full text-sm">
@@ -521,7 +623,31 @@ export default function Reports() {
                   </tr>
                 </thead>
                 <tbody>
-                  {predictions.map((pred) => {
+                  {predictions.filter(pred => {
+                    // Apply filters (same logic)
+                    if (pred.confidence * 100 < predictionConfidenceFilter) return false;
+
+                    const predDate = new Date(pred.predictedNextDate);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+
+                    if (predictionDateFilter === "overdue") {
+                      if (!pred.isOverdue) return false;
+                    } else if (predictionDateFilter === "week") {
+                      const weekFromNow = new Date(today);
+                      weekFromNow.setDate(weekFromNow.getDate() + 7);
+                      if (predDate < today || predDate > weekFromNow) return false;
+                    } else if (predictionDateFilter === "month") {
+                      const monthFromNow = new Date(today);
+                      monthFromNow.setDate(monthFromNow.getDate() + 30);
+                      if (predDate < today || predDate > monthFromNow) return false;
+                    } else if (predictionDateFilter === "custom") {
+                      if (predictionCustomStartDate && predDate < new Date(predictionCustomStartDate)) return false;
+                      if (predictionCustomEndDate && predDate > new Date(predictionCustomEndDate)) return false;
+                    }
+
+                    return true;
+                  }).map((pred) => {
                     const isExpanded = expandedParty === pred.partyLedgerId;
                     const dateColor = pred.isOverdue ? "text-danger" : pred.daysUntilPredicted <= 7 ? "text-warn" : "text-success";
                     return (
