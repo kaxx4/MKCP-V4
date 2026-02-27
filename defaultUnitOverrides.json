@@ -1,0 +1,26 @@
+{
+  "units": {},
+  "rates": {},
+  "version": "1.0.0",
+  "description": "Default unit and rate overrides for MK Cycles Dashboard. Add item-specific overrides here to be loaded on first app initialization.",
+  "example": {
+    "units": {
+      "ITEM123": {
+        "itemId": "ITEM123",
+        "pkgUnit": "BOX",
+        "unitsPerPkg": 100,
+        "source": "default",
+        "confidence": 1.0,
+        "updatedAt": "2026-02-27T00:00:00.000Z"
+      }
+    },
+    "rates": {
+      "ITEM456": {
+        "itemId": "ITEM456",
+        "newRate": 150.50,
+        "source": "default",
+        "updatedAt": "2026-02-27T00:00:00.000Z"
+      }
+    }
+  }
+}
