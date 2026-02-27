@@ -1,17 +1,20 @@
-import { useState } from "react";
-import { Settings as SettingsIcon, Trash2, Download, AlertTriangle } from "lucide-react";
+import { useState, useRef } from "react";
+import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useDataStore } from "../store/dataStore";
 import { useOverrideStore } from "../store/overrideStore";
 import { clearAllData } from "../db/idb";
 import { useToast } from "../components/Toast";
+import { exportUnitsToExcel, importUnitsFromExcel } from "../utils/unitExcelHandler";
 
 export default function Settings() {
   const { unitMode, toggleUnitMode, fyYear, setFyYear, coverMonths, setCoverMonths, leadTimeMonths, setLeadTimeMonths, defaultCreditDays, setDefaultCreditDays } = useUIStore();
-  const { clearData, data } = useDataStore();
-  const { exportAuditLog } = useOverrideStore();
+  const { clearData, data, refreshOverrides } = useDataStore();
+  const { exportAuditLog, units, setUnitOverride } = useOverrideStore();
   const { toast } = useToast();
   const [confirmClear, setConfirmClear] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function handleClearData() {
     if (!confirmClear) {
@@ -32,6 +35,59 @@ export default function Settings() {
     a.download = `audit_log_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     toast("Audit log exported", "success");
+  }
+
+  function handleExportUnits() {
+    if (!data) {
+      toast("No data loaded. Import data first.", "error");
+      return;
+    }
+    try {
+      exportUnitsToExcel(data.items, units);
+      toast("Unit configuration exported successfully", "success");
+    } catch (err) {
+      toast(`Export failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    }
+  }
+
+  function handleImportUnitsClick() {
+    fileInputRef.current?.click();
+  }
+
+  async function handleImportUnits(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !data) return;
+
+    setIsImporting(true);
+    try {
+      const { overrides, errors } = await importUnitsFromExcel(file, data.items);
+
+      if (errors.length > 0) {
+        // Show first few errors
+        const errorMsg = errors.slice(0, 3).join("; ");
+        toast(`Import warnings: ${errorMsg}${errors.length > 3 ? ` (${errors.length - 3} more)` : ""}`, "warn");
+      }
+
+      if (overrides.length > 0) {
+        // Apply overrides
+        for (const override of overrides) {
+          setUnitOverride(override.itemId, override);
+        }
+        // Refresh data to apply the new overrides
+        refreshOverrides();
+        toast(`Successfully imported ${overrides.length} unit configuration(s)`, "success");
+      } else if (errors.length === 0) {
+        toast("No changes found in the imported file", "info");
+      }
+    } catch (err) {
+      toast(`Import failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    } finally {
+      setIsImporting(false);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
   }
 
   const fyOptions: string[] = [];
@@ -105,6 +161,45 @@ export default function Settings() {
         <input type="number" value={defaultCreditDays} min={0} max={365}
           onChange={(e) => setDefaultCreditDays(parseInt(e.target.value) || 30)}
           className="bg-bg border border-bg-border rounded-lg px-3 py-2 text-primary text-sm outline-none w-24" />
+      </Section>
+
+      {/* Unit Configuration Export/Import */}
+      <Section title="Unit Configuration (Base & Package Units)">
+        <div className="space-y-3">
+          <p className="text-xs text-muted">
+            Export item units to Excel, edit package configurations, then import back.
+          </p>
+          <div className="flex gap-3">
+            <button
+              onClick={handleExportUnits}
+              disabled={!data}
+              className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:bg-muted disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition text-sm"
+            >
+              <FileSpreadsheet size={14} />
+              Export Template
+            </button>
+            <button
+              onClick={handleImportUnitsClick}
+              disabled={!data || isImporting}
+              className="flex items-center gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 rounded-lg transition text-sm"
+            >
+              <Upload size={14} />
+              {isImporting ? "Importing..." : "Import Excel"}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleImportUnits}
+              className="hidden"
+            />
+          </div>
+          {units && Object.keys(units).length > 0 && (
+            <p className="text-xs text-accent">
+              {Object.keys(units).length} unit override(s) currently applied
+            </p>
+          )}
+        </div>
       </Section>
 
       {/* Export Audit Log */}

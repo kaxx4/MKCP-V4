@@ -272,9 +272,9 @@ export default function Orders() {
         </div>
 
         {/* CENTER: Item Detail */}
-        <div className="flex-1 flex flex-col bg-bg overflow-y-auto">
+        <div className="flex-1 flex flex-col bg-bg min-h-0">
           {selectedItem ? (
-            <div className="p-4 flex flex-col gap-4">
+            <div className="p-4 flex flex-col gap-4 overflow-y-auto">
               <div>
                 <h2 className="text-lg font-bold text-primary leading-tight">{selectedItem.name}</h2>
                 <div className="text-muted text-xs mt-0.5">{selectedItem.group} · {selectedItem.baseUnit}{selectedItem.pkgUnit ? ` · ${selectedItem.unitsPerPkg}/${selectedItem.pkgUnit}` : ""}</div>
@@ -320,7 +320,7 @@ export default function Orders() {
                       />
                       <Bar dataKey="in" fill="#10b981" name="In" radius={[2, 2, 0, 0]} barSize={12} />
                       <Bar dataKey="out" fill="#ef4444" name="Out" radius={[2, 2, 0, 0]} barSize={12} />
-                      <Line type="monotone" dataKey="closing" stroke="#f59e0b" dot={false} strokeWidth={2} name="Stock" />
+                      <Line type="monotone" dataKey="closing" stroke="#3b82f6" dot={false} strokeWidth={2} name="Stock" />
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
@@ -360,8 +360,9 @@ export default function Orders() {
           )}
         </div>
 
-        {/* RIGHT: Order Editor */}
-        <div className="w-[28%] flex flex-col border-l border-bg-border bg-bg-card">
+        {/* RIGHT: Order Editor & Summary */}
+        <div className="w-[28%] flex flex-col border-l border-bg-border bg-bg-card min-h-0">
+          {/* Order Entry - Top */}
           <div className="p-4 border-b border-bg-border">
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm font-semibold text-primary">Order Entry</span>
@@ -447,60 +448,60 @@ export default function Orders() {
             )}
           </div>
 
+          {/* Order Summary - Bottom */}
+          {orderLinesList.length > 0 && (
+            <div className="flex-1 flex flex-col min-h-0 border-t border-bg-border">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-semibold text-primary">Order Summary</span>
+                  <span className="text-xs text-muted font-mono">{orderLinesList.length} items</span>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={exportCSV} className="flex items-center gap-1.5 text-xs bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-2 py-1.5 rounded-lg transition">
+                    <Download size={12} />
+                  </button>
+                  <button onClick={exportXLSX} className="flex items-center gap-1.5 text-xs bg-accent hover:bg-accent-hover text-white px-2 py-1.5 rounded-lg transition">
+                    <Download size={12} />
+                  </button>
+                  <button onClick={clearAll} className="text-xs bg-danger/20 hover:bg-danger/30 text-danger px-2 py-1.5 rounded-lg transition">
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto min-h-0">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-bg-card">
+                    <tr className="border-b border-bg-border">
+                      {["Item", "Qty", ""].map((h) => (
+                        <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderLinesList.map((line) => {
+                      const item = data.items.get(line.itemId);
+                      const disp = toDisplay(item ?? null, line.qtyBase, unitMode);
+                      return (
+                        <tr key={line.itemId} className="border-b border-bg-border/50 hover:bg-bg-border/20">
+                          <td className="px-3 py-2 text-primary truncate max-w-[140px]" title={line.itemName}>{line.itemName}</td>
+                          <td className="px-3 py-2 font-mono text-primary text-xs">
+                            {fmtNum(disp.value, 2)} <span className="text-muted">{disp.label}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <button onClick={() => removeLine(line.itemId)} className="text-muted hover:text-danger">
+                              <X size={12} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       </div>
-
-      {/* BOTTOM: Order Summary */}
-      {orderLinesList.length > 0 && (
-        <div className="mt-3 bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-semibold text-primary">Order Summary</span>
-              <span className="text-xs text-muted font-mono">{orderLinesList.length} items</span>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={exportCSV} className="flex items-center gap-1.5 text-xs bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-3 py-1.5 rounded-lg transition">
-                <Download size={12} />CSV
-              </button>
-              <button onClick={exportXLSX} className="flex items-center gap-1.5 text-xs bg-accent hover:bg-accent-hover text-white px-3 py-1.5 rounded-lg transition">
-                <Download size={12} />XLSX
-              </button>
-              <button onClick={clearAll} className="flex items-center gap-1.5 text-xs bg-danger/20 hover:bg-danger/30 text-danger px-3 py-1.5 rounded-lg transition">
-                <Trash2 size={12} />Clear
-              </button>
-            </div>
-          </div>
-          <div className="overflow-x-auto max-h-52 overflow-y-auto">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-bg-card">
-                <tr className="border-b border-bg-border">
-                  {["Item", "Qty", "Unit", ""].map((h) => (
-                    <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {orderLinesList.map((line) => {
-                  const item = data.items.get(line.itemId);
-                  const disp = toDisplay(item ?? null, line.qtyBase, unitMode);
-                  return (
-                    <tr key={line.itemId} className="border-b border-bg-border/50 hover:bg-bg-border/20">
-                      <td className="px-3 py-2 text-primary truncate max-w-[200px]">{line.itemName}</td>
-                      <td className="px-3 py-2 font-mono text-primary">{fmtNum(disp.value, 3)}</td>
-                      <td className="px-3 py-2 text-muted">{disp.label}</td>
-                      <td className="px-3 py-2">
-                        <button onClick={() => removeLine(line.itemId)} className="text-muted hover:text-danger">
-                          <X size={12} />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
