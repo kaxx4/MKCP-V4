@@ -2,6 +2,8 @@ import { create } from "zustand";
 import type { ParsedData, CanonicalVoucher } from "../types/canonical";
 import { applyOverridesToItems } from "../utils/applyOverrides";
 import { useOverrideStore } from "./overrideStore";
+import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
+import { saveToStore, loadFromStore } from "../db/idb";
 
 interface DataState {
   data: ParsedData | null;
@@ -89,5 +91,61 @@ export const useDataStore = create<DataState>((set, get) => ({
       ],
     };
     get().setData(mergedRawData);
+
+    // Auto-regenerate predictions after merge (Task 3E)
+    // Run async to not block the merge
+    (async () => {
+      try {
+        const { units, rates } = useOverrideStore.getState();
+        const itemsWithOverrides = applyOverridesToItems(items, units, rates);
+
+        // Load previous predictions for accuracy scoring
+        const prevSnapshot = await loadFromStore<PredictionSnapshot>("predictions", "latest");
+
+        // Generate new predictions for both types
+        const salesPredictions = generatePredictions(allVouchers, itemsWithOverrides, "Sales");
+        const purchasePredictions = generatePredictions(allVouchers, itemsWithOverrides, "Purchase");
+        const allPredictions = [...salesPredictions, ...purchasePredictions];
+
+        const newSnapshot: PredictionSnapshot = {
+          generatedAt: new Date().toISOString(),
+          predictions: allPredictions,
+        };
+
+        // Score previous predictions against new actuals
+        if (prevSnapshot && prevSnapshot.predictions.length > 0) {
+          const salesAccuracy = scorePredictions(
+            prevSnapshot.predictions.filter(p => {
+              const v = allVouchers.find(v => v.partyLedgerId === p.partyLedgerId && !v.isCancelled);
+              return v?.voucherType === "Sales";
+            }),
+            allVouchers,
+            "Sales"
+          );
+          const purchaseAccuracy = scorePredictions(
+            prevSnapshot.predictions.filter(p => {
+              const v = allVouchers.find(v => v.partyLedgerId === p.partyLedgerId && !v.isCancelled);
+              return v?.voucherType === "Purchase";
+            }),
+            allVouchers,
+            "Purchase"
+          );
+          const allAccuracy = [...salesAccuracy, ...purchaseAccuracy];
+          const today = new Date().toISOString().slice(0, 10);
+          await saveToStore("predictions", `accuracy_${today}`, allAccuracy);
+
+          // Save to prediction history (last 10 snapshots)
+          const history = (await loadFromStore<PredictionSnapshot[]>("predictions", "history")) ?? [];
+          history.push(prevSnapshot);
+          if (history.length > 10) history.splice(0, history.length - 10);
+          await saveToStore("predictions", "history", history);
+        }
+
+        // Save new predictions
+        await saveToStore("predictions", "latest", newSnapshot);
+      } catch {
+        // Silently fail - predictions are non-critical
+      }
+    })();
   },
 }));
