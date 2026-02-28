@@ -1,6 +1,7 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, ChevronDown, ChevronUp, Download, Upload, FileText } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { computeOutstandingInvoices, type InvoiceRecord } from "../engine/financial";
@@ -122,83 +123,130 @@ export default function Invoices() {
       </div>
 
       {/* Table */}
-      <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="border-b border-bg-border">
-              <tr>
-                {["Date", "Voucher#", "Type", "Party", "Amount", "Paid", "Outstanding", "Due Date", "Status"].map((h) => (
-                  <th key={h} className="text-left text-muted px-4 py-3 font-medium text-xs">{h}</th>
-                ))}
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((inv) => {
-                const isExpanded = expandedId === inv.voucherId;
-                const voucher = data.vouchers.find((v) => v.voucherId === inv.voucherId);
-                return (
-                  <>
-                    <tr key={inv.voucherId}
-                      className="border-b border-bg-border/50 hover:bg-bg-border/20 cursor-pointer"
-                      onClick={() => setExpandedId(isExpanded ? null : inv.voucherId)}>
-                      <td className="px-4 py-3 text-muted">{fmtDate(inv.date)}</td>
-                      <td className="px-4 py-3 font-mono text-primary">{inv.voucherNumber}</td>
-                      <td className="px-4 py-3">
-                        <span className={clsx("text-xs px-2 py-0.5 rounded-full", inv.type === "receivable" ? "bg-success/10 text-success" : "bg-danger/10 text-danger")}>
-                          {inv.type === "receivable" ? "Sales" : "Purchase"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-primary max-w-[200px] truncate">{inv.partyName}</td>
-                      <td className="px-4 py-3 font-mono text-primary">{fmtINR(inv.totalAmount)}</td>
-                      <td className="px-4 py-3 font-mono text-success">{fmtINR(inv.paidAmount)}</td>
-                      <td className="px-4 py-3 font-mono font-semibold text-primary">{fmtINR(inv.outstanding)}</td>
-                      <td className="px-4 py-3 text-muted text-xs">{inv.dueDate ? fmtDate(inv.dueDate) : "-"}</td>
-                      <td className="px-4 py-3">
-                        <span className={clsx("text-xs px-2 py-0.5 rounded-full", agingColor(inv))}>
-                          {inv.agingBucket === "current" ? "Current" : `${inv.daysPastDue}d overdue`}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-muted">
-                        {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                      </td>
-                    </tr>
-                    {isExpanded && voucher && (
-                      <tr key={`${inv.voucherId}-detail`} className="bg-bg border-b border-bg-border">
-                        <td colSpan={10} className="px-6 py-4">
-                          <div className="text-xs space-y-2">
-                            <div className="text-muted font-medium mb-2">Voucher Lines</div>
-                            {voucher.lines.map((line, i) => (
-                              <div key={i} className="flex gap-4 font-mono text-primary">
-                                {line.type === "ledger" ? (
-                                  <>
-                                    <span className="text-muted w-16">{line.isDebit ? "Dr" : "Cr"}</span>
-                                    <span>{line.ledgerId}</span>
-                                    <span className="ml-auto">{fmtINR(line.amount ?? 0)}</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <span className="text-muted w-16">Inv</span>
-                                    <span>{line.itemId}</span>
-                                    <span className="text-muted">{line.qtyBase} {" × "} {fmtINR(line.ratePerBase ?? 0)}</span>
-                                    <span className="ml-auto">{fmtINR(line.lineAmount ?? 0)}</span>
-                                  </>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </>
-                );
-              })}
-            </tbody>
-          </table>
-          {filtered.length === 0 && (
-            <div className="text-center py-12 text-muted text-sm">No outstanding invoices found</div>
-          )}
+      <InvoiceTable filtered={filtered} expandedId={expandedId} setExpandedId={setExpandedId} agingColor={agingColor} data={data} />
+    </div>
+  );
+}
+
+/** Virtualized invoice table component */
+function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }: {
+  filtered: InvoiceRecord[];
+  expandedId: string | null;
+  setExpandedId: (id: string | null) => void;
+  agingColor: (inv: InvoiceRecord) => string;
+  data: import("../types/canonical").ParsedData;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  // Fixed column template for grid layout - ensures header and rows align
+  const COL_TEMPLATE = "90px 110px 80px 1fr 110px 100px 110px 90px 100px 40px";
+
+  const virtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: (i) => (expandedId === filtered[i]?.voucherId ? 240 : 48),
+    overscan: 10,
+  });
+
+  // Re-measure virtualizer when expanded row changes
+  useEffect(() => {
+    virtualizer.measure();
+  }, [expandedId, virtualizer]);
+
+  return (
+    <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+      <div className="overflow-x-auto" style={{ minWidth: "900px" }}>
+        {/* Header */}
+        <div className="grid text-xs text-muted font-medium border-b border-bg-border"
+             style={{ gridTemplateColumns: COL_TEMPLATE }}>
+          {["Date", "Voucher#", "Type", "Party", "Amount", "Paid", "Outstanding", "Due Date", "Status", ""].map((h) => (
+            <div key={h} className="px-4 py-3">{h}</div>
+          ))}
         </div>
+
+        {/* Virtualized rows */}
+        <div ref={parentRef} className="overflow-auto max-h-[60vh]">
+          <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const inv = filtered[virtualRow.index];
+              if (!inv) return null;
+              const isExpanded = expandedId === inv.voucherId;
+              const voucher = isExpanded ? data.vouchers.find((v: import("../types/canonical").CanonicalVoucher) => v.voucherId === inv.voucherId) : null;
+
+              return (
+                <div
+                  key={inv.voucherId}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  {/* Main row with grid layout */}
+                  <div
+                    className="grid border-b border-bg-border/50 hover:bg-bg-border/20 cursor-pointer text-sm"
+                    style={{ gridTemplateColumns: COL_TEMPLATE }}
+                    onClick={() => setExpandedId(isExpanded ? null : inv.voucherId)}
+                  >
+                    <div className="px-4 py-3 text-muted">{fmtDate(inv.date)}</div>
+                    <div className="px-4 py-3 font-mono text-primary">{inv.voucherNumber}</div>
+                    <div className="px-4 py-3">
+                      <span className={clsx("text-xs px-2 py-0.5 rounded-full", inv.type === "receivable" ? "bg-success/10 text-success" : "bg-danger/10 text-danger")}>
+                        {inv.type === "receivable" ? "Sales" : "Purchase"}
+                      </span>
+                    </div>
+                    <div className="px-4 py-3 text-primary truncate">{inv.partyName}</div>
+                    <div className="px-4 py-3 font-mono text-primary">{fmtINR(inv.totalAmount)}</div>
+                    <div className="px-4 py-3 font-mono text-success">{fmtINR(inv.paidAmount)}</div>
+                    <div className="px-4 py-3 font-mono font-semibold text-primary">{fmtINR(inv.outstanding)}</div>
+                    <div className="px-4 py-3 text-muted text-xs">{inv.dueDate ? fmtDate(inv.dueDate) : "-"}</div>
+                    <div className="px-4 py-3">
+                      <span className={clsx("text-xs px-2 py-0.5 rounded-full", agingColor(inv))}>
+                        {inv.agingBucket === "current" ? "Current" : `${inv.daysPastDue}d overdue`}
+                      </span>
+                    </div>
+                    <div className="px-4 py-3 text-muted">
+                      {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </div>
+                  </div>
+
+                  {/* Expanded voucher detail - full width, no grid */}
+                  {isExpanded && voucher && (
+                    <div className="bg-bg border-b border-bg-border px-6 py-4">
+                      <div className="text-xs space-y-2">
+                        <div className="text-muted font-medium mb-2">Voucher Lines</div>
+                        {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => (
+                          <div key={i} className="flex gap-4 font-mono text-primary">
+                            {line.type === "ledger" ? (
+                              <>
+                                <span className="text-muted w-16">{line.isDebit ? "Dr" : "Cr"}</span>
+                                <span>{line.ledgerId}</span>
+                                <span className="ml-auto">{fmtINR(line.amount ?? 0)}</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-muted w-16">Inv</span>
+                                <span>{line.itemId}</span>
+                                <span className="text-muted">{line.qtyBase} {" × "} {fmtINR(line.ratePerBase ?? 0)}</span>
+                                <span className="ml-auto">{fmtINR(line.lineAmount ?? 0)}</span>
+                              </>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {filtered.length === 0 && (
+          <div className="text-center py-12 text-muted text-sm">No outstanding invoices found</div>
+        )}
       </div>
     </div>
   );
