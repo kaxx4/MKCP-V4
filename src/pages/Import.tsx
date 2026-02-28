@@ -47,17 +47,20 @@ export default function ImportPage() {
       f.toLowerCase().includes('master') || f.toLowerCase().includes('sample/masters')
     );
 
-    const voucherDates = existingData.vouchers
-      .filter(v => !v.isCancelled)
-      .map(v => v.date)
-      .sort();
+    const nonCancelledVouchers = existingData.vouchers.filter(v => !v.isCancelled);
+    const sortedVouchers = [...nonCancelledVouchers].sort((a, b) => a.date.localeCompare(b.date));
 
-    const earliestTxDate = voucherDates.length > 0
-      ? new Date(voucherDates[0]).toLocaleDateString('en-IN', { dateStyle: 'medium' })
+    const earliestTxDate = sortedVouchers.length > 0
+      ? new Date(sortedVouchers[0].date).toLocaleDateString('en-IN', { dateStyle: 'medium' })
       : 'N/A';
 
-    const latestTxDate = voucherDates.length > 0
-      ? new Date(voucherDates[voucherDates.length - 1]).toLocaleDateString('en-IN', { dateStyle: 'medium' })
+    const latestVoucher = sortedVouchers.length > 0 ? sortedVouchers[sortedVouchers.length - 1] : null;
+    const latestTxDate = latestVoucher
+      ? new Date(latestVoucher.date).toLocaleDateString('en-IN', { dateStyle: 'medium' })
+      : 'N/A';
+
+    const lastVoucherEntry = latestVoucher
+      ? `${latestVoucher.voucherType} #${latestVoucher.voucherNumber}`
       : 'N/A';
 
     return {
@@ -65,7 +68,8 @@ export default function ImportPage() {
       hasMasters,
       earliestTxDate,
       latestTxDate,
-      totalVouchers: voucherDates.length
+      lastVoucherEntry,
+      totalVouchers: sortedVouchers.length
     };
   })() : null;
 
@@ -323,6 +327,9 @@ export default function ImportPage() {
               </div>
               <div className="text-xs text-muted mt-1">
                 Period: {existingDataInfo.earliestTxDate} to {existingDataInfo.latestTxDate}
+              </div>
+              <div className="text-xs text-muted mt-1">
+                Last Entry: <span className="font-mono text-primary">{existingDataInfo.lastVoucherEntry}</span>
               </div>
             </div>
           </div>
