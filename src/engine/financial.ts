@@ -119,21 +119,27 @@ function getAgingBucket(days: number): InvoiceRecord["agingBucket"] {
   return "90+";
 }
 
-/** Compute cash/bank balance */
+/** Compute cash/bank balance — single pass over vouchers */
 export function computeBankBalance(
   ledgers: Map<string, CanonicalLedger>,
   vouchers: CanonicalVoucher[]
 ): number {
+  // Collect bank/cash ledger IDs and their opening balances
+  const bankCashIds = new Set<string>();
   let balance = 0;
   for (const [, ledger] of ledgers) {
     if (!isBankLedger(ledger) && !isCashLedger(ledger)) continue;
+    bankCashIds.add(ledger.ledgerId);
     balance += ledger.openingBalance;
-    for (const v of vouchers) {
-      if (v.isCancelled) continue;
-      for (const line of v.lines) {
-        if (line.type !== "ledger" || line.ledgerId !== ledger.ledgerId) continue;
-        balance += line.isDebit ? (line.amount ?? 0) : -(line.amount ?? 0);
-      }
+  }
+  if (bankCashIds.size === 0) return balance;
+
+  // Single pass over all vouchers
+  for (const v of vouchers) {
+    if (v.isCancelled) continue;
+    for (const line of v.lines) {
+      if (line.type !== "ledger" || !line.ledgerId || !bankCashIds.has(line.ledgerId)) continue;
+      balance += line.isDebit ? (line.amount ?? 0) : -(line.amount ?? 0);
     }
   }
   return balance;

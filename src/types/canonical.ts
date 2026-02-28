@@ -116,7 +116,7 @@ export interface RateOverride {
 }
 
 export interface AuditEntry {
-  type: "rate_update" | "unit_override" | "master_edit" | "import";
+  type: "rate_update" | "unit_override" | "master_edit" | "import" | "system";
   itemId?: string;
   ledgerId?: string;
   oldValue?: unknown;

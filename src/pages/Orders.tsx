@@ -18,7 +18,7 @@ import {
 import { useDataStore } from "../store/dataStore";
 import { useUIStore } from "../store/uiStore";
 import { useOrderStore } from "../store/orderStore";
-import { getCurrentStock, computeMonthlyBuckets, suggestedReorder, buildVoucherIndex } from "../engine/inventory";
+import { getCurrentStock, getCurrentStockIndexed, computeMonthlyBuckets, computeMonthlyBucketsIndexed, suggestedReorder, buildVoucherIndex } from "../engine/inventory";
 import { toDisplay, fromDisplay } from "../engine/unitEngine";
 import { UnitToggle } from "../components/UnitToggle";
 import { fmtNum } from "../utils/format";
@@ -90,15 +90,15 @@ export default function Orders() {
     return buildVoucherIndex(data.vouchers);
   }, [data]);
 
-  // Cache stock calculations for all items
+  // Cache stock calculations for all items (using indexed lookup)
   const stockCache = useMemo(() => {
     if (!data) return new Map<string, number>();
     const cache = new Map<string, number>();
     for (const item of allItems) {
-      cache.set(item.itemId, getCurrentStock(item, data.vouchers));
+      cache.set(item.itemId, getCurrentStockIndexed(item, voucherIndex));
     }
     return cache;
-  }, [data, allItems]);
+  }, [data, allItems, voucherIndex]);
 
   const filteredItems = useMemo(() => {
     let result = allItems;
@@ -118,13 +118,13 @@ export default function Orders() {
 
   const currentStock = useMemo(() => {
     if (!selectedItem || !data) return 0;
-    return getCurrentStock(selectedItem, data.vouchers);
-  }, [selectedItem, data]);
+    return getCurrentStockIndexed(selectedItem, voucherIndex);
+  }, [selectedItem, data, voucherIndex]);
 
   const monthlyBuckets = useMemo(() => {
     if (!selectedItem || !data) return [];
-    return computeMonthlyBuckets(selectedItem, data.vouchers, 8);
-  }, [selectedItem, data]);
+    return computeMonthlyBucketsIndexed(selectedItem, voucherIndex, 8);
+  }, [selectedItem, data, voucherIndex]);
 
   const suggested = useMemo(() => {
     if (!selectedItem || !data) return 0;
@@ -306,13 +306,13 @@ export default function Orders() {
 
   const focusedStock = useMemo(() => {
     if (!focusedItem || !data) return 0;
-    return getCurrentStock(focusedItem, data.vouchers);
-  }, [focusedItem, data]);
+    return getCurrentStockIndexed(focusedItem, voucherIndex);
+  }, [focusedItem, data, voucherIndex]);
 
   const focusedMonthlyBuckets = useMemo(() => {
     if (!focusedItem || !data) return [];
-    return computeMonthlyBuckets(focusedItem, data.vouchers, 8);
-  }, [focusedItem, data]);
+    return computeMonthlyBucketsIndexed(focusedItem, voucherIndex, 8);
+  }, [focusedItem, data, voucherIndex]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-112px)] gap-0">
@@ -485,7 +485,7 @@ export default function Orders() {
           )}
         </div>
 
-        {/* RIGHT: Order Entry (All Items) */}
+        {/* RIGHT: Order Entry (All Items) — Virtualized */}
         <div className="w-[28%] flex flex-col border-l border-bg-border bg-bg-card min-h-0">
           <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
             <div className="flex items-center gap-3">
@@ -505,64 +505,79 @@ export default function Orders() {
               </button>
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto min-h-0">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
-                <tr>
-                  <th className="text-left text-muted px-3 py-2 font-medium">Item</th>
-                  <th className="text-left text-muted px-3 py-2 font-medium w-24">Order Qty</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredItems.map((item) => {
-                  const orderLine = orderLines[item.itemId];
-                  const orderQtyValue = orderLine ? toDisplay(item, orderLine.qtyBase, unitMode).value : 0;
-                  const hasOrder = orderQtyValue > 0;
-                  return (
-                    <tr
-                      key={item.itemId}
-                      className={clsx(
-                        "border-b border-bg-border/50 hover:bg-bg-border/20 transition-colors",
-                        focusedItemId === item.itemId && "bg-accent/10"
-                      )}
-                    >
-                      <td className="px-3 py-2 text-primary truncate max-w-[140px]" title={item.name}>
-                        {item.name}
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          ref={(el) => orderInputRefs.current[item.itemId] = el}
-                          type="text"
-                          inputMode="decimal"
-                          value={orderQtyValue || ""}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            updateOrderLine(item.itemId, val);
-                          }}
-                          onFocus={() => {
-                            setFocusedItemId(item.itemId);
-                            setSelectedItemId(item.itemId);
-                          }}
-                          onBlur={() => {
-                            if (focusedItemId === item.itemId) {
-                              // Small delay to allow navigation
-                              setTimeout(() => setFocusedItemId(null), 100);
-                            }
-                          }}
-                          onKeyDown={(e) => handleOrderInputKeyDown(e, item.itemId, filteredItems)}
-                          placeholder="0"
-                          className={clsx(
-                            "w-full bg-bg border border-bg-border rounded px-2 py-1 font-mono text-sm text-center outline-none focus:border-accent/60 transition-all",
-                            hasOrder ? "font-bold text-accent" : "text-muted"
-                          )}
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="sticky top-0 bg-bg-card border-b border-bg-border z-10">
+            <div className="flex text-xs text-muted font-medium">
+              <div className="flex-1 px-3 py-2">Item</div>
+              <div className="w-24 px-3 py-2">Order Qty</div>
+            </div>
           </div>
+          {(() => {
+            const orderPanelRef = useRef<HTMLDivElement>(null);
+            const orderVirtualizer = useVirtualizer({
+              count: filteredItems.length,
+              getScrollElement: () => orderPanelRef.current,
+              estimateSize: () => 40,
+              overscan: 15,
+            });
+            return (
+              <div ref={orderPanelRef} className="flex-1 overflow-y-auto min-h-0">
+                <div style={{ height: `${orderVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
+                  {orderVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const item = filteredItems[virtualRow.index];
+                    const orderLine = orderLines[item.itemId];
+                    const orderQtyValue = orderLine ? toDisplay(item, orderLine.qtyBase, unitMode).value : 0;
+                    const hasOrder = orderQtyValue > 0;
+                    return (
+                      <div
+                        key={item.itemId}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                        className={clsx(
+                          "flex items-center border-b border-bg-border/50 hover:bg-bg-border/20 transition-colors",
+                          focusedItemId === item.itemId && "bg-accent/10"
+                        )}
+                      >
+                        <div className="flex-1 px-3 py-2 text-xs text-primary truncate" title={item.name}>
+                          {item.name}
+                        </div>
+                        <div className="w-24 px-3 py-2">
+                          <input
+                            ref={(el) => { orderInputRefs.current[item.itemId] = el; }}
+                            type="text"
+                            inputMode="decimal"
+                            value={orderQtyValue || ""}
+                            onChange={(e) => {
+                              updateOrderLine(item.itemId, e.target.value);
+                            }}
+                            onFocus={() => {
+                              setFocusedItemId(item.itemId);
+                              setSelectedItemId(item.itemId);
+                            }}
+                            onBlur={() => {
+                              if (focusedItemId === item.itemId) {
+                                setTimeout(() => setFocusedItemId(null), 100);
+                              }
+                            }}
+                            onKeyDown={(e) => handleOrderInputKeyDown(e, item.itemId, filteredItems)}
+                            placeholder="0"
+                            className={clsx(
+                              "w-full bg-bg border border-bg-border rounded px-2 py-1 font-mono text-xs text-center outline-none focus:border-accent/60 transition-all",
+                              hasOrder ? "font-bold text-accent" : "text-muted"
+                            )}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>

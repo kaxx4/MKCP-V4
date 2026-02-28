@@ -136,6 +136,18 @@ export function avgMonthlyOutward(
   return total / buckets.length;
 }
 
+/** Average monthly outward using voucher index (optimized) */
+export function avgMonthlyOutwardIndexed(
+  item: CanonicalItem,
+  voucherIndex: VoucherIndex,
+  nMonths: number = 3
+): number {
+  const buckets = computeMonthlyBucketsIndexed(item, voucherIndex, nMonths);
+  if (!buckets.length) return 0;
+  const total = buckets.reduce((s, b) => s + b.outwardsBase, 0);
+  return total / buckets.length;
+}
+
 /** Suggested reorder quantity */
 export function suggestedReorder(
   item: CanonicalItem,
@@ -145,6 +157,19 @@ export function suggestedReorder(
   minReorder: number = 0
 ): number {
   const avg = avgMonthlyOutward(item, vouchers);
+  const needed = avg * leadTimeMonths - currentStock;
+  return Math.max(Math.ceil(needed), minReorder);
+}
+
+/** Suggested reorder using voucher index (optimized) */
+export function suggestedReorderIndexed(
+  item: CanonicalItem,
+  voucherIndex: VoucherIndex,
+  currentStock: number,
+  leadTimeMonths: number = 1.5,
+  minReorder: number = 0
+): number {
+  const avg = avgMonthlyOutwardIndexed(item, voucherIndex);
   const needed = avg * leadTimeMonths - currentStock;
   return Math.max(Math.ceil(needed), minReorder);
 }
@@ -265,6 +290,7 @@ export interface ItemTurnoverData {
 
 /**
  * Compute inventory turnover data for ALL items over a given period.
+ * Optimized: single pass over all vouchers, bucketing by itemId + date phase.
  * @param items - all items
  * @param vouchers - all vouchers
  * @param periodMonths - number of months to analyze (3, 6, 12)
@@ -275,7 +301,6 @@ export function computeItemTurnover(
   periodMonths: number = 12
 ): ItemTurnoverData[] {
   const periodDays = periodMonths * 30; // approximate
-  const results: ItemTurnoverData[] = [];
 
   // Determine period range from data (use latest voucher date as end)
   let latestDate = "";
@@ -290,49 +315,68 @@ export function computeItemTurnover(
   startDateObj.setMonth(startDateObj.getMonth() - periodMonths);
   const startDate = startDateObj.toISOString().slice(0, 10);
 
-  for (const [, item] of items) {
-    let totalOutQty = 0;
-    let totalOutValue = 0;
-    let totalInQty = 0;
+  // Accumulators per item: pre-period net movement, in-period out/in/value
+  interface ItemAcc {
+    preNetQty: number;      // net qty change before startDate
+    inPeriodOutQty: number;
+    inPeriodOutValue: number;
+    inPeriodInQty: number;
+    inPeriodNetQty: number; // net qty change within period
+  }
+  const acc = new Map<string, ItemAcc>();
 
-    // Compute opening stock at startDate by rolling forward from FY opening
-    let runningQty = item.openingQtyBase;
-    // Pre-period movements (everything before startDate)
-    for (const v of vouchers) {
-      if (v.isCancelled || v.isOptional || v.date >= startDate) continue;
-      for (const line of v.lines) {
-        if (line.type !== "inventory" || line.itemId !== item.itemId) continue;
-        const qty = line.qtyBase ?? 0;
-        if (["Sales", "Credit Note"].includes(v.voucherType)) runningQty -= qty;
-        else if (["Purchase", "Debit Note"].includes(v.voucherType)) runningQty += qty;
-        else if (v.voucherType === "Stock Journal") runningQty += qty;
+  // Single pass over all vouchers
+  for (const v of vouchers) {
+    if (v.isCancelled || v.isOptional) continue;
+    const isPrePeriod = v.date < startDate;
+    const isInPeriod = v.date >= startDate && v.date <= endDate;
+    if (!isPrePeriod && !isInPeriod) continue;
+
+    for (const line of v.lines) {
+      if (line.type !== "inventory" || !line.itemId) continue;
+      let a = acc.get(line.itemId);
+      if (!a) {
+        a = { preNetQty: 0, inPeriodOutQty: 0, inPeriodOutValue: 0, inPeriodInQty: 0, inPeriodNetQty: 0 };
+        acc.set(line.itemId, a);
       }
-    }
-    const openingQty = runningQty;
 
-    // In-period movements
-    for (const v of vouchers) {
-      if (v.isCancelled || v.isOptional) continue;
-      if (v.date < startDate || v.date > endDate) continue;
-      for (const line of v.lines) {
-        if (line.type !== "inventory" || line.itemId !== item.itemId) continue;
-        const qty = line.qtyBase ?? 0;
-        const lineVal = line.lineAmount ?? qty * (line.ratePerBase ?? item.openingRate);
-        if (["Sales", "Credit Note"].includes(v.voucherType)) {
-          totalOutQty += qty;
-          totalOutValue += lineVal;
-          runningQty -= qty;
-        } else if (["Purchase", "Debit Note"].includes(v.voucherType)) {
-          totalInQty += qty;
-          runningQty += qty;
-        } else if (v.voucherType === "Stock Journal") {
-          if (qty > 0) totalInQty += qty;
-          else totalOutQty += Math.abs(qty);
-          runningQty += qty;
+      const qty = line.qtyBase ?? 0;
+      const item = items.get(line.itemId);
+      const lineVal = line.lineAmount ?? qty * (line.ratePerBase ?? (item?.openingRate ?? 0));
+
+      if (["Sales", "Credit Note"].includes(v.voucherType)) {
+        if (isPrePeriod) a.preNetQty -= qty;
+        else {
+          a.inPeriodOutQty += qty;
+          a.inPeriodOutValue += lineVal;
+          a.inPeriodNetQty -= qty;
+        }
+      } else if (["Purchase", "Debit Note"].includes(v.voucherType)) {
+        if (isPrePeriod) a.preNetQty += qty;
+        else {
+          a.inPeriodInQty += qty;
+          a.inPeriodNetQty += qty;
+        }
+      } else if (v.voucherType === "Stock Journal") {
+        if (isPrePeriod) a.preNetQty += qty;
+        else {
+          if (qty > 0) a.inPeriodInQty += qty;
+          else a.inPeriodOutQty += Math.abs(qty);
+          a.inPeriodNetQty += qty;
         }
       }
     }
-    const closingQty = runningQty;
+  }
+
+  // Build results from accumulators
+  const results: ItemTurnoverData[] = [];
+  for (const [, item] of items) {
+    const a = acc.get(item.itemId);
+    const openingQty = item.openingQtyBase + (a?.preNetQty ?? 0);
+    const closingQty = openingQty + (a?.inPeriodNetQty ?? 0);
+    const totalOutQty = a?.inPeriodOutQty ?? 0;
+    const totalOutValue = a?.inPeriodOutValue ?? 0;
+    const totalInQty = a?.inPeriodInQty ?? 0;
 
     const openingValue = openingQty * item.openingRate;
     const closingValue = closingQty * item.openingRate;
@@ -340,8 +384,6 @@ export function computeItemTurnover(
     const turnoverRatio = avgInventoryValue > 0.01 ? totalOutValue / avgInventoryValue : 0;
     const daysOfInventory = turnoverRatio > 0 ? periodDays / turnoverRatio : Infinity;
 
-    // Classification thresholds (annualized turnover):
-    // Fast: turns > 6x/year, Moderate: 2-6x, Slow: 0.5-2x, Dead: < 0.5x
     const annualizedTurns = turnoverRatio * (12 / periodMonths);
     let classification: ItemTurnoverData["classification"];
     if (annualizedTurns >= 6) classification = "fast";

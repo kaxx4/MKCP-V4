@@ -14,7 +14,7 @@ import {
 } from "recharts";
 import { useDataStore } from "../store/dataStore";
 import { computeOutstandingInvoices, computeBankBalance, monthlyTotals } from "../engine/financial";
-import { getCurrentStock, suggestedReorder, avgMonthlyOutward } from "../engine/inventory";
+import { buildVoucherIndex, getCurrentStockIndexed, avgMonthlyOutwardIndexed, suggestedReorderIndexed } from "../engine/inventory";
 import { KPICard } from "../components/KPICard";
 import { fmtINR, fmtDate } from "../utils/format";
 
@@ -36,20 +36,25 @@ export default function Dashboard() {
 
   const latestMonth = latestDate.slice(0, 7);
 
+  // Build voucher index once for all indexed operations
+  const voucherIndex = useMemo(() => {
+    if (!data) return new Map();
+    return buildVoucherIndex(data.vouchers);
+  }, [data]);
+
   const kpis = useMemo(() => {
     if (!data) return null;
     const { vouchers, ledgers, items } = data;
 
-    const voucherAmount = (v: typeof vouchers[0]) =>
-      v.totalAmount || v.lines.filter((l) => l.type === "inventory").reduce((s, l) => s + (l.lineAmount ?? 0), 0);
-
-    const latestDaySales = vouchers
-      .filter((v) => v.voucherType === "Sales" && v.date === latestDate && !v.isCancelled)
-      .reduce((s, v) => s + voucherAmount(v), 0);
-
-    const monthSales = vouchers
-      .filter((v) => v.voucherType === "Sales" && v.date.startsWith(latestMonth) && !v.isCancelled)
-      .reduce((s, v) => s + voucherAmount(v), 0);
+    // Single pass over vouchers to compute latestDaySales and monthSales
+    let latestDaySales = 0;
+    let monthSales = 0;
+    for (const v of vouchers) {
+      if (v.voucherType !== "Sales" || v.isCancelled) continue;
+      const amount = v.totalAmount || v.lines.filter((l) => l.type === "inventory").reduce((s, l) => s + (l.lineAmount ?? 0), 0);
+      if (v.date === latestDate) latestDaySales += amount;
+      if (v.date.startsWith(latestMonth)) monthSales += amount;
+    }
 
     const invoices = computeOutstandingInvoices(vouchers, ledgers);
     const ar = invoices.filter((i) => i.type === "receivable").reduce((s, i) => s + i.outstanding, 0);
@@ -58,12 +63,12 @@ export default function Dashboard() {
 
     let stockValue = 0;
     for (const [, item] of items) {
-      const stock = getCurrentStock(item, vouchers);
+      const stock = getCurrentStockIndexed(item, voucherIndex);
       stockValue += stock * item.openingRate;
     }
 
     return { latestDaySales, monthSales, ar, ap, bankBalance, stockValue, invoices };
-  }, [data, latestDate, latestMonth]);
+  }, [data, latestDate, latestMonth, voucherIndex]);
 
   const salesTrend = useMemo(() => {
     if (!data) return [];
@@ -114,9 +119,9 @@ export default function Dashboard() {
     const lowStock: Array<{ name: string; stock: number; reorder: number; avgOut: number }> = [];
 
     for (const item of items) {
-      const stock = getCurrentStock(item, data.vouchers);
-      const reorder = suggestedReorder(item, data.vouchers, stock);
-      const avgOut = avgMonthlyOutward(item, data.vouchers, 3);
+      const stock = getCurrentStockIndexed(item, voucherIndex);
+      const reorder = suggestedReorderIndexed(item, voucherIndex, stock);
+      const avgOut = avgMonthlyOutwardIndexed(item, voucherIndex, 3);
 
       if (reorder > 0 && avgOut > 0.5) {
         lowStock.push({ name: item.name, stock, reorder, avgOut });
@@ -126,7 +131,7 @@ export default function Dashboard() {
     return lowStock
       .sort((a, b) => b.reorder - a.reorder)
       .slice(0, 5);
-  }, [data]);
+  }, [data, voucherIndex]);
 
   if (!data) {
     return (
