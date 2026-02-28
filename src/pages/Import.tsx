@@ -17,6 +17,9 @@ interface ImportReport {
   vouchers: number;
   warnings: ImportWarning[];
   reconErrors: string[];
+  duplicatesRemoved?: number;
+  newVouchersAdded?: number;
+  mergeMode?: boolean;
 }
 
 type DropZone = "masters" | "transactions";
@@ -172,22 +175,58 @@ export default function ImportPage() {
     let company: any | null = null;
     let mw: ImportWarning[] = [];
 
+    // Load existing data for smart merging
+    const existingRaw = await loadData<unknown>("parsedData");
+    const existingData = existingRaw ? deserializeParsedData(existingRaw) : null;
+
     if (mastersRaw) {
       addLog("Parsing masters (items, ledgers)...");
       const parsed = parseMasters(mastersRaw);
       company = parsed.company;
-      items = parsed.items;
-      ledgers = parsed.ledgers;
+
+      // Merge masters with existing data
+      if (existingData) {
+        addLog("Merging new masters with existing data...");
+        items = new Map(existingData.items);
+        ledgers = new Map(existingData.ledgers);
+
+        // Update/add new items
+        let newItems = 0;
+        let updatedItems = 0;
+        for (const [itemId, item] of parsed.items) {
+          if (items.has(itemId)) {
+            updatedItems++;
+          } else {
+            newItems++;
+          }
+          items.set(itemId, item);
+        }
+
+        // Update/add new ledgers
+        let newLedgers = 0;
+        let updatedLedgers = 0;
+        for (const [ledgerId, ledger] of parsed.ledgers) {
+          if (ledgers.has(ledgerId)) {
+            updatedLedgers++;
+          } else {
+            newLedgers++;
+          }
+          ledgers.set(ledgerId, ledger);
+        }
+
+        addLog(`Masters merged: ${newItems} new items, ${updatedItems} updated | ${newLedgers} new ledgers, ${updatedLedgers} updated`);
+      } else {
+        items = parsed.items;
+        ledgers = parsed.ledgers;
+        addLog(`Parsed ${items.size} items, ${ledgers.size} ledgers (${mw.length} warnings)`);
+      }
       mw = parsed.warnings;
-      addLog(`Parsed ${items.size} items, ${ledgers.size} ledgers (${mw.length} warnings)`);
     } else {
       addLog("No masters file — using existing data...");
-      const existingRaw = await loadData<unknown>("parsedData");
-      if (existingRaw) {
-        const existing = deserializeParsedData(existingRaw);
-        items = existing.items;
-        ledgers = existing.ledgers;
-        company = existing.company;
+      if (existingData) {
+        items = existingData.items;
+        ledgers = existingData.ledgers;
+        company = existingData.company;
         addLog(`Using existing: ${items.size} items, ${ledgers.size} ledgers`);
       } else {
         toast("No existing masters data found. Please upload a masters file.", "error");
@@ -196,8 +235,42 @@ export default function ImportPage() {
     }
 
     addLog("Parsing transactions (vouchers)...");
-    const { vouchers, warnings: tw } = parseTransactions(txRaw);
-    addLog(`Parsed ${vouchers.length} vouchers (${tw.length} warnings)`);
+    const { vouchers: newVouchers, warnings: tw } = parseTransactions(txRaw);
+    addLog(`Parsed ${newVouchers.length} new vouchers (${tw.length} warnings)`);
+
+    // Smart merge: Remove duplicates and add only new vouchers
+    let vouchers = newVouchers;
+    let duplicatesRemoved = 0;
+    let newVouchersAdded = 0;
+
+    if (existingData && existingData.vouchers.length > 0) {
+      addLog("Detecting duplicates and merging vouchers...");
+
+      // Create a Set of existing voucher IDs for fast lookup
+      const existingVoucherIds = new Set(existingData.vouchers.map(v => v.voucherId));
+
+      // Filter out duplicates from new vouchers
+      const uniqueNewVouchers = newVouchers.filter(v => {
+        if (existingVoucherIds.has(v.voucherId)) {
+          duplicatesRemoved++;
+          return false;
+        }
+        return true;
+      });
+
+      newVouchersAdded = uniqueNewVouchers.length;
+
+      // Merge existing + new unique vouchers
+      vouchers = [...existingData.vouchers, ...uniqueNewVouchers];
+
+      // Sort by date
+      vouchers.sort((a, b) => a.date.localeCompare(b.date));
+
+      addLog(`Duplicates removed: ${duplicatesRemoved} | New vouchers added: ${newVouchersAdded} | Total: ${vouchers.length}`);
+    } else {
+      newVouchersAdded = newVouchers.length;
+      addLog(`First import: ${newVouchersAdded} vouchers added`);
+    }
 
     addLog("Running voucher reconciliation checks...");
     const reconErrors: string[] = [];
@@ -231,6 +304,9 @@ export default function ImportPage() {
       vouchers: vouchers.length,
       warnings: data.warnings,
       reconErrors: reconErrors.slice(0, 20),
+      duplicatesRemoved,
+      newVouchersAdded,
+      mergeMode: existingData !== null,
     });
   }
 
@@ -407,12 +483,32 @@ export default function ImportPage() {
         <div className="bg-bg-card border border-bg-border rounded-xl p-6 space-y-4">
           <h2 className="text-lg font-semibold text-primary">Import Summary</h2>
 
+          {/* Merge Info Banner */}
+          {report.mergeMode && (
+            <div className="bg-accent/10 border border-accent/30 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2 text-accent font-medium text-sm">
+                <CheckCircle size={14} />
+                Smart Merge Completed
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-bg-card border border-bg-border rounded-lg p-2">
+                  <span className="text-muted">Duplicates Removed:</span>
+                  <span className="font-mono font-bold text-warn ml-2">{report.duplicatesRemoved}</span>
+                </div>
+                <div className="bg-bg-card border border-bg-border rounded-lg p-2">
+                  <span className="text-muted">New Vouchers Added:</span>
+                  <span className="font-mono font-bold text-success ml-2">{report.newVouchersAdded}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Stats */}
           <div className="grid grid-cols-3 gap-4">
             {[
               { label: "Items", value: report.items, color: "text-success" },
               { label: "Ledgers", value: report.ledgers, color: "text-accent" },
-              { label: "Vouchers", value: report.vouchers, color: "text-primary" },
+              { label: "Total Vouchers", value: report.vouchers, color: "text-primary" },
             ].map(({ label, value, color }) => (
               <div key={label} className="bg-bg border border-bg-border rounded-lg p-4 text-center">
                 <div className={`text-3xl font-mono font-bold ${color}`}>{value.toLocaleString("en-IN")}</div>
