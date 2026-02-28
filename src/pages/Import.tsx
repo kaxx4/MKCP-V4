@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical } from "lucide-react";
+import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical, Calendar } from "lucide-react";
 import clsx from "clsx";
 import { parseMasters } from "../parser/masterParser";
 import { parseTransactions } from "../parser/transactionParser";
@@ -23,7 +23,7 @@ type DropZone = "masters" | "transactions";
 
 export default function ImportPage() {
   const navigate = useNavigate();
-  const { mergeData } = useDataStore();
+  const { mergeData, data: existingData } = useDataStore();
   const { toast } = useToast();
 
   const [mastersFile, setMastersFile] = useState<File | null>(null);
@@ -33,6 +33,41 @@ export default function ImportPage() {
   const [pendingData, setPendingData] = useState<ParsedData | null>(null);
   const [dragOver, setDragOver] = useState<DropZone | null>(null);
   const [debugLog, setDebugLog] = useState<string[]>([]);
+
+  // Calculate existing data metadata
+  const existingDataInfo = existingData ? (() => {
+    const mastersUploadedAt = existingData.importedAt
+      ? new Date(existingData.importedAt).toLocaleString('en-IN', {
+          dateStyle: 'medium',
+          timeStyle: 'short'
+        })
+      : 'Unknown';
+
+    const hasMasters = existingData.sourceFiles.some(f =>
+      f.toLowerCase().includes('master') || f.toLowerCase().includes('sample/masters')
+    );
+
+    const voucherDates = existingData.vouchers
+      .filter(v => !v.isCancelled)
+      .map(v => v.date)
+      .sort();
+
+    const earliestTxDate = voucherDates.length > 0
+      ? new Date(voucherDates[0]).toLocaleDateString('en-IN', { dateStyle: 'medium' })
+      : 'N/A';
+
+    const latestTxDate = voucherDates.length > 0
+      ? new Date(voucherDates[voucherDates.length - 1]).toLocaleDateString('en-IN', { dateStyle: 'medium' })
+      : 'N/A';
+
+    return {
+      mastersUploadedAt,
+      hasMasters,
+      earliestTxDate,
+      latestTxDate,
+      totalVouchers: voucherDates.length
+    };
+  })() : null;
 
   const handleDrop = useCallback((zone: DropZone, e: React.DragEvent) => {
     e.preventDefault();
@@ -263,6 +298,36 @@ export default function ImportPage() {
         <h1 className="text-2xl font-bold text-primary mb-1">Import Tally Data</h1>
         <p className="text-muted text-sm">Upload your exported JSON files from Tally Prime</p>
       </div>
+
+      {/* Existing Data Info */}
+      {existingDataInfo && (
+        <div className="bg-bg-card border border-bg-border rounded-xl p-4 mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Calendar size={16} className="text-accent" />
+            <h3 className="font-semibold text-primary">Current Data Status</h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-bg border border-bg-border rounded-lg p-3">
+              <div className="text-xs text-muted mb-1">Masters Data</div>
+              <div className="text-sm font-medium text-primary">
+                {existingDataInfo.hasMasters ? '✓ Loaded' : '⚠ Not Loaded'}
+              </div>
+              <div className="text-xs text-muted mt-1">
+                Uploaded: {existingDataInfo.mastersUploadedAt}
+              </div>
+            </div>
+            <div className="bg-bg border border-bg-border rounded-lg p-3">
+              <div className="text-xs text-muted mb-1">Transaction Data</div>
+              <div className="text-sm font-medium text-primary">
+                {existingDataInfo.totalVouchers.toLocaleString('en-IN')} vouchers
+              </div>
+              <div className="text-xs text-muted mt-1">
+                Period: {existingDataInfo.earliestTxDate} to {existingDataInfo.latestTxDate}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Drop Zones */}
       <div className="grid grid-cols-2 gap-4 mb-6">
