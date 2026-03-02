@@ -280,13 +280,13 @@ function generateUpsellSuggestions(
   itemPartyQtys: Map<string, number[]>,
   items: Map<string, CanonicalItem>,
 ): UpsellSuggestion[] {
-  const partyItems = partyItemSets.get(partyId);
-  if (!partyItems || partyItems.size === 0) return [];
+  const partyItems = partyItemSets.get(partyId) ?? new Set<string>();
+  // Allow suggestions even for parties with no history
 
   const suggestions: UpsellSuggestion[] = [];
   const suggestedIds = new Set<string>();
 
-  // 1. Co-purchase analysis: find parties with >= 50% overlap
+  // 1. Co-purchase analysis: find parties with >= 30% overlap (lowered from 50%)
   const coPartyItems = new Map<string, number>(); // itemId -> count of co-purchasing parties that buy it
   let coPurchaserCount = 0;
 
@@ -297,8 +297,9 @@ function generateUpsellSuggestions(
     for (const itemId of partyItems) {
       if (otherItems.has(itemId)) overlap++;
     }
-    const overlapRatio = partyItems.size > 0 ? overlap / partyItems.size : 0;
-    if (overlapRatio >= 0.5) {
+    // For new parties (no items), consider all other parties as potential matches
+    const overlapRatio = partyItems.size > 0 ? overlap / partyItems.size : 0.3;
+    if (overlapRatio >= 0.3) {
       coPurchaserCount++;
       // Find items they buy that this party doesn't
       for (const itemId of otherItems) {

@@ -139,7 +139,7 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
   const parentRef = useRef<HTMLDivElement>(null);
 
   // Fixed column template for grid layout - ensures header and rows align
-  const COL_TEMPLATE = "90px 110px 80px 1fr 110px 100px 110px 90px 100px 40px";
+  const COL_TEMPLATE = "90px 110px 80px 1fr 110px 40px";
 
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -159,7 +159,7 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
         {/* Header */}
         <div className="grid text-xs text-muted font-medium border-b border-bg-border"
              style={{ gridTemplateColumns: COL_TEMPLATE }}>
-          {["Date", "Voucher#", "Type", "Party", "Amount", "Paid", "Outstanding", "Due Date", "Status", ""].map((h) => (
+          {["Date", "Voucher#", "Type", "Party", "Amount", ""].map((h) => (
             <div key={h} className="px-4 py-3">{h}</div>
           ))}
         </div>
@@ -182,7 +182,9 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                     left: 0,
                     width: "100%",
                     transform: `translateY(${virtualRow.start}px)`,
+                    zIndex: isExpanded ? 10 : 1,
                   }}
+                  className="bg-bg-card"
                 >
                   {/* Main row with grid layout */}
                   <div
@@ -199,14 +201,6 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                     </div>
                     <div className="px-4 py-3 text-primary truncate">{inv.partyName}</div>
                     <div className="px-4 py-3 font-mono text-primary">{fmtINR(inv.totalAmount)}</div>
-                    <div className="px-4 py-3 font-mono text-success">{fmtINR(inv.paidAmount)}</div>
-                    <div className="px-4 py-3 font-mono font-semibold text-primary">{fmtINR(inv.outstanding)}</div>
-                    <div className="px-4 py-3 text-muted text-xs">{inv.dueDate ? fmtDate(inv.dueDate) : "-"}</div>
-                    <div className="px-4 py-3">
-                      <span className={clsx("text-xs px-2 py-0.5 rounded-full", agingColor(inv))}>
-                        {inv.agingBucket === "current" ? "Current" : `${inv.daysPastDue}d overdue`}
-                      </span>
-                    </div>
                     <div className="px-4 py-3 text-muted">
                       {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                     </div>
