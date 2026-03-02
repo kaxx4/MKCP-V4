@@ -406,15 +406,16 @@ export default function Orders() {
               </div>
 
               {/* Mini KPIs */}
-              {focusedMonthlyBuckets.length > 0 && (() => {
+              {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
+                const item = focusedItem; // Capture in const to ensure non-null type
                 const last = focusedMonthlyBuckets[focusedMonthlyBuckets.length - 1]!;
                 return (
                   <div className="grid grid-cols-4 gap-2">
                     {[
-                      { label: "Opening", val: toDisplay(focusedItem, last.openingQtyBase, unitMode).formatted, color: "text-muted" },
-                      { label: "In", val: toDisplay(focusedItem, last.inwardsBase, unitMode).formatted, color: "text-success" },
-                      { label: "Out", val: toDisplay(focusedItem, last.outwardsBase, unitMode).formatted, color: "text-danger" },
-                      { label: "Closing", val: toDisplay(focusedItem, focusedStock, unitMode).formatted, color: focusedStock <= 0 ? "text-danger" : "text-primary" },
+                      { label: "Opening", val: toDisplay(item, last.openingQtyBase, unitMode).formatted, color: "text-muted" },
+                      { label: "In", val: toDisplay(item, last.inwardsBase, unitMode).formatted, color: "text-success" },
+                      { label: "Out", val: toDisplay(item, last.outwardsBase, unitMode).formatted, color: "text-danger" },
+                      { label: "Closing", val: toDisplay(item, focusedStock, unitMode).formatted, color: focusedStock <= 0 ? "text-danger" : "text-primary" },
                     ].map(({ label, val, color }) => (
                       <div key={label} className="bg-bg-card border border-bg-border rounded-lg p-2 text-center">
                         <div className={`text-sm font-mono font-semibold ${color}`}>{val}</div>
@@ -426,56 +427,62 @@ export default function Orders() {
               })()}
 
               {/* Monthly data table */}
-              {focusedMonthlyBuckets.length > 0 && (
-                <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-bg-border">
-                        {["Month", "Opening", "In", "Out", "Closing"].map((h) => (
-                          <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {focusedMonthlyBuckets.map((b) => (
-                        <tr key={b.yearMonth} className="border-b border-bg-border/50">
-                          <td className="px-3 py-1.5 text-muted">{b.label}</td>
-                          <td className="px-3 py-1.5 font-mono text-primary">{toDisplay(focusedItem, b.openingQtyBase, unitMode).formatted}</td>
-                          <td className="px-3 py-1.5 font-mono text-success">{toDisplay(focusedItem, b.inwardsBase, unitMode).formatted}</td>
-                          <td className="px-3 py-1.5 font-mono text-danger">{toDisplay(focusedItem, b.outwardsBase, unitMode).formatted}</td>
-                          <td className="px-3 py-1.5 font-mono text-primary font-semibold">{toDisplay(focusedItem, b.closingQtyBase, unitMode).formatted}</td>
+              {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
+                const item = focusedItem; // Capture in const to ensure non-null type
+                return (
+                  <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-bg-border">
+                          {["Month", "Opening", "In", "Out", "Closing"].map((h) => (
+                            <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>
+                          ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                      </thead>
+                      <tbody>
+                        {focusedMonthlyBuckets.map((b) => (
+                          <tr key={b.yearMonth} className="border-b border-bg-border/50">
+                            <td className="px-3 py-1.5 text-muted">{b.label}</td>
+                            <td className="px-3 py-1.5 font-mono text-primary">{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
+                            <td className="px-3 py-1.5 font-mono text-success">{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
+                            <td className="px-3 py-1.5 font-mono text-danger">{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
+                            <td className="px-3 py-1.5 font-mono text-primary font-semibold">{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
 
               {/* Chart */}
-              {focusedMonthlyBuckets.length > 0 && (
-                <div className="bg-bg-card border border-bg-border rounded-xl p-3">
-                  <div className="text-xs text-muted mb-2 font-medium">8-Month History</div>
-                  <ResponsiveContainer width="100%" height={180}>
-                    <ComposedChart data={focusedMonthlyBuckets.map((b) => ({
-                      label: b.label,
-                      in: toDisplay(focusedItem, b.inwardsBase, unitMode).value,
-                      out: toDisplay(focusedItem, b.outwardsBase, unitMode).value,
-                      closing: toDisplay(focusedItem, b.closingQtyBase, unitMode).value,
-                    }))}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} />
-                      <YAxis tick={{ fontSize: 10, fill: "#64748b" }} />
-                      <Tooltip
-                        contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
-                        labelStyle={{ color: "#0f172a" }}
-                      />
-                      <Bar dataKey="in" fill="#10b981" name="In" radius={[2, 2, 0, 0]} barSize={12} />
-                      <Bar dataKey="out" fill="#ef4444" name="Out" radius={[2, 2, 0, 0]} barSize={12} />
-                      <Line type="monotone" dataKey="closing" stroke="#3b82f6" dot={false} strokeWidth={2} name="Stock" />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
+              {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
+                const item = focusedItem; // Capture in const to ensure non-null type
+                return (
+                  <div className="bg-bg-card border border-bg-border rounded-xl p-3">
+                    <div className="text-xs text-muted mb-2 font-medium">8-Month History</div>
+                    <ResponsiveContainer width="100%" height={180}>
+                      <ComposedChart data={focusedMonthlyBuckets.map((b) => ({
+                        label: b.label,
+                        in: toDisplay(item, b.inwardsBase, unitMode).value,
+                        out: toDisplay(item, b.outwardsBase, unitMode).value,
+                        closing: toDisplay(item, b.closingQtyBase, unitMode).value,
+                      }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} />
+                        <YAxis tick={{ fontSize: 10, fill: "#64748b" }} />
+                        <Tooltip
+                          contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
+                          labelStyle={{ color: "#0f172a" }}
+                        />
+                        <Bar dataKey="in" fill="#10b981" name="In" radius={[2, 2, 0, 0]} barSize={12} />
+                        <Bar dataKey="out" fill="#ef4444" name="Out" radius={[2, 2, 0, 0]} barSize={12} />
+                        <Line type="monotone" dataKey="closing" stroke="#3b82f6" dot={false} strokeWidth={2} name="Stock" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                );
+              })()}
 
             </div>
           ) : (

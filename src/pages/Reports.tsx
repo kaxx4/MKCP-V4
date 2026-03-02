@@ -212,19 +212,33 @@ export default function Reports() {
     return { fast, moderate, slow, dead, avgRatio: Math.round(avgRatio * 100) / 100, totalCOGS, totalAvgInv };
   }, [turnoverData]);
 
-  // ─── Purchase Orders data (Task 2) ───────────────────────
+  // ─── Financial Year Info ───────────────────────
+  const fyInfo = useMemo(() => {
+    const now = new Date();
+    const currentMonth = now.getMonth(); // 0 = Jan, 3 = Apr
+    const currentYear = now.getFullYear();
+    const fyStartYear = currentMonth >= 3 ? currentYear : currentYear - 1;
+    const fyStart = `${fyStartYear}-04-01`;
+    const fyEnd = `${fyStartYear + 1}-03-31`;
+    const fyLabel = `FY ${fyStartYear}-${(fyStartYear + 1).toString().slice(-2)}`;
+    return { fyStart, fyEnd, fyLabel };
+  }, []);
+
+  // ─── Purchase Orders data (Current FY) ───────────────────────
   const dailyPOs = useMemo(() => {
     if (!data) return [];
-    // Group Purchase vouchers by date
+
+    // Group Purchase vouchers by date (current FY only)
     const byDate = new Map<string, CanonicalVoucher[]>();
     for (const v of data.vouchers) {
       if (v.voucherType !== "Purchase" || v.isCancelled || v.isOptional) continue;
+      if (v.date < fyInfo.fyStart || v.date > fyInfo.fyEnd) continue; // Filter by FY
       let arr = byDate.get(v.date);
       if (!arr) { arr = []; byDate.set(v.date, arr); }
       arr.push(v);
     }
-    // Sort dates descending, take last 20
-    const sortedDates = Array.from(byDate.keys()).sort((a, b) => b.localeCompare(a)).slice(0, 20);
+    // Sort dates descending
+    const sortedDates = Array.from(byDate.keys()).sort((a, b) => b.localeCompare(a));
 
     return sortedDates.map(date => {
       const vouchers = byDate.get(date)!;
@@ -270,6 +284,29 @@ export default function Reports() {
 
   // Max PO value for visual weighting
   const maxPOValue = useMemo(() => Math.max(...dailyPOs.map(p => p.totalValue), 1), [dailyPOs]);
+
+  // Monthly purchase aggregation
+  const monthlyPurchaseData = useMemo(() => {
+    if (!dailyPOs.length) return [];
+    const monthMap = new Map<string, { yearMonth: string; totalValue: number; count: number }>();
+
+    for (const po of dailyPOs) {
+      const yearMonth = po.date.slice(0, 7); // "YYYY-MM"
+      const existing = monthMap.get(yearMonth) ?? { yearMonth, totalValue: 0, count: 0 };
+      existing.totalValue += po.totalValue;
+      existing.count++;
+      monthMap.set(yearMonth, existing);
+    }
+
+    return Array.from(monthMap.values())
+      .sort((a, b) => a.yearMonth.localeCompare(b.yearMonth))
+      .map(m => {
+        const [y, mo] = m.yearMonth.split("-");
+        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const label = `${months[parseInt(mo, 10) - 1]} ${y}`;
+        return { label, value: m.totalValue, count: m.count };
+      });
+  }, [dailyPOs]);
 
   // KPI calculations
   const poKPIs = useMemo(() => {
@@ -664,17 +701,17 @@ export default function Reports() {
         </div>
       )}
 
-      {/* ═══ Purchase Orders (Task 2) ═══ */}
+      {/* ═══ Purchase Orders (Current FY) ═══ */}
       {tab === "Purchase Orders" && (
         <div className="space-y-4">
           {/* Header */}
           <div className="bg-bg-card border border-bg-border rounded-xl p-4">
             <div className="flex items-center gap-3 mb-2">
               <ShoppingBag size={16} className="text-purple-500" />
-              <h3 className="font-semibold text-primary">Purchase Order History (Last 20 Purchase Dates)</h3>
+              <h3 className="font-semibold text-primary">Purchase Orders - {fyInfo.fyLabel}</h3>
             </div>
             <span className="text-muted text-sm">
-              {dailyPOs.length} days · {dailyPOs.length > 0 ? `${fmtDate(dailyPOs[dailyPOs.length - 1].date)} — ${fmtDate(dailyPOs[0].date)}` : "No data"}
+              {fmtDate(fyInfo.fyStart)} to {fmtDate(fyInfo.fyEnd)} · {dailyPOs.length} purchase days
             </span>
           </div>
 
@@ -707,15 +744,18 @@ export default function Reports() {
           {/* Aggregate Charts */}
           {dailyPOs.length > 0 && (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              {/* Daily Purchase Value Trend */}
+              {/* Monthly Purchase Value Trend */}
               <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-                <h3 className="font-semibold text-primary mb-3 text-sm">Daily Purchase Value Trend</h3>
+                <h3 className="font-semibold text-primary mb-3 text-sm">Monthly Purchase Value Trend</h3>
                 <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={[...dailyPOs].reverse().map(po => ({ date: fmtDateShort(po.date), value: po.totalValue }))}>
+                  <BarChart data={monthlyPurchaseData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#64748b" }} />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} />
                     <YAxis tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
-                    <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number) => [fmtINR(v), "Value"]} />
+                    <Tooltip
+                      contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
+                      formatter={(v: number, name: string, props: any) => [fmtINR(v), `Value (${props.payload.count} orders)`]}
+                    />
                     <Bar dataKey="value" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
