@@ -139,10 +139,13 @@ function tallyEnvelopeVoucherToSimple(tv: any): any {
   }
 
   for (const ie of toArray(tv.ALLINVENTORYENTRIES ?? tv.INVENTORYENTRIES)) {
+    // For Stock Journal, preserve sign; for others, take abs
+    const isStockJournal = String(tv.VOUCHERTYPENAME ?? "").toLowerCase().includes("stock journal");
+    const rawQty = parseNum(ie.ACTUALQTY ?? ie.BILLEDQTY);
     lines.push({
       type: "inventory",
       itemName: ie.STOCKITEMNAME,
-      qtyBase: Math.abs(parseNum(ie.ACTUALQTY ?? ie.BILLEDQTY)),
+      qtyBase: isStockJournal ? rawQty : Math.abs(rawQty),
       ratePerBase: parseNum(ie.RATE),
       lineAmount: Math.abs(parseNum(ie.AMOUNT)),
     });
@@ -247,15 +250,18 @@ function parseOneVoucher(rv: any, warnings: ImportWarning[]): CanonicalVoucher |
     if (!itemId) continue;
 
     // qty: " 240 PC" string or number
-    const qtyBase = Math.abs(parseQtyString(
+    // For Stock Journal, preserve sign (negative = stock going out)
+    // For other voucher types, always take absolute value (direction from voucherType)
+    const rawQty = parseQtyString(
       ie.actualqty ?? ie.billedqty ?? ie.qtyBase ?? ie.ACTUALQTY ?? ie.BILLEDQTY ?? "0"
-    ));
+    );
+    const qtyBase = voucherType === "Stock Journal" ? rawQty : Math.abs(rawQty);
 
     // rate: "185.71/PC" string or number
     const ratePerBase = parseRateString(ie.rate ?? ie.ratePerBase ?? ie.RATE ?? "0");
 
     // amount: may be negative in Tally
-    const lineAmount = Math.abs(parseNum(ie.amount ?? ie.lineAmount ?? ie.AMOUNT ?? qtyBase * ratePerBase));
+    const lineAmount = Math.abs(parseNum(ie.amount ?? ie.lineAmount ?? ie.AMOUNT ?? Math.abs(qtyBase) * ratePerBase));
 
     if (!totalAmount && lineAmount) totalAmount = lineAmount;
 

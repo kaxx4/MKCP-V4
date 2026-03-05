@@ -5,7 +5,7 @@ import clsx from "clsx";
 import { parseMasters } from "../parser/masterParser";
 import { parseTransactions } from "../parser/transactionParser";
 import { useDataStore } from "../store/dataStore";
-import { saveData, loadData, createBackup, saveToStore, loadFromStore } from "../db/idb";
+import { saveData, loadData, createBackup, saveToStore, loadFromStore, saveJsonUpload } from "../db/idb";
 import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
 import type { ParsedData, ImportWarning } from "../types/canonical";
 import { useToast } from "../components/Toast";
@@ -143,6 +143,11 @@ export default function ImportPage() {
           mastersRaw = JSON.parse(decoder.decode(buf));
           addLog("Masters file parsed (UTF-16)");
         }
+        // Persist raw JSON locally so it survives browser sessions
+        try {
+          await saveJsonUpload(mastersFile.name, mastersRaw);
+          addLog(`✓ Masters JSON persisted locally as "${mastersFile.name}"`);
+        } catch { addLog("Warning: Could not persist masters JSON locally"); }
       } else {
         addLog("No masters file — will use existing data");
       }
@@ -158,6 +163,12 @@ export default function ImportPage() {
         txRaw = JSON.parse(decoder.decode(buf));
         addLog("Transactions file parsed (UTF-16)");
       }
+
+      // Persist raw JSON locally
+      try {
+        await saveJsonUpload(txFile.name, txRaw);
+        addLog(`✓ Transactions JSON persisted locally as "${txFile.name}"`);
+      } catch { addLog("Warning: Could not persist transactions JSON locally"); }
 
       const sourceFiles = mastersFile ? [mastersFile.name, txFile.name] : [txFile.name];
       await runImportFromParsed(mastersRaw, txRaw, sourceFiles);

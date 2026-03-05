@@ -14,13 +14,13 @@ import {
 } from "recharts";
 import { useDataStore } from "../store/dataStore";
 import { computeOutstandingInvoices, computeBankBalance, monthlyTotals } from "../engine/financial";
-import { buildVoucherIndex, getCurrentStockIndexed, avgMonthlyOutwardIndexed, suggestedReorderIndexed } from "../engine/inventory";
+import { getCurrentStockIndexed, avgMonthlyOutwardIndexed, suggestedReorderIndexed } from "../engine/inventory";
 import { KPICard } from "../components/KPICard";
 import { fmtINR, fmtDate } from "../utils/format";
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
+  const { data, voucherIndex } = useDataStore();
   const [salesPeriod, setSalesPeriod] = useState(6);
   const [topItemsPeriod, setTopItemsPeriod] = useState<"month" | "quarter" | "year">("month");
 
@@ -35,12 +35,6 @@ export default function Dashboard() {
   }, [data]);
 
   const latestMonth = latestDate.slice(0, 7);
-
-  // Build voucher index once for all indexed operations
-  const voucherIndex = useMemo(() => {
-    if (!data) return new Map();
-    return buildVoucherIndex(data.vouchers);
-  }, [data]);
 
   const kpis = useMemo(() => {
     if (!data) return null;
