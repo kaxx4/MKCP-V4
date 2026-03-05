@@ -1,14 +1,16 @@
+import * as http from "node:http";
+import { URL } from "node:url";
 import { XMLParser } from "fast-xml-parser";
 
-// ─── XML Parser configured for Tally responses ────────────────────
-const parser = new XMLParser({
+// ─────────────────────────────────────────────────────────────────────
+// XML Parser ───────────────────────────────────────────────────────────
+const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   textNodeName: "#text",
-  parseTagValue: false,    // Keep ALL values as strings — let downstream parsers handle conversion
+  parseTagValue: false,  // Keep everything as strings — parsers handle conversion
   trimValues: true,
   isArray: (tag) => {
-    // Tags that MUST be arrays even when Tally returns a single element
     const t = tag.toUpperCase().replace(/\.LIST$/, "");
     return ARRAY_TAGS.has(t);
   },
@@ -20,280 +22,217 @@ const ARRAY_TAGS = new Set([
   "BILLALLOCATIONS", "BATCHALLOCATIONS", "ACCOUNTINGALLOCATIONS",
   "GSTDETAILS", "HSNDETAILS", "STATEWISEDETAILS", "RATEDETAILS",
   "CATEGORYALLOCATIONS", "INVENTORYALLOCATIONS",
-  "DSPVCHLEDACCOUNT", "DSPVCHLEDDATE", // DayBook response tags
 ]);
 
-// ─── Send XML to Tally, get parsed JSON ───────────────────────────
-export async function postToTally(url: string, xml: string): Promise<any> {
-  const label = xml.match(/<ID[^>]*>([^<]+)/)?.[1] || "?";
-  const t0 = Date.now();
-  console.log(`[tally] >>> ${label} (${xml.length}b)`);
+/**
+ * POST XML to Tally using node:http with SOCKET-LEVEL timeout.
+ * Unlike fetch(), this properly handles Tally's slow response generation.
+ *
+ * @param tallyUrl  e.g. "http://localhost:9000"
+ * @param xml       XML request body
+ * @param timeoutMs Socket timeout (default 5 minutes)
+ * @param rawMode   If true, return raw string instead of parsed object
+ */
+export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, rawMode = false): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(tallyUrl);
+    const label = xml.match(/<ID[^>]*>([^<]+)/)?.[1] || "request";
+    const t0 = Date.now();
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "text/xml; charset=utf-8" },
-    body: xml,
-    signal: AbortSignal.timeout(90_000), // 90s timeout
+    const reqBody = Buffer.from(xml, "utf-8");
+
+    const req = http.request(
+      {
+        hostname: url.hostname,
+        port: url.port || 9000,
+        path: "/",
+        method: "POST",
+        headers: {
+          "Content-Type": "text/xml; charset=utf-8",
+          "Content-Length": reqBody.length,
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        let totalBytes = 0;
+
+        // Reset timeout on each data chunk — Tally sends data in bursts
+        res.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+          totalBytes += chunk.length;
+          // Reset socket timeout since we're receiving data
+          res.socket?.setTimeout(timeoutMs);
+        });
+
+        res.on("end", () => {
+          const ms = Date.now() - t0;
+          const body = Buffer.concat(chunks).toString("utf-8");
+          console.log(`[tally] ✓ ${label}: ${totalBytes} bytes in ${ms}ms`);
+
+          if (body.includes("<LINEERROR>")) {
+            const err = body.match(/<LINEERROR>([^<]*)/)?.[1] || "unknown";
+            console.error(`[tally] ✗  TALLY ERROR: ${err}`);
+          }
+
+          if (rawMode) return resolve(body);
+
+          try {
+            const parsed = xmlParser.parse(body);
+            resolve(parsed);
+          } catch (parseErr: any) {
+            console.error(`[tally] ✗ XML parse failed: ${parseErr.message}`);
+            console.error(`[tally]   First 500 chars: ${body.slice(0, 500)}`);
+            reject(new Error(`XML parse failed: ${parseErr.message}`));
+          }
+        });
+
+        res.on("error", (err) => {
+          reject(new Error(`Response error: ${err.message}`));
+        });
+      }
+    );
+
+    // Socket-level timeout — fires if NO DATA received for timeoutMs
+    req.on("timeout", () => {
+      console.error(`[tally] ✗ ${label}: TIMEOUT after ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+      req.destroy(new Error(`Tally timeout: ${label} took longer than ${Math.round(timeoutMs / 1000)}s`));
+    });
+
+    req.on("error", (err: any) => {
+      if (err.code === "ECONNREFUSED") {
+        reject(new Error("Cannot connect to Tally at " + tallyUrl + " — is TallyPrime running with ODBC enabled on port 9000?"));
+      } else if (err.code === "ECONNRESET") {
+        reject(new Error("Tally reset the connection — the company may not be loaded or the request was invalid"));
+      } else {
+        reject(new Error(`Tally request failed (${label}): ${err.message}`));
+      }
+    });
+
+    console.log(`[tally] → ${label} (${reqBody.length} bytes, timeout ${Math.round(timeoutMs / 1000)}s)`);
+    req.write(reqBody);
+    req.end();
   });
-
-  const text = await res.text();
-  const ms = Date.now() - t0;
-  console.log(`[tally] <<< ${label}: ${text.length}b in ${ms}ms`);
-
-  if (text.includes("<LINEERROR>")) {
-    const err = text.match(/<LINEERROR>([^<]*)/)?.[1] || "unknown";
-    console.error(`[tally] !!! TALLY ERROR: ${err}`);
-  }
-
-  return parser.parse(text);
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// XML REQUESTS — Using ONLY official Tally built-in endpoints
-// From: https://help.tallysolutions.com/integration-with-tallyprime/
-// ═══════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────
+// XML REQUEST BUILDERS
+// Using EXACT formats from official Tally documentation:
+// https://help.tallysolutions.com/integration-with-tallyprime/
+// ─────────────────────────────────────────────────────────────────────
 
-/** Health check — simplest possible request */
+/** Simple health check — "List of Companies" is the lightest built-in */
 export const HEALTH_XML = `<ENVELOPE>
-<HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>List of Companies</ID></HEADER>
-<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT></STATICVARIABLES></DESC></BODY>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Data</TYPE>
+<ID>List of Companies</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+</STATICVARIABLES>
+</DESC>
+</BODY>
 </ENVELOPE>`;
 
-/** Get all companies — built-in report */
-export const COMPANY_XML = HEALTH_XML;
-
-/** Get all stock items with full details — uses built-in "List of Accounts" report */
+/**
+ * Stock items — using object export to get actual STOCKITEM data
+ */
 export function stockItemsXml(company: string): string {
   return `<ENVELOPE>
-<HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>List of Accounts</ID></HEADER>
-<BODY><DESC>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Data</TYPE>
+<ID>All Masters</ID>
+</HEADER>
+<BODY>
+<DESC>
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
-<AccountType>Stock Items</AccountType>
+<MASTERNAME>StockItem</MASTERNAME>
 </STATICVARIABLES>
-</DESC></BODY>
+</DESC>
+</BODY>
 </ENVELOPE>`;
 }
 
-/** Get all ledgers — built-in "List of Ledgers" collection */
+/**
+ * Ledgers — from Tally docs:
+ * TYPE=Collection, ID=List of Ledgers
+ * Modified with ISMODIFY to get full details via NATIVEMETHOD
+ */
 export function ledgersXml(company: string): string {
   return `<ENVELOPE>
-<HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>List of Ledgers</ID></HEADER>
-<BODY><DESC>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Collection</TYPE>
+<ID>List of Ledgers</ID>
+</HEADER>
+<BODY>
+<DESC>
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
 </STATICVARIABLES>
-</DESC></BODY>
+<TDL>
+<TDLMESSAGE>
+<COLLECTION NAME="List of Ledgers" ISMODIFY="Yes">
+<NATIVEMETHOD>Name</NATIVEMETHOD>
+<NATIVEMETHOD>Parent</NATIVEMETHOD>
+<NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>
+<NATIVEMETHOD>GSTIN</NATIVEMETHOD>
+<NATIVEMETHOD>LedGSTIN</NATIVEMETHOD>
+<NATIVEMETHOD>PartyGSTIN</NATIVEMETHOD>
+<NATIVEMETHOD>CreditPeriod</NATIVEMETHOD>
+<NATIVEMETHOD>BillCreditPeriod</NATIVEMETHOD>
+<NATIVEMETHOD>GUID</NATIVEMETHOD>
+<NATIVEMETHOD>MailingName</NATIVEMETHOD>
+<NATIVEMETHOD>Address</NATIVEMETHOD>
+<NATIVEMETHOD>LedStateName</NATIVEMETHOD>
+<NATIVEMETHOD>CountryName</NATIVEMETHOD>
+<NATIVEMETHOD>PinCode</NATIVEMETHOD>
+<NATIVEMETHOD>Email</NATIVEMETHOD>
+<NATIVEMETHOD>LedgerPhone</NATIVEMETHOD>
+</COLLECTION>
+</TDLMESSAGE>
+</TDL>
+</DESC>
+</BODY>
 </ENVELOPE>`;
 }
 
-/** Get all vouchers — built-in "Day Book" report with date filter */
+/**
+ * Vouchers — from Tally docs:
+ * TYPE=Data, ID=Day Book with date range
+ * This is the official way to get transactions.
+ */
 export function vouchersXml(company: string, from?: string, to?: string): string {
-  // Tally date format: YYYYMMDD — the doc example uses "1-Apr-2016" but YYYYMMDD also works
-  const dateFilter = from && to
-    ? `<SVFROMDATE>${from}</SVFROMDATE><SVTODATE>${to}</SVTODATE>`
+  const dates = from && to
+    ? `<SVFROMDATE TYPE="Date">${from}</SVFROMDATE>\n<SVTODATE TYPE="Date">${to}</SVTODATE>`
     : "";
   return `<ENVELOPE>
-<HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>Day Book</ID></HEADER>
-<BODY><DESC>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Data</TYPE>
+<ID>Day Book</ID>
+</HEADER>
+<BODY>
+<DESC>
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
-${dateFilter}
+${dates}
 </STATICVARIABLES>
-</DESC></BODY>
+</DESC>
+</BODY>
 </ENVELOPE>`;
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// RESPONSE CONVERTERS — XML parsed JSON → tallymessage format
-// The frontend parsers (masterParser.ts, transactionParser.ts) expect:
-//   { tallymessage: [ { metadata: { type: "Stock Item" }, name, parent, ... }, ... ] }
-// ═══════════════════════════════════════════════════════════════════
-
-/** Dig through nested Tally XML response to find the data payload */
-function dig(obj: any, ...paths: string[][]): any {
-  for (const path of paths) {
-    let cur = obj;
-    for (const key of path) {
-      if (!cur) break;
-      // Try exact key, then .LIST variant
-      cur = cur[key] ?? cur[key + ".LIST"] ?? cur[key.toUpperCase()] ?? cur[key.toUpperCase() + ".LIST"];
-    }
-    if (cur !== undefined && cur !== null) return cur;
-  }
-  return null;
-}
-
-function arr(v: any): any[] {
-  if (!v) return [];
-  if (Array.isArray(v)) return v;
-  return [v];
-}
-
-/** Convert "List of Accounts" (Stock Items) response → tallymessage */
-export function convertStockItems(parsed: any): { tallymessage: any[] } {
-  const messages: any[] = [];
-
-  // "List of Accounts" with AccountType=Stock Items returns:
-  // ENVELOPE > BODY > DATA > TALLYMESSAGE > STOCKITEM[]
-  const data = dig(parsed,
-    ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
-    ["ENVELOPE", "BODY", "DATA"],
-    ["ENVELOPE", "BODY", "TALLYMESSAGE"],
-    ["ENVELOPE", "BODY"],
-  );
-
-  const items = arr(data?.STOCKITEM ?? data?.["STOCKITEM.LIST"] ?? []);
-  console.log(`[convert] Stock items found: ${items.length}`);
-
-  for (const si of items) {
-    const name = si["@_NAME"] || si.NAME || si.LANGUAGENAME?.["NAME.LIST"]?.NAME || "";
-    if (!name) continue;
-    messages.push({
-      metadata: { type: "Stock Item", name },
-      name,
-      parent: si.PARENT || "Primary",
-      baseunits: si.BASEUNITS || "PC",
-      additionalunits: si.ADDITIONALUNITS || " Not Applicable",
-      denominator: si.DENOMINATOR || "1",
-      openingbalance: si.OPENINGBALANCE || si["OPENINGBALANCE"] || "0",
-      openingrate: si.OPENINGRATE || "0",
-      openingvalue: si.OPENINGVALUE || "0",
-      gstapplicable: si.GSTAPPLICABLE || "",
-      gsttypeofsupply: si.GSTTYPEOFSUPPLY || "",
-      costingmethod: si.COSTINGMETHOD || "",
-      valuationmethod: si.VALUATIONMETHOD || "",
-      isbatchwiseon: si.ISBATCHWISEON === "Yes",
-      iscostcentreson: si.ISCOSTCENTRESON === "Yes",
-      gstdetails: arr(si.GSTDETAILS ?? si["GSTDETAILS.LIST"]).map((g: any) => ({
-        ...g,
-        statewisedetails: arr(g?.STATEWISEDETAILS ?? g?.["STATEWISEDETAILS.LIST"]).map((s: any) => ({
-          ...s,
-          ratedetails: arr(s?.RATEDETAILS ?? s?.["RATEDETAILS.LIST"]).map((r: any) => ({
-            gstratedutyhead: r.GSTRATEDUTYHEAD || "",
-            gstrate: r.GSTRATE || "0",
-          })),
-        })),
-      })),
-      hsndetails: arr(si.HSNDETAILS ?? si["HSNDETAILS.LIST"]).map((h: any) => ({
-        hsncode: h.HSNCODE || h.DESCRIPTION || "",
-      })),
-      guid: si.GUID || "",
-    });
-  }
-  return { tallymessage: messages };
-}
-
-/** Convert "List of Ledgers" response → tallymessage */
-export function convertLedgers(parsed: any): { tallymessage: any[] } {
-  const messages: any[] = [];
-
-  // Built-in collection returns: ENVELOPE > BODY > DATA > COLLECTION > LEDGER[]
-  // OR sometimes: ENVELOPE > BODY > DATA > TALLYMESSAGE > LEDGER[]
-  const data = dig(parsed,
-    ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
-    ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
-    ["ENVELOPE", "BODY", "DATA"],
-    ["ENVELOPE", "BODY", "TALLYMESSAGE"],
-    ["ENVELOPE", "BODY"],
-  );
-
-  const ledgers = arr(data?.LEDGER ?? data?.["LEDGER.LIST"] ?? []);
-  console.log(`[convert] Ledgers found: ${ledgers.length}`);
-
-  for (const led of ledgers) {
-    const name = led["@_NAME"] || led.NAME || led.LANGUAGENAME?.["NAME.LIST"]?.NAME || "";
-    if (!name) continue;
-    messages.push({
-      metadata: { type: "Ledger", name },
-      name,
-      parent: led.PARENT || "Unsorted",
-      openingbalance: led.OPENINGBALANCE || "0",
-      gstin: led.PARTYGSTIN || led.GSTIN || led.LEDGERGSTIN || "",
-      creditperiod: led.CREDITPERIOD || led.BILLCREDITPERIOD || "",
-      guid: led.GUID || "",
-    });
-  }
-  return { tallymessage: messages };
-}
-
-/** Convert "Day Book" response → tallymessage */
-export function convertVouchers(parsed: any): { tallymessage: any[] } {
-  const messages: any[] = [];
-
-  // DayBook returns: ENVELOPE > BODY > DATA > TALLYMESSAGE > VOUCHER[]
-  const data = dig(parsed,
-    ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
-    ["ENVELOPE", "BODY", "DATA"],
-    ["ENVELOPE", "BODY", "TALLYMESSAGE"],
-    ["ENVELOPE", "BODY"],
-  );
-
-  const vouchers = arr(data?.VOUCHER ?? data?.["VOUCHER.LIST"] ?? []);
-  console.log(`[convert] Vouchers found: ${vouchers.length}`);
-
-  for (const v of vouchers) {
-    // Extract ledger entries — Tally uses .LIST suffix
-    const le = arr(v["ALLLEDGERENTRIES.LIST"] ?? v.ALLLEDGERENTRIES ?? v["LEDGERENTRIES.LIST"] ?? v.LEDGERENTRIES);
-    const ie = arr(v["ALLINVENTORYENTRIES.LIST"] ?? v.ALLINVENTORYENTRIES ?? v["INVENTORYENTRIES.LIST"] ?? v.INVENTORYENTRIES);
-
-    const ledgerentries = le.map((e: any) => ({
-      ledgername: e.LEDGERNAME || "",
-      isdeemedpositive: e.ISDEEMEDPOSITIVE === "Yes",
-      ispartyledger: e.ISPARTYLEDGER === "Yes",
-      amount: e.AMOUNT || "0",
-      billallocations: arr(e["BILLALLOCATIONS.LIST"] ?? e.BILLALLOCATIONS).map((b: any) => ({
-        name: b.NAME || "",
-        billtype: b.BILLTYPE || "New Ref",
-        amount: b.AMOUNT || "0",
-      })),
-    }));
-
-    const inventoryentries = ie.map((e: any) => ({
-      stockitemname: e.STOCKITEMNAME || "",
-      actualqty: e.ACTUALQTY || e.BILLEDQTY || "0",
-      billedqty: e.BILLEDQTY || e.ACTUALQTY || "0",
-      rate: e.RATE || "0",
-      amount: e.AMOUNT || "0",
-      isdeemedpositive: e.ISDEEMEDPOSITIVE === "Yes",
-    }));
-
-    messages.push({
-      metadata: { type: "Voucher" },
-      date: v.DATE || v["@_DATE"] || "",
-      guid: v.GUID || v["@_GUID"] || "",
-      vouchernumber: v.VOUCHERNUMBER || v.REFERENCE || "",
-      vouchertypename: v.VOUCHERTYPENAME || "",
-      partyledgername: v.PARTYLEDGERNAME || "",
-      narration: v.NARRATION || "",
-      iscancelled: v.ISCANCELLED === "Yes",
-      isoptional: v.ISOPTIONAL === "Yes",
-      effectivedate: v.EFFECTIVEDATE || v.DATE || "",
-      allledgerentries: ledgerentries,
-      ledgerentries: ledgerentries,
-      allinventoryentries: inventoryentries,
-      inventoryentries: inventoryentries,
-    });
-  }
-  return { tallymessage: messages };
-}
-
-/** Convert company list response */
-export function convertCompanies(parsed: any): any[] {
-  const data = dig(parsed,
-    ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
-    ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
-    ["ENVELOPE", "BODY", "DATA"],
-  );
-  const companies = arr(data?.COMPANY ?? data?.["COMPANY.LIST"] ?? []);
-  return companies.map((c: any) => ({
-    name: c["@_NAME"] || c.NAME || "",
-    startDate: c.STARTINGFROM || "",
-    endDate: c.ENDINGAT || "",
-  }));
 }
 
 function esc(s: string): string {
