@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive } from "lucide-react";
+import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive, Activity } from "lucide-react";
 import clsx from "clsx";
 import { useUIStore } from "../store/uiStore";
 import { useDataStore } from "../store/dataStore";
@@ -11,7 +11,7 @@ import { deserializeParsedData } from "../utils/serialize";
 
 export default function Settings() {
   const { unitMode, toggleUnitMode, fyYear, setFyYear, coverMonths, setCoverMonths, leadTimeMonths, setLeadTimeMonths, defaultCreditDays, setDefaultCreditDays } = useUIStore();
-  const { clearData, data, refreshOverrides } = useDataStore();
+  const { clearData, data, refreshOverrides, voucherIndex } = useDataStore();
   const { exportAuditLog, units, setUnitOverride } = useOverrideStore();
   const { toast } = useToast();
   const [confirmClear, setConfirmClear] = useState(false);
@@ -20,6 +20,8 @@ export default function Settings() {
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   const [eraseStep, setEraseStep] = useState<"idle" | "confirm" | "downloading" | "done">("idle");
   const [jsonUploads, setJsonUploads] = useState<string[]>([]);
+  const [auditResults, setAuditResults] = useState<any>(null);
+  const [runningAudit, setRunningAudit] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load backups and json uploads on mount
@@ -191,6 +193,51 @@ export default function Settings() {
     }
   }
 
+  async function handleRunAudit() {
+    if (!data) {
+      toast("No data loaded. Import data first.", "error");
+      return;
+    }
+
+    setRunningAudit(true);
+    try {
+      const { auditAllItems, auditInvoiceBalance, getVoucherTypeDistribution, findNegativeStockItems, findDeadItems, findItemsWithoutGST } = await import("../engine/audit");
+
+      const itemAudit = auditAllItems(data.items, data.vouchers, voucherIndex);
+      const invoiceAudit = auditInvoiceBalance(data.vouchers, data.ledgers);
+      const voucherDist = getVoucherTypeDistribution(data.vouchers);
+      const negativeStock = findNegativeStockItems(data.items, voucherIndex);
+      const deadItems = findDeadItems(data.items, voucherIndex);
+      const noGstItems = findItemsWithoutGST(data.items);
+
+      const failures = itemAudit.filter((r) => Math.abs(r.discrepancy) > 1e-9);
+      const chainBreaks = itemAudit.filter((r) => !r.monthlyChainValid);
+
+      setAuditResults({
+        itemAudit,
+        failures,
+        chainBreaks,
+        invoiceAudit,
+        voucherDist,
+        negativeStock,
+        deadItems,
+        noGstItems,
+        passCount: itemAudit.length - failures.length,
+        totalCount: itemAudit.length,
+      });
+
+      if (failures.length === 0) {
+        toast(`✓ All ${itemAudit.length} items passed audit`, "success");
+      } else {
+        toast(`⚠ ${failures.length} of ${itemAudit.length} items have discrepancies`, "warn");
+      }
+    } catch (err) {
+      toast(`Audit failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    } finally {
+      setRunningAudit(false);
+    }
+  }
+
   const fyOptions: string[] = [];
   const currentYear = new Date().getFullYear();
   for (let y = currentYear - 3; y <= currentYear + 1; y++) {
@@ -313,6 +360,94 @@ export default function Settings() {
             <p className="text-xs text-accent">
               {Object.keys(units).length} unit override(s) currently applied
             </p>
+          )}
+        </div>
+      </Section>
+
+      {/* Diagnostics */}
+      <Section title="Diagnostics">
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Activity size={14} className="text-accent" />
+            <span className="text-xs text-muted">Run comprehensive data integrity checks</span>
+          </div>
+          <button
+            onClick={handleRunAudit}
+            disabled={!data || runningAudit}
+            className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:bg-muted disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition text-sm"
+          >
+            <Activity size={14} />
+            {runningAudit ? "Running Audit..." : "Run Audit"}
+          </button>
+
+          {auditResults && (
+            <div className="space-y-3 bg-bg border border-bg-border rounded-lg p-3 text-sm">
+              {/* Summary */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-bg-card border border-bg-border rounded-lg p-2 text-center">
+                  <div className={`text-xl font-bold font-mono ${auditResults.failures.length === 0 ? "text-success" : "text-danger"}`}>
+                    {auditResults.passCount}/{auditResults.totalCount}
+                  </div>
+                  <div className="text-muted text-xs">Items Passed</div>
+                </div>
+                <div className="bg-bg-card border border-bg-border rounded-lg p-2 text-center">
+                  <div className={`text-xl font-bold font-mono ${auditResults.chainBreaks.length === 0 ? "text-success" : "text-warn"}`}>
+                    {auditResults.totalCount - auditResults.chainBreaks.length}/{auditResults.totalCount}
+                  </div>
+                  <div className="text-muted text-xs">Chain Valid</div>
+                </div>
+              </div>
+
+              {/* Invoice Balance */}
+              <div className="border-t border-bg-border pt-2">
+                <div className="text-xs font-semibold text-muted mb-1">Invoice Balance</div>
+                <div className="grid grid-cols-3 gap-1 text-xs">
+                  <div><span className="text-muted">Billed:</span> <span className="font-mono text-primary">₹{(auditResults.invoiceAudit.totalBilled / 100000).toFixed(1)}L</span></div>
+                  <div><span className="text-muted">Paid:</span> <span className="font-mono text-success">₹{(auditResults.invoiceAudit.totalPaid / 100000).toFixed(1)}L</span></div>
+                  <div><span className="text-muted">Outstanding:</span> <span className="font-mono text-accent">₹{(auditResults.invoiceAudit.totalOutstanding / 100000).toFixed(1)}L</span></div>
+                </div>
+                {auditResults.invoiceAudit.orphanedPayments.length > 0 && (
+                  <div className="text-xs text-warn mt-1">⚠ {auditResults.invoiceAudit.orphanedPayments.length} orphaned payment(s)</div>
+                )}
+              </div>
+
+              {/* Voucher Distribution */}
+              <div className="border-t border-bg-border pt-2">
+                <div className="text-xs font-semibold text-muted mb-1">Voucher Types</div>
+                <div className="grid grid-cols-2 gap-1 text-xs">
+                  {Array.from(auditResults.voucherDist.entries()).map(([type, counts]) => (
+                    <div key={type}>
+                      <span className="text-muted">{type}:</span> <span className="font-mono text-primary">{counts.active}</span>
+                      {counts.cancelled > 0 && <span className="text-danger ml-1">(-{counts.cancelled})</span>}
+                      {counts.optional > 0 && <span className="text-warn ml-1">(~{counts.optional})</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Issues */}
+              {(auditResults.failures.length > 0 || auditResults.negativeStock.length > 0 || auditResults.noGstItems.length > 0) && (
+                <div className="border-t border-bg-border pt-2">
+                  <div className="text-xs font-semibold text-danger mb-1">Issues Found</div>
+                  {auditResults.failures.length > 0 && (
+                    <div className="text-xs text-danger">• {auditResults.failures.length} item(s) with inventory discrepancies</div>
+                  )}
+                  {auditResults.negativeStock.length > 0 && (
+                    <div className="text-xs text-warn">• {auditResults.negativeStock.length} item(s) with negative stock</div>
+                  )}
+                  {auditResults.noGstItems.length > 0 && (
+                    <div className="text-xs text-muted">• {auditResults.noGstItems.length} item(s) without GST rates</div>
+                  )}
+                </div>
+              )}
+
+              {/* Dead Items */}
+              {auditResults.deadItems.length > 0 && (
+                <div className="border-t border-bg-border pt-2">
+                  <div className="text-xs text-muted">ℹ {auditResults.deadItems.length} dead item(s) (zero opening, zero movement)</div>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </Section>

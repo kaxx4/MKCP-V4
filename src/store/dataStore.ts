@@ -26,11 +26,40 @@ export const useDataStore = create<DataState>((set, get) => ({
     const { units, rates } = useOverrideStore.getState();
     const itemsWithOverrides = applyOverridesToItems(rawData.items, units, rates);
     const newData = { ...rawData, items: itemsWithOverrides };
+    const voucherIndex = buildVoucherIndex(newData.vouchers);
+
     set({
       rawData,
       data: newData,
-      voucherIndex: buildVoucherIndex(newData.vouchers),
+      voucherIndex,
     });
+
+    // Run audit in development mode (Phase 5.1)
+    if (import.meta.env.DEV) {
+      // Dynamically import audit module to avoid circular dependencies
+      import("../engine/audit").then(({ auditAllItems }) => {
+        const auditResults = auditAllItems(newData.items, newData.vouchers, voucherIndex);
+        const failures = auditResults.filter((r) => Math.abs(r.discrepancy) > 1e-9);
+        if (failures.length > 0) {
+          console.error("[AUDIT] Inventory discrepancies found:", failures);
+          console.table(
+            failures.map((f) => ({
+              Item: f.itemName,
+              Opening: f.openingQtyBase,
+              Inwards: f.totalInwards,
+              Outwards: f.totalOutwards,
+              Expected: f.expectedClosing,
+              Computed: f.computedClosing,
+              Discrepancy: f.discrepancy.toFixed(4),
+            }))
+          );
+        } else {
+          console.log(`[AUDIT] ✓ All ${auditResults.length} items pass inventory integrity check`);
+        }
+      }).catch((err) => {
+        console.warn("[AUDIT] Failed to run audit:", err);
+      });
+    }
   },
 
   clearData: () => set({ data: null, rawData: null, voucherIndex: new Map() }),

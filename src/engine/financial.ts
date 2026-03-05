@@ -270,6 +270,8 @@ export function computeItemMargins(
 
     const marginPerUnit = avgSalesRate - avgPurchaseRate;
     const marginPct = avgSalesRate > 0 ? (marginPerUnit / avgSalesRate) * 100 : 0;
+    // Total profit uses min(sales, purchase) to calculate profit only on matched inventory (conservative approach)
+    // This accounts for the fact that we can't have sold more than we purchased (excluding opening stock)
     const totalProfit = marginPerUnit * Math.min(totalSalesQty, totalPurchaseQty);
 
     results.push({

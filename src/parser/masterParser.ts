@@ -237,17 +237,20 @@ function parseOneItem(raw: any, warnings: ImportWarning[]): CanonicalItem | null
 
   const openingQty = parseNumber(raw.openingQty ?? raw.openingQtyBase ?? 0);
   const openingValue = parseNumber(raw.openingValue ?? 0);
-  const openingRate = openingQty > 0
-    ? (parseNumber(raw.openingRate ?? 0) || (openingValue / openingQty))
-    : 0;
+  // Prefer explicit rate if provided, else calculate from value/qty
+  const explicitRate = parseNumber(raw.openingRate ?? 0);
+  const openingRate = explicitRate > 0
+    ? explicitRate
+    : (openingQty > 0 ? (openingValue / openingQty) : 0);
 
   const unitsPerPkg = parseNumber(raw.unitsPerPkg ?? raw.denominator ?? 1);
 
-  // Clean pkg unit
+  // Clean pkg unit - normalize case for "not applicable" check
   let pkgUnit: string | null = null;
   if (raw.pkgUnit) {
     const pu = String(raw.pkgUnit).trim();
-    if (pu && !pu.toLowerCase().includes("not applicable")) {
+    const puLower = pu.toLowerCase();
+    if (pu && !puLower.includes("not applicable") && puLower !== "not applicable") {
       pkgUnit = pu.toUpperCase();
     }
   }
