@@ -1,44 +1,31 @@
 import express from "express";
 import cors from "cors";
-import { mastersRouter } from "./routes/masters.js";
-import { vouchersRouter } from "./routes/vouchers.js";
-import { companyRouter } from "./routes/company.js";
-import { healthRouter } from "./routes/health.js";
-import { syncRouter } from "./routes/sync.js";
-import { pushRouter } from "./routes/push.js";
-import { debugRouter } from "./routes/debug.js";
+import { healthHandler, companyHandler, syncHandler, mastersHandler, vouchersHandler, debugHandler } from "./handlers.js";
 
 const app = express();
 const PORT = 3100;
-const TALLY_URL = process.env.TALLY_URL || "http://127.0.0.1:9000";
+const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 
-app.use(cors({ origin: "*" }));
+app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 
-// Inject Tally URL into all routes
+// Inject config
 app.use((req, _res, next) => {
-  req.tallyUrl = TALLY_URL;
+  (req as any).tallyUrl = TALLY_URL;
   next();
 });
 
-app.use("/api/tally", healthRouter);
-app.use("/api/tally", companyRouter);
-app.use("/api/tally", mastersRouter);
-app.use("/api/tally", vouchersRouter);
-app.use("/api/tally", syncRouter);
-app.use("/api/tally", pushRouter);
-app.use("/api/tally", debugRouter);
+// Routes
+app.get("/api/tally/health", healthHandler);
+app.get("/api/tally/company", companyHandler);
+app.get("/api/tally/masters", mastersHandler);
+app.get("/api/tally/vouchers", vouchersHandler);
+app.post("/api/tally/sync", syncHandler);
+app.post("/api/tally/debug", debugHandler);
 
 app.listen(PORT, () => {
-  console.log(`✅ MKCP Tally Proxy running on http://localhost:${PORT}`);
-  console.log(`  → Tally target: ${TALLY_URL}`);
+  console.log(`\n✅ MKCP Tally Proxy on http://localhost:${PORT}`);
+  console.log(`   Tally target: ${TALLY_URL}\n`);
 });
 
-// Type augmentation for Express
-declare global {
-  namespace Express {
-    interface Request {
-      tallyUrl: string;
-    }
-  }
-}
+declare global { namespace Express { interface Request { tallyUrl: string } } }
