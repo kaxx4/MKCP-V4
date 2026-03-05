@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mkcycles-dashboard",
+      "runtimeExecutable": "C:/Program Files/nodejs/node.exe",
+      "runtimeArgs": ["C:/Users/kanis/Desktop/MKCP/mkcycles-dashboard/node_modules/vite/bin/vite.js", "C:/Users/kanis/Desktop/MKCP/mkcycles-dashboard", "--host"],
+      "port": 5173
+    }
+  ]
+}
