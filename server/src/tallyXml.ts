@@ -1,4 +1,4 @@
-import { XMLParser, XMLBuilder } from "fast-xml-parser";
+import { XMLParser } from "fast-xml-parser";
 import axios from "axios";
 
 const xmlParser = new XMLParser({
@@ -6,8 +6,10 @@ const xmlParser = new XMLParser({
   attributeNamePrefix: "@_",
   textNodeName: "#text",
   isArray: (name) => {
-    // These tags should ALWAYS be arrays even when single item
-    const arrayTags = [
+    const upper = name.toUpperCase();
+    const stripped = upper.replace(/\.LIST$/, "");
+    const arrayTags = new Set([
+      "TALLYMESSAGE",
       "LEDGER", "STOCKITEM", "VOUCHER", "COMPANY",
       "LEDGERENTRY", "ALLLEDGERENTRIES", "ALLINVENTORYENTRIES",
       "INVENTORYENTRIES", "LEDGERENTRIES",
@@ -15,39 +17,60 @@ const xmlParser = new XMLParser({
       "RATEDETAILS", "STATEWISEDETAILS",
       "BATCHALLOCATIONS", "CATEGORYALLOCATIONS",
       "BILLALLOCATIONS",
-    ];
-    return arrayTags.includes(name.toUpperCase());
+    ]);
+    return arrayTags.has(upper) || arrayTags.has(stripped);
   },
   parseTagValue: true,
   trimValues: true,
 });
 
 /**
- * Send raw XML to Tally and get parsed JSON back
+ * Send raw XML to Tally and get parsed JSON back – WITH LOGGING
  */
 export async function postToTally(tallyUrl: string, xml: string): Promise<any> {
+  // Log the request (truncated for readability)
+  const collectionMatch = xml.match(/<ID>([^<]+)<\/ID>/);
+  const idTag = collectionMatch ? collectionMatch[1] : "unknown";
+  console.log(`[tally] >>> POST ${tallyUrl} | ID=${idTag} | ${xml.length} bytes`);
+
   const response = await axios.post(tallyUrl, xml, {
     headers: { "Content-Type": "text/xml; charset=utf-8" },
-    timeout: 120000, // 2 min – large companies can be slow
+    timeout: 120000,
     responseType: "text",
+    // Handle different encodings
+    transformResponse: [(data) => data],
   });
-  return xmlParser.parse(response.data);
+
+  const raw: string = response.data;
+  console.log(`[tally] <<< ${raw.length} bytes, status=${response.status}`);
+
+  // Detect Tally errors
+  if (raw.includes("<LINEERROR>") || raw.includes("<ERRORCODE>")) {
+    const errorMatch = raw.match(/<LINEERROR>([^<]*)<\/LINEERROR>/);
+    const errMsg = errorMatch ? errorMatch[1] : "Unknown Tally error";
+    console.error(`[tally] <<< TALLY ERROR: ${errMsg}`);
+    console.error(`[tally] <<< First 500 chars: ${raw.slice(0, 500)}`);
+  }
+
+  // Log first few tags to help debug structure
+  const firstTags = raw.slice(0, 300).replace(/\s+/g, " ");
+  console.log(`[tally] <<< Preview: ${firstTags}...`);
+
+  const parsed = xmlParser.parse(raw);
+  return parsed;
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// XML REQUEST BUILDERS – one for each data type we need
+// XML REQUEST BUILDERS
 // ═══════════════════════════════════════════════════════════════════
 
-/**
- * Fetch active company info
- */
 export function buildCompanyRequestXml(): string {
   return `<ENVELOPE>
 <HEADER>
 <VERSION>1</VERSION>
 <TALLYREQUEST>Export</TALLYREQUEST>
-<TYPE>Data</TYPE>
-<ID>CompanyInfo</ID>
+<TYPE>Collection</TYPE>
+<ID>MKCPCompanyList</ID>
 </HEADER>
 <BODY>
 <DESC>
@@ -56,46 +79,9 @@ export function buildCompanyRequestXml(): string {
 </STATICVARIABLES>
 <TDL>
 <TDLMESSAGE>
-<REPORT NAME="CompanyInfo">
-<FORMS>CompanyInfo</FORMS>
-</REPORT>
-<FORM NAME="CompanyInfo">
-<PARTS>CompanyInfoPart</PARTS>
-</FORM>
-<PART NAME="CompanyInfoPart">
-<TOPPARTS>CompanyInfoPart</TOPPARTS>
-<REPEAT>CompanyInfoPart : CompanyCollection</REPEAT>
-<SCROLLED>Vertical</SCROLLED>
-</PART>
-<PART NAME="CompanyInfoPart">
-<LINES>CompanyName, CompanyGSTIN, CompanyStartDate, CompanyEndDate</LINES>
-</PART>
-<LINE NAME="CompanyName">
-<FIELD>CompanyNameFld</FIELD>
-</LINE>
-<LINE NAME="CompanyGSTIN">
-<FIELD>CompanyGSTINFld</FIELD>
-</LINE>
-<LINE NAME="CompanyStartDate">
-<FIELD>CompanyStartDateFld</FIELD>
-</LINE>
-<LINE NAME="CompanyEndDate">
-<FIELD>CompanyEndDateFld</FIELD>
-</LINE>
-<FIELD NAME="CompanyNameFld">
-<SET>$$Name</SET>
-</FIELD>
-<FIELD NAME="CompanyGSTINFld">
-<SET>$$GSTIN</SET>
-</FIELD>
-<FIELD NAME="CompanyStartDateFld">
-<SET>$$StartingFrom</SET>
-</FIELD>
-<FIELD NAME="CompanyEndDateFld">
-<SET>$$EndingAt</SET>
-</FIELD>
-<COLLECTION NAME="CompanyCollection">
+<COLLECTION NAME="MKCPCompanyList" ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No" ISOPTION="No" ISINTERNAL="No">
 <TYPE>Company</TYPE>
+<NATIVEMETHOD>Name, GSTIN, StartingFrom, BooksFrom</NATIVEMETHOD>
 </COLLECTION>
 </TDLMESSAGE>
 </TDL>
@@ -104,16 +90,13 @@ export function buildCompanyRequestXml(): string {
 </ENVELOPE>`.trim();
 }
 
-/**
- * Fetch ALL stock items with full details (opening bal, units, GST, HSN)
- */
 export function buildStockItemsRequestXml(companyName: string): string {
   return `<ENVELOPE>
 <HEADER>
 <VERSION>1</VERSION>
 <TALLYREQUEST>Export</TALLYREQUEST>
 <TYPE>Collection</TYPE>
-<ID>AllStockItems</ID>
+<ID>MKCPStockItems</ID>
 </HEADER>
 <BODY>
 <DESC>
@@ -123,9 +106,9 @@ export function buildStockItemsRequestXml(companyName: string): string {
 </STATICVARIABLES>
 <TDL>
 <TDLMESSAGE>
-<COLLECTION NAME="AllStockItems">
+<COLLECTION NAME="MKCPStockItems" ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No" ISOPTION="No" ISINTERNAL="No">
 <TYPE>Stock Item</TYPE>
-<FETCH>*</FETCH>
+<NATIVEMETHOD>*</NATIVEMETHOD>
 </COLLECTION>
 </TDLMESSAGE>
 </TDL>
@@ -134,16 +117,13 @@ export function buildStockItemsRequestXml(companyName: string): string {
 </ENVELOPE>`.trim();
 }
 
-/**
- * Fetch ALL ledgers with full details
- */
 export function buildLedgersRequestXml(companyName: string): string {
   return `<ENVELOPE>
 <HEADER>
 <VERSION>1</VERSION>
 <TALLYREQUEST>Export</TALLYREQUEST>
 <TYPE>Collection</TYPE>
-<ID>AllLedgers</ID>
+<ID>MKCPLedgers</ID>
 </HEADER>
 <BODY>
 <DESC>
@@ -153,9 +133,9 @@ export function buildLedgersRequestXml(companyName: string): string {
 </STATICVARIABLES>
 <TDL>
 <TDLMESSAGE>
-<COLLECTION NAME="AllLedgers">
+<COLLECTION NAME="MKCPLedgers" ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No" ISOPTION="No" ISINTERNAL="No">
 <TYPE>Ledger</TYPE>
-<FETCH>*</FETCH>
+<NATIVEMETHOD>*</NATIVEMETHOD>
 </COLLECTION>
 </TDLMESSAGE>
 </TDL>
@@ -164,14 +144,10 @@ export function buildLedgersRequestXml(companyName: string): string {
 </ENVELOPE>`.trim();
 }
 
-/**
- * Fetch ALL vouchers (all types) for a given date range.
- * If no dates passed, fetches entire loaded company period.
- */
 export function buildVouchersRequestXml(
   companyName: string,
-  fromDate?: string,  // YYYYMMDD
-  toDate?: string     // YYYYMMDD
+  fromDate?: string,
+  toDate?: string
 ): string {
   const dateFilter = fromDate && toDate ? `
 <SVFROMDATE>${fromDate}</SVFROMDATE>
@@ -182,7 +158,7 @@ export function buildVouchersRequestXml(
 <VERSION>1</VERSION>
 <TALLYREQUEST>Export</TALLYREQUEST>
 <TYPE>Collection</TYPE>
-<ID>AllVouchers</ID>
+<ID>MKCPVouchers</ID>
 </HEADER>
 <BODY>
 <DESC>
@@ -192,9 +168,9 @@ export function buildVouchersRequestXml(
 </STATICVARIABLES>
 <TDL>
 <TDLMESSAGE>
-<COLLECTION NAME="AllVouchers">
+<COLLECTION NAME="MKCPVouchers" ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No" ISOPTION="No" ISINTERNAL="No">
 <TYPE>Voucher</TYPE>
-<FETCH>*</FETCH>
+<NATIVEMETHOD>*</NATIVEMETHOD>
 </COLLECTION>
 </TDLMESSAGE>
 </TDL>
@@ -203,9 +179,6 @@ export function buildVouchersRequestXml(
 </ENVELOPE>`.trim();
 }
 
-/**
- * Fetch specific voucher types only (e.g., just Sales or just Purchase)
- */
 export function buildVouchersByTypeXml(
   companyName: string,
   voucherType: string,
@@ -213,153 +186,132 @@ export function buildVouchersByTypeXml(
   toDate?: string
 ): string {
   const dateFilter = fromDate && toDate ? `
-        <SVFROMDATE>${fromDate}</SVFROMDATE>
-        <SVTODATE>${toDate}</SVTODATE>` : "";
+<SVFROMDATE>${fromDate}</SVFROMDATE>
+<SVTODATE>${toDate}</SVTODATE>` : "";
 
-  return `
-<ENVELOPE>
-  <HEADER>
-    <VERSION>1</VERSION>
-    <TALLYREQUEST>Export</TALLYREQUEST>
-    <TYPE>Collection</TYPE>
-    <ID>MKCP_TypedVouchers</ID>
-  </HEADER>
-  <BODY>
-    <DESC>
-      <STATICVARIABLES>
-        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-        <SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>${dateFilter}
-      </STATICVARIABLES>
-      <TDL>
-        <TDLMESSAGE>
-          <COLLECTION NAME="MKCP_TypedVouchers" ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No" ISOPTION="No" ISINTERNAL="No">
-            <TYPE>Voucher</TYPE>
-            <NATIVEMETHOD>*</NATIVEMETHOD>
-            <FILTERS>MKCP_VchTypeFilter</FILTERS>
-          </COLLECTION>
-          <SYSTEM TYPE="Formulae" NAME="MKCP_VchTypeFilter">
-            $VoucherTypeName = "${escapeXml(voucherType)}"
-          </SYSTEM>
-        </TDLMESSAGE>
-      </TDL>
-    </DESC>
-  </BODY>
+  return `<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Collection</TYPE>
+<ID>MKCPTypedVouchers</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>${dateFilter}
+</STATICVARIABLES>
+<TDL>
+<TDLMESSAGE>
+<COLLECTION NAME="MKCPTypedVouchers" ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No" ISOPTION="No" ISINTERNAL="No">
+<TYPE>Voucher</TYPE>
+<NATIVEMETHOD>*</NATIVEMETHOD>
+<FILTERS>MKCPVchTypeFilter</FILTERS>
+</COLLECTION>
+<SYSTEM TYPE="Formulae" NAME="MKCPVchTypeFilter">
+$VoucherTypeName = "${escapeXml(voucherType)}"
+</SYSTEM>
+</TDLMESSAGE>
+</TDL>
+</DESC>
+</BODY>
 </ENVELOPE>`.trim();
 }
 
-/**
- * Fetch stock groups
- */
 export function buildStockGroupsRequestXml(companyName: string): string {
-  return `
-<ENVELOPE>
-  <HEADER>
-    <VERSION>1</VERSION>
-    <TALLYREQUEST>Export</TALLYREQUEST>
-    <TYPE>Collection</TYPE>
-    <ID>List of Stock Groups</ID>
-  </HEADER>
-  <BODY>
-    <DESC>
-      <STATICVARIABLES>
-        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-        <SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
-      </STATICVARIABLES>
-    </DESC>
-  </BODY>
+  return `<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Collection</TYPE>
+<ID>List of Stock Groups</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+</DESC>
+</BODY>
 </ENVELOPE>`.trim();
 }
 
-/**
- * Fetch ledger groups
- */
 export function buildGroupsRequestXml(companyName: string): string {
-  return `
-<ENVELOPE>
-  <HEADER>
-    <VERSION>1</VERSION>
-    <TALLYREQUEST>Export</TALLYREQUEST>
-    <TYPE>Collection</TYPE>
-    <ID>List of Groups</ID>
-  </HEADER>
-  <BODY>
-    <DESC>
-      <STATICVARIABLES>
-        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-        <SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
-      </STATICVARIABLES>
-    </DESC>
-  </BODY>
+  return `<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Collection</TYPE>
+<ID>List of Groups</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+</DESC>
+</BODY>
 </ENVELOPE>`.trim();
 }
 
-/**
- * Fetch voucher types configured in Tally
- */
 export function buildVoucherTypesRequestXml(companyName: string): string {
-  return `
-<ENVELOPE>
-  <HEADER>
-    <VERSION>1</VERSION>
-    <TALLYREQUEST>Export</TALLYREQUEST>
-    <TYPE>Collection</TYPE>
-    <ID>List of Voucher Types</ID>
-  </HEADER>
-  <BODY>
-    <DESC>
-      <STATICVARIABLES>
-        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-        <SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
-      </STATICVARIABLES>
-    </DESC>
-  </BODY>
+  return `<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Collection</TYPE>
+<ID>List of Voucher Types</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+</DESC>
+</BODY>
 </ENVELOPE>`.trim();
 }
 
-/**
- * Push/create a voucher into Tally (for future use – order → invoice)
- */
 export function buildCreateVoucherXml(
   companyName: string,
   voucherXmlBody: string
 ): string {
-  return `
-<ENVELOPE>
-  <HEADER>
-    <VERSION>1</VERSION>
-    <TALLYREQUEST>Import</TALLYREQUEST>
-    <TYPE>Data</TYPE>
-    <ID>Vouchers</ID>
-  </HEADER>
-  <BODY>
-    <DESC>
-      <STATICVARIABLES>
-        <SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
-      </STATICVARIABLES>
-    </DESC>
-    <DATA>
-      <TALLYMESSAGE xmlns:UDF="TallyUDF">
-        ${voucherXmlBody}
-      </TALLYMESSAGE>
-    </DATA>
-  </BODY>
+  return `<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Import</TALLYREQUEST>
+<TYPE>Data</TYPE>
+<ID>Vouchers</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVCURRENTCOMPANY>${escapeXml(companyName)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+</DESC>
+<DATA>
+<TALLYMESSAGE xmlns:UDF="TallyUDF">
+${voucherXmlBody}
+</TALLYMESSAGE>
+</DATA>
+</BODY>
 </ENVELOPE>`.trim();
 }
 
 // ═══════════════════════════════════════════════════════════════════
 // XML → tallymessage JSON CONVERTERS
-// These convert Tally's XML response into the EXACT JSON format
-// that masterParser.ts and transactionParser.ts already consume.
 // ═══════════════════════════════════════════════════════════════════
 
-/**
- * Convert stock items XML response → { tallymessage: [...] } format.
- * Each item becomes a message with metadata.type = "Stock Item"
- */
 export function stockItemsXmlToTallyJson(parsed: any): { tallymessage: any[] } {
   const messages: any[] = [];
-  const collection = extractCollection(parsed);
-  const items = ensureArray(collection?.STOCKITEM || collection?.["STOCK ITEM"] || []);
+  const root = extractCollection(parsed);
+  const items = findArrayInRoot(root, "STOCKITEM", "STOCK ITEM");
+
+  console.log(`[convert] stockItems: found ${items.length} items`);
 
   for (const item of items) {
     messages.push({
@@ -382,17 +334,17 @@ export function stockItemsXmlToTallyJson(parsed: any): { tallymessage: any[] } {
       valuationmethod: item.VALUATIONMETHOD || "",
       isbatchwiseon: parseBool(item.ISBATCHWISEON),
       iscostcentreson: parseBool(item.ISCOSTCENTRESON),
-      gstdetails: ensureArray(item.GSTDETAILS || item["GSTDETAILS.LIST"] || []).map((g: any) => ({
+      gstdetails: findEntries(item, "GSTDETAILS").map((g: any) => ({
         ...g,
-        statewisedetails: ensureArray(g.STATEWISEDETAILS || g["STATEWISEDETAILS.LIST"] || []).map((s: any) => ({
+        statewisedetails: findEntries(g, "STATEWISEDETAILS").map((s: any) => ({
           ...s,
-          ratedetails: ensureArray(s.RATEDETAILS || s["RATEDETAILS.LIST"] || []).map((r: any) => ({
+          ratedetails: findEntries(s, "RATEDETAILS").map((r: any) => ({
             gstratedutyhead: r.GSTRATEDUTYHEAD || "",
             gstrate: r.GSTRATE || 0,
           })),
         })),
       })),
-      hsndetails: ensureArray(item.HSNDETAILS || item["HSNDETAILS.LIST"] || []).map((h: any) => ({
+      hsndetails: findEntries(item, "HSNDETAILS").map((h: any) => ({
         hsncode: h.HSNCODE || h.DESCRIPTION || "",
       })),
       guid: item.GUID || "",
@@ -402,13 +354,12 @@ export function stockItemsXmlToTallyJson(parsed: any): { tallymessage: any[] } {
   return { tallymessage: messages };
 }
 
-/**
- * Convert ledgers XML response → { tallymessage: [...] } format.
- */
 export function ledgersXmlToTallyJson(parsed: any): { tallymessage: any[] } {
   const messages: any[] = [];
-  const collection = extractCollection(parsed);
-  const ledgers = ensureArray(collection?.LEDGER || []);
+  const root = extractCollection(parsed);
+  const ledgers = findArrayInRoot(root, "LEDGER");
+
+  console.log(`[convert] ledgers: found ${ledgers.length} ledgers`);
 
   for (const led of ledgers) {
     messages.push({
@@ -419,7 +370,7 @@ export function ledgersXmlToTallyJson(parsed: any): { tallymessage: any[] } {
       name: led["@_NAME"] || led.NAME || "",
       parent: led.PARENT || "Unsorted",
       openingbalance: led.OPENINGBALANCE || 0,
-      gstin: led.PARTYGSTIN || led.GSTIN || "",
+      gstin: led.PARTYGSTIN || led.GSTIN || led["LEDGERGSTIN"] || "",
       creditperiod: led.CREDITPERIOD || led.BILLCREDITPERIOD || "",
       creditdays: led.CREDITDAYS || 0,
       guid: led.GUID || "",
@@ -435,33 +386,23 @@ export function ledgersXmlToTallyJson(parsed: any): { tallymessage: any[] } {
   return { tallymessage: messages };
 }
 
-/**
- * Convert vouchers XML response → { tallymessage: [...] } format.
- * This must carefully map ALL voucher fields so transactionParser.ts works.
- */
 export function vouchersXmlToTallyJson(parsed: any): { tallymessage: any[] } {
   const messages: any[] = [];
-  const collection = extractCollection(parsed);
-  const vouchers = ensureArray(collection?.VOUCHER || []);
+  const root = extractCollection(parsed);
+  const vouchers = findArrayInRoot(root, "VOUCHER");
+
+  console.log(`[convert] vouchers: found ${vouchers.length} vouchers`);
 
   for (const v of vouchers) {
-    const allLedgerEntries = ensureArray(
-      v["ALLLEDGERENTRIES.LIST"] || v.ALLLEDGERENTRIES ||
-      v["LEDGERENTRIES.LIST"] || v.LEDGERENTRIES || []
-    );
+    const allLedgerEntries = findEntries(v, "ALLLEDGERENTRIES", "LEDGERENTRIES");
+    const allInventoryEntries = findEntries(v, "ALLINVENTORYENTRIES", "INVENTORYENTRIES");
 
-    const allInventoryEntries = ensureArray(
-      v["ALLINVENTORYENTRIES.LIST"] || v.ALLINVENTORYENTRIES ||
-      v["INVENTORYENTRIES.LIST"] || v.INVENTORYENTRIES || []
-    );
-
-    // Map ledger entries
     const ledgerentries = allLedgerEntries.map((le: any) => ({
       ledgername: le.LEDGERNAME || "",
       isdeemedpositive: parseBool(le.ISDEEMEDPOSITIVE),
       ispartyledger: parseBool(le.ISPARTYLEDGER),
       amount: le.AMOUNT || "0",
-      billallocations: ensureArray(le["BILLALLOCATIONS.LIST"] || le.BILLALLOCATIONS || []).map((ba: any) => ({
+      billallocations: findEntries(le, "BILLALLOCATIONS").map((ba: any) => ({
         name: ba.NAME || "",
         billtype: ba.BILLTYPE || "New Ref",
         amount: ba.AMOUNT || "0",
@@ -469,7 +410,6 @@ export function vouchersXmlToTallyJson(parsed: any): { tallymessage: any[] } {
       })),
     }));
 
-    // Map inventory entries
     const inventoryentries = allInventoryEntries.map((ie: any) => ({
       stockitemname: ie.STOCKITEMNAME || "",
       actualqty: ie.ACTUALQTY || ie.BILLEDQTY || "0",
@@ -502,24 +442,21 @@ export function vouchersXmlToTallyJson(parsed: any): { tallymessage: any[] } {
   return { tallymessage: messages };
 }
 
-/**
- * Convert company XML response
- */
 export function companyXmlToTallyJson(parsed: any): any {
-  const body = parsed?.ENVELOPE?.BODY;
-  const data = body?.DATA || body;
-  const companies = ensureArray(
-    data?.COLLECTION?.COMPANY || data?.COMPANY || []
-  );
+  const root = extractCollection(parsed);
+  const companies = findArrayInRoot(root, "COMPANY");
+
+  console.log(`[convert] companies: found ${companies.length}`);
+
   if (companies.length === 0) return null;
 
   const c = companies[0];
   return {
     name: c["@_NAME"] || c.NAME || c.COMPANYNAME || "",
-    gstin: c.GSTIN || c.PARTYLEDGERNAME || "",
-    fystart: c.STARTINGFROM ? parseInt(c.STARTINGFROM.slice(4, 6)) : 4,
+    gstin: c.GSTIN || "",
+    fystart: c.STARTINGFROM ? parseInt(String(c.STARTINGFROM).slice(4, 6)) : 4,
     startDate: c.STARTINGFROM || "",
-    endDate: c.ENDINGAT || "",
+    endDate: c.ENDINGAT || c.BOOKSTO || "",
   };
 }
 
@@ -539,16 +476,106 @@ function parseBool(v: any): boolean {
   return s === "yes" || s === "true" || s === "1";
 }
 
+/**
+ * Navigate parsed XML to find the data root.
+ * Tally Collection export response structure can be:
+ *   ENVELOPE > BODY > DATA > TALLYMESSAGE > [STOCKITEM, LEDGER, VOUCHER...]
+ *   ENVELOPE > BODY > DATA > COLLECTION > [...]
+ *   ENVELOPE > BODY > COLLECTION > [...]
+ * This function returns the object containing the entity arrays.
+ */
 function extractCollection(parsed: any): any {
-  // Tally wraps response: ENVELOPE > BODY > DATA > COLLECTION > TYPE[]
-  return (
-    parsed?.ENVELOPE?.BODY?.DATA?.COLLECTION ||
-    parsed?.ENVELOPE?.BODY?.DATA ||
-    parsed?.ENVELOPE?.BODY?.COLLECTION ||
-    parsed?.ENVELOPE?.BODY ||
-    parsed?.COLLECTION ||
-    parsed || {}
-  );
+  // Try ALL known Tally response paths, most specific first
+  const paths = [
+    parsed?.ENVELOPE?.BODY?.DATA?.TALLYMESSAGE,    // Collection export (most common)
+    parsed?.ENVELOPE?.BODY?.DATA?.COLLECTION,       // Some built-in collections
+    parsed?.ENVELOPE?.BODY?.TALLYMESSAGE,           // Alternate structure
+    parsed?.ENVELOPE?.BODY?.DATA,                   // Fallback
+    parsed?.ENVELOPE?.BODY?.COLLECTION,             // Another variant
+    parsed?.ENVELOPE?.BODY,                         // Broadest fallback
+    parsed?.COLLECTION,
+    parsed?.TALLYMESSAGE,
+  ];
+
+  for (const p of paths) {
+    if (p && typeof p === "object") {
+      // If it's an array (TALLYMESSAGE can be array), take first element that has entity tags
+      if (Array.isArray(p)) {
+        // Merge all array elements into one object
+        const merged: any = {};
+        for (const item of p) {
+          if (item && typeof item === "object") {
+            for (const [k, v] of Object.entries(item)) {
+              if (merged[k]) {
+                merged[k] = [...ensureArray(merged[k]), ...ensureArray(v)];
+              } else {
+                merged[k] = v;
+              }
+            }
+          }
+        }
+        if (Object.keys(merged).length > 0) {
+          console.log(`[extract] Found data via array merge, keys: ${Object.keys(merged).join(", ")}`);
+          return merged;
+        }
+      }
+      // Check if this object has entity-type keys
+      const keys = Object.keys(p);
+      const hasEntities = keys.some(k => {
+        const upper = k.toUpperCase().replace(/\.LIST$/, "");
+        return ["STOCKITEM", "LEDGER", "VOUCHER", "COMPANY", "STOCK ITEM"].includes(upper);
+      });
+      if (hasEntities) {
+        console.log(`[extract] Found data root with keys: ${keys.join(", ")}`);
+        return p;
+      }
+    }
+  }
+
+  console.warn(`[extract] Could not find data root in parsed XML! Top keys: ${Object.keys(parsed || {}).join(", ")}`);
+  return parsed || {};
+}
+
+/**
+ * Find entity arrays in the root object, trying multiple tag name variants.
+ * Handles: STOCKITEM, STOCKITEM.LIST, "STOCK ITEM", etc.
+ */
+function findArrayInRoot(root: any, ...tagNames: string[]): any[] {
+  for (const tag of tagNames) {
+    // Try exact match, .LIST suffix, and case variations
+    const variants = [
+      tag,
+      `${tag}.LIST`,
+      tag.toUpperCase(),
+      `${tag.toUpperCase()}.LIST`,
+    ];
+    for (const variant of variants) {
+      const val = root?.[variant];
+      if (val) {
+        const arr = ensureArray(val);
+        if (arr.length > 0) return arr;
+      }
+    }
+  }
+  return [];
+}
+
+/**
+ * Find child entry arrays in a parent object (e.g., ledger entries within a voucher).
+ * Tries key, key.LIST, and case variants.
+ */
+function findEntries(obj: any, ...keys: string[]): any[] {
+  if (!obj) return [];
+  for (const key of keys) {
+    const variants = [key, `${key}.LIST`, key.toUpperCase(), `${key.toUpperCase()}.LIST`];
+    for (const variant of variants) {
+      const val = obj[variant];
+      if (val !== undefined && val !== null && val !== "") {
+        return ensureArray(val);
+      }
+    }
+  }
+  return [];
 }
 
 function escapeXml(s: string): string {
