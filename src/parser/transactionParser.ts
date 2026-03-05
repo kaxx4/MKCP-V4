@@ -175,12 +175,18 @@ function parseOneVoucher(rv: any, warnings: ImportWarning[]): CanonicalVoucher |
 
   const voucherType = normalizeVoucherType(rv.vouchertypename ?? rv.voucherType ?? rv.VOUCHERTYPENAME ?? "Other");
   const voucherNumber = String(rv.vouchernumber ?? rv.voucherNumber ?? rv.VOUCHERNUMBER ?? "").trim();
-  const voucherId = `${voucherType}|${voucherNumber}|${date}`;
+
+  // Extract partyLedgerId early for unique voucherId generation
+  let partyLedgerId: string | undefined;
+  const partyName = rv.partyledgername ?? rv.partyName ?? rv.PARTYLEDGERNAME;
+
+  // Build voucherId with partyLedgerId to ensure uniqueness
+  const voucherId = partyName
+    ? `${voucherType}|${voucherNumber}|${date}|${String(partyName).toUpperCase().trim()}`
+    : `${voucherType}|${voucherNumber}|${date}`;
 
   const lines: CanonicalVoucherLine[] = [];
   let totalAmount = 0;
-  let partyLedgerId: string | undefined;
-  let partyName = rv.partyledgername ?? rv.partyName ?? rv.PARTYLEDGERNAME;
 
   // Real Tally format uses ledgerentries (SALES) or allledgerentries (others)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -330,12 +336,16 @@ function parseNum(v: unknown): number {
   return isFinite(n) ? n : 0;
 }
 
-/** Parse qty string like " 240 PC" or " 800 PR" → 240 */
+/** Parse qty string like " 240 PC" or " 800 PR" or " -10 KG" → 240, -10 */
 function parseQtyString(v: unknown): number {
   if (typeof v === "number") return v;
   const s = String(v).trim();
-  const match = s.match(/^-?\s*([0-9]+(?:\.[0-9]+)?)/);
-  if (match) return parseFloat(match[1]);
+  // Match optional leading minus, then digits with optional decimal
+  const match = s.match(/^(-?\s*[0-9]+(?:\.[0-9]+)?)/);
+  if (match) {
+    const numStr = match[1].replace(/\s+/g, ""); // Remove internal spaces
+    return parseFloat(numStr);
+  }
   return parseNum(v);
 }
 
