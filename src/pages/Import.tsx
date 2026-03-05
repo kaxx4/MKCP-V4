@@ -1,15 +1,17 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical, Calendar } from "lucide-react";
+import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical, Calendar, Zap, Wifi, WifiOff } from "lucide-react";
 import clsx from "clsx";
 import { parseMasters } from "../parser/masterParser";
 import { parseTransactions } from "../parser/transactionParser";
 import { useDataStore } from "../store/dataStore";
+import { useTallyStore } from "../store/tallyStore";
 import { saveData, loadData, createBackup, saveToStore, loadFromStore, saveJsonUpload } from "../db/idb";
 import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
 import type { ParsedData, ImportWarning } from "../types/canonical";
 import { useToast } from "../components/Toast";
 import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
+import { checkTallyHealth, fullSync, type TallySyncResult } from "../api/tallyApi";
 
 interface ImportReport {
   items: number;
@@ -23,19 +25,139 @@ interface ImportReport {
 }
 
 type DropZone = "masters" | "transactions";
+type TabMode = "live" | "upload";
 
 export default function ImportPage() {
   const navigate = useNavigate();
   const { mergeData, data: existingData } = useDataStore();
   const { toast } = useToast();
 
+  // Tab state
+  const [tab, setTab] = useState<TabMode>("live");
+
+  // Tally Live state
+  const {
+    companyName,
+    isConnected,
+    lastSyncAt,
+    isSyncing,
+    fyFromDate,
+    fyToDate,
+    setCompanyName,
+    setConnected,
+    setLastSync,
+    setSyncing,
+    setFyDates,
+  } = useTallyStore();
+
+  // Upload state
   const [mastersFile, setMastersFile] = useState<File | null>(null);
   const [txFile, setTxFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
+
+  // Shared state
   const [report, setReport] = useState<ImportReport | null>(null);
   const [pendingData, setPendingData] = useState<ParsedData | null>(null);
   const [dragOver, setDragOver] = useState<DropZone | null>(null);
   const [debugLog, setDebugLog] = useState<string[]>([]);
+
+  // Check Tally connection on mount
+  useEffect(() => {
+    if (tab === "live") {
+      checkConnection();
+    }
+  }, [tab]);
+
+  async function checkConnection() {
+    try {
+      const health = await checkTallyHealth();
+      setConnected(health.connected);
+      if (!health.connected) {
+        addLog(`⚠ Tally not connected: ${health.error || "Server not reachable"}`);
+      } else {
+        addLog("✓ Tally proxy connected");
+      }
+    } catch (err) {
+      setConnected(false);
+      addLog(`⚠ Connection check failed: ${err}`);
+    }
+  }
+
+  async function handleTallySync() {
+    if (!companyName.trim()) {
+      toast("Please enter company name", "warn");
+      return;
+    }
+
+    setSyncing(true);
+    setDebugLog([]);
+    try {
+      addLog(`Starting sync for "${companyName}"...`);
+      const t0 = Date.now();
+
+      // Call full sync
+      const result: TallySyncResult = await fullSync(companyName, fyFromDate, fyToDate);
+
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      addLog(`✓ Data fetched in ${elapsed}s`);
+      addLog(`  ${result.stats.stockItems} stock items`);
+      addLog(`  ${result.stats.ledgers} ledgers`);
+      addLog(`  ${result.stats.vouchers} vouchers`);
+
+      // Parse using EXISTING parsers
+      addLog("Parsing masters...");
+      const mastersResult = parseMasters(result.masters);
+      addLog("Parsing transactions...");
+      const txResult = parseTransactions(result.transactions);
+
+      // Build ParsedData
+      const data: ParsedData = {
+        company: mastersResult.company,
+        items: mastersResult.items,
+        ledgers: mastersResult.ledgers,
+        vouchers: txResult.vouchers,
+        importedAt: new Date().toISOString(),
+        sourceFiles: ["tally-live-sync"],
+        warnings: [...mastersResult.warnings, ...txResult.warnings],
+      };
+
+      addLog("✓ Parsing complete");
+
+      // Reconciliation check
+      addLog("Running reconciliation checks...");
+      const reconErrors: string[] = [];
+      for (const v of data.vouchers) {
+        const ledgerLines = v.lines.filter((l) => l.type === "ledger");
+        const debits = ledgerLines.filter((l) => l.isDebit).reduce((s, l) => s + (l.amount ?? 0), 0);
+        const credits = ledgerLines.filter((l) => !l.isDebit).reduce((s, l) => s + (l.amount ?? 0), 0);
+        if (Math.abs(debits - credits) > 1 && ledgerLines.length > 1) {
+          reconErrors.push(
+            `${v.voucherType} ${v.voucherNumber} (${v.date}): Dr=${debits.toFixed(0)} Cr=${credits.toFixed(0)}`
+          );
+        }
+      }
+      addLog(`Found ${reconErrors.length} reconciliation issues`);
+
+      setPendingData(data);
+      setReport({
+        items: data.items.size,
+        ledgers: data.ledgers.size,
+        vouchers: data.vouchers.length,
+        warnings: data.warnings,
+        reconErrors: reconErrors.slice(0, 20),
+        mergeMode: false,
+      });
+
+      setLastSync(new Date().toISOString());
+      addLog("✓ Sync complete — review summary below");
+    } catch (err: any) {
+      addLog(`ERROR: ${err.message || err}`);
+      toast(`Sync failed: ${err.message || err}`, "error");
+      setConnected(false);
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   // Calculate existing data metadata
   const existingDataInfo = existingData ? (() => {
@@ -131,19 +253,16 @@ export default function ImportPage() {
       // Parse masters file if provided
       if (mastersFile) {
         addLog(`Reading masters file: ${mastersFile.name} (${(mastersFile.size / 1024).toFixed(0)} KB)`);
-        // Handle UTF-16 encoded files (Tally Prime export)
         try {
           mastersRaw = JSON.parse(await mastersFile.text());
           addLog("Masters file parsed (UTF-8)");
         } catch {
           addLog("UTF-8 failed, trying UTF-16...");
-          // Try UTF-16 via ArrayBuffer
           const buf = await mastersFile.arrayBuffer();
           const decoder = new TextDecoder("utf-16");
           mastersRaw = JSON.parse(decoder.decode(buf));
           addLog("Masters file parsed (UTF-16)");
         }
-        // Persist raw JSON locally so it survives browser sessions
         try {
           await saveJsonUpload(mastersFile.name, mastersRaw);
           addLog(`✓ Masters JSON persisted locally as "${mastersFile.name}"`);
@@ -164,7 +283,6 @@ export default function ImportPage() {
         addLog("Transactions file parsed (UTF-16)");
       }
 
-      // Persist raw JSON locally
       try {
         await saveJsonUpload(txFile.name, txRaw);
         addLog(`✓ Transactions JSON persisted locally as "${txFile.name}"`);
@@ -186,7 +304,6 @@ export default function ImportPage() {
     let company: any | null = null;
     let mw: ImportWarning[] = [];
 
-    // Load existing data for smart merging
     const existingRaw = await loadData<unknown>("parsedData");
     const existingData = existingRaw ? deserializeParsedData(existingRaw) : null;
 
@@ -195,13 +312,11 @@ export default function ImportPage() {
       const parsed = parseMasters(mastersRaw);
       company = parsed.company;
 
-      // Merge masters with existing data
       if (existingData) {
         addLog("Merging new masters with existing data...");
         items = new Map(existingData.items);
         ledgers = new Map(existingData.ledgers);
 
-        // Update/add new items
         let newItems = 0;
         let updatedItems = 0;
         for (const [itemId, item] of parsed.items) {
@@ -213,7 +328,6 @@ export default function ImportPage() {
           items.set(itemId, item);
         }
 
-        // Update/add new ledgers
         let newLedgers = 0;
         let updatedLedgers = 0;
         for (const [ledgerId, ledger] of parsed.ledgers) {
@@ -249,7 +363,6 @@ export default function ImportPage() {
     const { vouchers: newVouchers, warnings: tw } = parseTransactions(txRaw);
     addLog(`Parsed ${newVouchers.length} new vouchers (${tw.length} warnings)`);
 
-    // Smart merge: Remove duplicates and add only new vouchers
     let vouchers = newVouchers;
     let duplicatesRemoved = 0;
     let newVouchersAdded = 0;
@@ -257,10 +370,8 @@ export default function ImportPage() {
     if (existingData && existingData.vouchers.length > 0) {
       addLog("Detecting duplicates and merging vouchers...");
 
-      // Create a Set of existing voucher IDs for fast lookup
       const existingVoucherIds = new Set(existingData.vouchers.map(v => v.voucherId));
 
-      // Filter out duplicates from new vouchers
       const uniqueNewVouchers = newVouchers.filter(v => {
         if (existingVoucherIds.has(v.voucherId)) {
           duplicatesRemoved++;
@@ -271,10 +382,7 @@ export default function ImportPage() {
 
       newVouchersAdded = uniqueNewVouchers.length;
 
-      // Merge existing + new unique vouchers
       vouchers = [...existingData.vouchers, ...uniqueNewVouchers];
-
-      // Sort by date
       vouchers.sort((a, b) => a.date.localeCompare(b.date));
 
       addLog(`Duplicates removed: ${duplicatesRemoved} | New vouchers added: ${newVouchersAdded} | Total: ${vouchers.length}`);
@@ -324,7 +432,6 @@ export default function ImportPage() {
   async function acceptData() {
     if (!pendingData) return;
 
-    // 1. Backup existing data before overwriting
     const existingRaw = await loadData("parsedData");
     if (existingRaw) {
       const dateLabel = new Date().toISOString().slice(0, 10);
@@ -332,22 +439,18 @@ export default function ImportPage() {
       addLog(`Backup created: ${backupKey}`);
     }
 
-    // 2. Load previous predictions for scoring
     const prevSnapshot = await loadFromStore<PredictionSnapshot>("predictions", "latest");
 
-    // 3. Merge new data into store
     mergeData(pendingData);
     const merged = useDataStore.getState().data!;
     await saveData("parsedData", serializeParsedData(pendingData));
 
-    // 4. Score previous predictions against new data
     if (prevSnapshot && prevSnapshot.predictions.length > 0) {
       const accuracy = scorePredictions(prevSnapshot.predictions, pendingData.vouchers, "Sales");
       if (accuracy.length > 0) {
         const avgDateScore = accuracy.reduce((s, a) => s + a.dateAccuracyScore, 0) / accuracy.length;
         const avgItemScore = accuracy.reduce((s, a) => s + a.itemAccuracyScore, 0) / accuracy.length;
 
-        // Store accuracy results
         const accuracyKey = `accuracy_${new Date().toISOString().slice(0, 10)}`;
         await saveToStore("predictions", accuracyKey, accuracy);
 
@@ -359,7 +462,6 @@ export default function ImportPage() {
       }
     }
 
-    // 5. Generate fresh predictions with all data and save
     const freshPredictions = generatePredictions(merged.vouchers, merged.items, "Sales");
     await saveToStore("predictions", "latest", {
       generatedAt: new Date().toISOString(),
@@ -387,7 +489,35 @@ export default function ImportPage() {
     <div className="max-w-4xl mx-auto">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-primary mb-1">Import Tally Data</h1>
-        <p className="text-muted text-sm">Upload your exported JSON files from Tally Prime</p>
+        <p className="text-muted text-sm">Connect live to TallyPrime or upload JSON files</p>
+      </div>
+
+      {/* Tab Switcher */}
+      <div className="flex gap-2 mb-6 bg-bg-card border border-bg-border rounded-lg p-1">
+        <button
+          onClick={() => setTab("live")}
+          className={clsx(
+            "flex items-center gap-2 flex-1 px-4 py-2.5 rounded-md font-medium transition",
+            tab === "live"
+              ? "bg-accent text-white"
+              : "text-muted hover:text-primary"
+          )}
+        >
+          <Zap size={16} />
+          Live Tally Connection
+        </button>
+        <button
+          onClick={() => setTab("upload")}
+          className={clsx(
+            "flex items-center gap-2 flex-1 px-4 py-2.5 rounded-md font-medium transition",
+            tab === "upload"
+              ? "bg-accent text-white"
+              : "text-muted hover:text-primary"
+          )}
+        >
+          <Upload size={16} />
+          Upload JSON Files
+        </button>
       </div>
 
       {/* Existing Data Info */}
@@ -423,58 +553,149 @@ export default function ImportPage() {
         </div>
       )}
 
-      {/* Drop Zones */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <DropZoneCard
-          zone="masters"
-          file={mastersFile}
-          label="masters.json (Optional)"
-          subtitle={mastersFile ? "Stock items + Ledgers" : "Optional — uses existing if skipped"}
-          dragOver={dragOver === "masters"}
-          onDrop={(e) => handleDrop("masters", e)}
-          onDragOver={(e) => { e.preventDefault(); setDragOver("masters"); }}
-          onDragLeave={() => setDragOver(null)}
-          onSelect={(e) => handleFileSelect("masters", e)}
-        />
-        <DropZoneCard
-          zone="transactions"
-          file={txFile}
-          label="transactions.json"
-          subtitle="Vouchers (Sales, Purchase, etc.)"
-          dragOver={dragOver === "transactions"}
-          onDrop={(e) => handleDrop("transactions", e)}
-          onDragOver={(e) => { e.preventDefault(); setDragOver("transactions"); }}
-          onDragLeave={() => setDragOver(null)}
-          onSelect={(e) => handleFileSelect("transactions", e)}
-        />
-      </div>
+      {/* LIVE TALLY TAB */}
+      {tab === "live" && (
+        <div className="space-y-6">
+          {/* Connection Status */}
+          <div className={clsx(
+            "border rounded-xl p-4",
+            isConnected ? "bg-success/10 border-success/30" : "bg-danger/10 border-danger/30"
+          )}>
+            <div className="flex items-center gap-3 mb-3">
+              {isConnected ? (
+                <Wifi size={20} className="text-success" />
+              ) : (
+                <WifiOff size={20} className="text-danger" />
+              )}
+              <div>
+                <div className="font-semibold text-primary">
+                  {isConnected ? "Connected to Tally" : "Not Connected"}
+                </div>
+                <div className="text-xs text-muted">
+                  {isConnected
+                    ? "Proxy server running on http://localhost:3100"
+                    : "Start proxy: cd server && npm run dev"}
+                </div>
+              </div>
+              <button
+                onClick={checkConnection}
+                className="ml-auto text-sm px-3 py-1.5 bg-bg-border hover:bg-bg-border/70 rounded-md text-muted hover:text-primary"
+              >
+                Test Connection
+              </button>
+            </div>
+            {lastSyncAt && (
+              <div className="text-xs text-muted">
+                Last sync: {new Date(lastSyncAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+              </div>
+            )}
+          </div>
 
-      {/* Action buttons */}
-      <div className="flex gap-3 mb-6">
-        <button
-          onClick={runImport}
-          disabled={!txFile || importing}
-          className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-5 py-2.5 rounded-lg transition"
-        >
-          {importing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-          {importing ? "Importing..." : "Parse Files"}
-        </button>
-        <button
-          onClick={loadSampleData}
-          disabled={importing}
-          className="flex items-center gap-2 bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary font-medium px-5 py-2.5 rounded-lg transition"
-        >
-          <FlaskConical size={16} />
-          Load Sample Data
-        </button>
-      </div>
+          {/* Sync Form */}
+          <div className="bg-bg-card border border-bg-border rounded-xl p-6 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-primary mb-2">Company Name</label>
+              <input
+                type="text"
+                value={companyName}
+                readOnly
+                className="w-full px-4 py-2 bg-bg-border border border-bg-border rounded-lg text-muted font-medium cursor-not-allowed"
+                title="Company name is fixed: M.K.CYCLES (P) LTD."
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-primary mb-2">FY From Date</label>
+                <input
+                  type="text"
+                  value={fyFromDate}
+                  onChange={(e) => setFyDates(e.target.value, fyToDate)}
+                  placeholder="YYYYMMDD"
+                  className="w-full px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-primary mb-2">FY To Date</label>
+                <input
+                  type="text"
+                  value={fyToDate}
+                  onChange={(e) => setFyDates(fyFromDate, e.target.value)}
+                  placeholder="YYYYMMDD"
+                  className="w-full px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={handleTallySync}
+              disabled={isSyncing || !isConnected || !companyName.trim()}
+              className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-5 py-3 rounded-lg transition"
+            >
+              {isSyncing ? <Loader2 size={18} className="animate-spin" /> : <Zap size={18} />}
+              {isSyncing ? "Syncing..." : "Sync Now"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* UPLOAD JSON TAB */}
+      {tab === "upload" && (
+        <div className="space-y-6">
+          {/* Drop Zones */}
+          <div className="grid grid-cols-2 gap-4">
+            <DropZoneCard
+              zone="masters"
+              file={mastersFile}
+              label="masters.json (Optional)"
+              subtitle={mastersFile ? "Stock items + Ledgers" : "Optional — uses existing if skipped"}
+              dragOver={dragOver === "masters"}
+              onDrop={(e) => handleDrop("masters", e)}
+              onDragOver={(e) => { e.preventDefault(); setDragOver("masters"); }}
+              onDragLeave={() => setDragOver(null)}
+              onSelect={(e) => handleFileSelect("masters", e)}
+            />
+            <DropZoneCard
+              zone="transactions"
+              file={txFile}
+              label="transactions.json"
+              subtitle="Vouchers (Sales, Purchase, etc.)"
+              dragOver={dragOver === "transactions"}
+              onDrop={(e) => handleDrop("transactions", e)}
+              onDragOver={(e) => { e.preventDefault(); setDragOver("transactions"); }}
+              onDragLeave={() => setDragOver(null)}
+              onSelect={(e) => handleFileSelect("transactions", e)}
+            />
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex gap-3">
+            <button
+              onClick={runImport}
+              disabled={!txFile || importing}
+              className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-5 py-2.5 rounded-lg transition"
+            >
+              {importing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+              {importing ? "Importing..." : "Parse Files"}
+            </button>
+            <button
+              onClick={loadSampleData}
+              disabled={importing}
+              className="flex items-center gap-2 bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary font-medium px-5 py-2.5 rounded-lg transition"
+            >
+              <FlaskConical size={16} />
+              Load Sample Data
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Debug Log */}
       {debugLog.length > 0 && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4 mb-6">
+        <div className="bg-bg-card border border-bg-border rounded-xl p-4 mt-6">
           <h3 className="text-sm font-semibold text-primary mb-2 flex items-center gap-2">
             <Info size={14} />
-            Import Progress Log
+            {tab === "live" ? "Sync Progress Log" : "Import Progress Log"}
           </h3>
           <div className="bg-bg border border-bg-border rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-xs">
             {debugLog.map((log, idx) => (
@@ -491,7 +712,7 @@ export default function ImportPage() {
 
       {/* Report */}
       {report && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-6 space-y-4">
+        <div className="bg-bg-card border border-bg-border rounded-xl p-6 space-y-4 mt-6">
           <h2 className="text-lg font-semibold text-primary">Import Summary</h2>
 
           {/* Merge Info Banner */}
