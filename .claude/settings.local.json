@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \":*)",
+      "Bash(python \"C:/Users/kanis/Desktop/MKCP/TALLY JSON/generate_sample.py\")",
+      "Bash(python3 \"C:/Users/kanis/Desktop/MKCP/TALLY JSON/generate_sample.py\")",
+      "Bash(\"C:/Users/kanis/Desktop/MKCP/TALLY JSON/generate_sample.py\":*)",
+      "Bash(npm install)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(npm run build)",
+      "Bash(where npm)",
+      "Bash(where node)",
+      "Bash(where node.exe)",
+      "Bash(node --version)",
+      "Bash(npm run dev:*)",
+      "Bash(gh auth status:*)",
+      "Bash(git --version)",
+      "Bash(winget install:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(git checkout:*)",
+      "Bash(npm create:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(ls:*)"
+    ]
+  }
+}
