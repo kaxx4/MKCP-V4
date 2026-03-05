@@ -35,7 +35,7 @@ export const useDataStore = create<DataState>((set, get) => ({
     });
 
     // Run audit in development mode (Phase 5.1)
-    if (import.meta.env.DEV) {
+    if ((import.meta as any).env?.DEV) {
       // Dynamically import audit module to avoid circular dependencies
       import("../engine/audit").then(({ auditAllItems }) => {
         const auditResults = auditAllItems(newData.items, newData.vouchers, voucherIndex);

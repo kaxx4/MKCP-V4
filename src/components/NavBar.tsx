@@ -12,8 +12,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Bike,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
+import { useTallyStore } from "../store/tallyStore";
 import clsx from "clsx";
 
 const NAV_ITEMS = [
@@ -29,6 +32,19 @@ const NAV_ITEMS = [
 
 export function NavBar() {
   const { sidebarOpen, setSidebarOpen } = useUIStore();
+  const { isConnected, lastSyncAt } = useTallyStore();
+
+  const formatLastSync = () => {
+    if (!lastSyncAt) return "Never";
+    const date = new Date(lastSyncAt);
+    const now = new Date();
+    const diffMins = Math.floor((now.getTime() - date.getTime()) / 60000);
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHrs = Math.floor(diffMins / 60);
+    if (diffHrs < 24) return `${diffHrs}h ago`;
+    return date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
+  };
 
   return (
     <nav
@@ -65,6 +81,36 @@ export function NavBar() {
           </NavLink>
         ))}
       </div>
+
+      {/* Tally Connection Status */}
+      <NavLink
+        to="/import"
+        className="mx-2 mb-2 px-2 py-2 rounded-lg hover:bg-bg-border/50 transition border border-bg-border"
+        title={isConnected ? `Connected - Last sync: ${formatLastSync()}` : "Not connected - Click to connect"}
+      >
+        <div className="flex items-center gap-2">
+          {isConnected ? (
+            <Wifi size={14} className="text-success flex-shrink-0" />
+          ) : (
+            <WifiOff size={14} className="text-danger flex-shrink-0" />
+          )}
+          {sidebarOpen && (
+            <div className="flex flex-col min-w-0">
+              <span className={clsx(
+                "text-xs font-medium truncate",
+                isConnected ? "text-success" : "text-danger"
+              )}>
+                {isConnected ? "Tally Connected" : "Tally Offline"}
+              </span>
+              {lastSyncAt && (
+                <span className="text-[10px] text-muted truncate">
+                  {formatLastSync()}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </NavLink>
 
       {/* Collapse toggle */}
       <button

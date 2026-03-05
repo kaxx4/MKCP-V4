@@ -8,6 +8,7 @@ import { useDataStore } from "./store/dataStore";
 import { useOverrideStore } from "./store/overrideStore";
 import { loadData, loadFromStore } from "./db/idb";
 import { deserializeParsedData } from "./utils/serialize";
+import { useTallyAutoSync } from "./hooks/useTallyAutoSync";
 
 // Lazy load pages
 const ImportPage = lazy(() => import("./pages/Import"));
@@ -31,6 +32,9 @@ function LoadingFallback() {
 
 function AppRoutes() {
   const { data, setData } = useDataStore();
+
+  // Enable Tally auto-sync
+  useTallyAutoSync();
 
   // Restore from IndexedDB on first load
   useEffect(() => {

@@ -1,13 +1,15 @@
 import { useState, useRef, useEffect } from "react";
-import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive, Activity } from "lucide-react";
+import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive, Activity, Wifi, RefreshCw } from "lucide-react";
 import clsx from "clsx";
 import { useUIStore } from "../store/uiStore";
 import { useDataStore } from "../store/dataStore";
 import { useOverrideStore } from "../store/overrideStore";
+import { useTallyStore } from "../store/tallyStore";
 import { clearAllData, listBackups, loadBackup, deleteBackup, exportBackupAsJSON, exportFullBackupAsJSON, eraseAllStores, listJsonUploads } from "../db/idb";
 import { useToast } from "../components/Toast";
 import { exportUnitsToExcel, importUnitsFromExcel } from "../utils/unitExcelHandler";
 import { deserializeParsedData } from "../utils/serialize";
+import { checkTallyHealth } from "../api/tallyApi";
 
 export default function Settings() {
   const { unitMode, toggleUnitMode, fyYear, setFyYear, coverMonths, setCoverMonths, leadTimeMonths, setLeadTimeMonths, defaultCreditDays, setDefaultCreditDays } = useUIStore();
@@ -280,6 +282,9 @@ export default function Settings() {
         </div>
       </Section>
 
+      {/* Tally Connection */}
+      <TallyConnectionSection />
+
       {/* Unit Mode */}
       <Section title="Unit Mode">
         <div className="flex items-center gap-4">
@@ -415,13 +420,16 @@ export default function Settings() {
               <div className="border-t border-bg-border pt-2">
                 <div className="text-xs font-semibold text-muted mb-1">Voucher Types</div>
                 <div className="grid grid-cols-2 gap-1 text-xs">
-                  {Array.from(auditResults.voucherDist.entries()).map(([type, counts]) => (
-                    <div key={type}>
-                      <span className="text-muted">{type}:</span> <span className="font-mono text-primary">{counts.active}</span>
-                      {counts.cancelled > 0 && <span className="text-danger ml-1">(-{counts.cancelled})</span>}
-                      {counts.optional > 0 && <span className="text-warn ml-1">(~{counts.optional})</span>}
-                    </div>
-                  ))}
+                  {Array.from(auditResults.voucherDist.entries()).map((entry: any) => {
+                    const [type, counts] = entry;
+                    return (
+                      <div key={type}>
+                        <span className="text-muted">{type}:</span> <span className="font-mono text-primary">{counts.active}</span>
+                        {counts.cancelled > 0 && <span className="text-danger ml-1">(-{counts.cancelled})</span>}
+                        {counts.optional > 0 && <span className="text-warn ml-1">(~{counts.optional})</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -602,5 +610,159 @@ function Stat({ label, value }: { label: string; value: number }) {
       <div className="text-xl font-mono font-bold text-accent">{value.toLocaleString("en-IN")}</div>
       <div className="text-muted text-xs mt-0.5">{label}</div>
     </div>
+  );
+}
+
+function TallyConnectionSection() {
+  const {
+    proxyUrl,
+    companyName,
+    isConnected,
+    lastSyncAt,
+    autoSyncMinutes,
+    fyFromDate,
+    fyToDate,
+    setProxyUrl,
+    setCompanyName,
+    setConnected,
+    setAutoSync,
+    setFyDates,
+  } = useTallyStore();
+
+  const { toast } = useToast();
+  const [testing, setTesting] = useState(false);
+
+  async function handleTestConnection() {
+    setTesting(true);
+    try {
+      const health = await checkTallyHealth();
+      setConnected(health.connected);
+      if (health.connected) {
+        toast("✓ Connected to Tally proxy", "success");
+      } else {
+        toast(`⚠ Not connected: ${health.error || "Unknown error"}`, "error");
+      }
+    } catch (err: any) {
+      setConnected(false);
+      toast(`Connection failed: ${err.message || err}`, "error");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  const formatLastSync = () => {
+    if (!lastSyncAt) return "Never";
+    return new Date(lastSyncAt).toLocaleString('en-IN', {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    });
+  };
+
+  return (
+    <Section title="Tally Connection">
+      <div className="space-y-4">
+        {/* Connection Status */}
+        <div className={clsx(
+          "flex items-center gap-3 p-3 rounded-lg border",
+          isConnected
+            ? "bg-success/10 border-success/30 text-success"
+            : "bg-danger/10 border-danger/30 text-danger"
+        )}>
+          <Wifi size={16} />
+          <div className="flex-1">
+            <div className="text-sm font-medium">
+              {isConnected ? "Connected" : "Not Connected"}
+            </div>
+            <div className="text-xs opacity-75">
+              {isConnected
+                ? `Proxy: ${proxyUrl}`
+                : "Start proxy: cd server && npm run dev"}
+            </div>
+          </div>
+          <button
+            onClick={handleTestConnection}
+            disabled={testing}
+            className="flex items-center gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg text-xs transition disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={testing ? "animate-spin" : ""} />
+            {testing ? "Testing..." : "Test"}
+          </button>
+        </div>
+
+        {/* Proxy URL */}
+        <div>
+          <label className="block text-xs text-muted mb-1.5">Proxy URL</label>
+          <input
+            type="text"
+            value={proxyUrl}
+            onChange={(e) => setProxyUrl(e.target.value)}
+            placeholder="http://localhost:3100"
+            className="w-full px-3 py-2 bg-bg border border-bg-border rounded-lg text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+          />
+        </div>
+
+        {/* Company Name */}
+        <div>
+          <label className="block text-xs text-muted mb-1.5">Company Name (Fixed)</label>
+          <input
+            type="text"
+            value={companyName}
+            readOnly
+            className="w-full px-3 py-2 bg-bg-border border border-bg-border rounded-lg text-muted text-sm font-medium cursor-not-allowed"
+            title="Company name is permanently set to M.K.CYCLES (P) LTD."
+          />
+        </div>
+
+        {/* FY Date Range */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-muted mb-1.5">FY From (YYYYMMDD)</label>
+            <input
+              type="text"
+              value={fyFromDate}
+              onChange={(e) => setFyDates(e.target.value, fyToDate)}
+              placeholder="20240401"
+              className="w-full px-3 py-2 bg-bg border border-bg-border rounded-lg text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-muted mb-1.5">FY To (YYYYMMDD)</label>
+            <input
+              type="text"
+              value={fyToDate}
+              onChange={(e) => setFyDates(fyFromDate, e.target.value)}
+              placeholder="20250331"
+              className="w-full px-3 py-2 bg-bg border border-bg-border rounded-lg text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+            />
+          </div>
+        </div>
+
+        {/* Auto-Sync */}
+        <div>
+          <label className="block text-xs text-muted mb-1.5">Auto-Sync (minutes)</label>
+          <select
+            value={autoSyncMinutes}
+            onChange={(e) => setAutoSync(Number(e.target.value))}
+            className="w-full px-3 py-2 bg-bg border border-bg-border rounded-lg text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+          >
+            <option value="0">Disabled</option>
+            <option value="5">Every 5 minutes</option>
+            <option value="15">Every 15 minutes</option>
+            <option value="30">Every 30 minutes</option>
+            <option value="60">Every hour</option>
+          </select>
+          <p className="text-xs text-muted mt-1">
+            Automatically sync data from Tally at regular intervals (requires active connection)
+          </p>
+        </div>
+
+        {/* Last Sync */}
+        {lastSyncAt && (
+          <div className="text-xs text-muted">
+            Last sync: {formatLastSync()}
+          </div>
+        )}
+      </div>
+    </Section>
   );
 }

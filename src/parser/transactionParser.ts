@@ -178,7 +178,7 @@ function parseOneVoucher(rv: any, warnings: ImportWarning[]): CanonicalVoucher |
 
   // Extract partyLedgerId early for unique voucherId generation
   let partyLedgerId: string | undefined;
-  const partyName = rv.partyledgername ?? rv.partyName ?? rv.PARTYLEDGERNAME;
+  let partyName = rv.partyledgername ?? rv.partyName ?? rv.PARTYLEDGERNAME;
 
   // Build voucherId with partyLedgerId to ensure uniqueness
   const voucherId = partyName
