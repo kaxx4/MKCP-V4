@@ -12,6 +12,8 @@ export default defineConfig({
       "/api/tally": {
         target: "http://localhost:3100",
         changeOrigin: true,
+        timeout: 600000,      // 10 minute proxy timeout
+        proxyTimeout: 600000, // 10 minute proxy timeout
       },
     },
   },

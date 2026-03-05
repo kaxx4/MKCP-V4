@@ -93,10 +93,16 @@ export default function ImportPage() {
     setDebugLog([]);
     try {
       addLog(`Starting sync for "${companyName}"...`);
+      addLog("Note: First sync of a large company can take 2-5 minutes. Watch the proxy terminal for progress.");
       const t0 = Date.now();
 
       // Call full sync
       const result: TallySyncResult = await fullSync(companyName, fyFromDate, fyToDate);
+
+      // Show partial errors
+      if (result.errors) {
+        for (const err of result.errors) addLog(`⚠  ${err}`);
+      }
 
       // Show error if sync failed
       if (!result.success && result.error) {
@@ -105,11 +111,11 @@ export default function ImportPage() {
 
       // Check if we actually got data
       if (result.stats.stockItems === 0 && result.stats.ledgers === 0 && result.stats.vouchers === 0) {
-        addLog("ERROR: Zero data returned from Tally!");
+        addLog("ERROR: Tally returned zero data!");
         addLog("Check: 1) Company name exact match  2) Company loaded in Tally  3) FY dates correct");
-        addLog("Tip: Open proxy terminal to see what Tally XML actually returned");
-        addLog('Debug: curl -X POST http://localhost:3100/api/tally/debug -H "Content-Type: application/json" -d "{\\"company\\":\\"YOUR COMPANY\\",\\"test\\":\\"stock\\"}"');
-        toast("Sync returned empty — see log for debug steps", "error");
+        addLog("Test: Open a new terminal and run:");
+        addLog(`  curl -X POST http://localhost:3100/api/tally/debug -H "Content-Type: application/json" -d "{\\"company\\":\\"${companyName}\\",\\"test\\":\\"stock\\"}"`);
+        toast("Sync returned empty data — check log", "error");
         setSyncing(false);
         return;
       }
