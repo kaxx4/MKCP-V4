@@ -1,112 +1,36 @@
-const PROXY_BASE = (import.meta as any).env?.DEV ? "" : ((import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100");
-
-export interface TallyHealthStatus {
-  connected: boolean;
-  error?: string;
-  tallyUrl: string;
-}
+const BASE = import.meta.env.DEV ? "" : (import.meta.env.VITE_TALLY_PROXY || "http://localhost:3100");
 
 export interface TallySyncResult {
   success: boolean;
-  errors?: string[];
+  error?: string;
   masters: { tallymessage: any[] };
   transactions: { tallymessage: any[] };
-  stats: {
-    stockItems: number;
-    ledgers: number;
-    vouchers: number;
-    elapsedSeconds: number;
-  };
+  stats: { stockItems: number; ledgers: number; vouchers: number; elapsedSeconds: number };
 }
 
-export async function checkTallyHealth(): Promise<TallyHealthStatus> {
+export async function checkTallyHealth(): Promise<{ connected: boolean; error?: string; tallyUrl: string }> {
   try {
-    const res = await fetch(`${PROXY_BASE}/api/tally/health`, { signal: AbortSignal.timeout(5000) });
-    return await res.json();
+    const r = await fetch(`${BASE}/api/tally/health`, { signal: AbortSignal.timeout(5000) });
+    return r.json();
   } catch {
-    return { connected: false, error: "Proxy server not reachable at " + PROXY_BASE, tallyUrl: "" };
+    return { connected: false, error: "Proxy not reachable", tallyUrl: "" };
   }
 }
 
-export async function fetchCompanyInfo(): Promise<any> {
-  const res = await fetch(`${PROXY_BASE}/api/tally/company`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error);
-  return json.data;
+export async function getCompanies(): Promise<any[]> {
+  const r = await fetch(`${BASE}/api/tally/company`);
+  const j = await r.json();
+  if (!j.success) throw new Error(j.error);
+  return j.data;
 }
 
-export async function fetchMasters(company: string): Promise<{ tallymessage: any[] }> {
-  const res = await fetch(`${PROXY_BASE}/api/tally/masters?company=${encodeURIComponent(company)}`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error);
-  return json.data;
-}
-
-export async function fetchVouchers(
-  company: string,
-  fromDate?: string,
-  toDate?: string
-): Promise<{ tallymessage: any[] }> {
-  const params = new URLSearchParams({ company });
-  if (fromDate) params.set("from", fromDate);
-  if (toDate) params.set("to", toDate);
-
-  const res = await fetch(`${PROXY_BASE}/api/tally/vouchers?${params}`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error);
-  return json.data;
-}
-
-export async function fullSync(
-  company: string,
-  fromDate?: string,
-  toDate?: string
-): Promise<TallySyncResult> {
-  const res = await fetch(`${PROXY_BASE}/api/tally/sync`, {
+export async function fullSync(company: string, fromDate?: string, toDate?: string): Promise<TallySyncResult> {
+  const r = await fetch(`${BASE}/api/tally/sync`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ company, fromDate, toDate }),
   });
-  const json = await res.json();
-  // Accept both full success and partial success
-  if (!json.success && !json.masters && !json.transactions) {
-    throw new Error(json.error || "Sync failed with no data");
-  }
-  if (json.errors && json.errors.length > 0) {
-    console.warn("[tallyApi] Sync completed with warnings:", json.errors);
-  }
-  return json;
-}
-
-export async function syncMastersOnly(company: string): Promise<{ tallymessage: any[] }> {
-  const res = await fetch(`${PROXY_BASE}/api/tally/masters?company=${encodeURIComponent(company)}`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error);
-  return json.data;
-}
-
-export async function syncTransactionsOnly(
-  company: string,
-  fromDate?: string,
-  toDate?: string
-): Promise<{ tallymessage: any[] }> {
-  const params = new URLSearchParams({ company });
-  if (fromDate) params.set("from", fromDate);
-  if (toDate) params.set("to", toDate);
-
-  const res = await fetch(`${PROXY_BASE}/api/tally/vouchers?${params}`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error);
-  return json.data;
-}
-
-export async function pushVoucher(company: string, voucherXml: string): Promise<any> {
-  const res = await fetch(`${PROXY_BASE}/api/tally/push/voucher`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ company, voucherXml }),
-  });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error);
-  return json.result;
+  const j = await r.json();
+  if (!j.success && j.error && !j.masters) throw new Error(j.error);
+  return j;
 }

@@ -11,7 +11,7 @@ import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
 import type { ParsedData, ImportWarning } from "../types/canonical";
 import { useToast } from "../components/Toast";
 import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
-import { checkTallyHealth, fullSync, syncMastersOnly, syncTransactionsOnly, type TallySyncResult } from "../api/tallyApi";
+import { checkTallyHealth, fullSync, type TallySyncResult } from "../api/tallyApi";
 
 interface ImportReport {
   items: number;
@@ -98,22 +98,19 @@ export default function ImportPage() {
       // Call full sync
       const result: TallySyncResult = await fullSync(companyName, fyFromDate, fyToDate);
 
-      // Show any warnings from partial failures
-      if (result.errors && result.errors.length > 0) {
-        for (const err of result.errors) {
-          addLog(`⚠ Warning: ${err}`);
-        }
+      // Show error if sync failed
+      if (!result.success && result.error) {
+        addLog(`⚠ ${result.error}`);
       }
 
       // Check if we actually got data
       if (result.stats.stockItems === 0 && result.stats.ledgers === 0 && result.stats.vouchers === 0) {
-        addLog("ERROR: Tally returned zero items, ledgers, and vouchers!");
-        addLog("Possible causes:");
-        addLog("  1. Company name doesn't match exactly (case-sensitive, check for spaces/dots)");
-        addLog("  2. No company is loaded in TallyPrime");
-        addLog("  3. FY dates are outside the company's period");
-        addLog("  4. Check proxy console (Terminal 1) for detailed XML error logs");
-        toast("Sync returned empty data — check proxy console for details", "error");
+        addLog("ERROR: Zero data returned from Tally!");
+        addLog("Check: 1) Company name exact match  2) Company loaded in Tally  3) FY dates correct");
+        addLog("Tip: Open proxy terminal to see what Tally XML actually returned");
+        addLog('Debug: curl -X POST http://localhost:3100/api/tally/debug -H "Content-Type: application/json" -d "{\\"company\\":\\"YOUR COMPANY\\",\\"test\\":\\"stock\\"}"');
+        toast("Sync returned empty — see log for debug steps", "error");
+        setSyncing(false);
         return;
       }
 
@@ -172,135 +169,6 @@ export default function ImportPage() {
     } catch (err: any) {
       addLog(`ERROR: ${err.message || err}`);
       toast(`Sync failed: ${err.message || err}`, "error");
-      setConnected(false);
-    } finally {
-      setSyncing(false);
-    }
-  }
-
-  async function handleMastersSync() {
-    if (!companyName.trim()) {
-      toast("Please enter company name", "warn");
-      return;
-    }
-
-    setSyncing(true);
-    setDebugLog([]);
-    try {
-      addLog(`Syncing masters only for "${companyName}"...`);
-      const t0 = Date.now();
-
-      const mastersRaw = await syncMastersOnly(companyName);
-
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      addLog(`✓ Masters fetched in ${elapsed}s`);
-
-      addLog("Parsing masters...");
-      const mastersResult = parseMasters(mastersRaw);
-
-      // If we have existing data, merge only masters
-      if (existingData) {
-        const data: ParsedData = {
-          company: mastersResult.company,
-          items: mastersResult.items,
-          ledgers: mastersResult.ledgers,
-          vouchers: existingData.vouchers, // Keep existing vouchers
-          importedAt: new Date().toISOString(),
-          sourceFiles: ["tally-live-sync-masters"],
-          warnings: mastersResult.warnings,
-        };
-
-        setPendingData(data);
-        setReport({
-          items: data.items.size,
-          ledgers: data.ledgers.size,
-          vouchers: data.vouchers.length,
-          warnings: data.warnings,
-          reconErrors: [],
-          mergeMode: true,
-        });
-        addLog("✓ Masters-only sync complete — existing vouchers preserved");
-      } else {
-        toast("No existing data found. Use 'Sync All' to import both masters and transactions", "warn");
-        addLog("⚠ Cannot sync masters only without existing transaction data");
-      }
-
-      setLastSync(new Date().toISOString());
-    } catch (err: any) {
-      addLog(`ERROR: ${err.message || err}`);
-      toast(`Masters sync failed: ${err.message || err}`, "error");
-      setConnected(false);
-    } finally {
-      setSyncing(false);
-    }
-  }
-
-  async function handleTransactionsSync() {
-    if (!companyName.trim()) {
-      toast("Please enter company name", "warn");
-      return;
-    }
-
-    setSyncing(true);
-    setDebugLog([]);
-    try {
-      addLog(`Syncing transactions only for "${companyName}"...`);
-      const t0 = Date.now();
-
-      const txRaw = await syncTransactionsOnly(companyName, fyFromDate, fyToDate);
-
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      addLog(`✓ Transactions fetched in ${elapsed}s`);
-
-      addLog("Parsing transactions...");
-      const txResult = parseTransactions(txRaw);
-
-      // Must have existing data to sync transactions only
-      if (existingData) {
-        const data: ParsedData = {
-          company: existingData.company, // Keep existing company info
-          items: existingData.items, // Keep existing items
-          ledgers: existingData.ledgers, // Keep existing ledgers
-          vouchers: txResult.vouchers, // Replace with new vouchers
-          importedAt: new Date().toISOString(),
-          sourceFiles: ["tally-live-sync-transactions"],
-          warnings: txResult.warnings,
-        };
-
-        // Reconciliation check
-        addLog("Running reconciliation checks...");
-        const reconErrors: string[] = [];
-        for (const v of data.vouchers) {
-          const ledgerLines = v.lines.filter((l) => l.type === "ledger");
-          const debits = ledgerLines.filter((l) => l.isDebit).reduce((s, l) => s + (l.amount ?? 0), 0);
-          const credits = ledgerLines.filter((l) => !l.isDebit).reduce((s, l) => s + (l.amount ?? 0), 0);
-          if (Math.abs(debits - credits) > 1 && ledgerLines.length > 1) {
-            reconErrors.push(
-              `${v.voucherType} ${v.voucherNumber} (${v.date}): Dr=${debits.toFixed(0)} Cr=${credits.toFixed(0)}`
-            );
-          }
-        }
-        addLog(`Found ${reconErrors.length} reconciliation issues`);
-
-        setPendingData(data);
-        setReport({
-          items: data.items.size,
-          ledgers: data.ledgers.size,
-          vouchers: data.vouchers.length,
-          warnings: data.warnings,
-          reconErrors: reconErrors.slice(0, 20),
-          mergeMode: true,
-        });
-        addLog("✓ Transactions-only sync complete — existing masters preserved");
-      } else {
-        toast("No existing data found. Use 'Sync All' to import both masters and transactions", "warn");
-        addLog("⚠ Cannot sync transactions only without existing master data");
-      }
-
-      setLastSync(new Date().toISOString());
-    } catch (err: any) {
-      addLog(`ERROR: ${err.message || err}`);
-      toast(`Transactions sync failed: ${err.message || err}`, "error");
       setConnected(false);
     } finally {
       setSyncing(false);
@@ -778,35 +646,14 @@ export default function ImportPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
-              <button
-                onClick={handleMastersSync}
-                disabled={isSyncing || !isConnected || !companyName.trim()}
-                className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-3 rounded-lg transition text-sm"
-                title="Sync only stock items and ledgers (keeps existing transactions)"
-              >
-                {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                Masters
-              </button>
-              <button
-                onClick={handleTransactionsSync}
-                disabled={isSyncing || !isConnected || !companyName.trim()}
-                className="flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-3 rounded-lg transition text-sm"
-                title="Sync only transactions/vouchers (keeps existing masters)"
-              >
-                {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <FileJson size={16} />}
-                Transactions
-              </button>
-              <button
-                onClick={handleTallySync}
-                disabled={isSyncing || !isConnected || !companyName.trim()}
-                className="flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-3 rounded-lg transition text-sm"
-                title="Sync everything (masters + transactions)"
-              >
-                {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
-                Sync All
-              </button>
-            </div>
+            <button
+              onClick={handleTallySync}
+              disabled={isSyncing || !isConnected || !companyName.trim()}
+              className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-5 py-3 rounded-lg transition"
+            >
+              {isSyncing ? <Loader2 size={18} className="animate-spin" /> : <Zap size={18} />}
+              {isSyncing ? "Syncing..." : "Sync Now"}
+            </button>
           </div>
         </div>
       )}
