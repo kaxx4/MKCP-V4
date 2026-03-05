@@ -18,6 +18,7 @@ const Ledgers = lazy(() => import("./pages/Ledgers"));
 const Reports = lazy(() => import("./pages/Reports"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Edit = lazy(() => import("./pages/Edit"));
+const Alerts = lazy(() => import("./pages/Alerts"));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -74,6 +75,7 @@ function AppRoutes() {
           <Route path="/ledgers" element={<Ledgers />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/edit" element={<Edit />} />
+          <Route path="/alerts" element={<Alerts />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

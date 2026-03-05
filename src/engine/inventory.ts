@@ -55,16 +55,16 @@ export function computeMonthlyBuckets(
     for (const line of v.lines) {
       if (line.type !== "inventory" || line.itemId !== item.itemId) continue;
       const qty = line.qtyBase ?? 0;
-      if (
-        v.voucherType === "Sales" ||
-        v.voucherType === "Credit Note"
-      ) {
+      if (v.voucherType === "Sales") {
         monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
-      } else if (
-        v.voucherType === "Purchase" ||
-        v.voucherType === "Debit Note"
-      ) {
+      } else if (v.voucherType === "Credit Note") {
+        // Credit Note = Sales return → goods come BACK IN
         monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
+      } else if (v.voucherType === "Purchase") {
+        monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
+      } else if (v.voucherType === "Debit Note") {
+        // Debit Note = Purchase return → goods go BACK OUT
+        monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
       } else if (v.voucherType === "Stock Journal") {
         if (qty > 0) monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
         else monthlyOut[ym] = (monthlyOut[ym] ?? 0) + Math.abs(qty);
@@ -112,10 +112,16 @@ export function getCurrentStock(item: CanonicalItem, vouchers: CanonicalVoucher[
     for (const line of v.lines) {
       if (line.type !== "inventory" || line.itemId !== item.itemId) continue;
       const qty = line.qtyBase ?? 0;
-      if (["Sales", "Credit Note"].includes(v.voucherType)) {
+      if (v.voucherType === "Sales") {
         running -= qty;
-      } else if (["Purchase", "Debit Note"].includes(v.voucherType)) {
+      } else if (v.voucherType === "Credit Note") {
+        // Credit Note = Sales return → goods come BACK IN
         running += qty;
+      } else if (v.voucherType === "Purchase") {
+        running += qty;
+      } else if (v.voucherType === "Debit Note") {
+        // Debit Note = Purchase return → goods go BACK OUT
+        running -= qty;
       } else if (v.voucherType === "Stock Journal") {
         running += qty; // Stock Journal qty can be +ve or -ve
       }
@@ -185,10 +191,16 @@ export function getCurrentStockIndexed(item: CanonicalItem, voucherIndex: Vouche
     for (const line of v.lines) {
       if (line.type !== "inventory" || line.itemId !== item.itemId) continue;
       const qty = line.qtyBase ?? 0;
-      if (["Sales", "Credit Note"].includes(v.voucherType)) {
+      if (v.voucherType === "Sales") {
         running -= qty;
-      } else if (["Purchase", "Debit Note"].includes(v.voucherType)) {
+      } else if (v.voucherType === "Credit Note") {
+        // Credit Note = Sales return → goods come BACK IN
         running += qty;
+      } else if (v.voucherType === "Purchase") {
+        running += qty;
+      } else if (v.voucherType === "Debit Note") {
+        // Debit Note = Purchase return → goods go BACK OUT
+        running -= qty;
       } else if (v.voucherType === "Stock Journal") {
         running += qty;
       }
@@ -217,16 +229,16 @@ export function computeMonthlyBucketsIndexed(
     for (const line of v.lines) {
       if (line.type !== "inventory" || line.itemId !== item.itemId) continue;
       const qty = line.qtyBase ?? 0;
-      if (
-        v.voucherType === "Sales" ||
-        v.voucherType === "Credit Note"
-      ) {
+      if (v.voucherType === "Sales") {
         monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
-      } else if (
-        v.voucherType === "Purchase" ||
-        v.voucherType === "Debit Note"
-      ) {
+      } else if (v.voucherType === "Credit Note") {
+        // Credit Note = Sales return → goods come BACK IN
         monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
+      } else if (v.voucherType === "Purchase") {
+        monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
+      } else if (v.voucherType === "Debit Note") {
+        // Debit Note = Purchase return → goods go BACK OUT
+        monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
       } else if (v.voucherType === "Stock Journal") {
         if (qty > 0) monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
         else monthlyOut[ym] = (monthlyOut[ym] ?? 0) + Math.abs(qty);
@@ -344,18 +356,33 @@ export function computeItemTurnover(
       const item = items.get(line.itemId);
       const lineVal = line.lineAmount ?? qty * (line.ratePerBase ?? (item?.openingRate ?? 0));
 
-      if (["Sales", "Credit Note"].includes(v.voucherType)) {
+      if (v.voucherType === "Sales") {
         if (isPrePeriod) a.preNetQty -= qty;
         else {
           a.inPeriodOutQty += qty;
           a.inPeriodOutValue += lineVal;
           a.inPeriodNetQty -= qty;
         }
-      } else if (["Purchase", "Debit Note"].includes(v.voucherType)) {
+      } else if (v.voucherType === "Credit Note") {
+        // Credit Note = Sales return → goods come BACK IN
         if (isPrePeriod) a.preNetQty += qty;
         else {
           a.inPeriodInQty += qty;
           a.inPeriodNetQty += qty;
+        }
+      } else if (v.voucherType === "Purchase") {
+        if (isPrePeriod) a.preNetQty += qty;
+        else {
+          a.inPeriodInQty += qty;
+          a.inPeriodNetQty += qty;
+        }
+      } else if (v.voucherType === "Debit Note") {
+        // Debit Note = Purchase return → goods go BACK OUT
+        if (isPrePeriod) a.preNetQty -= qty;
+        else {
+          a.inPeriodOutQty += qty;
+          a.inPeriodOutValue += lineVal;
+          a.inPeriodNetQty -= qty;
         }
       } else if (v.voucherType === "Stock Journal") {
         if (isPrePeriod) a.preNetQty += qty;
@@ -408,6 +435,273 @@ export function computeItemTurnover(
       closingQty,
       avgMonthlyOutward: periodMonths > 0 ? totalOutQty / periodMonths : 0,
       classification,
+    });
+  }
+
+  return results;
+}
+
+export interface PeriodComparisonItem {
+  itemId: string;
+  name: string;
+  group: string;
+  baseUnit: string;
+  openingA: number;
+  inwardsA: number;
+  outwardsA: number;
+  closingA: number;
+  openingB: number;
+  inwardsB: number;
+  outwardsB: number;
+  closingB: number;
+  closingDelta: number;
+  outwardsDelta: number;
+  outwardsDeltaPct: number;
+}
+
+/**
+ * Compare two months side-by-side for every item.
+ * Uses computeMonthlyBucketsIndexed to obtain bucket data for both months,
+ * then computes deltas between them.
+ */
+export function computePeriodComparison(
+  items: Map<string, CanonicalItem>,
+  voucherIndex: VoucherIndex,
+  monthA: string,
+  monthB: string
+): PeriodComparisonItem[] {
+  const results: PeriodComparisonItem[] = [];
+
+  // Determine the later month to use as asOfDate, and how many months we need
+  const later = monthA > monthB ? monthA : monthB;
+  const earlier = monthA <= monthB ? monthA : monthB;
+
+  // Parse months to calculate span
+  const [laterY, laterM] = later.split("-").map(Number);
+  const [earlierY, earlierM] = earlier.split("-").map(Number);
+  const spanMonths = (laterY - earlierY) * 12 + (laterM - earlierM);
+
+  // We need at least spanMonths + 1 buckets, add a small buffer
+  const nMonths = spanMonths + 2;
+
+  // asOfDate should be end of the later month so the range covers both months
+  const asOfDate = new Date(laterY, laterM - 1 + 1, 0); // last day of later month
+
+  for (const [, item] of items) {
+    const buckets = computeMonthlyBucketsIndexed(item, voucherIndex, nMonths, asOfDate);
+
+    const bucketA = buckets.find((b) => b.yearMonth === monthA);
+    const bucketB = buckets.find((b) => b.yearMonth === monthB);
+
+    const openingA = bucketA?.openingQtyBase ?? 0;
+    const inwardsA = bucketA?.inwardsBase ?? 0;
+    const outwardsA = bucketA?.outwardsBase ?? 0;
+    const closingA = bucketA?.closingQtyBase ?? 0;
+
+    const openingB = bucketB?.openingQtyBase ?? 0;
+    const inwardsB = bucketB?.inwardsBase ?? 0;
+    const outwardsB = bucketB?.outwardsBase ?? 0;
+    const closingB = bucketB?.closingQtyBase ?? 0;
+
+    const closingDelta = closingB - closingA;
+    const outwardsDelta = outwardsB - outwardsA;
+    const outwardsDeltaPct =
+      outwardsA > 0
+        ? ((outwardsB - outwardsA) / outwardsA) * 100
+        : outwardsB > 0
+          ? 100
+          : 0;
+
+    results.push({
+      itemId: item.itemId,
+      name: item.name,
+      group: item.group,
+      baseUnit: item.baseUnit,
+      openingA,
+      inwardsA,
+      outwardsA,
+      closingA,
+      openingB,
+      inwardsB,
+      outwardsB,
+      closingB,
+      closingDelta,
+      outwardsDelta,
+      outwardsDeltaPct,
+    });
+  }
+
+  return results;
+}
+
+export interface ABCXYZItem {
+  itemId: string;
+  name: string;
+  group: string;
+  baseUnit: string;
+  totalRevenue: number;
+  revenueShare: number;
+  cumulativeShare: number;
+  abcClass: "A" | "B" | "C";
+  avgMonthlyDemand: number;
+  coefficientOfVariation: number;
+  xyzClass: "X" | "Y" | "Z";
+  combined: string;
+}
+
+/**
+ * Compute ABC-XYZ classification for all items over a given period.
+ * ABC = revenue-based Pareto classification (A <=80%, B 80-95%, C rest)
+ * XYZ = demand variability classification based on coefficient of variation
+ * Single pass over vouchers for efficiency.
+ */
+export function computeABCXYZ(
+  items: Map<string, CanonicalItem>,
+  vouchers: CanonicalVoucher[],
+  periodMonths: number = 12
+): ABCXYZItem[] {
+  // 1. Determine period range from latest voucher date
+  let latestDate = "";
+  for (const v of vouchers) {
+    if (v.date > latestDate) latestDate = v.date;
+  }
+  if (!latestDate) return [];
+
+  const endDateObj = new Date(latestDate);
+  const startDateObj = new Date(endDateObj);
+  startDateObj.setMonth(startDateObj.getMonth() - periodMonths);
+  const startDate = startDateObj.toISOString().slice(0, 10);
+  const endDate = latestDate;
+
+  // Build the full list of month keys ("YYYY-MM") in the period
+  const allMonthKeys: string[] = [];
+  const cursor = new Date(startDateObj.getFullYear(), startDateObj.getMonth(), 1);
+  const endMonth = new Date(endDateObj.getFullYear(), endDateObj.getMonth(), 1);
+  while (cursor <= endMonth) {
+    allMonthKeys.push(
+      `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`
+    );
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  // 2. Single pass over vouchers — accumulate per-item revenue and monthly outward qty
+  const revenueMap = new Map<string, number>();
+  const monthlyOutMap = new Map<string, Map<string, number>>(); // itemId -> (YYYY-MM -> qty)
+
+  for (const v of vouchers) {
+    if (v.isCancelled || v.isOptional) continue;
+    if (v.voucherType !== "Sales") continue;
+    if (v.date < startDate || v.date > endDate) continue;
+
+    const ym = v.date.slice(0, 7);
+
+    for (const line of v.lines) {
+      if (line.type !== "inventory" || !line.itemId) continue;
+
+      const itemId = line.itemId;
+      const lineAmt = line.lineAmount ?? 0;
+      const qty = line.qtyBase ?? 0;
+
+      // Revenue accumulation
+      revenueMap.set(itemId, (revenueMap.get(itemId) ?? 0) + lineAmt);
+
+      // Monthly outward qty accumulation
+      let monthMap = monthlyOutMap.get(itemId);
+      if (!monthMap) {
+        monthMap = new Map<string, number>();
+        monthlyOutMap.set(itemId, monthMap);
+      }
+      monthMap.set(ym, (monthMap.get(ym) ?? 0) + qty);
+    }
+  }
+
+  // 3. ABC classification — sort by revenue descending, compute cumulative share
+  const grandTotal = Array.from(revenueMap.values()).reduce((s, v) => s + v, 0);
+
+  // Build intermediate array of all items with their revenue
+  const itemEntries: {
+    itemId: string;
+    name: string;
+    group: string;
+    baseUnit: string;
+    totalRevenue: number;
+  }[] = [];
+
+  for (const [, item] of items) {
+    itemEntries.push({
+      itemId: item.itemId,
+      name: item.name,
+      group: item.group,
+      baseUnit: item.baseUnit,
+      totalRevenue: revenueMap.get(item.itemId) ?? 0,
+    });
+  }
+
+  // Sort by revenue descending
+  itemEntries.sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+  // 4 & 5. Compute ABC + XYZ for each item and build result
+  const results: ABCXYZItem[] = [];
+  let cumulativeShare = 0;
+
+  for (const entry of itemEntries) {
+    const revenueShare = grandTotal > 0 ? (entry.totalRevenue / grandTotal) * 100 : 0;
+    cumulativeShare += revenueShare;
+
+    // ABC class
+    let abcClass: "A" | "B" | "C";
+    if (grandTotal === 0) {
+      abcClass = "C";
+    } else if (cumulativeShare <= 80) {
+      abcClass = "A";
+    } else if (cumulativeShare <= 95) {
+      abcClass = "B";
+    } else {
+      abcClass = "C";
+    }
+
+    // XYZ classification — compute CV of monthly demand
+    const monthMap = monthlyOutMap.get(entry.itemId);
+    const monthlyDemands = allMonthKeys.map((ym) => monthMap?.get(ym) ?? 0);
+    const totalOutQty = monthlyDemands.reduce((s, q) => s + q, 0);
+    const avgMonthlyDemand = periodMonths > 0 ? totalOutQty / periodMonths : 0;
+
+    let coefficientOfVariation: number;
+    if (avgMonthlyDemand === 0) {
+      coefficientOfVariation = Infinity;
+    } else {
+      // Compute standard deviation (population)
+      const variance =
+        monthlyDemands.reduce((s, q) => s + (q - avgMonthlyDemand) ** 2, 0) /
+        monthlyDemands.length;
+      const stddev = Math.sqrt(variance);
+      coefficientOfVariation = stddev / avgMonthlyDemand;
+    }
+
+    let xyzClass: "X" | "Y" | "Z";
+    if (coefficientOfVariation < 0.5) {
+      xyzClass = "X";
+    } else if (coefficientOfVariation <= 1.0) {
+      xyzClass = "Y";
+    } else {
+      xyzClass = "Z";
+    }
+
+    results.push({
+      itemId: entry.itemId,
+      name: entry.name,
+      group: entry.group,
+      baseUnit: entry.baseUnit,
+      totalRevenue: entry.totalRevenue,
+      revenueShare: Math.round(revenueShare * 100) / 100,
+      cumulativeShare: Math.round(cumulativeShare * 100) / 100,
+      abcClass,
+      avgMonthlyDemand: Math.round(avgMonthlyDemand * 100) / 100,
+      coefficientOfVariation: isFinite(coefficientOfVariation)
+        ? Math.round(coefficientOfVariation * 100) / 100
+        : Infinity,
+      xyzClass,
+      combined: abcClass + xyzClass,
     });
   }
 

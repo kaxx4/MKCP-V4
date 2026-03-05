@@ -18,7 +18,7 @@ import {
 import { useDataStore } from "../store/dataStore";
 import { useUIStore } from "../store/uiStore";
 import { useOrderStore } from "../store/orderStore";
-import { getCurrentStock, getCurrentStockIndexed, computeMonthlyBuckets, computeMonthlyBucketsIndexed, suggestedReorder, buildVoucherIndex } from "../engine/inventory";
+import { getCurrentStock, getCurrentStockIndexed, computeMonthlyBuckets, computeMonthlyBucketsIndexed, suggestedReorder } from "../engine/inventory";
 import { toDisplay, fromDisplay } from "../engine/unitEngine";
 import { UnitToggle } from "../components/UnitToggle";
 import { fmtNum } from "../utils/format";
@@ -27,7 +27,7 @@ import clsx from "clsx";
 
 export default function Orders() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
+  const { data, voucherIndex } = useDataStore();
   const { unitMode, coverMonths, setCoverMonths } = useUIStore();
   const { lines: orderLines, setLine, removeLine, clearAll, getAllLines } = useOrderStore();
 
@@ -83,12 +83,6 @@ export default function Orders() {
     () => new Fuse(allItems, { keys: ["name", "group"], threshold: 0.4 }),
     [allItems]
   );
-
-  // Build voucher index for O(V_item) instead of O(V) lookup
-  const voucherIndex = useMemo(() => {
-    if (!data) return new Map();
-    return buildVoucherIndex(data.vouchers);
-  }, [data]);
 
   // Cache stock calculations for all items (using indexed lookup)
   const stockCache = useMemo(() => {

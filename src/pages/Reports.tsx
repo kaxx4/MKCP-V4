@@ -1,12 +1,14 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line,
+  ScatterChart, Scatter, Cell, ReferenceLine, ComposedChart,
 } from "recharts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDataStore } from "../store/dataStore";
-import { getCurrentStockIndexed, buildVoucherIndex, computeItemTurnover } from "../engine/inventory";
-import { monthlyTotals } from "../engine/financial";
+import { getCurrentStockIndexed, computeItemTurnover, computeABCXYZ, computePeriodComparison, type ABCXYZItem, type PeriodComparisonItem } from "../engine/inventory";
+import { monthlyTotals, computeItemMargins, type ItemMarginData } from "../engine/financial";
+import { computeGSTR1, computeGSTR3B, type GSTR1Summary, type GSTR3BSummary } from "../engine/gst";
 import { toDisplay } from "../engine/unitEngine";
 import { useUIStore } from "../store/uiStore";
 import { fmtINR, fmtNum, fmtDate, fmtDateShort } from "../utils/format";
@@ -16,7 +18,7 @@ import { loadFromStore } from "../db/idb";
 import { generatePredictions, type PartyOrderPattern, type PredictionSnapshot, type PredictionAccuracy, type UpsellSuggestion } from "../engine/prediction";
 import type { CanonicalVoucher, CanonicalItem } from "../types/canonical";
 
-const TABS = ["Inventory", "Sales Trend", "Top Items", "Turnover", "Predictions", "Purchase Orders", "Calendar"] as const;
+const TABS = ["Inventory", "Sales Trend", "Top Items", "Turnover", "Predictions", "Purchase Orders", "Calendar", "ABC-XYZ", "Period Compare", "Margins", "GST Summary"] as const;
 type Tab = typeof TABS[number];
 
 // ─── Daily Purchase Order types ─────────────────────────────
@@ -54,7 +56,7 @@ interface DayActivity {
 
 export default function Reports() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
+  const { data, voucherIndex } = useDataStore();
   const { unitMode } = useUIStore();
   const [tab, setTab] = useState<Tab>("Inventory");
   const [predictionType, setPredictionType] = useState<"Sales" | "Purchase">("Sales");
@@ -75,11 +77,31 @@ export default function Reports() {
   const [calendarMonth, setCalendarMonth] = useState<string>(""); // "YYYY-MM"
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
-  // Build voucher index for inventory tab
-  const voucherIndex = useMemo(() => {
-    if (!data) return new Map();
-    return buildVoucherIndex(data.vouchers);
-  }, [data]);
+  // ABC-XYZ state
+  const [abcxyzSearch, setAbcxyzSearch] = useState("");
+  const [abcxyzAbcFilter, setAbcxyzAbcFilter] = useState<"ALL" | "A" | "B" | "C">("ALL");
+  const [abcxyzXyzFilter, setAbcxyzXyzFilter] = useState<"ALL" | "X" | "Y" | "Z">("ALL");
+  const [abcxyzSort, setAbcxyzSort] = useState<string>("revenue");
+  const [abcxyzSortDir, setAbcxyzSortDir] = useState<"asc" | "desc">("desc");
+
+  // Period Compare state
+  const [periodMonthA, setPeriodMonthA] = useState("");
+  const [periodMonthB, setPeriodMonthB] = useState("");
+  const [periodSearch, setPeriodSearch] = useState("");
+  const [periodSort, setPeriodSort] = useState<string>("outDeltaPct");
+  const [periodSortDir, setPeriodSortDir] = useState<"asc" | "desc">("desc");
+
+  // Margins state
+  const [marginPeriod, setMarginPeriod] = useState<number | undefined>(undefined);
+  const [marginSearch, setMarginSearch] = useState("");
+  const [marginGroupFilter, setMarginGroupFilter] = useState("ALL");
+  const [marginSort, setMarginSort] = useState<string>("totalProfit");
+  const [marginSortDir, setMarginSortDir] = useState<"asc" | "desc">("desc");
+
+  // GST state
+  const [gstMonth, setGstMonth] = useState("");
+  const [gstView, setGstView] = useState<"GSTR1" | "GSTR3B">("GSTR1");
+  const [gstExpandedParty, setGstExpandedParty] = useState<string | null>(null);
 
   // Load predictions when tab changes to Predictions
   useEffect(() => {
@@ -451,6 +473,144 @@ export default function Reports() {
     }
     return map;
   }, [data, calendarMonth, predictions]);
+
+  // ─── ABC-XYZ data ───────────────────────────────
+  const abcxyzData = useMemo(() => {
+    if (!data) return [];
+    return computeABCXYZ(data.items, data.vouchers, 12);
+  }, [data]);
+
+  const abcxyzFiltered = useMemo(() => {
+    let result = abcxyzData;
+    if (abcxyzAbcFilter !== "ALL") result = result.filter(d => d.abcClass === abcxyzAbcFilter);
+    if (abcxyzXyzFilter !== "ALL") result = result.filter(d => d.xyzClass === abcxyzXyzFilter);
+    if (abcxyzSearch) {
+      const s = abcxyzSearch.toLowerCase();
+      result = result.filter(d => d.name.toLowerCase().includes(s));
+    }
+    const dir = abcxyzSortDir === "desc" ? -1 : 1;
+    switch (abcxyzSort) {
+      case "revenue": result = [...result].sort((a, b) => dir * (a.totalRevenue - b.totalRevenue)); break;
+      case "share": result = [...result].sort((a, b) => dir * (a.revenueShare - b.revenueShare)); break;
+      case "demand": result = [...result].sort((a, b) => dir * (a.avgMonthlyDemand - b.avgMonthlyDemand)); break;
+      case "cv": result = [...result].sort((a, b) => dir * ((isFinite(a.coefficientOfVariation) ? a.coefficientOfVariation : 9999) - (isFinite(b.coefficientOfVariation) ? b.coefficientOfVariation : 9999))); break;
+      case "name": result = [...result].sort((a, b) => dir * a.name.localeCompare(b.name)); break;
+    }
+    return result;
+  }, [abcxyzData, abcxyzAbcFilter, abcxyzXyzFilter, abcxyzSearch, abcxyzSort, abcxyzSortDir]);
+
+  // ABC-XYZ matrix data
+  const abcxyzMatrix = useMemo(() => {
+    const matrix: Record<string, { count: number; revenue: number }> = {};
+    for (const cls of ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"]) {
+      matrix[cls] = { count: 0, revenue: 0 };
+    }
+    for (const d of abcxyzData) {
+      const key = d.combined;
+      if (matrix[key]) {
+        matrix[key].count++;
+        matrix[key].revenue += d.totalRevenue;
+      }
+    }
+    return matrix;
+  }, [abcxyzData]);
+
+  // ─── Available months from voucher data ────────
+  const availableMonths = useMemo(() => {
+    if (!data) return [];
+    const months = new Set<string>();
+    for (const v of data.vouchers) {
+      if (!v.isCancelled) months.add(v.date.slice(0, 7));
+    }
+    return Array.from(months).sort().reverse();
+  }, [data]);
+
+  // Initialize period compare months
+  useEffect(() => {
+    if (availableMonths.length >= 2 && !periodMonthA) {
+      setPeriodMonthA(availableMonths[1]);
+      setPeriodMonthB(availableMonths[0]);
+    }
+  }, [availableMonths, periodMonthA]);
+
+  // Initialize GST month
+  useEffect(() => {
+    if (availableMonths.length > 0 && !gstMonth) {
+      setGstMonth(availableMonths[0]);
+    }
+  }, [availableMonths, gstMonth]);
+
+  // ─── Period comparison data ────────────────────
+  const periodData = useMemo(() => {
+    if (!data || !periodMonthA || !periodMonthB) return [];
+    return computePeriodComparison(data.items, voucherIndex, periodMonthA, periodMonthB);
+  }, [data, voucherIndex, periodMonthA, periodMonthB]);
+
+  const periodFiltered = useMemo(() => {
+    let result = periodData;
+    if (periodSearch) {
+      const s = periodSearch.toLowerCase();
+      result = result.filter(d => d.name.toLowerCase().includes(s));
+    }
+    const dir = periodSortDir === "desc" ? -1 : 1;
+    switch (periodSort) {
+      case "name": result = [...result].sort((a, b) => dir * a.name.localeCompare(b.name)); break;
+      case "closingDelta": result = [...result].sort((a, b) => dir * (a.closingDelta - b.closingDelta)); break;
+      case "outDelta": result = [...result].sort((a, b) => dir * (a.outwardsDelta - b.outwardsDelta)); break;
+      case "outDeltaPct": result = [...result].sort((a, b) => dir * (a.outwardsDeltaPct - b.outwardsDeltaPct)); break;
+      case "outA": result = [...result].sort((a, b) => dir * (a.outwardsA - b.outwardsA)); break;
+      case "outB": result = [...result].sort((a, b) => dir * (a.outwardsB - b.outwardsB)); break;
+    }
+    return result;
+  }, [periodData, periodSearch, periodSort, periodSortDir]);
+
+  // ─── Margins data ─────────────────────────────
+  const marginData = useMemo(() => {
+    if (!data) return [];
+    return computeItemMargins(data.items, data.vouchers, marginPeriod);
+  }, [data, marginPeriod]);
+
+  const marginGroups = useMemo(() => {
+    const gs = new Set(marginData.map(d => d.group));
+    return ["ALL", ...Array.from(gs).sort()];
+  }, [marginData]);
+
+  const marginFiltered = useMemo(() => {
+    let result = marginData;
+    if (marginGroupFilter !== "ALL") result = result.filter(d => d.group === marginGroupFilter);
+    if (marginSearch) {
+      const s = marginSearch.toLowerCase();
+      result = result.filter(d => d.name.toLowerCase().includes(s));
+    }
+    const dir = marginSortDir === "desc" ? -1 : 1;
+    switch (marginSort) {
+      case "totalProfit": result = [...result].sort((a, b) => dir * (a.totalProfit - b.totalProfit)); break;
+      case "marginPct": result = [...result].sort((a, b) => dir * (a.marginPct - b.marginPct)); break;
+      case "salesValue": result = [...result].sort((a, b) => dir * (a.totalSalesValue - b.totalSalesValue)); break;
+      case "name": result = [...result].sort((a, b) => dir * a.name.localeCompare(b.name)); break;
+    }
+    return result;
+  }, [marginData, marginGroupFilter, marginSearch, marginSort, marginSortDir]);
+
+  const marginKPIs = useMemo(() => {
+    const withBoth = marginData.filter(d => !d.hasNoSales && !d.hasNoPurchases);
+    const avgMargin = withBoth.length > 0 ? withBoth.reduce((s, d) => s + d.marginPct, 0) / withBoth.length : 0;
+    const totalProfit = marginData.reduce((s, d) => s + d.totalProfit, 0);
+    const thinMargin = withBoth.filter(d => d.marginPct < 10 && d.marginPct >= 0).length;
+    const negativeMargin = withBoth.filter(d => d.marginPct < 0).length;
+    return { avgMargin, totalProfit, thinMargin, negativeMargin };
+  }, [marginData]);
+
+  // ─── GST data ──────────────────────────────────
+  const gstr1Data = useMemo(() => {
+    if (!data || !gstMonth) return null;
+    return computeGSTR1(data.vouchers, data.items, data.ledgers, gstMonth, data.company?.gstin);
+  }, [data, gstMonth]);
+
+  const gstr3bData = useMemo(() => {
+    if (!data || !gstMonth) return null;
+    return computeGSTR3B(data.vouchers, data.items, data.ledgers, gstMonth, data.company?.gstin);
+  }, [data, gstMonth]);
 
   if (!data) {
     return (
@@ -892,6 +1052,572 @@ export default function Reports() {
         <CalendarTab calendarMonth={calendarMonth} setCalendarMonth={setCalendarMonth}
           calendarActivity={calendarActivity} selectedDay={selectedDay} setSelectedDay={setSelectedDay}
           data={data} />
+      )}
+
+      {/* ═══ ABC-XYZ Classification ═══ */}
+      {tab === "ABC-XYZ" && (
+        <div className="space-y-4">
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-success">{abcxyzData.filter(d => d.abcClass === "A").length}</div>
+              <div className="text-muted text-xs mt-1">A Items</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-accent">{abcxyzData.filter(d => d.abcClass === "B").length}</div>
+              <div className="text-muted text-xs mt-1">B Items</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-muted">{abcxyzData.filter(d => d.abcClass === "C").length}</div>
+              <div className="text-muted text-xs mt-1">C Items</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-primary">{abcxyzData.length > 0 ? `${Math.round(abcxyzData.filter(d => d.abcClass === "A").reduce((s, d) => s + d.revenueShare, 0))}%` : "0%"}</div>
+              <div className="text-muted text-xs mt-1">A Revenue Share</div>
+            </div>
+          </div>
+
+          {/* 3x3 Matrix */}
+          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+            <h3 className="font-semibold text-primary mb-3">ABC-XYZ Matrix</h3>
+            <div className="grid grid-cols-4 gap-1 text-sm">
+              <div />
+              {["X (Steady)", "Y (Variable)", "Z (Erratic)"].map(h => (
+                <div key={h} className="text-center text-muted text-xs font-medium py-1">{h}</div>
+              ))}
+              {(["A", "B", "C"] as const).map(abc => (
+                <Fragment key={abc}>
+                  <div className="text-muted text-xs font-medium flex items-center">{abc} ({abc === "A" ? "High" : abc === "B" ? "Mid" : "Low"})</div>
+                  {(["X", "Y", "Z"] as const).map(xyz => {
+                    const key = abc + xyz;
+                    const cell = abcxyzMatrix[key];
+                    const bg = { AX: "bg-green-500/20", AY: "bg-green-500/10", AZ: "bg-yellow-500/10", BX: "bg-green-500/10", BY: "bg-yellow-500/10", BZ: "bg-orange-500/10", CX: "bg-yellow-500/10", CY: "bg-orange-500/10", CZ: "bg-red-500/10" }[key] ?? "";
+                    return (
+                      <div key={key} className={clsx("rounded-lg p-2 text-center", bg)}>
+                        <div className="text-lg font-bold text-primary">{cell?.count ?? 0}</div>
+                        <div className="text-xs text-muted">{fmtINR(cell?.revenue ?? 0)}</div>
+                      </div>
+                    );
+                  })}
+                </Fragment>
+              ))}
+            </div>
+          </div>
+
+          {/* Pareto chart */}
+          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+            <h3 className="font-semibold text-primary mb-3">Pareto Chart (Revenue Distribution)</h3>
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart data={abcxyzData.slice(0, 50).map((d, i) => ({ name: d.name.slice(0, 15), revenue: d.totalRevenue, cumPct: d.cumulativeShare }))}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="name" tick={{ fontSize: 8, fill: "#64748b" }} angle={-45} textAnchor="end" height={60} />
+                <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => fmtINR(v)} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#64748b" }} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
+                <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} />
+                <Bar yAxisId="left" dataKey="revenue" fill="#3b82f6" radius={[2, 2, 0, 0]} />
+                <Line yAxisId="right" type="monotone" dataKey="cumPct" stroke="#ef4444" strokeWidth={2} dot={false} />
+                <ReferenceLine yAxisId="right" y={80} stroke="#ef4444" strokeDasharray="5 5" label={{ value: "80%", position: "right", fontSize: 10, fill: "#ef4444" }} />
+                <ReferenceLine yAxisId="right" y={95} stroke="#f59e0b" strokeDasharray="5 5" label={{ value: "95%", position: "right", fontSize: 10, fill: "#f59e0b" }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Filters + Table */}
+          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <h3 className="font-semibold text-primary">All Items ({abcxyzFiltered.length})</h3>
+                <select value={abcxyzAbcFilter} onChange={e => setAbcxyzAbcFilter(e.target.value as any)} className="bg-bg border border-bg-border rounded-lg px-2 py-1 text-xs text-primary outline-none">
+                  <option value="ALL">All ABC</option>
+                  <option value="A">A</option>
+                  <option value="B">B</option>
+                  <option value="C">C</option>
+                </select>
+                <select value={abcxyzXyzFilter} onChange={e => setAbcxyzXyzFilter(e.target.value as any)} className="bg-bg border border-bg-border rounded-lg px-2 py-1 text-xs text-primary outline-none">
+                  <option value="ALL">All XYZ</option>
+                  <option value="X">X</option>
+                  <option value="Y">Y</option>
+                  <option value="Z">Z</option>
+                </select>
+                <input type="text" placeholder="Search..." value={abcxyzSearch} onChange={e => setAbcxyzSearch(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1 text-xs text-primary outline-none w-40" />
+              </div>
+              <button onClick={() => {
+                const rows = [["Item", "Group", "Revenue", "Revenue %", "Cumulative %", "ABC", "Monthly Avg Demand", "CV", "XYZ", "Combined"], ...abcxyzFiltered.map(d => [d.name, d.group, d.totalRevenue.toFixed(0), d.revenueShare.toFixed(2), d.cumulativeShare.toFixed(2), d.abcClass, d.avgMonthlyDemand.toFixed(2), isFinite(d.coefficientOfVariation) ? d.coefficientOfVariation.toFixed(2) : "Inf", d.xyzClass, d.combined])];
+                const csv = rows.map(r => r.join(",")).join("\n");
+                const blob = new Blob([csv], { type: "text/csv" });
+                const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `abcxyz_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+              }} className="flex items-center gap-2 bg-bg border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg transition text-xs">
+                <Download size={14} />CSV
+              </button>
+            </div>
+            <div className="overflow-auto max-h-[60vh]">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                  <tr>
+                    {[{k:"name",l:"Item"},{k:"",l:"Group"},{k:"revenue",l:"Revenue"},{k:"share",l:"Rev %"},{k:"",l:"ABC"},{k:"demand",l:"Avg Demand"},{k:"cv",l:"CV"},{k:"",l:"XYZ"},{k:"",l:"Combined"}].map(h => (
+                      <th key={h.l} className="text-left text-muted px-4 py-2 font-medium text-xs cursor-pointer hover:text-primary" onClick={() => h.k && (abcxyzSort === h.k ? setAbcxyzSortDir(d => d === "desc" ? "asc" : "desc") : (setAbcxyzSort(h.k), setAbcxyzSortDir("desc")))}>{h.l}{abcxyzSort === h.k ? (abcxyzSortDir === "desc" ? " ↓" : " ↑") : ""}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {abcxyzFiltered.map(d => {
+                    const abcColor = { A: "bg-success/10 text-success", B: "bg-accent/10 text-accent", C: "bg-muted/10 text-muted" }[d.abcClass];
+                    const xyzColor = { X: "bg-success/10 text-success", Y: "bg-warn/10 text-warn", Z: "bg-danger/10 text-danger" }[d.xyzClass];
+                    return (
+                      <tr key={d.itemId} className="border-b border-bg-border/50 hover:bg-bg-border/20">
+                        <td className="px-4 py-2 text-primary max-w-[200px] truncate">{d.name}</td>
+                        <td className="px-4 py-2 text-muted text-xs">{d.group}</td>
+                        <td className="px-4 py-2 font-mono text-primary text-xs">{fmtINR(d.totalRevenue)}</td>
+                        <td className="px-4 py-2 font-mono text-muted text-xs">{d.revenueShare.toFixed(2)}%</td>
+                        <td className="px-4 py-2"><span className={clsx("text-xs px-2 py-0.5 rounded-full font-medium", abcColor)}>{d.abcClass}</span></td>
+                        <td className="px-4 py-2 font-mono text-primary text-xs">{fmtNum(d.avgMonthlyDemand, 1)}</td>
+                        <td className="px-4 py-2 font-mono text-muted text-xs">{isFinite(d.coefficientOfVariation) ? d.coefficientOfVariation.toFixed(2) : "∞"}</td>
+                        <td className="px-4 py-2"><span className={clsx("text-xs px-2 py-0.5 rounded-full font-medium", xyzColor)}>{d.xyzClass}</span></td>
+                        <td className="px-4 py-2 font-mono font-semibold text-primary text-xs">{d.combined}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ Period Compare ═══ */}
+      {tab === "Period Compare" && (
+        <div className="space-y-4">
+          {/* Month selectors */}
+          <div className="flex items-center gap-4 bg-bg-card border border-bg-border rounded-xl p-4">
+            <div>
+              <label className="text-xs text-muted mb-1 block">Period A</label>
+              <select value={periodMonthA} onChange={e => setPeriodMonthA(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+                {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <span className="text-muted text-lg mt-4">vs</span>
+            <div>
+              <label className="text-xs text-muted mb-1 block">Period B</label>
+              <select value={periodMonthB} onChange={e => setPeriodMonthB(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+                {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div className="ml-auto">
+              <input type="text" placeholder="Search items..." value={periodSearch} onChange={e => setPeriodSearch(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none w-48" />
+            </div>
+          </div>
+
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-success">{periodData.filter(d => d.outwardsDelta > 0).length}</div>
+              <div className="text-muted text-xs mt-1">Increased Outwards</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-danger">{periodData.filter(d => d.outwardsDelta < 0).length}</div>
+              <div className="text-muted text-xs mt-1">Decreased Outwards</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-success">{periodData.filter(d => d.closingDelta > 0).length}</div>
+              <div className="text-muted text-xs mt-1">Stock Increase</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-primary">{fmtNum(periodData.reduce((s, d) => s + d.closingDelta, 0), 0)}</div>
+              <div className="text-muted text-xs mt-1">Net Stock Change</div>
+            </div>
+          </div>
+
+          {/* Comparison table */}
+          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-bg-border flex justify-between items-center">
+              <h3 className="font-semibold text-primary">Comparison ({periodFiltered.length} items)</h3>
+              <button onClick={() => {
+                const rows = [["Item", "Group", "Open A", "In A", "Out A", "Close A", "Open B", "In B", "Out B", "Close B", "Δ Closing", "Δ Out %"], ...periodFiltered.map(d => [d.name, d.group, d.openingA, d.inwardsA, d.outwardsA, d.closingA, d.openingB, d.inwardsB, d.outwardsB, d.closingB, d.closingDelta, d.outwardsDeltaPct.toFixed(1)])];
+                const csv = rows.map(r => r.join(",")).join("\n");
+                const blob = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `period_compare_${periodMonthA}_vs_${periodMonthB}.csv`; a.click();
+              }} className="flex items-center gap-2 bg-bg border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg transition text-xs">
+                <Download size={14} />CSV
+              </button>
+            </div>
+            <div className="overflow-auto max-h-[60vh]">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                  <tr>
+                    {[{k:"name",l:"Item"},{k:"",l:"Group"},{k:"",l:"Open A"},{k:"",l:"In A"},{k:"outA",l:"Out A"},{k:"",l:"Close A"},{k:"",l:"Open B"},{k:"",l:"In B"},{k:"outB",l:"Out B"},{k:"",l:"Close B"},{k:"closingDelta",l:"Δ Close"},{k:"outDeltaPct",l:"Δ Out %"}].map(h => (
+                      <th key={h.l} className="text-left text-muted px-3 py-2 font-medium cursor-pointer hover:text-primary" onClick={() => h.k && (periodSort === h.k ? setPeriodSortDir(d => d === "desc" ? "asc" : "desc") : (setPeriodSort(h.k), setPeriodSortDir("desc")))}>{h.l}{periodSort === h.k ? (periodSortDir === "desc" ? " ↓" : " ↑") : ""}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {periodFiltered.map(d => {
+                    const negClose = d.closingA < 0 || d.closingB < 0;
+                    return (
+                      <tr key={d.itemId} className={clsx("border-b border-bg-border/50 hover:bg-bg-border/20", negClose && "bg-red-500/5")}>
+                        <td className="px-3 py-2 text-primary max-w-[180px] truncate">{d.name}</td>
+                        <td className="px-3 py-2 text-muted">{d.group}</td>
+                        <td className="px-3 py-2 font-mono text-muted">{fmtNum(d.openingA, 0)}</td>
+                        <td className="px-3 py-2 font-mono text-success">{fmtNum(d.inwardsA, 0)}</td>
+                        <td className="px-3 py-2 font-mono text-danger">{fmtNum(d.outwardsA, 0)}</td>
+                        <td className="px-3 py-2 font-mono text-primary">{fmtNum(d.closingA, 0)}</td>
+                        <td className="px-3 py-2 font-mono text-muted">{fmtNum(d.openingB, 0)}</td>
+                        <td className="px-3 py-2 font-mono text-success">{fmtNum(d.inwardsB, 0)}</td>
+                        <td className="px-3 py-2 font-mono text-danger">{fmtNum(d.outwardsB, 0)}</td>
+                        <td className="px-3 py-2 font-mono text-primary">{fmtNum(d.closingB, 0)}</td>
+                        <td className={clsx("px-3 py-2 font-mono font-semibold", d.closingDelta > 0 ? "text-success" : d.closingDelta < 0 ? "text-danger" : "text-muted")}>{d.closingDelta > 0 ? "+" : ""}{fmtNum(d.closingDelta, 0)}</td>
+                        <td className={clsx("px-3 py-2 font-mono font-semibold", d.outwardsDeltaPct > 0 ? "text-success" : d.outwardsDeltaPct < 0 ? "text-danger" : "text-muted")}>{d.outwardsDeltaPct > 0 ? "+" : ""}{d.outwardsDeltaPct.toFixed(1)}%</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ Margins ═══ */}
+      {tab === "Margins" && (
+        <div className="space-y-4">
+          {/* Period selector */}
+          <div className="flex items-center gap-2 bg-bg-card border border-bg-border rounded-xl p-4">
+            <h3 className="font-semibold text-primary mr-3">Profit Margins</h3>
+            {[{l:"All Time",v:undefined},{l:"Last 12M",v:12},{l:"Last 6M",v:6},{l:"Last 3M",v:3}].map(p => (
+              <button key={p.l} onClick={() => setMarginPeriod(p.v)} className={clsx("px-3 py-1.5 rounded-lg text-sm transition", marginPeriod === p.v ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>{p.l}</button>
+            ))}
+            <div className="ml-auto flex items-center gap-2">
+              <select value={marginGroupFilter} onChange={e => setMarginGroupFilter(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-2 py-1 text-xs text-primary outline-none">
+                {marginGroups.map(g => <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>)}
+              </select>
+              <input type="text" placeholder="Search..." value={marginSearch} onChange={e => setMarginSearch(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1 text-xs text-primary outline-none w-40" />
+            </div>
+          </div>
+
+          {/* KPIs */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-accent">{marginKPIs.avgMargin.toFixed(1)}%</div>
+              <div className="text-muted text-xs mt-1">Avg Margin</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-success">{fmtINR(marginKPIs.totalProfit)}</div>
+              <div className="text-muted text-xs mt-1">Total Profit</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-warn">{marginKPIs.thinMargin}</div>
+              <div className="text-muted text-xs mt-1">Thin Margin (&lt;10%)</div>
+            </div>
+            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="text-2xl font-bold font-mono text-danger">{marginKPIs.negativeMargin}</div>
+              <div className="text-muted text-xs mt-1">Negative Margin</div>
+            </div>
+          </div>
+
+          {/* Charts */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            {/* Top 20 by profit */}
+            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+              <h3 className="font-semibold text-primary mb-3 text-sm">Top 20 by Profit</h3>
+              <ResponsiveContainer width="100%" height={350}>
+                <BarChart data={[...marginData].filter(d => !d.hasNoSales && !d.hasNoPurchases).sort((a, b) => b.totalProfit - a.totalProfit).slice(0, 20).map(d => ({ name: d.name.slice(0, 18), profit: d.totalProfit, pct: d.marginPct }))} layout="vertical" barSize={14}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => fmtINR(v)} />
+                  <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fill: "#64748b" }} />
+                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number, name: string) => [name === "profit" ? fmtINR(v) : `${v.toFixed(1)}%`, name === "profit" ? "Profit" : "Margin"]} />
+                  <Bar dataKey="profit" radius={[0, 4, 4, 0]}>
+                    {[...marginData].filter(d => !d.hasNoSales && !d.hasNoPurchases).sort((a, b) => b.totalProfit - a.totalProfit).slice(0, 20).map((d, i) => (
+                      <Cell key={i} fill={d.marginPct > 20 ? "#10b981" : d.marginPct > 10 ? "#f59e0b" : "#ef4444"} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Scatter: Revenue vs Margin */}
+            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+              <h3 className="font-semibold text-primary mb-3 text-sm">Revenue vs Margin %</h3>
+              <ResponsiveContainer width="100%" height={350}>
+                <ScatterChart>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis type="number" dataKey="x" name="Sales Value" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}K`} />
+                  <YAxis type="number" dataKey="y" name="Margin %" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => `${v}%`} />
+                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number, name: string) => [name === "Sales Value" ? fmtINR(v) : `${v.toFixed(1)}%`, name]} />
+                  <Scatter data={marginData.filter(d => !d.hasNoSales && !d.hasNoPurchases && d.totalSalesValue > 0).map(d => ({ x: d.totalSalesValue, y: d.marginPct, name: d.name }))} fill="#3b82f6">
+                    {marginData.filter(d => !d.hasNoSales && !d.hasNoPurchases && d.totalSalesValue > 0).map((d, i) => (
+                      <Cell key={i} fill={d.marginPct > 20 ? "#10b981" : d.marginPct > 10 ? "#f59e0b" : "#ef4444"} />
+                    ))}
+                  </Scatter>
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Table */}
+          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-bg-border flex justify-between items-center">
+              <h3 className="font-semibold text-primary">All Items ({marginFiltered.length})</h3>
+              <button onClick={() => {
+                const rows = [["Item", "Group", "Avg Buy Rate", "Avg Sell Rate", "Margin/Unit", "Margin %", "Sales Qty", "Purchase Qty", "Total Profit"], ...marginFiltered.map(d => [d.name, d.group, d.avgPurchaseRate.toFixed(2), d.avgSalesRate.toFixed(2), d.marginPerUnit.toFixed(2), d.marginPct.toFixed(2), d.totalSalesQty, d.totalPurchaseQty, d.totalProfit.toFixed(0)])];
+                const csv = rows.map(r => r.join(",")).join("\n");
+                const blob = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `margins_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+              }} className="flex items-center gap-2 bg-bg border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg transition text-xs">
+                <Download size={14} />CSV
+              </button>
+            </div>
+            <div className="overflow-auto max-h-[60vh]">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                  <tr>
+                    {[{k:"name",l:"Item"},{k:"",l:"Group"},{k:"",l:"Avg Buy"},{k:"",l:"Avg Sell"},{k:"",l:"Margin/Unit"},{k:"marginPct",l:"Margin %"},{k:"",l:"Sales Qty"},{k:"",l:"Buy Qty"},{k:"totalProfit",l:"Total Profit"}].map(h => (
+                      <th key={h.l} className="text-left text-muted px-4 py-2 font-medium text-xs cursor-pointer hover:text-primary" onClick={() => h.k && (marginSort === h.k ? setMarginSortDir(d => d === "desc" ? "asc" : "desc") : (setMarginSort(h.k), setMarginSortDir("desc")))}>{h.l}{marginSort === h.k ? (marginSortDir === "desc" ? " ↓" : " ↑") : ""}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {marginFiltered.map(d => {
+                    const mColor = d.hasNoSales ? "text-muted" : d.marginPct > 20 ? "text-success" : d.marginPct > 10 ? "text-warn" : d.marginPct < 0 ? "text-danger font-bold" : "text-danger";
+                    return (
+                      <tr key={d.itemId} className="border-b border-bg-border/50 hover:bg-bg-border/20">
+                        <td className="px-4 py-2 text-primary max-w-[200px] truncate">{d.name}{d.hasNoSales && <span className="ml-1 text-xs px-1.5 py-0.5 rounded bg-muted/10 text-muted">No Sales</span>}</td>
+                        <td className="px-4 py-2 text-muted text-xs">{d.group}</td>
+                        <td className="px-4 py-2 font-mono text-muted text-xs">{fmtINR(d.avgPurchaseRate)}</td>
+                        <td className="px-4 py-2 font-mono text-primary text-xs">{fmtINR(d.avgSalesRate)}</td>
+                        <td className="px-4 py-2 font-mono text-primary text-xs">{fmtINR(d.marginPerUnit)}</td>
+                        <td className={clsx("px-4 py-2 font-mono text-xs font-semibold", mColor)}>{d.hasNoSales ? "-" : `${d.marginPct.toFixed(1)}%`}</td>
+                        <td className="px-4 py-2 font-mono text-muted text-xs">{fmtNum(d.totalSalesQty, 0)}</td>
+                        <td className="px-4 py-2 font-mono text-muted text-xs">{fmtNum(d.totalPurchaseQty, 0)}</td>
+                        <td className={clsx("px-4 py-2 font-mono font-semibold text-xs", d.totalProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(d.totalProfit)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ GST Summary ═══ */}
+      {tab === "GST Summary" && (
+        <div className="space-y-4">
+          {/* Controls */}
+          <div className="flex items-center gap-4 bg-bg-card border border-bg-border rounded-xl p-4">
+            <h3 className="font-semibold text-primary">GST Summary</h3>
+            <select value={gstMonth} onChange={e => setGstMonth(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+              {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <div className="flex gap-1">
+              {(["GSTR1", "GSTR3B"] as const).map(v => (
+                <button key={v} onClick={() => setGstView(v)} className={clsx("px-3 py-1.5 rounded-lg text-sm transition", gstView === v ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>{v === "GSTR1" ? "GSTR-1 (Sales)" : "GSTR-3B (Net)"}</button>
+              ))}
+            </div>
+          </div>
+
+          {gstView === "GSTR1" && gstr1Data && (
+            <>
+              {/* Summary cards */}
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+                {[
+                  { v: fmtINR(gstr1Data.totalTaxableValue), l: "Taxable Value", c: "text-primary" },
+                  { v: fmtINR(gstr1Data.totalIGST), l: "IGST", c: "text-accent" },
+                  { v: fmtINR(gstr1Data.totalCGST), l: "CGST", c: "text-accent" },
+                  { v: fmtINR(gstr1Data.totalSGST), l: "SGST", c: "text-accent" },
+                  { v: fmtINR(gstr1Data.totalTax), l: "Total Tax", c: "text-success" },
+                  { v: String(gstr1Data.totalInvoices), l: "Invoices", c: "text-primary" },
+                ].map(({ v, l, c }) => (
+                  <div key={l} className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+                    <div className={`text-xl font-bold font-mono ${c}`}>{v}</div>
+                    <div className="text-muted text-xs mt-1">{l}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* B2B Section */}
+              {gstr1Data.b2b.length > 0 && (
+                <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-bg-border">
+                    <h3 className="font-semibold text-primary">B2B Supplies ({gstr1Data.b2b.length} parties)</h3>
+                  </div>
+                  <div className="overflow-auto max-h-[40vh]">
+                    {gstr1Data.b2b.map(party => (
+                      <div key={party.gstin} className="border-b border-bg-border/50">
+                        <div className="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-bg-border/20" onClick={() => setGstExpandedParty(gstExpandedParty === party.gstin ? null : party.gstin)}>
+                          <div className="flex items-center gap-3">
+                            {gstExpandedParty === party.gstin ? <ChevronDown size={14} className="text-muted" /> : <ChevronRight size={14} className="text-muted" />}
+                            <div>
+                              <span className="text-primary text-sm font-medium">{party.partyName}</span>
+                              <span className="ml-2 text-muted text-xs font-mono">{party.gstin}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-4 text-xs">
+                            <span className="text-muted">{party.invoiceCount} inv</span>
+                            <span className="font-mono text-primary">{fmtINR(party.taxableValue)}</span>
+                            <span className="font-mono text-accent">{fmtINR(party.totalTax)}</span>
+                          </div>
+                        </div>
+                        {gstExpandedParty === party.gstin && (
+                          <div className="px-8 pb-3">
+                            <table className="w-full text-xs">
+                              <thead><tr>
+                                {["Invoice#", "Date", "Taxable", "IGST", "CGST", "SGST"].map(h => <th key={h} className="text-left text-muted px-2 py-1 font-medium">{h}</th>)}
+                              </tr></thead>
+                              <tbody>
+                                {party.invoices.map((inv, i) => (
+                                  <tr key={i} className="border-t border-bg-border/30">
+                                    <td className="px-2 py-1 font-mono text-primary">{inv.invoiceNumber}</td>
+                                    <td className="px-2 py-1 text-muted">{inv.date}</td>
+                                    <td className="px-2 py-1 font-mono text-primary">{fmtINR(inv.taxableValue)}</td>
+                                    <td className="px-2 py-1 font-mono text-muted">{fmtINR(inv.igst)}</td>
+                                    <td className="px-2 py-1 font-mono text-muted">{fmtINR(inv.cgst)}</td>
+                                    <td className="px-2 py-1 font-mono text-muted">{fmtINR(inv.sgst)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* B2C Section */}
+              {gstr1Data.b2cCount > 0 && (
+                <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+                  <h3 className="font-semibold text-primary mb-2">B2C Supplies</h3>
+                  <div className="flex gap-6 text-sm">
+                    <span className="text-muted">Invoices: <span className="font-mono text-primary">{gstr1Data.b2cCount}</span></span>
+                    <span className="text-muted">Taxable: <span className="font-mono text-primary">{fmtINR(gstr1Data.b2cTaxableValue)}</span></span>
+                    <span className="text-muted">Tax: <span className="font-mono text-accent">{fmtINR(gstr1Data.b2cTax)}</span></span>
+                  </div>
+                </div>
+              )}
+
+              {/* HSN Summary */}
+              {gstr1Data.hsnSummary.length > 0 && (
+                <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-bg-border flex justify-between items-center">
+                    <h3 className="font-semibold text-primary">HSN Summary</h3>
+                    <button onClick={() => {
+                      const rows = [["HSN", "Description", "UQC", "Qty", "Taxable Value", "IGST", "CGST", "SGST", "Total Tax"], ...gstr1Data.hsnSummary.map(h => [h.hsn, h.description, h.uqc, h.totalQty, h.taxableValue.toFixed(2), h.igstAmount.toFixed(2), h.cgstAmount.toFixed(2), h.sgstAmount.toFixed(2), h.totalTax.toFixed(2)])];
+                      const csv = rows.map(r => r.join(",")).join("\n");
+                      const blob = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `hsn_summary_${gstMonth}.csv`; a.click();
+                    }} className="flex items-center gap-2 bg-bg border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg transition text-xs">
+                      <Download size={14} />HSN CSV
+                    </button>
+                  </div>
+                  <div className="overflow-auto max-h-[40vh]">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                        <tr>
+                          {["HSN", "Description", "UQC", "Qty", "Taxable", "IGST", "CGST", "SGST", "Total Tax"].map(h => <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {gstr1Data.hsnSummary.map(h => (
+                          <tr key={h.hsn} className="border-b border-bg-border/50">
+                            <td className="px-3 py-2 font-mono text-primary">{h.hsn}</td>
+                            <td className="px-3 py-2 text-primary truncate max-w-[200px]">{h.description}</td>
+                            <td className="px-3 py-2 text-muted">{h.uqc}</td>
+                            <td className="px-3 py-2 font-mono text-primary">{fmtNum(h.totalQty, 0)}</td>
+                            <td className="px-3 py-2 font-mono text-primary">{fmtINR(h.taxableValue)}</td>
+                            <td className="px-3 py-2 font-mono text-muted">{fmtINR(h.igstAmount)}</td>
+                            <td className="px-3 py-2 font-mono text-muted">{fmtINR(h.cgstAmount)}</td>
+                            <td className="px-3 py-2 font-mono text-muted">{fmtINR(h.sgstAmount)}</td>
+                            <td className="px-3 py-2 font-mono text-accent font-semibold">{fmtINR(h.totalTax)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Export GSTR-1 JSON */}
+              <div className="flex gap-3">
+                <button onClick={() => {
+                  const blob = new Blob([JSON.stringify(gstr1Data, null, 2)], { type: "application/json" });
+                  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `gstr1_${gstMonth}.json`; a.click();
+                }} className="flex items-center gap-2 bg-accent hover:bg-accent/90 text-white px-4 py-2 rounded-lg transition text-sm">
+                  <Download size={14} />Export GSTR-1 JSON
+                </button>
+              </div>
+            </>
+          )}
+
+          {gstView === "GSTR3B" && gstr3bData && (
+            <div className="space-y-4">
+              {/* Table 3.1 - Outward */}
+              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-bg-border">
+                  <h3 className="font-semibold text-primary">3.1 Outward Supplies (Sales)</h3>
+                </div>
+                <table className="w-full text-sm">
+                  <thead className="border-b border-bg-border">
+                    <tr>
+                      {["", "Taxable Value", "IGST", "CGST", "SGST"].map(h => <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b border-bg-border/50">
+                      <td className="px-4 py-2 text-primary text-sm">Taxable outward supplies</td>
+                      <td className="px-4 py-2 font-mono text-primary">{fmtINR(gstr3bData.outwardTaxable)}</td>
+                      <td className="px-4 py-2 font-mono text-accent">{fmtINR(gstr3bData.outwardIGST)}</td>
+                      <td className="px-4 py-2 font-mono text-accent">{fmtINR(gstr3bData.outwardCGST)}</td>
+                      <td className="px-4 py-2 font-mono text-accent">{fmtINR(gstr3bData.outwardSGST)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Table 4 - ITC */}
+              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-bg-border">
+                  <h3 className="font-semibold text-primary">4. Eligible ITC (Purchases)</h3>
+                </div>
+                <table className="w-full text-sm">
+                  <thead className="border-b border-bg-border">
+                    <tr>
+                      {["", "Taxable Value", "IGST", "CGST", "SGST"].map(h => <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b border-bg-border/50">
+                      <td className="px-4 py-2 text-primary text-sm">All other ITC</td>
+                      <td className="px-4 py-2 font-mono text-primary">{fmtINR(gstr3bData.inwardTaxable)}</td>
+                      <td className="px-4 py-2 font-mono text-success">{fmtINR(gstr3bData.inwardIGST)}</td>
+                      <td className="px-4 py-2 font-mono text-success">{fmtINR(gstr3bData.inwardCGST)}</td>
+                      <td className="px-4 py-2 font-mono text-success">{fmtINR(gstr3bData.inwardSGST)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Table 6 - Net */}
+              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-bg-border">
+                  <h3 className="font-semibold text-primary">6. Net Tax Payable</h3>
+                </div>
+                <table className="w-full text-sm">
+                  <thead className="border-b border-bg-border">
+                    <tr>
+                      {["", "IGST", "CGST", "SGST", "Total"].map(h => <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b border-bg-border/50 bg-bg-border/10">
+                      <td className="px-4 py-2 text-primary text-sm font-semibold">Net Payable</td>
+                      <td className={clsx("px-4 py-2 font-mono font-bold", gstr3bData.netIGST >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netIGST)}</td>
+                      <td className={clsx("px-4 py-2 font-mono font-bold", gstr3bData.netCGST >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netCGST)}</td>
+                      <td className={clsx("px-4 py-2 font-mono font-bold", gstr3bData.netSGST >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netSGST)}</td>
+                      <td className={clsx("px-4 py-2 font-mono font-bold text-lg", gstr3bData.netPayable >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netPayable)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

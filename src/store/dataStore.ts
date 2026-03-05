@@ -4,10 +4,12 @@ import { applyOverridesToItems } from "../utils/applyOverrides";
 import { useOverrideStore } from "./overrideStore";
 import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
 import { saveToStore, loadFromStore } from "../db/idb";
+import { buildVoucherIndex, type VoucherIndex } from "../engine/inventory";
 
 interface DataState {
   data: ParsedData | null;
   rawData: ParsedData | null; // Store original data without overrides
+  voucherIndex: VoucherIndex;
   setData: (d: ParsedData) => void;
   mergeData: (d: ParsedData) => void;
   clearData: () => void;
@@ -17,18 +19,21 @@ interface DataState {
 export const useDataStore = create<DataState>((set, get) => ({
   data: null,
   rawData: null,
+  voucherIndex: new Map(),
 
   setData: (rawData) => {
     // Store raw data and apply overrides
     const { units, rates } = useOverrideStore.getState();
     const itemsWithOverrides = applyOverridesToItems(rawData.items, units, rates);
+    const newData = { ...rawData, items: itemsWithOverrides };
     set({
       rawData,
-      data: { ...rawData, items: itemsWithOverrides },
+      data: newData,
+      voucherIndex: buildVoucherIndex(newData.vouchers),
     });
   },
 
-  clearData: () => set({ data: null, rawData: null }),
+  clearData: () => set({ data: null, rawData: null, voucherIndex: new Map() }),
 
   refreshOverrides: () => {
     const { rawData } = get();
@@ -114,19 +119,24 @@ export const useDataStore = create<DataState>((set, get) => ({
 
         // Score previous predictions against new actuals
         if (prevSnapshot && prevSnapshot.predictions.length > 0) {
+          // Build a party→voucherType map for O(1) lookup instead of O(n*m)
+          const partyTypeMap = new Map<string, "Sales" | "Purchase">();
+          for (const v of allVouchers) {
+            if (v.isCancelled || !v.partyLedgerId) continue;
+            if (v.voucherType === "Sales" || v.voucherType === "Purchase") {
+              if (!partyTypeMap.has(v.partyLedgerId)) {
+                partyTypeMap.set(v.partyLedgerId, v.voucherType);
+              }
+            }
+          }
+
           const salesAccuracy = scorePredictions(
-            prevSnapshot.predictions.filter(p => {
-              const v = allVouchers.find(v => v.partyLedgerId === p.partyLedgerId && !v.isCancelled);
-              return v?.voucherType === "Sales";
-            }),
+            prevSnapshot.predictions.filter(p => partyTypeMap.get(p.partyLedgerId) === "Sales"),
             allVouchers,
             "Sales"
           );
           const purchaseAccuracy = scorePredictions(
-            prevSnapshot.predictions.filter(p => {
-              const v = allVouchers.find(v => v.partyLedgerId === p.partyLedgerId && !v.isCancelled);
-              return v?.voucherType === "Purchase";
-            }),
+            prevSnapshot.predictions.filter(p => partyTypeMap.get(p.partyLedgerId) === "Purchase"),
             allVouchers,
             "Purchase"
           );

@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from "react";
-import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw } from "lucide-react";
+import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive } from "lucide-react";
 import clsx from "clsx";
 import { useUIStore } from "../store/uiStore";
 import { useDataStore } from "../store/dataStore";
 import { useOverrideStore } from "../store/overrideStore";
-import { clearAllData, listBackups, loadBackup, deleteBackup, exportBackupAsJSON } from "../db/idb";
+import { clearAllData, listBackups, loadBackup, deleteBackup, exportBackupAsJSON, exportFullBackupAsJSON, eraseAllStores, listJsonUploads } from "../db/idb";
 import { useToast } from "../components/Toast";
 import { exportUnitsToExcel, importUnitsFromExcel } from "../utils/unitExcelHandler";
 import { deserializeParsedData } from "../utils/serialize";
@@ -18,16 +18,24 @@ export default function Settings() {
   const [isImporting, setIsImporting] = useState(false);
   const [backups, setBackups] = useState<Array<{ key: string; label: string; createdAt: string }>>([]);
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
+  const [eraseStep, setEraseStep] = useState<"idle" | "confirm" | "downloading" | "done">("idle");
+  const [jsonUploads, setJsonUploads] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load backups on mount
+  // Load backups and json uploads on mount
   useEffect(() => {
     loadBackupsList();
+    loadJsonUploadsList();
   }, []);
 
   async function loadBackupsList() {
     const list = await listBackups();
     setBackups(list);
+  }
+
+  async function loadJsonUploadsList() {
+    const files = await listJsonUploads();
+    setJsonUploads(files);
   }
 
   async function handleRestoreBackup(key: string) {
@@ -86,6 +94,38 @@ export default function Settings() {
     await clearAllData();
     setConfirmClear(false);
     toast("All data cleared", "info");
+  }
+
+  async function handleEraseData() {
+    if (eraseStep === "idle") {
+      setEraseStep("confirm");
+      return;
+    }
+    if (eraseStep === "confirm") {
+      setEraseStep("downloading");
+      try {
+        const blob = await exportFullBackupAsJSON();
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const filename = `MKCP_full_backup_${timestamp}.json`;
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        toast(`Backup downloaded as ${filename}`, "success");
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await eraseAllStores();
+        clearData();
+        localStorage.removeItem("mkcycles-overrides");
+        localStorage.removeItem("mkcycles-ui");
+        localStorage.removeItem("mkcycles-orders");
+        setEraseStep("done");
+        toast("All data erased. A backup was saved locally.", "info");
+        setTimeout(() => setEraseStep("idle"), 3000);
+      } catch (err) {
+        toast(`Erase failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+        setEraseStep("idle");
+      }
+    }
   }
 
   function handleExportAudit() {
@@ -164,20 +204,34 @@ export default function Settings() {
         Settings
       </h1>
 
-      {/* Data info */}
-      {data && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-primary mb-3">Loaded Data</h3>
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <Stat label="Items" value={data.items.size} />
-            <Stat label="Ledgers" value={data.ledgers.size} />
-            <Stat label="Vouchers" value={data.vouchers.length} />
+      {/* Local Data Storage */}
+      <Section title="Local Data Storage">
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 mb-2">
+            <HardDrive size={14} className="text-accent" />
+            <span className="text-xs text-muted">All data is stored locally in your browser (IndexedDB). Nothing is sent to any server.</span>
           </div>
-          <p className="text-muted text-xs mt-3">
-            Source: {data.sourceFiles.join(", ")}
-          </p>
+          {data ? (
+            <>
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <Stat label="Items" value={data.items.size} />
+                <Stat label="Ledgers" value={data.ledgers.size} />
+                <Stat label="Vouchers" value={data.vouchers.length} />
+              </div>
+              {jsonUploads.length > 0 && (
+                <p className="text-xs text-accent">
+                  {jsonUploads.length} JSON file(s) persisted locally
+                </p>
+              )}
+              <p className="text-muted text-xs">
+                Source: {data.sourceFiles.join(", ")}
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-muted italic">No data loaded</p>
+          )}
         </div>
-      )}
+      </Section>
 
       {/* Unit Mode */}
       <Section title="Unit Mode">
@@ -338,20 +392,60 @@ export default function Settings() {
         </div>
       </Section>
 
-      {/* Clear Data */}
+      {/* Danger Zone */}
       <Section title="Danger Zone">
-        <div className="space-y-2">
-          {confirmClear && (
-            <div className="flex items-center gap-2 text-danger text-sm bg-danger/10 border border-danger/30 rounded-lg p-3">
-              <AlertTriangle size={14} />
-              This will delete all imported data. Click again to confirm.
+        <div className="space-y-4">
+          {/* Clear Working Data */}
+          <div className="space-y-2">
+            <p className="text-xs text-muted">Clear in-memory working data (does not delete persisted backups or JSON uploads).</p>
+            {confirmClear && (
+              <div className="flex items-center gap-2 text-danger text-sm bg-danger/10 border border-danger/30 rounded-lg p-3">
+                <AlertTriangle size={14} />
+                This will clear all imported data from memory. Click again to confirm.
+              </div>
+            )}
+            <button onClick={handleClearData}
+              className="flex items-center gap-2 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger px-4 py-2 rounded-lg transition text-sm">
+              <Trash2 size={14} />
+              {confirmClear ? "Confirm Clear Working Data" : "Clear Working Data"}
+            </button>
+          </div>
+
+          {/* Erase All Data */}
+          <div className="border-t border-bg-border pt-4 space-y-2">
+            <div className="flex items-center gap-2">
+              <Shield size={14} className="text-danger" />
+              <span className="text-sm font-semibold text-danger">Erase All Data (with backup)</span>
             </div>
-          )}
-          <button onClick={handleClearData}
-            className="flex items-center gap-2 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger px-4 py-2 rounded-lg transition text-sm">
-            <Trash2 size={14} />
-            {confirmClear ? "Confirm Clear All Data" : "Clear All Data"}
-          </button>
+            <p className="text-xs text-muted">
+              Downloads a full backup of ALL data (items, vouchers, overrides, predictions, JSON uploads),
+              then permanently erases everything from your browser.
+            </p>
+            {eraseStep === "confirm" && (
+              <div className="flex items-center gap-2 text-danger text-sm bg-danger/10 border border-danger/30 rounded-lg p-3">
+                <AlertTriangle size={14} />
+                A full backup will be downloaded first, then ALL data will be erased. Click again to proceed.
+              </div>
+            )}
+            {eraseStep === "downloading" && (
+              <div className="flex items-center gap-2 text-accent text-sm bg-accent/10 border border-accent/30 rounded-lg p-3">
+                Downloading backup and erasing data...
+              </div>
+            )}
+            {eraseStep === "done" && (
+              <div className="flex items-center gap-2 text-success text-sm bg-success/10 border border-success/30 rounded-lg p-3">
+                All data erased successfully. Backup was downloaded.
+              </div>
+            )}
+            <button onClick={handleEraseData}
+              disabled={eraseStep === "downloading" || eraseStep === "done"}
+              className="flex items-center gap-2 bg-danger hover:bg-danger/80 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition text-sm">
+              <Trash2 size={14} />
+              {eraseStep === "idle" ? "Erase All Data (with backup)" :
+               eraseStep === "confirm" ? "Confirm — Download Backup & Erase" :
+               eraseStep === "downloading" ? "Erasing..." : "Done"}
+            </button>
+          </div>
         </div>
       </Section>
     </div>
