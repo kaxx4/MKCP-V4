@@ -240,11 +240,11 @@ export function ledgersXml(company: string): string {
 /**
  * Vouchers — from Tally docs:
  * TYPE=Data, ID=Day Book with date range
- * This is the official way to get transactions.
+ * Date format: YYYYMMDD (TallyPrime XML API standard)
  */
 export function vouchersXml(company: string, from?: string, to?: string): string {
   const dates = from && to
-    ? `<SVFROMDATE TYPE="Date">${from}</SVFROMDATE>\n<SVTODATE TYPE="Date">${to}</SVTODATE>`
+    ? `<SVFROMDATE>${from}</SVFROMDATE>\n<SVTODATE>${to}</SVTODATE>`
     : "";
   return `<ENVELOPE>
 <HEADER>
