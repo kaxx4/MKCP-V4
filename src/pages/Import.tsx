@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical, Calendar, Zap, Wifi, WifiOff } from "lucide-react";
+import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical, Calendar, Zap, Wifi, WifiOff, Package } from "lucide-react";
 import clsx from "clsx";
 import { parseMasters } from "../parser/masterParser";
 import { parseTransactions } from "../parser/transactionParser";
@@ -11,7 +11,7 @@ import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
 import type { ParsedData, ImportWarning } from "../types/canonical";
 import { useToast } from "../components/Toast";
 import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
-import { checkTallyHealth, fullSync, type TallySyncResult } from "../api/tallyApi";
+import { checkTallyHealth, fullSync, syncMasters, syncDayBook, type TallySyncResult } from "../api/tallyApi";
 
 interface ImportReport {
   items: number;
@@ -194,6 +194,130 @@ export default function ImportPage() {
       addLog(`ERROR: ${err.message || err}`);
       toast(`Sync failed: ${err.message || err}`, "error");
       setConnected(false);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleSyncMasters() {
+    if (!companyName.trim()) { toast("Enter company name", "warn"); return; }
+    setSyncing(true);
+    setDebugLog([]);
+    setReport(null);
+    setPendingData(null);
+    try {
+      addLog(`Syncing masters for "${companyName}"...`);
+      const result = await syncMasters(companyName);
+
+      if (result.errors?.length) result.errors.forEach(e => addLog(`⚠ ${e}`));
+      if (result.stats.stockItems === 0 && result.stats.ledgers === 0) {
+        addLog("ERROR: Zero masters returned. Check company name matches EXACTLY.");
+        toast("No masters found — check company name", "error");
+        return;
+      }
+      addLog(`✓ ${result.stats.stockItems} stock items, ${result.stats.ledgers} ledgers in ${result.stats.elapsedSeconds}s`);
+
+      addLog("Parsing masters...");
+      const parsed = parseMasters(result.data);
+      addLog(`Parsed: ${parsed.items.size} items, ${parsed.ledgers.size} ledgers, ${parsed.warnings.length} warnings`);
+
+      if (parsed.items.size === 0 && parsed.ledgers.size === 0) {
+        addLog("ERROR: Parser found 0 items and 0 ledgers in the response.");
+        addLog("The data arrived from Tally but the format may not match.");
+        parsed.warnings.forEach(w => addLog(`  [${w.context}] ${w.message}`));
+        toast("Parser found 0 items — check proxy console", "error");
+        return;
+      }
+
+      // Build ParsedData with masters only (keep existing vouchers if any)
+      const existingRaw = await loadData<unknown>("parsedData");
+      const existing = existingRaw ? deserializeParsedData(existingRaw) : null;
+
+      const data: ParsedData = {
+        company: parsed.company ?? { name: companyName, fyStartMonth: 4 },
+        items: parsed.items,
+        ledgers: parsed.ledgers,
+        vouchers: existing?.vouchers ?? [],
+        importedAt: new Date().toISOString(),
+        sourceFiles: ["tally-masters-sync"],
+        warnings: parsed.warnings,
+      };
+
+      // Save immediately — no "Accept" step needed for masters
+      if (existing) {
+        await createBackup(existingRaw, `pre-masters-sync`);
+      }
+      mergeData(data);
+      await saveData("parsedData", serializeParsedData(data));
+
+      setLastSync(new Date().toISOString());
+      addLog("✓ Masters saved to app. You can now sync Day Book or go to Orders.");
+      toast(`Synced ${parsed.items.size} items, ${parsed.ledgers.size} ledgers`, "success");
+    } catch (err: any) {
+      addLog(`ERROR: ${err.message}`);
+      toast(`Masters sync failed: ${err.message}`, "error");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleSyncDayBook() {
+    if (!companyName.trim()) { toast("Enter company name", "warn"); return; }
+    if (!fyFromDate || !fyToDate) { toast("Select date range", "warn"); return; }
+    setSyncing(true);
+    setDebugLog([]);
+    setReport(null);
+    setPendingData(null);
+    try {
+      addLog(`Syncing Day Book for "${companyName}" (${fyFromDate} → ${fyToDate})...`);
+      addLog("This may take 1-3 minutes for large periods. Watch proxy terminal for progress.");
+      const result = await syncDayBook(companyName, fyFromDate, fyToDate);
+
+      if (!result.success || result.stats.vouchers === 0) {
+        addLog(result.error || "Zero vouchers returned for this period.");
+        addLog("Try: 1) Shorter period 2) Check dates are within loaded company FY");
+        toast("No vouchers found for this period", "warn");
+        return;
+      }
+      addLog(`✓ ${result.stats.vouchers} vouchers fetched in ${result.stats.elapsedSeconds}s`);
+
+      addLog("Parsing transactions...");
+      const parsed = parseTransactions(result.data);
+      addLog(`Parsed: ${parsed.vouchers.length} vouchers, ${parsed.warnings.length} warnings`);
+
+      // Load existing data and merge (duplicates auto-ignored by mergeData)
+      const existingRaw = await loadData<unknown>("parsedData");
+      const existing = existingRaw ? deserializeParsedData(existingRaw) : null;
+
+      if (!existing || existing.items.size === 0) {
+        addLog("⚠ No masters data loaded yet. Sync Masters first for best results.");
+      }
+
+      const data: ParsedData = {
+        company: existing?.company ?? { name: companyName, fyStartMonth: 4 },
+        items: existing?.items ?? new Map(),
+        ledgers: existing?.ledgers ?? new Map(),
+        vouchers: parsed.vouchers,
+        importedAt: new Date().toISOString(),
+        sourceFiles: ["tally-daybook-sync"],
+        warnings: parsed.warnings,
+      };
+
+      if (existing) {
+        await createBackup(existingRaw, `pre-daybook-sync`);
+      }
+      mergeData(data);
+
+      const merged = useDataStore.getState().data!;
+      await saveData("parsedData", serializeParsedData(merged));
+
+      setLastSync(new Date().toISOString());
+      const totalVouchers = merged.vouchers.length;
+      addLog(`✓ Day Book saved. Total vouchers now: ${totalVouchers}`);
+      toast(`Synced ${parsed.vouchers.length} vouchers (${totalVouchers} total)`, "success");
+    } catch (err: any) {
+      addLog(`ERROR: ${err.message}`);
+      toast(`Day Book sync failed: ${err.message}`, "error");
     } finally {
       setSyncing(false);
     }
@@ -688,14 +812,28 @@ export default function ImportPage() {
               Current FY: {formatFYRange(fyFromDate, fyToDate)}
             </div>
 
-            <button
-              onClick={handleTallySync}
-              disabled={isSyncing || !isConnected || !companyName.trim()}
-              className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-5 py-3 rounded-lg transition"
-            >
-              {isSyncing ? <Loader2 size={18} className="animate-spin" /> : <Zap size={18} />}
-              {isSyncing ? "Syncing..." : "Sync Now"}
-            </button>
+            {/* Two Sync Buttons */}
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={handleSyncMasters}
+                disabled={isSyncing || !isConnected || !companyName.trim()}
+                className="flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-3 rounded-lg transition"
+              >
+                {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Package size={16} />}
+                {isSyncing ? "Syncing..." : "Sync All Masters"}
+              </button>
+              <button
+                onClick={handleSyncDayBook}
+                disabled={isSyncing || !isConnected || !companyName.trim() || !fyFromDate || !fyToDate}
+                className="flex items-center justify-center gap-2 bg-success hover:bg-success/80 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-3 rounded-lg transition"
+              >
+                {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <FileJson size={16} />}
+                {isSyncing ? "Syncing..." : "Sync Day Book"}
+              </button>
+            </div>
+            <p className="text-xs text-muted text-center">
+              Sync Masters first (items + ledgers), then Sync Day Book (vouchers for the period above)
+            </p>
           </div>
         </div>
       )}
