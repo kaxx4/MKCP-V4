@@ -48,7 +48,19 @@ export const useTallyStore = create<TallyConnectionState>()(
       setAutoSync: (autoSyncMinutes) => set({ autoSyncMinutes }),
       setFyDates: (fyFromDate, fyToDate) => set({ fyFromDate, fyToDate }),
     }),
-    { name: "mkcycles-tally" }
+    {
+      name: "mkcycles-tally",
+      partialize: (state) => {
+        // Exclude isSyncing from persistence — it's transient runtime state.
+        // If a sync hangs, we don't want buttons stuck disabled forever.
+        const { isSyncing, ...rest } = state;
+        return rest;
+      },
+      onRehydrateStorage: () => (state) => {
+        // Always reset isSyncing on page load — clear any stuck state
+        if (state) state.isSyncing = false;
+      },
+    }
   )
 );
 
