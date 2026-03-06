@@ -184,6 +184,94 @@ app.get("/api/tally/health", async (_req, res) => {
   }
 });
 
+// ── Sync Masters Only (stock items + ledgers) ──
+app.post("/api/tally/sync-masters", async (req, res) => {
+  const { company } = req.body;
+  if (!company) return res.status(400).json({ success: false, error: "company required" });
+
+  res.setTimeout(300_000); // 5 min
+  const t0 = Date.now();
+  console.log(`\n[MASTERS] Syncing masters for "${company}"...`);
+
+  let stocks = { tallymessage: [] as any[] };
+  let ledgers = { tallymessage: [] as any[] };
+  const errors: string[] = [];
+
+  // Step 1: Stock Items
+  try {
+    console.log(`[MASTERS] Fetching stock items...`);
+    const xml = await tallyPost(TALLY, stockItemsXml(company), 120_000);
+    stocks = convertStockItems(xml);
+    console.log(`[MASTERS] ✓ ${stocks.tallymessage.length} stock items`);
+  } catch (e: any) {
+    console.error(`[MASTERS] ✗ Stock items: ${e.message}`);
+    errors.push(e.message);
+  }
+
+  // Step 2: Ledgers
+  try {
+    console.log(`[MASTERS] Fetching ledgers...`);
+    const xml = await tallyPost(TALLY, ledgersXml(company), 120_000);
+    ledgers = convertLedgers(xml);
+    console.log(`[MASTERS] ✓ ${ledgers.tallymessage.length} ledgers`);
+  } catch (e: any) {
+    console.error(`[MASTERS] ✗ Ledgers: ${e.message}`);
+    errors.push(e.message);
+  }
+
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(`[MASTERS] Done in ${elapsed}s`);
+
+  res.json({
+    success: stocks.tallymessage.length > 0 || ledgers.tallymessage.length > 0,
+    errors: errors.length > 0 ? errors : undefined,
+    data: {
+      tallymessage: [
+        { metadata: { type: "Company", name: company }, name: company, fystart: 4 },
+        ...stocks.tallymessage,
+        ...ledgers.tallymessage,
+      ],
+    },
+    stats: {
+      stockItems: stocks.tallymessage.length,
+      ledgers: ledgers.tallymessage.length,
+      elapsedSeconds: parseFloat(elapsed),
+    },
+  });
+});
+
+// ── Sync Day Book (vouchers for a period) ──
+app.post("/api/tally/sync-daybook", async (req, res) => {
+  const { company, fromDate, toDate } = req.body;
+  if (!company) return res.status(400).json({ success: false, error: "company required" });
+  if (!fromDate || !toDate) return res.status(400).json({ success: false, error: "fromDate and toDate required (YYYYMMDD)" });
+
+  res.setTimeout(600_000); // 10 min
+  const t0 = Date.now();
+  console.log(`\n[DAYBOOK] Syncing vouchers for "${company}" (${fromDate} → ${toDate})...`);
+
+  try {
+    const xml = await tallyPost(TALLY, vouchersXml(company, fromDate, toDate), 300_000);
+    const vouchers = convertVouchers(xml);
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(`[DAYBOOK] ✓ ${vouchers.tallymessage.length} vouchers in ${elapsed}s`);
+
+    res.json({
+      success: vouchers.tallymessage.length > 0,
+      data: vouchers,
+      stats: {
+        vouchers: vouchers.tallymessage.length,
+        fromDate,
+        toDate,
+        elapsedSeconds: parseFloat(elapsed),
+      },
+    });
+  } catch (e: any) {
+    console.error(`[DAYBOOK] ✗ Failed: ${e.message}`);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // Full sync — the main endpoint
 app.post("/api/tally/sync", async (req, res) => {
   const { company, fromDate, toDate } = req.body;

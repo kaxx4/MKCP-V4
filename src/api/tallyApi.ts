@@ -63,3 +63,57 @@ export async function fullSync(company: string, fromDate?: string, toDate?: stri
     throw e;
   }
 }
+
+export interface MastersSyncResult {
+  success: boolean;
+  errors?: string[];
+  data: { tallymessage: any[] };
+  stats: { stockItems: number; ledgers: number; elapsedSeconds: number };
+}
+
+export interface DayBookSyncResult {
+  success: boolean;
+  error?: string;
+  data: { tallymessage: any[] };
+  stats: { vouchers: number; fromDate: string; toDate: string; elapsedSeconds: number };
+}
+
+export async function syncMasters(company: string): Promise<MastersSyncResult> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 300_000); // 5 min
+  try {
+    const r = await fetch(`${BASE}/api/tally/sync-masters`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) throw new Error(`Server error: ${r.status}`);
+    return await r.json();
+  } catch (e: any) {
+    clearTimeout(timer);
+    if (e.name === "AbortError") throw new Error("Masters sync timed out (5 min)");
+    throw e;
+  }
+}
+
+export async function syncDayBook(company: string, fromDate: string, toDate: string): Promise<DayBookSyncResult> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 600_000); // 10 min
+  try {
+    const r = await fetch(`${BASE}/api/tally/sync-daybook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company, fromDate, toDate }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) throw new Error(`Server error: ${r.status}`);
+    return await r.json();
+  } catch (e: any) {
+    clearTimeout(timer);
+    if (e.name === "AbortError") throw new Error("Day Book sync timed out (10 min). Try a shorter period.");
+    throw e;
+  }
+}
