@@ -27,6 +27,24 @@ interface ImportReport {
 type DropZone = "masters" | "transactions";
 type TabMode = "live" | "upload";
 
+/**
+ * Convert YYYYMMDD to YYYY-MM-DD for HTML5 date input
+ */
+function formatDateForInput(yyyymmdd: string): string {
+  if (!yyyymmdd || yyyymmdd.length !== 8) return '';
+  return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
+}
+
+/**
+ * Format FY date range for display
+ */
+function formatFYRange(from: string, to: string): string {
+  if (!from || !to) return 'Not set';
+  const fromYear = from.slice(0, 4);
+  const toYear = to.slice(0, 4);
+  return `FY ${fromYear}-${toYear.slice(2)}`;
+}
+
 export default function ImportPage() {
   const navigate = useNavigate();
   const { mergeData, data: existingData } = useDataStore();
@@ -631,25 +649,43 @@ export default function ImportPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-primary mb-2">FY From Date</label>
+                <label className="block text-sm font-medium text-primary mb-2">
+                  FY From Date
+                  <span className="text-xs text-muted ml-2 font-normal">
+                    (Default: Previous FY start)
+                  </span>
+                </label>
                 <input
-                  type="text"
-                  value={fyFromDate}
-                  onChange={(e) => setFyDates(e.target.value, fyToDate)}
-                  placeholder="YYYYMMDD"
-                  className="w-full px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+                  type="date"
+                  value={formatDateForInput(fyFromDate)}
+                  onChange={(e) => {
+                    const yyyymmdd = e.target.value.replace(/-/g, '');
+                    setFyDates(yyyymmdd, fyToDate);
+                  }}
+                  className="w-full px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary focus:outline-none focus:ring-2 focus:ring-accent"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-primary mb-2">FY To Date</label>
+                <label className="block text-sm font-medium text-primary mb-2">
+                  FY To Date
+                  <span className="text-xs text-muted ml-2 font-normal">
+                    (Default: Previous FY end)
+                  </span>
+                </label>
                 <input
-                  type="text"
-                  value={fyToDate}
-                  onChange={(e) => setFyDates(fyFromDate, e.target.value)}
-                  placeholder="YYYYMMDD"
-                  className="w-full px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+                  type="date"
+                  value={formatDateForInput(fyToDate)}
+                  onChange={(e) => {
+                    const yyyymmdd = e.target.value.replace(/-/g, '');
+                    setFyDates(fyFromDate, yyyymmdd);
+                  }}
+                  className="w-full px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary focus:outline-none focus:ring-2 focus:ring-accent"
                 />
               </div>
+            </div>
+            <div className="text-xs text-muted bg-bg border border-bg-border rounded-lg px-3 py-2">
+              💡 <strong>Tip:</strong> Default dates point to the last completed financial year to ensure actual data.
+              Current FY: {formatFYRange(fyFromDate, fyToDate)}
             </div>
 
             <button
