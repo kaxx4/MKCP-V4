@@ -1,4 +1,5 @@
-const BASE = (import.meta as any).env?.DEV ? "" : ((import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100");
+// ALWAYS use direct connection to bypass Vite proxy timeout issues
+const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
 
 export interface TallySyncResult {
   success: boolean;
@@ -27,6 +28,7 @@ export async function fullSync(company: string, fromDate?: string, toDate?: stri
   const timer = setTimeout(() => ctrl.abort(), 600_000);
 
   try {
+    console.log(`[fullSync] Starting sync request for "${company}" (${fromDate} → ${toDate})`);
     const r = await fetch(`${BASE}/api/tally/sync`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -34,11 +36,27 @@ export async function fullSync(company: string, fromDate?: string, toDate?: stri
       signal: ctrl.signal,
     });
     clearTimeout(timer);
+    console.log(`[fullSync] Response received: status=${r.status} ok=${r.ok}`);
+
+    if (!r.ok) {
+      const text = await r.text();
+      console.error(`[fullSync] Non-OK response:`, text);
+      throw new Error(`Server error: ${r.status} ${r.statusText}`);
+    }
+
     const j = await r.json();
+    console.log(`[fullSync] Response parsed successfully:`, {
+      success: j.success,
+      stockItems: j.stats?.stockItems,
+      ledgers: j.stats?.ledgers,
+      vouchers: j.stats?.vouchers
+    });
+
     if (!j.success && j.error && !j.masters) throw new Error(j.error);
     return j;
   } catch (e: any) {
     clearTimeout(timer);
+    console.error(`[fullSync] Error:`, e);
     if (e.name === "AbortError") {
       throw new Error("Sync timed out after 10 minutes. Try narrowing the date range (e.g., 6 months instead of full year).");
     }
