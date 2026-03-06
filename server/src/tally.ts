@@ -121,12 +121,15 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
 // https://help.tallysolutions.com/integration-with-tallyprime/
 // ─────────────────────────────────────────────────────────────────────
 
-/** Simple health check — "List of Companies" is the lightest built-in */
+/**
+ * Simple health check — use Collection type for company list
+ * Reference: TallyPrime XML API Guide - Collection-based exports
+ */
 export const HEALTH_XML = `<ENVELOPE>
 <HEADER>
 <VERSION>1</VERSION>
 <TALLYREQUEST>Export</TALLYREQUEST>
-<TYPE>Data</TYPE>
+<TYPE>Collection</TYPE>
 <ID>List of Companies</ID>
 </HEADER>
 <BODY>
@@ -134,28 +137,55 @@ export const HEALTH_XML = `<ENVELOPE>
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 </STATICVARIABLES>
+<TDL>
+<TDLMESSAGE>
+<COLLECTION NAME="List of Companies" ISMODIFY="Yes">
+<NATIVEMETHOD>Name</NATIVEMETHOD>
+</COLLECTION>
+</TDLMESSAGE>
+</TDL>
 </DESC>
 </BODY>
 </ENVELOPE>`;
 
 /**
- * Stock items — using object export to get actual STOCKITEM data
+ * Stock items — using Collection export (All Masters is import-only)
+ * Reference: TallyPrime XML API Guide - Collection-based exports
  */
 export function stockItemsXml(company: string): string {
   return `<ENVELOPE>
 <HEADER>
 <VERSION>1</VERSION>
 <TALLYREQUEST>Export</TALLYREQUEST>
-<TYPE>Data</TYPE>
-<ID>All Masters</ID>
+<TYPE>Collection</TYPE>
+<ID>List of Stock Items</ID>
 </HEADER>
 <BODY>
 <DESC>
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
-<MASTERNAME>StockItem</MASTERNAME>
 </STATICVARIABLES>
+<TDL>
+<TDLMESSAGE>
+<COLLECTION NAME="List of Stock Items" ISMODIFY="Yes">
+<NATIVEMETHOD>Name</NATIVEMETHOD>
+<NATIVEMETHOD>Parent</NATIVEMETHOD>
+<NATIVEMETHOD>BaseUnits</NATIVEMETHOD>
+<NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>
+<NATIVEMETHOD>OpeningRate</NATIVEMETHOD>
+<NATIVEMETHOD>OpeningValue</NATIVEMETHOD>
+<NATIVEMETHOD>ClosingBalance</NATIVEMETHOD>
+<NATIVEMETHOD>ClosingValue</NATIVEMETHOD>
+<NATIVEMETHOD>GSTDetails</NATIVEMETHOD>
+<NATIVEMETHOD>HSNDetails</NATIVEMETHOD>
+<NATIVEMETHOD>GSTTypeOfSupply</NATIVEMETHOD>
+<NATIVEMETHOD>Guid</NATIVEMETHOD>
+<NATIVEMETHOD>MasterID</NATIVEMETHOD>
+<NATIVEMETHOD>AlterID</NATIVEMETHOD>
+</COLLECTION>
+</TDLMESSAGE>
+</TDL>
 </DESC>
 </BODY>
 </ENVELOPE>`;

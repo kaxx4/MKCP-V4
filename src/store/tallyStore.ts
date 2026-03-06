@@ -52,14 +52,25 @@ export const useTallyStore = create<TallyConnectionState>()(
   )
 );
 
+/**
+ * Calculate default FY start date - uses the PREVIOUS completed FY
+ * This ensures we're fetching actual historical data, not future dates
+ * Example: If today is March 2026, return April 1, 2024 (start of FY 2024-25)
+ */
 function getDefaultFYStart(): string {
   const now = new Date();
-  const year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-  return `${year}0401`;
+  // Always go back one full FY to get completed data
+  const fyStartYear = now.getMonth() < 3 ? now.getFullYear() - 2 : now.getFullYear() - 1;
+  return `${fyStartYear}0401`;
 }
 
+/**
+ * Calculate default FY end date - end of the PREVIOUS completed FY
+ * Example: If today is March 2026, return March 31, 2025 (end of FY 2024-25)
+ */
 function getDefaultFYEnd(): string {
   const now = new Date();
-  const year = now.getMonth() >= 3 ? now.getFullYear() + 1 : now.getFullYear();
-  return `${year}0331`;
+  // End date is one year after start
+  const fyEndYear = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+  return `${fyEndYear}0331`;
 }
