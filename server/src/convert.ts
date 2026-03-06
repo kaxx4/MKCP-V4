@@ -104,20 +104,29 @@ export function convertLedgers(parsed: any): { tallymessage: any[] } {
 }
 
 export function convertVouchers(parsed: any): { tallymessage: any[] } {
-  // "Day Book" response:
-  //   ENVELOPE.BODY.DATA.TALLYMESSAGE.VOUCHER[]
-  const root = dig(parsed,
-    ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
-    ["ENVELOPE", "BODY", "DATA"],
-    ["ENVELOPE", "BODY", "TALLYMESSAGE"],
-    ["ENVELOPE", "BODY"],
-  );
+  // "Day Book" response structure:
+  //   ENVELOPE.BODY.DATA.TALLYMESSAGE[] (array of messages, each containing VOUCHERs)
+  const data = parsed?.ENVELOPE?.BODY?.DATA;
+  if (!data) {
+    console.log(`[convert] Vouchers: 0 (no DATA node)`);
+    return { tallymessage: [] };
+  }
 
-  const vouchers = arr(root?.VOUCHER ?? root?.["VOUCHER.LIST"]);
-  console.log(`[convert] Vouchers: ${vouchers.length}`);
+  // TALLYMESSAGE can be an array (multiple messages) or single object
+  const messages = arr(data.TALLYMESSAGE);
+  console.log(`[convert] Found ${messages.length} TALLYMESSAGE nodes`);
+
+  // Collect all vouchers from all TALLYMESSAGE nodes
+  const allVouchers: any[] = [];
+  for (const msg of messages) {
+    const vouchers = arr(msg?.VOUCHER ?? msg?.["VOUCHER.LIST"]);
+    allVouchers.push(...vouchers);
+  }
+
+  console.log(`[convert] Vouchers: ${allVouchers.length}`);
 
   return {
-    tallymessage: vouchers.map((v: any) => {
+    tallymessage: allVouchers.map((v: any) => {
       const le = arr(v["ALLLEDGERENTRIES.LIST"] ?? v.ALLLEDGERENTRIES ?? v["LEDGERENTRIES.LIST"] ?? v.LEDGERENTRIES);
       const ie = arr(v["ALLINVENTORYENTRIES.LIST"] ?? v.ALLINVENTORYENTRIES ?? v["INVENTORYENTRIES.LIST"] ?? v.INVENTORYENTRIES);
 
