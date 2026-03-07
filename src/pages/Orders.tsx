@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, Minus, Trash2, Download, X, Upload, Package } from "lucide-react";
+import { Search, Plus, Minus, Trash2, Download, X, Upload, Package, Filter } from "lucide-react";
 import Fuse from "fuse.js";
 import * as XLSX from "xlsx";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -37,6 +37,9 @@ export default function Orders() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [orderQty, setOrderQty] = useState("");
   const [focusedItemId, setFocusedItemId] = useState<string | null>(null);
+  const [stockFilterEnabled, setStockFilterEnabled] = useState(false);
+  const [stockFilterOp, setStockFilterOp] = useState<"<=" | ">=" | "=">("<=");
+  const [stockFilterValue, setStockFilterValue] = useState("0");
 
   const searchRef = useRef<HTMLInputElement>(null);
   const qtyRef = useRef<HTMLInputElement>(null);
@@ -102,8 +105,17 @@ export default function Orders() {
       const ids = new Set(searchResult.map((r) => r.item.itemId));
       result = result.filter((i) => ids.has(i.itemId));
     }
+    if (stockFilterEnabled) {
+      const threshold = parseFloat(stockFilterValue) || 0;
+      result = result.filter((i) => {
+        const stock = stockCache.get(i.itemId) ?? 0;
+        if (stockFilterOp === "<=") return stock <= threshold;
+        if (stockFilterOp === ">=") return stock >= threshold;
+        return stock === threshold;
+      });
+    }
     return result;
-  }, [allItems, debouncedSearch, groupFilter, fuse]);
+  }, [allItems, debouncedSearch, groupFilter, fuse, stockFilterEnabled, stockFilterOp, stockFilterValue, stockCache]);
 
   const selectedItem = useMemo(
     () => (selectedItemId ? data?.items.get(selectedItemId) ?? null : null),
@@ -335,6 +347,40 @@ export default function Orders() {
                 <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>
               ))}
             </select>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setStockFilterEnabled((v) => !v)}
+                className={clsx(
+                  "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition",
+                  stockFilterEnabled
+                    ? "bg-accent/15 border-accent text-accent font-medium"
+                    : "bg-bg border-bg-border text-muted hover:text-primary"
+                )}
+                title="Filter by closing stock"
+              >
+                <Filter size={12} />
+                Stock
+              </button>
+              {stockFilterEnabled && (
+                <>
+                  <select
+                    value={stockFilterOp}
+                    onChange={(e) => setStockFilterOp(e.target.value as "<=" | ">=" | "=")}
+                    className="bg-bg border border-bg-border rounded-lg px-1.5 py-1.5 text-xs text-primary outline-none font-mono"
+                  >
+                    <option value="<=">≤</option>
+                    <option value=">=">≥</option>
+                    <option value="=">=</option>
+                  </select>
+                  <input
+                    type="number"
+                    value={stockFilterValue}
+                    onChange={(e) => setStockFilterValue(e.target.value)}
+                    className="w-16 bg-bg border border-bg-border rounded-lg px-2 py-1.5 text-xs text-primary font-mono text-center outline-none focus:border-accent/60"
+                  />
+                </>
+              )}
+            </div>
           </div>
           <div ref={parentRef} className="flex-1 overflow-y-auto">
             {(() => {

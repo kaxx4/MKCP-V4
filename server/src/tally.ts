@@ -17,9 +17,10 @@ const xmlParser = new XMLParser({
 });
 
 const ARRAY_TAGS = new Set([
-  "TALLYMESSAGE", "VOUCHER", "LEDGER", "STOCKITEM", "COMPANY",
+  "TALLYMESSAGE", "VOUCHER", "LEDGER", "STOCKITEM", "STOCKGROUP", "UNIT", "COMPANY",
   "ALLLEDGERENTRIES", "LEDGERENTRIES", "ALLINVENTORYENTRIES", "INVENTORYENTRIES",
   "BILLALLOCATIONS", "BATCHALLOCATIONS", "ACCOUNTINGALLOCATIONS",
+  "BANKALLOCATIONS", "COSTCENTREALLOCATIONS", "COSTALLOCATIONS",
   "GSTDETAILS", "HSNDETAILS", "STATEWISEDETAILS", "RATEDETAILS",
   "CATEGORYALLOCATIONS", "INVENTORYALLOCATIONS",
 ]);
@@ -38,8 +39,25 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
     const url = new URL(tallyUrl);
     const label = xml.match(/<ID[^>]*>([^<]+)/)?.[1] || "request";
     const t0 = Date.now();
+    let settled = false;
 
     const reqBody = Buffer.from(xml, "utf-8");
+
+    // Hard wall-clock deadline — prevents infinite hangs even if socket timeout doesn't fire
+    const hardDeadline = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      console.error(`[tally] ✗ ${label}: HARD DEADLINE after ${((Date.now() - t0) / 1000).toFixed(0)}s — destroying request`);
+      req.destroy();
+      reject(new Error(`Tally hard timeout: ${label} took longer than ${Math.round(timeoutMs / 1000)}s (wall-clock)`));
+    }, timeoutMs + 5_000); // 5s grace beyond the socket timeout
+
+    function settle(fn: () => void) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardDeadline);
+      fn();
+    }
 
     const req = http.request(
       {
@@ -75,20 +93,20 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
             console.error(`[tally] ✗  TALLY ERROR: ${err}`);
           }
 
-          if (rawMode) return resolve(body);
+          if (rawMode) return settle(() => resolve(body));
 
           try {
             const parsed = xmlParser.parse(body);
-            resolve(parsed);
+            settle(() => resolve(parsed));
           } catch (parseErr: any) {
             console.error(`[tally] ✗ XML parse failed: ${parseErr.message}`);
             console.error(`[tally]   First 500 chars: ${body.slice(0, 500)}`);
-            reject(new Error(`XML parse failed: ${parseErr.message}`));
+            settle(() => reject(new Error(`XML parse failed: ${parseErr.message}`)));
           }
         });
 
         res.on("error", (err) => {
-          reject(new Error(`Response error: ${err.message}`));
+          settle(() => reject(new Error(`Response error: ${err.message}`)));
         });
       }
     );
@@ -101,11 +119,11 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
 
     req.on("error", (err: any) => {
       if (err.code === "ECONNREFUSED") {
-        reject(new Error("Cannot connect to Tally at " + tallyUrl + " — is TallyPrime running with ODBC enabled on port 9000?"));
+        settle(() => reject(new Error("Cannot connect to Tally at " + tallyUrl + " — is TallyPrime running with ODBC enabled on port 9000?")));
       } else if (err.code === "ECONNRESET") {
-        reject(new Error("Tally reset the connection — the company may not be loaded or the request was invalid"));
+        settle(() => reject(new Error("Tally reset the connection — the company may not be loaded or the request was invalid")));
       } else {
-        reject(new Error(`Tally request failed (${label}): ${err.message}`));
+        settle(() => reject(new Error(`Tally request failed (${label}): ${err.message}`)));
       }
     });
 
@@ -147,6 +165,74 @@ export const HEALTH_XML = `<ENVELOPE>
 </DESC>
 </BODY>
 </ENVELOPE>`;
+
+/**
+ * Stock Groups — Collection export for all stock groups
+ */
+export function stockGroupsXml(company: string): string {
+  return `<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Collection</TYPE>
+<ID>List of Stock Groups</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+<TDL>
+<TDLMESSAGE>
+<COLLECTION NAME="List of Stock Groups" ISMODIFY="Yes">
+<NATIVEMETHOD>Name</NATIVEMETHOD>
+<NATIVEMETHOD>Parent</NATIVEMETHOD>
+<NATIVEMETHOD>IsAddable</NATIVEMETHOD>
+<NATIVEMETHOD>GUID</NATIVEMETHOD>
+</COLLECTION>
+</TDLMESSAGE>
+</TDL>
+</DESC>
+</BODY>
+</ENVELOPE>`;
+}
+
+/**
+ * Units — Collection export for all units of measure
+ */
+export function unitsXml(company: string): string {
+  return `<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Collection</TYPE>
+<ID>List of Units</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+<TDL>
+<TDLMESSAGE>
+<COLLECTION NAME="List of Units" ISMODIFY="Yes">
+<NATIVEMETHOD>Name</NATIVEMETHOD>
+<NATIVEMETHOD>OriginalName</NATIVEMETHOD>
+<NATIVEMETHOD>BaseUnits</NATIVEMETHOD>
+<NATIVEMETHOD>AdditionalUnits</NATIVEMETHOD>
+<NATIVEMETHOD>Conversion</NATIVEMETHOD>
+<NATIVEMETHOD>IsFormallyCompound</NATIVEMETHOD>
+<NATIVEMETHOD>IsSimpleUnit</NATIVEMETHOD>
+<NATIVEMETHOD>GUID</NATIVEMETHOD>
+</COLLECTION>
+</TDLMESSAGE>
+</TDL>
+</DESC>
+</BODY>
+</ENVELOPE>`;
+}
 
 /**
  * Stock items — using Collection export (All Masters is import-only)
@@ -249,11 +335,7 @@ export function ledgersXml(company: string): string {
  * TYPE=Data, ID=Day Book with date range
  * Date format: YYYYMMDD (TallyPrime XML API standard)
  */
-export function vouchersXml(company: string, from?: string, to?: string): string {
-  const dates = from && to
-    ? `<SVFROMDATE>${from}</SVFROMDATE>
-<SVTODATE>${to}</SVTODATE>`
-    : "";
+export function vouchersXml(company: string, from: string, to: string): string {
   return `<ENVELOPE>
 <HEADER>
 <VERSION>1</VERSION>
@@ -266,11 +348,59 @@ export function vouchersXml(company: string, from?: string, to?: string): string
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
-${dates}
+<SVFROMDATE>${from}</SVFROMDATE>
+<SVTODATE>${to}</SVTODATE>
 </STATICVARIABLES>
 </DESC>
 </BODY>
 </ENVELOPE>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Monthly Chunking — splits a FY date range into monthly requests
+// ─────────────────────────────────────────────────────────────────────
+
+export interface DateChunk {
+  from: string;  // YYYYMMDD
+  to: string;    // YYYYMMDD
+  label: string; // e.g. "Apr 2025"
+}
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+export function getMonthlyChunks(fromDate: string, toDate: string): DateChunk[] {
+  const chunks: DateChunk[] = [];
+
+  let year = parseInt(fromDate.slice(0, 4), 10);
+  let month = parseInt(fromDate.slice(4, 6), 10); // 1-based
+  const endYear = parseInt(toDate.slice(0, 4), 10);
+  const endMonth = parseInt(toDate.slice(4, 6), 10);
+  const endDay = parseInt(toDate.slice(6, 8), 10);
+  const startDay = parseInt(fromDate.slice(6, 8), 10);
+
+  let isFirst = true;
+  while (year < endYear || (year === endYear && month <= endMonth)) {
+    const chunkFromDay = isFirst ? startDay : 1;
+    const isLast = year === endYear && month === endMonth;
+    const lastDayOfMonth = new Date(year, month, 0).getDate();
+    const chunkToDay = isLast ? endDay : lastDayOfMonth;
+
+    const mm = String(month).padStart(2, "0");
+    const from = `${year}${mm}${String(chunkFromDay).padStart(2, "0")}`;
+    const to = `${year}${mm}${String(chunkToDay).padStart(2, "0")}`;
+    const label = `${MONTH_NAMES[month - 1]} ${year}`;
+
+    chunks.push({ from, to, label });
+
+    isFirst = false;
+    month++;
+    if (month > 12) {
+      month = 1;
+      year++;
+    }
+  }
+
+  return chunks;
 }
 
 function esc(s: string): string {

@@ -17,6 +17,9 @@ interface ImportReport {
   items: number;
   ledgers: number;
   vouchers: number;
+  stockGroups?: number;
+  units?: number;
+  chunkDetails?: { label: string; count: number; ms: number }[];
   warnings: ImportWarning[];
   reconErrors: string[];
   duplicatesRemoved?: number;
@@ -140,6 +143,8 @@ export default function ImportPage() {
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       addLog(`✓ Data fetched in ${elapsed}s`);
+      addLog(`  ${result.stats.stockGroups} stock groups`);
+      addLog(`  ${result.stats.units} units`);
       addLog(`  ${result.stats.stockItems} stock items`);
       addLog(`  ${result.stats.ledgers} ledgers`);
       addLog(`  ${result.stats.vouchers} vouchers`);
@@ -183,6 +188,8 @@ export default function ImportPage() {
         items: data.items.size,
         ledgers: data.ledgers.size,
         vouchers: data.vouchers.length,
+        stockGroups: mastersResult.stockGroups.length,
+        units: mastersResult.units.length,
         warnings: data.warnings,
         reconErrors: reconErrors.slice(0, 20),
         mergeMode: false,
@@ -215,7 +222,7 @@ export default function ImportPage() {
         toast("No masters found — check company name", "error");
         return;
       }
-      addLog(`✓ ${result.stats.stockItems} stock items, ${result.stats.ledgers} ledgers in ${result.stats.elapsedSeconds}s`);
+      addLog(`✓ ${result.stats.stockGroups} groups, ${result.stats.units} units, ${result.stats.stockItems} stock items, ${result.stats.ledgers} ledgers in ${result.stats.elapsedSeconds}s`);
 
       addLog("Parsing masters...");
       const parsed = parseMasters(result.data);
@@ -252,7 +259,7 @@ export default function ImportPage() {
 
       setLastSync(new Date().toISOString());
       addLog("✓ Masters saved to app. You can now sync Day Book or go to Orders.");
-      toast(`Synced ${parsed.items.size} items, ${parsed.ledgers.size} ledgers`, "success");
+      toast(`Synced ${parsed.stockGroups.length} groups, ${parsed.units.length} units, ${parsed.items.size} items, ${parsed.ledgers.size} ledgers`, "success");
     } catch (err: any) {
       addLog(`ERROR: ${err.message}`);
       toast(`Masters sync failed: ${err.message}`, "error");
@@ -270,8 +277,12 @@ export default function ImportPage() {
     setPendingData(null);
     try {
       addLog(`Syncing Day Book for "${companyName}" (${fyFromDate} → ${fyToDate})...`);
-      addLog("This may take 1-3 minutes for large periods. Watch proxy terminal for progress.");
+      addLog("Fetching vouchers month-by-month for reliability.");
       const result = await syncDayBook(companyName, fyFromDate, fyToDate);
+
+      if (result.errors?.length) {
+        for (const err of result.errors) addLog(`⚠ ${err}`);
+      }
 
       if (!result.success || result.stats.vouchers === 0) {
         addLog(result.error || "Zero vouchers returned for this period.");
@@ -279,7 +290,12 @@ export default function ImportPage() {
         toast("No vouchers found for this period", "warn");
         return;
       }
-      addLog(`✓ ${result.stats.vouchers} vouchers fetched in ${result.stats.elapsedSeconds}s`);
+      addLog(`✓ ${result.stats.vouchers} vouchers fetched in ${result.stats.elapsedSeconds}s (${result.stats.chunksSucceeded}/${result.stats.chunksTotal} chunks)`);
+      if (result.stats.chunkDetails) {
+        for (const cd of result.stats.chunkDetails) {
+          addLog(`  ${cd.label}: ${cd.count} vouchers (${cd.ms}ms)`);
+        }
+      }
 
       addLog("Parsing transactions...");
       const parsed = parseTransactions(result.data);
@@ -335,20 +351,26 @@ export default function ImportPage() {
       addLog(`=== IMPORT ALL: "${companyName}" (${fyFromDate} → ${fyToDate}) ===`);
 
       // Step 1: Sync Masters
-      addLog("Step 1/2: Fetching masters (stock items + ledgers)...");
+      addLog("Step 1/2: Fetching masters (groups + units + stock items + ledgers)...");
       const mastersResult = await syncMasters(companyName);
       if (mastersResult.errors?.length) mastersResult.errors.forEach(e => addLog(`⚠ ${e}`));
-      addLog(`✓ ${mastersResult.stats.stockItems} stock items, ${mastersResult.stats.ledgers} ledgers`);
+      addLog(`✓ ${mastersResult.stats.stockGroups} groups, ${mastersResult.stats.units} units, ${mastersResult.stats.stockItems} stock items, ${mastersResult.stats.ledgers} ledgers`);
 
-      // Step 2: Sync Day Book
-      addLog("Step 2/2: Fetching vouchers (this may take 1-3 minutes)...");
+      // Step 2: Sync Day Book (monthly chunks)
+      addLog("Step 2/2: Fetching vouchers month-by-month (this may take 2-5 minutes)...");
       const dayBookResult = await syncDayBook(companyName, fyFromDate, fyToDate);
-      addLog(`✓ ${dayBookResult.stats.vouchers} vouchers fetched`);
+      if (dayBookResult.errors?.length) dayBookResult.errors.forEach(e => addLog(`⚠ ${e}`));
+      addLog(`✓ ${dayBookResult.stats.vouchers} vouchers fetched (${dayBookResult.stats.chunksSucceeded}/${dayBookResult.stats.chunksTotal} chunks)`);
+      if (dayBookResult.stats.chunkDetails) {
+        for (const cd of dayBookResult.stats.chunkDetails) {
+          addLog(`  ${cd.label}: ${cd.count} vouchers (${cd.ms}ms)`);
+        }
+      }
 
       // Parse masters
       addLog("Parsing masters...");
       const parsedMasters = parseMasters(mastersResult.data);
-      addLog(`Parsed: ${parsedMasters.items.size} items, ${parsedMasters.ledgers.size} ledgers`);
+      addLog(`Parsed: ${parsedMasters.stockGroups.length} groups, ${parsedMasters.units.length} units, ${parsedMasters.items.size} items, ${parsedMasters.ledgers.size} ledgers`);
 
       // Parse vouchers
       addLog("Parsing transactions...");
@@ -364,7 +386,11 @@ export default function ImportPage() {
           typeCounts.set(v.voucherType, (typeCounts.get(v.voucherType) || 0) + 1);
         }
         const dates = [...dateCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-        addLog(`Voucher dates: ${dates.map(([d, c]) => `${d} (${c})`).join(", ")}`);
+        if (dates.length > 15) {
+          addLog(`Voucher dates: ${dates.length} unique dates from ${dates[0][0]} to ${dates[dates.length - 1][0]}`);
+        } else {
+          addLog(`Voucher dates: ${dates.map(([d, c]) => `${d} (${c})`).join(", ")}`);
+        }
         addLog(`Voucher types: ${[...typeCounts.entries()].map(([t, c]) => `${t}: ${c}`).join(", ")}`);
       }
 
@@ -890,7 +916,7 @@ export default function ImportPage() {
               </div>
             </div>
             <div className="text-xs text-muted bg-bg border border-bg-border rounded-lg px-3 py-2">
-              💡 <strong>Tip:</strong> Default dates point to the last completed financial year to ensure actual data.
+              💡 <strong>Tip:</strong> Vouchers are fetched month-by-month for reliability (no data loss).
               Current FY: {formatFYRange(fyFromDate, fyToDate)}
             </div>
 
@@ -912,7 +938,7 @@ export default function ImportPage() {
                 className="flex items-center justify-center gap-2 bg-bg-border hover:bg-bg-border/70 disabled:opacity-50 disabled:cursor-not-allowed text-muted hover:text-primary font-medium px-4 py-2.5 rounded-lg transition text-sm"
               >
                 {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <Package size={14} />}
-                Masters Only
+                Masters Only (Groups + Units + Items + Ledgers)
               </button>
               <button
                 onClick={handleSyncDayBook}
@@ -920,7 +946,7 @@ export default function ImportPage() {
                 className="flex items-center justify-center gap-2 bg-bg-border hover:bg-bg-border/70 disabled:opacity-50 disabled:cursor-not-allowed text-muted hover:text-primary font-medium px-4 py-2.5 rounded-lg transition text-sm"
               >
                 {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <FileJson size={14} />}
-                Day Book Only
+                Vouchers Only (Monthly Chunks)
               </button>
             </div>
           </div>
@@ -985,7 +1011,7 @@ export default function ImportPage() {
             <Info size={14} />
             {tab === "live" ? "Sync Progress Log" : "Import Progress Log"}
           </h3>
-          <div className="bg-bg border border-bg-border rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-xs">
+          <div className="bg-bg border border-bg-border rounded-lg p-3 max-h-72 overflow-y-auto font-mono text-xs">
             {debugLog.map((log, idx) => (
               <div key={idx} className={clsx(
                 "py-0.5",
@@ -1024,8 +1050,10 @@ export default function ImportPage() {
           )}
 
           {/* Stats */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className={clsx("grid gap-4", report.stockGroups || report.units ? "grid-cols-3 md:grid-cols-5" : "grid-cols-3")}>
             {[
+              ...(report.stockGroups ? [{ label: "Groups", value: report.stockGroups, color: "text-muted" }] : []),
+              ...(report.units ? [{ label: "Units", value: report.units, color: "text-muted" }] : []),
               { label: "Items", value: report.items, color: "text-success" },
               { label: "Ledgers", value: report.ledgers, color: "text-accent" },
               { label: "Total Vouchers", value: report.vouchers, color: "text-primary" },

@@ -46,6 +46,62 @@ function dig(obj: any, ...paths: string[][]): any {
   return null;
 }
 
+export function convertStockGroups(parsed: any): { tallymessage: any[] } {
+  const root = dig(parsed,
+    ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
+    ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
+    ["ENVELOPE", "BODY", "DATA"],
+    ["ENVELOPE", "BODY"],
+  );
+
+  const groups = arr(root?.STOCKGROUP ?? root?.["STOCKGROUP.LIST"]);
+  console.log(`[convert] Stock groups: ${groups.length}`);
+
+  return {
+    tallymessage: groups.map((g: any) => {
+      const name = g["@_NAME"] || txt(g.NAME);
+      if (!name) return null;
+      return {
+        metadata: { type: "Stock Group", name },
+        name,
+        parent: txt(g.PARENT, "Primary"),
+        isaddable: txt(g.ISADDABLE, "Yes"),
+        guid: txt(g.GUID),
+      };
+    }).filter(Boolean),
+  };
+}
+
+export function convertUnits(parsed: any): { tallymessage: any[] } {
+  const root = dig(parsed,
+    ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
+    ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
+    ["ENVELOPE", "BODY", "DATA"],
+    ["ENVELOPE", "BODY"],
+  );
+
+  const units = arr(root?.UNIT ?? root?.["UNIT.LIST"]);
+  console.log(`[convert] Units: ${units.length}`);
+
+  return {
+    tallymessage: units.map((u: any) => {
+      const name = u["@_NAME"] || txt(u.NAME);
+      if (!name) return null;
+      return {
+        metadata: { type: "Unit", name },
+        name,
+        originalname: txt(u.ORIGINALNAME, name),
+        baseunits: txt(u.BASEUNITS),
+        additionalunits: txt(u.ADDITIONALUNITS),
+        conversion: txt(u.CONVERSION),
+        issimpleunit: txt(u.ISSIMPLEUNIT, "No"),
+        isformallycompound: txt(u.ISFORMALLYCOMPOUND, "No"),
+        guid: txt(u.GUID),
+      };
+    }).filter(Boolean),
+  };
+}
+
 export function convertStockItems(parsed: any): { tallymessage: any[] } {
   // Tally "All Stock Items" collection response:
   //   ENVELOPE.BODY.DATA.COLLECTION.STOCKITEM[]  or  ENVELOPE.BODY.DATA.TALLYMESSAGE.STOCKITEM[]
@@ -156,7 +212,12 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
   const allVouchers: any[] = [];
   for (const msg of messages) {
     const vouchers = arr(msg?.VOUCHER ?? msg?.["VOUCHER.LIST"]);
-    allVouchers.push(...vouchers);
+    if (vouchers.length > 0) {
+      allVouchers.push(...vouchers);
+    } else if (msg && (msg.VOUCHERTYPENAME || msg.DATE || msg["@_VCHTYPE"])) {
+      // Flat structure: the TALLYMESSAGE node IS the voucher directly
+      allVouchers.push(msg);
+    }
   }
 
   console.log(`[convert] Vouchers: ${allVouchers.length}`);
@@ -167,7 +228,7 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
     const typeCounts: Record<string, number> = {};
     for (const v of allVouchers) {
       const d = v.DATE || v["@_DATE"] || "unknown";
-      const t = v.VOUCHERTYPENAME || "unknown";
+      const t = v.VOUCHERTYPENAME || v["@_VCHTYPE"] || "unknown";
       dateCounts[d] = (dateCounts[d] || 0) + 1;
       typeCounts[t] = (typeCounts[t] || 0) + 1;
     }
@@ -207,7 +268,7 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
         date: v.DATE || v["@_DATE"] || "",
         guid: v.GUID || v["@_GUID"] || "",
         vouchernumber: v.VOUCHERNUMBER || v.REFERENCE || "",
-        vouchertypename: v.VOUCHERTYPENAME || "",
+        vouchertypename: v.VOUCHERTYPENAME || v["@_VCHTYPE"] || "",
         partyledgername: v.PARTYLEDGERNAME || "",
         narration: v.NARRATION || "",
         iscancelled: v.ISCANCELLED === "Yes",
