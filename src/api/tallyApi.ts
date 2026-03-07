@@ -7,7 +7,7 @@ export interface TallySyncResult {
   errors?: string[];
   masters: { tallymessage: any[] };
   transactions: { tallymessage: any[] };
-  stats: { stockItems: number; ledgers: number; vouchers: number; elapsedSeconds: number };
+  stats: { stockGroups: number; units: number; stockItems: number; ledgers: number; vouchers: number; elapsedSeconds: number };
 }
 
 export async function checkTallyHealth(): Promise<{ connected: boolean; error?: string; tallyUrl: string }> {
@@ -23,9 +23,9 @@ export async function checkTallyHealth(): Promise<{ connected: boolean; error?: 
 }
 
 export async function fullSync(company: string, fromDate?: string, toDate?: string): Promise<TallySyncResult> {
-  // 10 MINUTE timeout — large companies need this
+  // 15 MINUTE timeout — monthly chunking can take longer
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 600_000);
+  const timer = setTimeout(() => ctrl.abort(), 900_000);
 
   try {
     console.log(`[fullSync] Starting sync request for "${company}" (${fromDate} → ${toDate})`);
@@ -47,6 +47,8 @@ export async function fullSync(company: string, fromDate?: string, toDate?: stri
     const j = await r.json();
     console.log(`[fullSync] Response parsed successfully:`, {
       success: j.success,
+      stockGroups: j.stats?.stockGroups,
+      units: j.stats?.units,
       stockItems: j.stats?.stockItems,
       ledgers: j.stats?.ledgers,
       vouchers: j.stats?.vouchers
@@ -58,7 +60,7 @@ export async function fullSync(company: string, fromDate?: string, toDate?: stri
     clearTimeout(timer);
     console.error(`[fullSync] Error:`, e);
     if (e.name === "AbortError") {
-      throw new Error("Sync timed out after 10 minutes. Try narrowing the date range (e.g., 6 months instead of full year).");
+      throw new Error("Sync timed out after 15 minutes. Try narrowing the date range (e.g., 6 months instead of full year).");
     }
     throw e;
   }
@@ -68,14 +70,24 @@ export interface MastersSyncResult {
   success: boolean;
   errors?: string[];
   data: { tallymessage: any[] };
-  stats: { stockItems: number; ledgers: number; elapsedSeconds: number };
+  stats: { stockGroups: number; units: number; stockItems: number; ledgers: number; elapsedSeconds: number };
 }
 
 export interface DayBookSyncResult {
   success: boolean;
   error?: string;
+  errors?: string[];
   data: { tallymessage: any[] };
-  stats: { vouchers: number; fromDate: string; toDate: string; elapsedSeconds: number };
+  stats: {
+    vouchers: number;
+    fromDate: string;
+    toDate: string;
+    chunksTotal: number;
+    chunksSucceeded: number;
+    chunksFailed: number;
+    chunkDetails?: { label: string; count: number; ms: number }[];
+    elapsedSeconds: number;
+  };
 }
 
 export async function syncMasters(company: string): Promise<MastersSyncResult> {
@@ -100,7 +112,7 @@ export async function syncMasters(company: string): Promise<MastersSyncResult> {
 
 export async function syncDayBook(company: string, fromDate: string, toDate: string): Promise<DayBookSyncResult> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 600_000); // 10 min
+  const timer = setTimeout(() => ctrl.abort(), 900_000); // 15 min
   try {
     const r = await fetch(`${BASE}/api/tally/sync-daybook`, {
       method: "POST",
@@ -113,7 +125,23 @@ export async function syncDayBook(company: string, fromDate: string, toDate: str
     return await r.json();
   } catch (e: any) {
     clearTimeout(timer);
-    if (e.name === "AbortError") throw new Error("Day Book sync timed out (10 min). Try a shorter period.");
+    if (e.name === "AbortError") throw new Error("Day Book sync timed out (15 min). Try a shorter period.");
     throw e;
   }
+}
+
+export function subscribeToProgress(onLog: (msg: string) => void): () => void {
+  const es = new EventSource(`${BASE}/api/tally/progress`);
+  es.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      onLog(msg);
+    } catch {
+      onLog(e.data);
+    }
+  };
+  es.onerror = () => {
+    // Silently reconnect — EventSource handles this automatically
+  };
+  return () => es.close();
 }

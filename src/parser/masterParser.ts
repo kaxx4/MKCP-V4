@@ -15,10 +15,28 @@
 
 import type { CanonicalItem, CanonicalLedger, CompanyInfo, ImportWarning } from "../types/canonical";
 
+export interface StockGroupInfo {
+  name: string;
+  parent: string;
+  isAddable: boolean;
+}
+
+export interface UnitInfo {
+  name: string;
+  originalName: string;
+  baseUnits: string;
+  additionalUnits: string;
+  conversion: string;
+  isSimple: boolean;
+  isCompound: boolean;
+}
+
 export interface MasterParseResult {
   company: CompanyInfo | null;
   items: Map<string, CanonicalItem>;
   ledgers: Map<string, CanonicalLedger>;
+  stockGroups: StockGroupInfo[];
+  units: UnitInfo[];
   warnings: ImportWarning[];
 }
 
@@ -26,6 +44,8 @@ export function parseMasters(raw: unknown): MasterParseResult {
   const warnings: ImportWarning[] = [];
   const items = new Map<string, CanonicalItem>();
   const ledgers = new Map<string, CanonicalLedger>();
+  const stockGroups: StockGroupInfo[] = [];
+  const units: UnitInfo[] = [];
   let company: CompanyInfo | null = null;
 
   const normalized = normalizeMasterInput(raw, warnings);
@@ -56,11 +76,36 @@ export function parseMasters(raw: unknown): MasterParseResult {
     }
   }
 
+  for (const raw_group of normalized.stockGroups ?? []) {
+    try {
+      const g = tallyRealStockGroupToSimple(raw_group);
+      if (g) stockGroups.push(g);
+    } catch (e) {
+      warnings.push({ severity: "warn", context: `stockGroup:${raw_group?.name}`, message: String(e) });
+    }
+  }
+
+  for (const raw_unit of normalized.units ?? []) {
+    try {
+      const u = tallyRealUnitToSimple(raw_unit);
+      if (u) units.push(u);
+    } catch (e) {
+      warnings.push({ severity: "warn", context: `unit:${raw_unit?.name}`, message: String(e) });
+    }
+  }
+
+  if (stockGroups.length > 0) {
+    warnings.push({ severity: "info", context: "parser", message: `Parsed ${stockGroups.length} stock groups` });
+  }
+  if (units.length > 0) {
+    warnings.push({ severity: "info", context: "parser", message: `Parsed ${units.length} units` });
+  }
+
   if (items.size === 0 && ledgers.size === 0) {
     warnings.push({ severity: "warn", context: "parser", message: "No items or ledgers found in masters file" });
   }
 
-  return { company, items, ledgers, warnings };
+  return { company, items, ledgers, stockGroups, units, warnings };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,6 +121,10 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ledgers: any[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stockGroups: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const units: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let company: any = null;
 
     for (const msg of obj.tallymessage) {
@@ -84,6 +133,10 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
         stockItems.push(tallyRealStockItemToSimple(msg));
       } else if (type === "Ledger" || type === "LEDGER") {
         ledgers.push(tallyRealLedgerToSimple(msg));
+      } else if (type === "Stock Group" || type === "STOCKGROUP") {
+        stockGroups.push(msg);
+      } else if (type === "Unit" || type === "UNIT") {
+        units.push(msg);
       } else if (type === "Company" || type === "COMPANY") {
         company = msg;
       }
@@ -93,7 +146,7 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
       warnings.push({ severity: "warn", context: "parser", message: `tallymessage has ${obj.tallymessage.length} entries but no Stock Items or Ledgers found` });
     }
 
-    return { stockItems, ledgers, company };
+    return { stockItems, ledgers, stockGroups, units, company };
   }
 
   // ── Format 2: Tally ENVELOPE format ──
@@ -118,6 +171,30 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
 
   // ── Format 3: Simple { stockItems: [...], ledgers: [...] } ──
   return obj;
+}
+
+function tallyRealStockGroupToSimple(msg: any): StockGroupInfo | null {
+  const name = msg?.metadata?.name ?? msg?.name ?? "";
+  if (!name) return null;
+  return {
+    name: String(name).trim(),
+    parent: String(msg?.parent ?? "Primary").trim(),
+    isAddable: String(msg?.isaddable ?? "Yes").trim() === "Yes",
+  };
+}
+
+function tallyRealUnitToSimple(msg: any): UnitInfo | null {
+  const name = msg?.metadata?.name ?? msg?.name ?? "";
+  if (!name) return null;
+  return {
+    name: String(name).trim(),
+    originalName: String(msg?.originalname ?? name).trim(),
+    baseUnits: String(msg?.baseunits ?? "").trim(),
+    additionalUnits: String(msg?.additionalunits ?? "").trim(),
+    conversion: String(msg?.conversion ?? "").trim(),
+    isSimple: String(msg?.issimpleunit ?? "No").trim() === "Yes",
+    isCompound: String(msg?.isformallycompound ?? "No").trim() === "Yes",
+  };
 }
 
 /** Convert real Tally JSON stock item to simple form */
