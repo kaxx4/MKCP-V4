@@ -10,6 +10,29 @@ function arr(v: any): any[] {
   return [v];
 }
 
+/**
+ * Extract text value from a Tally typed-object or plain value.
+ * Tally Collection exports return typed objects like:
+ *   { "#text": "&#4; Primary", "@_TYPE": "String" }
+ *   { "#text": "14 PC", "@_TYPE": "Quantity" }
+ *   { "@_TYPE": "Rate" }  ← empty value
+ * This function extracts the #text and strips the &#4; control char prefix.
+ */
+function txt(v: any, fallback = ""): string {
+  if (v === null || v === undefined) return fallback;
+  if (typeof v === "string") return stripCtrl(v) || fallback;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (typeof v === "object" && "#text" in v) {
+    return stripCtrl(String(v["#text"] ?? "")) || fallback;
+  }
+  return fallback;
+}
+
+/** Strip &#4; / \x04 (EOT control char) that Tally uses as prefix for some values */
+function stripCtrl(s: string): string {
+  return s.replace(/&#\d+;\s*/g, "").replace(/[\x00-\x1f]\s*/g, "").trim();
+}
+
 /** Walk multiple possible paths in the parsed XML to find the data */
 function dig(obj: any, ...paths: string[][]): any {
   for (const path of paths) {
@@ -36,38 +59,51 @@ export function convertStockItems(parsed: any): { tallymessage: any[] } {
   const items = arr(root?.STOCKITEM ?? root?.["STOCKITEM.LIST"]);
   console.log(`[convert] Stock items: ${items.length}`);
 
+  // Log sample stock item data for debugging
+  if (items.length > 0) {
+    const sample = items[0];
+    console.log(`[convert] Sample stock item: name="${sample["@_NAME"] || txt(sample.NAME)}", parent="${txt(sample.PARENT)}", baseunits="${txt(sample.BASEUNITS)}", opening="${txt(sample.OPENINGBALANCE)}", closing="${txt(sample.CLOSINGBALANCE)}"`);
+    // Count groups
+    const groups = new Set(items.map((s: any) => txt(s.PARENT, "Primary")));
+    console.log(`[convert] Stock groups found: ${groups.size} (${[...groups].slice(0, 10).join(", ")}${groups.size > 10 ? "..." : ""})`);
+  }
+
   return {
     tallymessage: items.map((si: any) => {
-      const name = si["@_NAME"] || si.NAME || "";
+      const name = si["@_NAME"] || txt(si.NAME);
       if (!name) return null;
       return {
         metadata: { type: "Stock Item", name },
         name,
-        parent: si.PARENT || "Primary",
-        baseunits: si.BASEUNITS || "PC",
-        additionalunits: si.ADDITIONALUNITS || " Not Applicable",
-        denominator: si.DENOMINATOR || "1",
-        openingbalance: si.OPENINGBALANCE || "0",
-        openingrate: si.OPENINGRATE || "0",
-        openingvalue: si.OPENINGVALUE || "0",
-        gstapplicable: si.GSTAPPLICABLE || "",
-        gsttypeofsupply: si.GSTTYPEOFSUPPLY || "",
-        costingmethod: si.COSTINGMETHOD || "",
-        valuationmethod: si.VALUATIONMETHOD || "",
-        isbatchwiseon: si.ISBATCHWISEON === "Yes",
-        iscostcentreson: si.ISCOSTCENTRESON === "Yes",
+        parent: txt(si.PARENT, "Primary"),
+        category: txt(si.CATEGORY),
+        baseunits: txt(si.BASEUNITS, "PC"),
+        additionalunits: txt(si.ADDITIONALUNITS, "Not Applicable"),
+        denominator: txt(si.DENOMINATOR, "1"),
+        openingbalance: txt(si.OPENINGBALANCE, "0"),
+        openingrate: txt(si.OPENINGRATE, "0"),
+        openingvalue: txt(si.OPENINGVALUE, "0"),
+        closingbalance: txt(si.CLOSINGBALANCE, "0"),
+        closingrate: txt(si.CLOSINGRATE, "0"),
+        closingvalue: txt(si.CLOSINGVALUE, "0"),
+        gstapplicable: txt(si.GSTAPPLICABLE),
+        gsttypeofsupply: txt(si.GSTTYPEOFSUPPLY),
+        costingmethod: txt(si.COSTINGMETHOD),
+        valuationmethod: txt(si.VALUATIONMETHOD),
+        isbatchwiseon: txt(si.ISBATCHWISEON) === "Yes",
+        iscostcentreson: txt(si.ISCOSTCENTRESON) === "Yes",
         gstdetails: arr(si.GSTDETAILS ?? si["GSTDETAILS.LIST"]).map((g: any) => ({
           statewisedetails: arr(g?.STATEWISEDETAILS ?? g?.["STATEWISEDETAILS.LIST"]).map((s: any) => ({
             ratedetails: arr(s?.RATEDETAILS ?? s?.["RATEDETAILS.LIST"]).map((r: any) => ({
-              gstratedutyhead: r.GSTRATEDUTYHEAD || "",
-              gstrate: r.GSTRATE || "0",
+              gstratedutyhead: txt(r.GSTRATEDUTYHEAD),
+              gstrate: txt(r.GSTRATE, "0"),
             })),
           })),
         })),
         hsndetails: arr(si.HSNDETAILS ?? si["HSNDETAILS.LIST"]).map((h: any) => ({
-          hsncode: h.HSNCODE || h.DESCRIPTION || "",
+          hsncode: txt(h.HSNCODE) || txt(h.DESCRIPTION),
         })),
-        guid: si.GUID || "",
+        guid: txt(si.GUID),
       };
     }).filter(Boolean),
   };
@@ -88,16 +124,16 @@ export function convertLedgers(parsed: any): { tallymessage: any[] } {
 
   return {
     tallymessage: ledgers.map((l: any) => {
-      const name = l["@_NAME"] || l.NAME || "";
+      const name = l["@_NAME"] || txt(l.NAME);
       if (!name) return null;
       return {
         metadata: { type: "Ledger", name },
         name,
-        parent: l.PARENT || "Unsorted",
-        openingbalance: l.OPENINGBALANCE || "0",
-        gstin: l.PARTYGSTIN || l.GSTIN || l.LEDGSTIN || "",
-        creditperiod: l.CREDITPERIOD || l.BILLCREDITPERIOD || "",
-        guid: l.GUID || "",
+        parent: txt(l.PARENT, "Unsorted"),
+        openingbalance: txt(l.OPENINGBALANCE, "0"),
+        gstin: txt(l.PARTYGSTIN) || txt(l.GSTIN) || txt(l.LEDGSTIN),
+        creditperiod: txt(l.CREDITPERIOD) || txt(l.BILLCREDITPERIOD),
+        guid: txt(l.GUID),
       };
     }).filter(Boolean),
   };
@@ -124,6 +160,21 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
   }
 
   console.log(`[convert] Vouchers: ${allVouchers.length}`);
+
+  // Log voucher date distribution for debugging
+  if (allVouchers.length > 0) {
+    const dateCounts: Record<string, number> = {};
+    const typeCounts: Record<string, number> = {};
+    for (const v of allVouchers) {
+      const d = v.DATE || v["@_DATE"] || "unknown";
+      const t = v.VOUCHERTYPENAME || "unknown";
+      dateCounts[d] = (dateCounts[d] || 0) + 1;
+      typeCounts[t] = (typeCounts[t] || 0) + 1;
+    }
+    const dates = Object.entries(dateCounts).sort((a, b) => a[0].localeCompare(b[0]));
+    console.log(`[convert] Voucher dates: ${dates.map(([d, c]) => `${d}(${c})`).join(", ")}`);
+    console.log(`[convert] Voucher types: ${Object.entries(typeCounts).map(([t, c]) => `${t}: ${c}`).join(", ")}`);
+  }
 
   return {
     tallymessage: allVouchers.map((v: any) => {
