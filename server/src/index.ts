@@ -377,6 +377,23 @@ app.post("/api/tally/debug", async (req, res) => {
   }
 });
 
+// Debug — return first N parsed stock items with all fields
+app.post("/api/tally/debug-stock", async (req, res) => {
+  const { company, count = 5 } = req.body;
+  if (!company) return res.status(400).json({ error: "company required" });
+  try {
+    const xml = await tallyPost(TALLY, stockItemsXml(company), 120_000);
+    const stocks = convertStockItems(xml);
+    res.json({
+      success: true,
+      totalItems: stocks.tallymessage.length,
+      sample: stocks.tallymessage.slice(0, count),
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`\n✓ MKCP Tally Proxy → http://localhost:${PORT}`);
   console.log(`   Target: ${TALLY}\n`);

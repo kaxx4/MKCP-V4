@@ -138,14 +138,19 @@ function tallyRealStockItemToSimple(msg: any): any {
   // Parse opening value (may be negative in Tally = debit)
   const openingValue = Math.abs(parseNumber(msg?.openingvalue ?? 0));
 
+  // Parse closing balance: same format as opening
+  const closingBalStr = String(msg?.closingbalance ?? "0").trim();
+  const closingQty = parseQtyString(closingBalStr);
+  const closingRateStr = String(msg?.closingrate ?? "0").trim();
+  const closingRate = parseRateString(closingRateStr);
+  const closingValue = Math.abs(parseNumber(msg?.closingvalue ?? 0));
+
   // Parse denominator (units per pkg): " 4" → 4
   const denomStr = String(msg?.denominator ?? "1").trim();
   const denom = parseNumber(denomStr);
 
-  // Extract parent (group) — may contain HSN info like "TRICYCLE DASH ( 950300 @ 12/ 5 %)"
-  let parent = String(msg?.parent ?? "Ungrouped").trim();
-  // Clean up: remove HSN suffix in parentheses at end
-  parent = parent.replace(/\s*\([^)]*\)\s*$/, "").trim() || parent;
+  // Extract parent (group) — keep the full name as it appears in Tally
+  const parent = String(msg?.parent ?? "Ungrouped").trim();
 
   // GST rate from gstdetails
   let gstRate: number | undefined;
@@ -171,12 +176,16 @@ function tallyRealStockItemToSimple(msg: any): any {
   return {
     name,
     group: parent,
+    category: String(msg?.category ?? "").trim() || undefined,
     baseUnit: String(msg?.baseunits ?? "PC").trim(),
     pkgUnit: hasAddlUnits ? addlUnits : null,
     unitsPerPkg: hasAddlUnits && denom > 0 ? denom : 1,
     openingQty,
     openingValue,
     openingRate,
+    closingQty,
+    closingValue,
+    closingRate,
     hsn,
     gstRate,
   };
@@ -259,16 +268,28 @@ function parseOneItem(raw: any, warnings: ImportWarning[]): CanonicalItem | null
     warnings.push({ severity: "info", context: `item:${name}`, message: "No group/parent found" });
   }
 
+  // Parse closing balance fields
+  const closingQty = parseNumber(raw.closingQty ?? raw.closingQtyBase ?? 0);
+  const closingValueRaw = parseNumber(raw.closingValue ?? 0);
+  const explicitClosingRate = parseNumber(raw.closingRate ?? 0);
+  const closingRate = explicitClosingRate > 0
+    ? explicitClosingRate
+    : (closingQty > 0 ? (closingValueRaw / closingQty) : 0);
+
   return {
     itemId,
     name,
     group: String(raw.group ?? raw.parent ?? "Ungrouped").trim(),
+    category: raw.category ? String(raw.category).trim() : undefined,
     baseUnit: String(raw.baseUnit ?? raw.baseUnits ?? "PC").toUpperCase().trim(),
     pkgUnit,
     unitsPerPkg: unitsPerPkg > 0 ? unitsPerPkg : 1,
     openingQtyBase: openingQty,
     openingRate,
     openingValue,
+    closingQtyBase: closingQty || undefined,
+    closingRate: closingRate || undefined,
+    closingValue: closingValueRaw || undefined,
     hsn: raw.hsn ? String(raw.hsn) : undefined,
     gstRate: raw.gstRate ? Number(raw.gstRate) : undefined,
   };

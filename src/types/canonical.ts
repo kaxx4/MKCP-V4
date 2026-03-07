@@ -16,13 +16,17 @@ export interface CompanyInfo {
 export interface CanonicalItem {
   itemId: string;          // normalized uppercase name used as key
   name: string;            // display name (original case from JSON)
-  group: string;           // stock group
+  group: string;           // stock group (immediate parent)
+  category?: string;       // stock category
   baseUnit: string;        // e.g. "PCS", "KG"
   pkgUnit: string | null;  // e.g. "BOX", null if not configured
   unitsPerPkg: number;     // 1 if no package unit
   openingQtyBase: number;  // opening stock in base units for active FY
   openingRate: number;     // rate per base unit at opening
   openingValue: number;    // total opening value
+  closingQtyBase?: number; // closing stock in base units for active FY
+  closingRate?: number;    // rate per base unit at closing
+  closingValue?: number;   // total closing value
   hsn?: string;
   gstRate?: number;
 }
