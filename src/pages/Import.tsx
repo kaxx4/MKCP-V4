@@ -11,7 +11,7 @@ import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
 import type { ParsedData, ImportWarning } from "../types/canonical";
 import { useToast } from "../components/Toast";
 import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
-import { checkTallyHealth, fullSync, syncMasters, syncDayBook, type TallySyncResult } from "../api/tallyApi";
+import { checkTallyHealth, fullSync, syncMasters, syncDayBook, detectCompany, type TallySyncResult } from "../api/tallyApi";
 
 interface ImportReport {
   items: number;
@@ -222,7 +222,7 @@ export default function ImportPage() {
         toast("No masters found — check company name", "error");
         return;
       }
-      addLog(`✓ ${result.stats.stockGroups} groups, ${result.stats.units} units, ${result.stats.stockItems} stock items, ${result.stats.ledgers} ledgers in ${result.stats.elapsedSeconds}s`);
+      addLog(`✓ ${result.stats.stockGroups} groups, ${result.stats.units} units, ${result.stats.stockItems} stock items, ${result.stats.ledgers} ledgers, ${result.stats.godowns ?? 0} godowns, ${result.stats.costCentres ?? 0} cost centres in ${result.stats.elapsedSeconds}s`);
 
       addLog("Parsing masters...");
       const parsed = parseMasters(result.data);
@@ -354,7 +354,7 @@ export default function ImportPage() {
       addLog("Step 1/2: Fetching masters (groups + units + stock items + ledgers)...");
       const mastersResult = await syncMasters(companyName);
       if (mastersResult.errors?.length) mastersResult.errors.forEach(e => addLog(`⚠ ${e}`));
-      addLog(`✓ ${mastersResult.stats.stockGroups} groups, ${mastersResult.stats.units} units, ${mastersResult.stats.stockItems} stock items, ${mastersResult.stats.ledgers} ledgers`);
+      addLog(`✓ ${mastersResult.stats.stockGroups} groups, ${mastersResult.stats.units} units, ${mastersResult.stats.stockItems} stock items, ${mastersResult.stats.ledgers} ledgers, ${mastersResult.stats.godowns ?? 0} godowns, ${mastersResult.stats.costCentres ?? 0} cost centres`);
 
       // Step 2: Sync Day Book (monthly chunks)
       addLog("Step 2/2: Fetching vouchers month-by-month (this may take 2-5 minutes)...");
@@ -867,13 +867,35 @@ export default function ImportPage() {
           <div className="bg-bg-card border border-bg-border rounded-xl p-6 space-y-4">
             <div>
               <label className="block text-sm font-medium text-primary mb-2">Company Name</label>
-              <input
-                type="text"
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
-                className="w-full px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary font-medium focus:outline-none focus:ring-2 focus:ring-accent"
-                placeholder="Enter exact company name from TallyPrime"
-              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  className="flex-1 px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary font-medium focus:outline-none focus:ring-2 focus:ring-accent"
+                  placeholder="Enter exact company name from TallyPrime"
+                />
+                <button
+                  onClick={async () => {
+                    try {
+                      const result = await detectCompany();
+                      if (result.current) {
+                        setCompanyName(result.current);
+                        addLog(`✓ Auto-detected company: ${result.current}`);
+                        toast(`Detected: ${result.current}`, "success");
+                      } else {
+                        toast("Could not detect company — is Tally running?", "warn");
+                      }
+                    } catch {
+                      toast("Detection failed", "error");
+                    }
+                  }}
+                  disabled={isSyncing}
+                  className="px-4 py-2 bg-accent hover:bg-accent-hover disabled:opacity-50 text-white font-medium rounded-lg transition text-sm whitespace-nowrap"
+                >
+                  Auto-Detect
+                </button>
+              </div>
               <p className="text-xs text-muted mt-1">
                 Must match EXACTLY as shown in TallyPrime (case-sensitive, including dots/spaces)
               </p>

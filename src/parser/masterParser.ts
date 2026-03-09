@@ -387,14 +387,23 @@ function parseOneLedger(raw: any, _warnings: ImportWarning[]): CanonicalLedger |
   };
 }
 
-/** Parse quantity string like " 240 PC" → 240 */
+/** Parse quantity string like " 240 PC", "9.000 Pcs", "-1234 Nos", "0.500 Kg" → number */
 function parseQtyString(s: string): number {
   if (!s) return 0;
-  // Extract first number from string
-  const match = s.match(/^[\s-]*([0-9]+(?:\.[0-9]+)?)/);
+  const cleaned = s.trim();
+  if (!cleaned) return 0;
+  // Match optional leading minus/space, then digits with optional decimal
+  const match = cleaned.match(/^(-?\s*\d+(?:\.\d+)?)/);
   if (match) {
-    const n = parseFloat(match[1]);
-    return s.trim().startsWith("-") ? -n : n;
+    const numStr = match[1].replace(/\s+/g, "");
+    const n = parseFloat(numStr);
+    return isFinite(n) ? n : 0;
+  }
+  // Fallback: try extracting any number from the string
+  const fallbackMatch = cleaned.match(/(-?\d+(?:\.\d+)?)/);
+  if (fallbackMatch) {
+    const n = parseFloat(fallbackMatch[1]);
+    return isFinite(n) ? n : 0;
   }
   return parseNumber(s);
 }

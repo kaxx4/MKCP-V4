@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
-import { tallyPost, stockItemsXml, stockGroupsXml, unitsXml, ledgersXml, vouchersXml, getMonthlyChunks, HEALTH_XML } from "./tally.js";
-import { convertStockItems, convertStockGroups, convertUnits, convertLedgers, convertVouchers, convertCompanies } from "./convert.js";
+import { tallyPost, tallyPostWithRetry, stockItemsXml, stockGroupsXml, unitsXml, godownsXml, costCentresXml, ledgersXml, vouchersXml, getMonthlyChunks, HEALTH_XML } from "./tally.js";
+import { convertStockItems, convertStockGroups, convertUnits, convertGodowns, convertCostCentres, convertLedgers, convertVouchers, convertCompanies } from "./convert.js";
 
 const app = express();
 const PORT = 3100;
@@ -13,6 +13,8 @@ app.use(express.json({ limit: "100mb" }));
 // In-memory log buffer for live streaming
 const logBuffer: string[] = [];
 const MAX_LOGS = 500;
+
+let lastRawXml: { request: string; response: string; timestamp: string; label: string } | null = null;
 
 // Intercept console.log to capture logs
 const originalLog = console.log;
@@ -195,6 +197,21 @@ app.get("/api/tally/progress", (req, res) => {
   });
 });
 
+// Company auto-detection
+app.get("/api/tally/company", async (_req, res) => {
+  try {
+    const parsed = await tallyPost(TALLY, HEALTH_XML, 10_000);
+    const companies = convertCompanies(parsed);
+    res.json({
+      success: true,
+      companies,
+      current: companies.length > 0 ? companies[0].name : null
+    });
+  } catch (e: any) {
+    res.json({ success: false, error: e.message, companies: [], current: null });
+  }
+});
+
 // Health
 app.get("/api/tally/health", async (_req, res) => {
   try {
@@ -222,8 +239,8 @@ app.post("/api/tally/sync-masters", async (req, res) => {
 
   // Step 1: Stock Groups
   try {
-    console.log(`[MASTERS] Step 1/4: Fetching stock groups...`);
-    const xml = await tallyPost(TALLY, stockGroupsXml(company), 30_000);
+    console.log(`[MASTERS] Step 1/6: Fetching stock groups...`);
+    const xml = await tallyPostWithRetry(TALLY, stockGroupsXml(company), 30_000);
     groups = convertStockGroups(xml);
     console.log(`[MASTERS] ✓ ${groups.tallymessage.length} stock groups`);
   } catch (e: any) {
@@ -233,8 +250,8 @@ app.post("/api/tally/sync-masters", async (req, res) => {
 
   // Step 2: Units
   try {
-    console.log(`[MASTERS] Step 2/4: Fetching units...`);
-    const xml = await tallyPost(TALLY, unitsXml(company), 30_000);
+    console.log(`[MASTERS] Step 2/6: Fetching units...`);
+    const xml = await tallyPostWithRetry(TALLY, unitsXml(company), 30_000);
     units = convertUnits(xml);
     console.log(`[MASTERS] ✓ ${units.tallymessage.length} units`);
   } catch (e: any) {
@@ -244,8 +261,8 @@ app.post("/api/tally/sync-masters", async (req, res) => {
 
   // Step 3: Stock Items
   try {
-    console.log(`[MASTERS] Step 3/4: Fetching stock items...`);
-    const xml = await tallyPost(TALLY, stockItemsXml(company), 120_000);
+    console.log(`[MASTERS] Step 3/6: Fetching stock items...`);
+    const xml = await tallyPostWithRetry(TALLY, stockItemsXml(company), 120_000);
     stocks = convertStockItems(xml);
     console.log(`[MASTERS] ✓ ${stocks.tallymessage.length} stock items`);
   } catch (e: any) {
@@ -255,13 +272,37 @@ app.post("/api/tally/sync-masters", async (req, res) => {
 
   // Step 4: Ledgers
   try {
-    console.log(`[MASTERS] Step 4/4: Fetching ledgers...`);
-    const xml = await tallyPost(TALLY, ledgersXml(company), 120_000);
+    console.log(`[MASTERS] Step 4/6: Fetching ledgers...`);
+    const xml = await tallyPostWithRetry(TALLY, ledgersXml(company), 120_000);
     ledgers = convertLedgers(xml);
     console.log(`[MASTERS] ✓ ${ledgers.tallymessage.length} ledgers`);
   } catch (e: any) {
     console.error(`[MASTERS] ✗ Ledgers: ${e.message}`);
     errors.push(e.message);
+  }
+
+  // Step 5: Godowns
+  let godowns = { tallymessage: [] as any[] };
+  try {
+    console.log(`[MASTERS] Step 5/6: Fetching godowns...`);
+    const xml = await tallyPostWithRetry(TALLY, godownsXml(company), 30_000);
+    godowns = convertGodowns(xml);
+    console.log(`[MASTERS] ✓ ${godowns.tallymessage.length} godowns`);
+  } catch (e: any) {
+    console.error(`[MASTERS] ✗ Godowns: ${e.message}`);
+    errors.push(`Godowns: ${e.message}`);
+  }
+
+  // Step 6: Cost Centres
+  let costCentres = { tallymessage: [] as any[] };
+  try {
+    console.log(`[MASTERS] Step 6/6: Fetching cost centres...`);
+    const xml = await tallyPostWithRetry(TALLY, costCentresXml(company), 30_000);
+    costCentres = convertCostCentres(xml);
+    console.log(`[MASTERS] ✓ ${costCentres.tallymessage.length} cost centres`);
+  } catch (e: any) {
+    console.error(`[MASTERS] ✗ Cost centres: ${e.message}`);
+    errors.push(`Cost centres: ${e.message}`);
   }
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -277,6 +318,8 @@ app.post("/api/tally/sync-masters", async (req, res) => {
         ...units.tallymessage,
         ...stocks.tallymessage,
         ...ledgers.tallymessage,
+        ...godowns.tallymessage,
+        ...costCentres.tallymessage,
       ],
     },
     stats: {
@@ -284,6 +327,8 @@ app.post("/api/tally/sync-masters", async (req, res) => {
       units: units.tallymessage.length,
       stockItems: stocks.tallymessage.length,
       ledgers: ledgers.tallymessage.length,
+      godowns: godowns.tallymessage.length,
+      costCentres: costCentres.tallymessage.length,
       elapsedSeconds: parseFloat(elapsed),
     },
   });
@@ -308,24 +353,32 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    const chunkT0 = Date.now();
-    try {
-      console.log(`[DAYBOOK] Chunk ${i + 1}/${chunks.length}: ${chunk.label} (${chunk.from} → ${chunk.to})...`);
-      const xml = await tallyPost(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000);
-      const vouchers = convertVouchers(xml);
-      const ms = Date.now() - chunkT0;
-      allVouchers.push(...vouchers.tallymessage);
-      chunkDetails.push({ label: chunk.label, count: vouchers.tallymessage.length, ms });
-      chunksSucceeded++;
-      console.log(`[DAYBOOK] ✓ ${chunk.label}: ${vouchers.tallymessage.length} vouchers (${ms}ms)`);
-    } catch (e: any) {
-      const ms = Date.now() - chunkT0;
-      chunksFailed++;
-      chunkDetails.push({ label: chunk.label, count: 0, ms });
-      const errMsg = `${chunk.label}: ${e.message}`;
-      errors.push(errMsg);
-      console.error(`[DAYBOOK] ✗ ${errMsg}`);
-      // Continue — don't abort on chunk failure
+    let chunkDone = false;
+    for (let attempt = 0; attempt < 2 && !chunkDone; attempt++) {
+      const chunkT0 = Date.now();
+      try {
+        if (attempt > 0) {
+          console.log(`[DAYBOOK]   Retrying ${chunk.label}...`);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+        console.log(`[DAYBOOK] Chunk ${i + 1}/${chunks.length}: ${chunk.label} (${chunk.from} → ${chunk.to})...`);
+        const xml = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+        const vouchers = convertVouchers(xml);
+        const ms = Date.now() - chunkT0;
+        allVouchers.push(...vouchers.tallymessage);
+        chunkDetails.push({ label: chunk.label, count: vouchers.tallymessage.length, ms });
+        chunksSucceeded++;
+        chunkDone = true;
+        console.log(`[DAYBOOK] ✓ ${chunk.label}: ${vouchers.tallymessage.length} vouchers (${ms}ms)`);
+      } catch (e: any) {
+        if (attempt === 1) {
+          const ms = Date.now() - chunkT0;
+          chunksFailed++;
+          chunkDetails.push({ label: chunk.label, count: 0, ms });
+          errors.push(`${chunk.label}: ${e.message}`);
+          console.error(`[DAYBOOK] ✗ ${chunk.label}: ${e.message} (gave up after 2 attempts)`);
+        }
+      }
     }
   }
 
@@ -368,8 +421,8 @@ app.post("/api/tally/sync", async (req, res) => {
   // ── Step 1: Stock Groups ──
   let groups = { tallymessage: [] as any[] };
   try {
-    console.log(`[SYNC] Step 1/5: Fetching stock groups...`);
-    const xml = await tallyPost(TALLY, stockGroupsXml(company), 30_000);
+    console.log(`[SYNC] Step 1/7: Fetching stock groups...`);
+    const xml = await tallyPostWithRetry(TALLY, stockGroupsXml(company), 30_000);
     groups = convertStockGroups(xml);
     console.log(`[SYNC] ✓ Stock groups: ${groups.tallymessage.length}`);
   } catch (e: any) {
@@ -380,8 +433,8 @@ app.post("/api/tally/sync", async (req, res) => {
   // ── Step 2: Units ──
   let units = { tallymessage: [] as any[] };
   try {
-    console.log(`[SYNC] Step 2/5: Fetching units...`);
-    const xml = await tallyPost(TALLY, unitsXml(company), 30_000);
+    console.log(`[SYNC] Step 2/7: Fetching units...`);
+    const xml = await tallyPostWithRetry(TALLY, unitsXml(company), 30_000);
     units = convertUnits(xml);
     console.log(`[SYNC] ✓ Units: ${units.tallymessage.length}`);
   } catch (e: any) {
@@ -392,8 +445,8 @@ app.post("/api/tally/sync", async (req, res) => {
   // ── Step 3: Stock Items ──
   let stocks = { tallymessage: [] as any[] };
   try {
-    console.log(`[SYNC] Step 3/5: Fetching stock items...`);
-    const xml = await tallyPost(TALLY, stockItemsXml(company), 300_000);
+    console.log(`[SYNC] Step 3/7: Fetching stock items...`);
+    const xml = await tallyPostWithRetry(TALLY, stockItemsXml(company), 300_000);
     stocks = convertStockItems(xml);
     console.log(`[SYNC] ✓ Stock items: ${stocks.tallymessage.length}`);
   } catch (e: any) {
@@ -404,8 +457,8 @@ app.post("/api/tally/sync", async (req, res) => {
   // ── Step 4: Ledgers ──
   let ledgers = { tallymessage: [] as any[] };
   try {
-    console.log(`[SYNC] Step 4/5: Fetching ledgers...`);
-    const xml = await tallyPost(TALLY, ledgersXml(company), 300_000);
+    console.log(`[SYNC] Step 4/7: Fetching ledgers...`);
+    const xml = await tallyPostWithRetry(TALLY, ledgersXml(company), 300_000);
     ledgers = convertLedgers(xml);
     console.log(`[SYNC] ✓ Ledgers: ${ledgers.tallymessage.length}`);
   } catch (e: any) {
@@ -413,28 +466,63 @@ app.post("/api/tally/sync", async (req, res) => {
     errors.push(`Ledgers: ${e.message}`);
   }
 
-  // ── Step 5: Vouchers (Monthly Chunking) ──
+  // ── Step 5: Godowns ──
+  let godowns = { tallymessage: [] as any[] };
+  try {
+    console.log(`[SYNC] Step 5/7: Fetching godowns...`);
+    const xml = await tallyPostWithRetry(TALLY, godownsXml(company), 30_000);
+    godowns = convertGodowns(xml);
+    console.log(`[SYNC] ✓ Godowns: ${godowns.tallymessage.length}`);
+  } catch (e: any) {
+    console.error(`[SYNC] ✗ Godowns failed: ${e.message}`);
+    errors.push(`Godowns: ${e.message}`);
+  }
+
+  // ── Step 6: Cost Centres ──
+  let costCentres = { tallymessage: [] as any[] };
+  try {
+    console.log(`[SYNC] Step 6/7: Fetching cost centres...`);
+    const xml = await tallyPostWithRetry(TALLY, costCentresXml(company), 30_000);
+    costCentres = convertCostCentres(xml);
+    console.log(`[SYNC] ✓ Cost centres: ${costCentres.tallymessage.length}`);
+  } catch (e: any) {
+    console.error(`[SYNC] ✗ Cost centres failed: ${e.message}`);
+    errors.push(`Cost centres: ${e.message}`);
+  }
+
+  // ── Step 7: Vouchers (Monthly Chunking) ──
   const allVouchers: any[] = [];
   if (fromDate && toDate) {
     const chunks = getMonthlyChunks(fromDate, toDate);
-    console.log(`[SYNC] Step 5/5: Fetching vouchers month-by-month (${chunks.length} chunks)...`);
+    console.log(`[SYNC] Step 7/7: Fetching vouchers month-by-month (${chunks.length} chunks)...`);
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      try {
-        console.log(`[SYNC]   Chunk ${i + 1}/${chunks.length}: ${chunk.label}...`);
-        const xml = await tallyPost(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000);
-        const vouchers = convertVouchers(xml);
-        allVouchers.push(...vouchers.tallymessage);
-        console.log(`[SYNC]   ✓ ${chunk.label}: ${vouchers.tallymessage.length} vouchers`);
-      } catch (e: any) {
-        console.error(`[SYNC]   ✗ ${chunk.label}: ${e.message}`);
-        errors.push(`Vouchers ${chunk.label}: ${e.message}`);
+      let chunkDone = false;
+      for (let attempt = 0; attempt < 2 && !chunkDone; attempt++) {
+        const chunkT0 = Date.now();
+        try {
+          if (attempt > 0) {
+            console.log(`[SYNC]   Retrying ${chunk.label}...`);
+            await new Promise(r => setTimeout(r, 2000));
+          }
+          console.log(`[SYNC]   Chunk ${i + 1}/${chunks.length}: ${chunk.label}...`);
+          const xml = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+          const vouchers = convertVouchers(xml);
+          allVouchers.push(...vouchers.tallymessage);
+          chunkDone = true;
+          console.log(`[SYNC]   ✓ ${chunk.label}: ${vouchers.tallymessage.length} vouchers (${Date.now() - chunkT0}ms)`);
+        } catch (e: any) {
+          if (attempt === 1) {
+            console.error(`[SYNC]   ✗ ${chunk.label}: ${e.message} (gave up after 2 attempts)`);
+            errors.push(`Vouchers ${chunk.label}: ${e.message}`);
+          }
+        }
       }
     }
     console.log(`[SYNC] ✓ Total vouchers: ${allVouchers.length}`);
   } else {
-    console.log(`[SYNC] Step 5/5: Skipped — no date range provided`);
+    console.log(`[SYNC] Step 7/7: Skipped — no date range provided`);
   }
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -443,11 +531,13 @@ app.post("/api/tally/sync", async (req, res) => {
     units: units.tallymessage.length,
     stockItems: stocks.tallymessage.length,
     ledgers: ledgers.tallymessage.length,
+    godowns: godowns.tallymessage.length,
+    costCentres: costCentres.tallymessage.length,
     vouchers: allVouchers.length,
     elapsedSeconds: parseFloat(elapsed),
   };
 
-  console.log(`[SYNC] Done in ${elapsed}s: ${stats.stockGroups} groups, ${stats.units} units, ${stats.stockItems} items, ${stats.ledgers} ledgers, ${stats.vouchers} vouchers`);
+  console.log(`[SYNC] Done in ${elapsed}s: ${stats.stockGroups} groups, ${stats.units} units, ${stats.stockItems} items, ${stats.ledgers} ledgers, ${stats.godowns} godowns, ${stats.costCentres} cost centres, ${stats.vouchers} vouchers`);
   if (errors.length > 0) console.log(`[SYNC] Errors: ${errors.join("; ")}`);
 
   const hasData = stats.stockItems > 0 || stats.ledgers > 0 || stats.vouchers > 0;
@@ -463,6 +553,8 @@ app.post("/api/tally/sync", async (req, res) => {
         ...units.tallymessage,
         ...stocks.tallymessage,
         ...ledgers.tallymessage,
+        ...godowns.tallymessage,
+        ...costCentres.tallymessage,
       ],
     },
     transactions: { tallymessage: allVouchers },
@@ -508,6 +600,38 @@ app.post("/api/tally/debug-stock", async (req, res) => {
       totalItems: stocks.tallymessage.length,
       sample: stocks.tallymessage.slice(0, count),
     });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/tally/debug/raw", (_req, res) => {
+  if (!lastRawXml) return res.json({ stored: false, message: "No raw XML captured yet. Use POST /api/tally/debug/raw-test to capture one." });
+  res.json({ stored: true, ...lastRawXml });
+});
+
+app.post("/api/tally/debug/raw-test", async (req, res) => {
+  const { company, test } = req.body;
+  if (!company) return res.status(400).json({ error: "company required" });
+
+  let xml = HEALTH_XML;
+  if (test === "stock") xml = stockItemsXml(company);
+  else if (test === "ledger") xml = ledgersXml(company);
+  else if (test === "voucher") xml = vouchersXml(company, "20250401", "20250430");
+  else if (test === "groups") xml = stockGroupsXml(company);
+  else if (test === "units") xml = unitsXml(company);
+  else if (test === "godowns") xml = godownsXml(company);
+  else if (test === "costcentres") xml = costCentresXml(company);
+
+  try {
+    const raw = await tallyPost(TALLY, xml, 60_000, true);
+    lastRawXml = {
+      request: xml,
+      response: typeof raw === "string" ? raw.slice(0, 50_000) : JSON.stringify(raw).slice(0, 50_000),
+      timestamp: new Date().toISOString(),
+      label: test || "health",
+    };
+    res.json({ success: true, responseLength: raw.length, preview: typeof raw === "string" ? raw.slice(0, 3000) : "parsed" });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
