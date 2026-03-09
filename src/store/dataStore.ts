@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { ParsedData, CanonicalVoucher } from "../types/canonical";
 import { applyOverridesToItems } from "../utils/applyOverrides";
 import { useOverrideStore } from "./overrideStore";
-import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
+import { generatePredictions, scorePredictions, generateItemForecasts, type PredictionSnapshot } from "../engine/prediction";
 import { saveToStore, loadFromStore } from "../db/idb";
 import { buildVoucherIndex, type VoucherIndex } from "../engine/inventory";
 
@@ -141,9 +141,16 @@ export const useDataStore = create<DataState>((set, get) => ({
         const purchasePredictions = generatePredictions(allVouchers, itemsWithOverrides, "Purchase");
         const allPredictions = [...salesPredictions, ...purchasePredictions];
 
+        // Generate item-level forecasts and inventory alerts
+        const { forecasts: itemForecasts, alerts: inventoryAlerts } = generateItemForecasts(
+          allVouchers, itemsWithOverrides
+        );
+
         const newSnapshot: PredictionSnapshot = {
           generatedAt: new Date().toISOString(),
           predictions: allPredictions,
+          itemForecasts,
+          inventoryAlerts,
         };
 
         // Score previous predictions against new actuals

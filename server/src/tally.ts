@@ -494,6 +494,72 @@ export function getMonthlyChunks(fromDate: string, toDate: string): DateChunk[] 
   return chunks;
 }
 
+/**
+ * Daily Chunking — splits a date range into individual day requests.
+ * Slower but more reliable for large datasets or problematic date ranges.
+ */
+export function getDailyChunks(fromDate: string, toDate: string): DateChunk[] {
+  const chunks: DateChunk[] = [];
+
+  const startYear = parseInt(fromDate.slice(0, 4), 10);
+  const startMonth = parseInt(fromDate.slice(4, 6), 10) - 1;
+  const startDay = parseInt(fromDate.slice(6, 8), 10);
+  const endYear = parseInt(toDate.slice(0, 4), 10);
+  const endMonth = parseInt(toDate.slice(4, 6), 10) - 1;
+  const endDay = parseInt(toDate.slice(6, 8), 10);
+
+  const current = new Date(startYear, startMonth, startDay);
+  const end = new Date(endYear, endMonth, endDay);
+
+  while (current <= end) {
+    const y = current.getFullYear();
+    const m = String(current.getMonth() + 1).padStart(2, "0");
+    const d = String(current.getDate()).padStart(2, "0");
+    const dateStr = `${y}${m}${d}`;
+    const label = `${d} ${MONTH_NAMES[current.getMonth()]} ${y}`;
+
+    chunks.push({ from: dateStr, to: dateStr, label });
+
+    current.setDate(current.getDate() + 1);
+  }
+
+  return chunks;
+}
+
+/**
+ * Weekly Chunking — splits a date range into 7-day blocks.
+ * Good balance between monthly (too large) and daily (too many requests).
+ */
+export function getWeeklyChunks(fromDate: string, toDate: string): DateChunk[] {
+  const chunks: DateChunk[] = [];
+
+  const startYear = parseInt(fromDate.slice(0, 4), 10);
+  const startMonth = parseInt(fromDate.slice(4, 6), 10) - 1;
+  const startDay = parseInt(fromDate.slice(6, 8), 10);
+  const endYear = parseInt(toDate.slice(0, 4), 10);
+  const endMonth = parseInt(toDate.slice(4, 6), 10) - 1;
+  const endDay = parseInt(toDate.slice(6, 8), 10);
+
+  const current = new Date(startYear, startMonth, startDay);
+  const end = new Date(endYear, endMonth, endDay);
+
+  while (current <= end) {
+    const weekEnd = new Date(current);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    if (weekEnd > end) weekEnd.setTime(end.getTime());
+
+    const fromStr = `${current.getFullYear()}${String(current.getMonth() + 1).padStart(2, "0")}${String(current.getDate()).padStart(2, "0")}`;
+    const toStr = `${weekEnd.getFullYear()}${String(weekEnd.getMonth() + 1).padStart(2, "0")}${String(weekEnd.getDate()).padStart(2, "0")}`;
+    const label = `${current.getDate()} ${MONTH_NAMES[current.getMonth()]} — ${weekEnd.getDate()} ${MONTH_NAMES[weekEnd.getMonth()]} ${weekEnd.getFullYear()}`;
+
+    chunks.push({ from: fromStr, to: toStr, label });
+
+    current.setDate(current.getDate() + 7);
+  }
+
+  return chunks;
+}
+
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
