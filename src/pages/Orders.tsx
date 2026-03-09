@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, Minus, Trash2, Download, X, Upload, Package, Filter } from "lucide-react";
+import { Search, Plus, Minus, Trash2, Download, X, Upload, Package, Filter, FolderPlus, FolderOpen, Save, Copy } from "lucide-react";
 import Fuse from "fuse.js";
 import * as XLSX from "xlsx";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -18,6 +18,7 @@ import {
 import { useDataStore } from "../store/dataStore";
 import { useUIStore } from "../store/uiStore";
 import { useOrderStore } from "../store/orderStore";
+import { useOrderGroupStore, type OrderGroup } from "../store/orderGroupStore";
 import { getCurrentStock, getCurrentStockIndexed, computeMonthlyBuckets, computeMonthlyBucketsIndexed, suggestedReorder } from "../engine/inventory";
 import { toDisplay, fromDisplay } from "../engine/unitEngine";
 import { UnitToggle } from "../components/UnitToggle";
@@ -30,6 +31,18 @@ export default function Orders() {
   const { data, voucherIndex } = useDataStore();
   const { unitMode, coverMonths, setCoverMonths } = useUIStore();
   const { lines: orderLines, setLine, removeLine, clearAll, getAllLines } = useOrderStore();
+  const {
+    groups: orderGroupsMap,
+    activeGroupId,
+    createGroup,
+    updateGroup,
+    deleteGroup,
+    duplicateGroup,
+    setActiveGroup,
+    setGroupLines,
+    addLinesToGroup,
+    getAllGroups,
+  } = useOrderGroupStore();
 
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -40,6 +53,9 @@ export default function Orders() {
   const [stockFilterEnabled, setStockFilterEnabled] = useState(false);
   const [stockFilterOp, setStockFilterOp] = useState<"<=" | ">=" | "=">("<=");
   const [stockFilterValue, setStockFilterValue] = useState("0");
+  const [showGroupPanel, setShowGroupPanel] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupDesc, setNewGroupDesc] = useState("");
 
   const searchRef = useRef<HTMLInputElement>(null);
   const qtyRef = useRef<HTMLInputElement>(null);
@@ -264,6 +280,44 @@ export default function Orders() {
     a.click();
   }
 
+  // ── Order Group Helpers ──
+  const orderGroups = getAllGroups();
+
+  function handleCreateGroup() {
+    if (!newGroupName.trim()) return;
+    const id = createGroup(newGroupName.trim(), newGroupDesc.trim());
+    const currentLines = getAllLines();
+    if (currentLines.length > 0) {
+      const lineMap: Record<string, any> = {};
+      for (const l of currentLines) lineMap[l.itemId] = l;
+      setGroupLines(id, lineMap);
+    }
+    setNewGroupName("");
+    setNewGroupDesc("");
+    setActiveGroup(id);
+  }
+
+  function handleSaveToGroup(groupId: string) {
+    const currentLines = getAllLines();
+    const lineMap: Record<string, any> = {};
+    for (const l of currentLines) lineMap[l.itemId] = l;
+    setGroupLines(groupId, lineMap);
+  }
+
+  function handleLoadGroup(group: OrderGroup) {
+    clearAll();
+    for (const [itemId, line] of Object.entries(group.lines)) {
+      setLine(itemId, line);
+    }
+    setActiveGroup(group.id);
+  }
+
+  function handleAddGroupToOrder(group: OrderGroup) {
+    for (const [itemId, line] of Object.entries(group.lines)) {
+      setLine(itemId, line);
+    }
+  }
+
   function exportXLSX() {
     const lines = getAllLines();
     const ws = XLSX.utils.aoa_to_sheet([
@@ -322,6 +376,152 @@ export default function Orders() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-112px)] gap-0">
+      {/* Order Groups Bar */}
+      <div className="flex items-center gap-2 px-3 py-2 bg-bg-card border border-bg-border rounded-t-xl mb-0">
+        <button
+          onClick={() => setShowGroupPanel(!showGroupPanel)}
+          className={clsx(
+            "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition",
+            showGroupPanel ? "bg-accent text-white" : "bg-bg-border text-muted hover:text-primary"
+          )}
+        >
+          <FolderOpen size={13} />
+          Order Groups ({orderGroups.length})
+        </button>
+        {orderGroups.length > 0 && !showGroupPanel && (
+          <div className="flex gap-1.5 overflow-x-auto">
+            {orderGroups.slice(0, 5).map((g) => (
+              <button
+                key={g.id}
+                onClick={() => handleLoadGroup(g)}
+                className={clsx(
+                  "flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition whitespace-nowrap",
+                  activeGroupId === g.id
+                    ? "border-accent bg-accent/10 text-accent font-medium"
+                    : "border-bg-border text-muted hover:text-primary hover:bg-bg-border/50"
+                )}
+                title={`${Object.keys(g.lines).length} items — ${g.description || "No description"}`}
+              >
+                <span className="w-2 h-2 rounded-full" style={{ background: g.color }} />
+                {g.name}
+                <span className="text-muted/60 font-mono">({Object.keys(g.lines).length})</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="ml-auto flex items-center gap-2 text-xs text-muted">
+          <span className="font-mono">{orderLinesList.length} items in order</span>
+        </div>
+      </div>
+
+      {/* Order Groups Expanded Panel */}
+      {showGroupPanel && (
+        <div className="bg-bg-card border-x border-b border-bg-border p-4 space-y-3 mb-0">
+          {/* Create new group */}
+          <div className="flex items-end gap-3">
+            <div className="flex-1">
+              <label className="text-xs text-muted font-medium mb-1 block">Group Name</label>
+              <input
+                value={newGroupName}
+                onChange={(e) => setNewGroupName(e.target.value)}
+                placeholder="e.g. Weekly Order, Premium Items, Urgent Restock…"
+                className="w-full bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none focus:border-accent/60"
+                onKeyDown={(e) => e.key === "Enter" && handleCreateGroup()}
+              />
+            </div>
+            <div className="flex-1">
+              <label className="text-xs text-muted font-medium mb-1 block">Description (optional)</label>
+              <input
+                value={newGroupDesc}
+                onChange={(e) => setNewGroupDesc(e.target.value)}
+                placeholder="Notes about this order group…"
+                className="w-full bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none focus:border-accent/60"
+                onKeyDown={(e) => e.key === "Enter" && handleCreateGroup()}
+              />
+            </div>
+            <button
+              onClick={handleCreateGroup}
+              disabled={!newGroupName.trim()}
+              className="flex items-center gap-1.5 bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap"
+            >
+              <FolderPlus size={14} />
+              Create & Save Current Order
+            </button>
+          </div>
+
+          {/* Existing groups */}
+          {orderGroups.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {orderGroups.map((g) => {
+                const lineCount = Object.keys(g.lines).length;
+                const isActive = activeGroupId === g.id;
+                return (
+                  <div
+                    key={g.id}
+                    className={clsx(
+                      "border rounded-lg p-3 transition",
+                      isActive ? "border-accent bg-accent/5" : "border-bg-border bg-bg hover:bg-bg-border/20"
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: g.color }} />
+                        <span className="font-medium text-sm text-primary truncate">{g.name}</span>
+                      </div>
+                      <span className="text-xs font-mono text-muted whitespace-nowrap">{lineCount} items</span>
+                    </div>
+                    {g.description && (
+                      <p className="text-xs text-muted mb-2 truncate">{g.description}</p>
+                    )}
+                    <div className="text-xs text-muted mb-2">
+                      Updated: {new Date(g.updatedAt).toLocaleDateString("en-IN", { dateStyle: "medium" })}
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => handleLoadGroup(g)}
+                        className="flex items-center gap-1 text-xs px-2 py-1 bg-accent/15 text-accent hover:bg-accent/25 rounded transition"
+                      >
+                        <FolderOpen size={11} /> Load
+                      </button>
+                      <button
+                        onClick={() => handleAddGroupToOrder(g)}
+                        className="flex items-center gap-1 text-xs px-2 py-1 bg-bg-border text-muted hover:text-primary rounded transition"
+                        title="Add group items to current order"
+                      >
+                        <Plus size={11} /> Merge
+                      </button>
+                      <button
+                        onClick={() => handleSaveToGroup(g.id)}
+                        className="flex items-center gap-1 text-xs px-2 py-1 bg-bg-border text-muted hover:text-primary rounded transition"
+                        title="Overwrite group with current order"
+                      >
+                        <Save size={11} /> Save
+                      </button>
+                      <button
+                        onClick={() => duplicateGroup(g.id)}
+                        className="flex items-center gap-1 text-xs px-2 py-1 bg-bg-border text-muted hover:text-primary rounded transition"
+                      >
+                        <Copy size={11} />
+                      </button>
+                      <button
+                        onClick={() => { if (confirm(`Delete "${g.name}"?`)) deleteGroup(g.id); }}
+                        className="flex items-center gap-1 text-xs px-2 py-1 bg-danger/10 text-danger hover:bg-danger/20 rounded transition ml-auto"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-4 text-sm text-muted">
+              No order groups yet. Create one to save your current order for reuse.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Top 3-panel area */}
       <div className="flex gap-0 flex-1 min-h-0 overflow-hidden rounded-xl border border-bg-border">
         {/* LEFT: Item List */}

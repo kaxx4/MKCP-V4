@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { tallyPost, tallyPostWithRetry, stockItemsXml, stockGroupsXml, unitsXml, godownsXml, costCentresXml, ledgersXml, vouchersXml, getMonthlyChunks, HEALTH_XML } from "./tally.js";
+import { tallyPost, tallyPostWithRetry, stockItemsXml, stockGroupsXml, unitsXml, godownsXml, costCentresXml, ledgersXml, vouchersXml, getMonthlyChunks, getDailyChunks, getWeeklyChunks, HEALTH_XML } from "./tally.js";
 import { convertStockItems, convertStockGroups, convertUnits, convertGodowns, convertCostCentres, convertLedgers, convertVouchers, convertCompanies } from "./convert.js";
 
 const app = express();
@@ -334,16 +334,36 @@ app.post("/api/tally/sync-masters", async (req, res) => {
   });
 });
 
-// ── Sync Day Book (vouchers for a period) — MONTHLY CHUNKING ──
+// ── Sync Day Book (vouchers for a period) — CONFIGURABLE CHUNKING ──
 app.post("/api/tally/sync-daybook", async (req, res) => {
-  const { company, fromDate, toDate } = req.body;
+  const { company, fromDate, toDate, chunkMode = "monthly" } = req.body;
   if (!company) return res.status(400).json({ success: false, error: "company required" });
   if (!fromDate || !toDate) return res.status(400).json({ success: false, error: "fromDate and toDate required (YYYYMMDD)" });
 
+  // Validate dates
+  if (fromDate.length !== 8 || toDate.length !== 8) {
+    return res.status(400).json({ success: false, error: `Invalid date format: from=${fromDate} to=${toDate}. Expected YYYYMMDD.` });
+  }
+  if (fromDate > toDate) {
+    return res.status(400).json({ success: false, error: `fromDate (${fromDate}) is after toDate (${toDate})` });
+  }
+  if (fromDate === toDate) {
+    console.warn(`[DAYBOOK] ⚠ Single day range detected (${fromDate}). This will only fetch one day of data.`);
+  }
+
   res.setTimeout(900_000); // 15 min
   const t0 = Date.now();
-  const chunks = getMonthlyChunks(fromDate, toDate);
-  console.log(`\n[DAYBOOK] Syncing vouchers for "${company}" (${fromDate} → ${toDate}) in ${chunks.length} monthly chunks...`);
+
+  // Select chunking strategy
+  let chunks: { from: string; to: string; label: string }[];
+  if (chunkMode === "daily") {
+    chunks = getDailyChunks(fromDate, toDate);
+  } else if (chunkMode === "weekly") {
+    chunks = getWeeklyChunks(fromDate, toDate);
+  } else {
+    chunks = getMonthlyChunks(fromDate, toDate);
+  }
+  console.log(`\n[DAYBOOK] Syncing vouchers for "${company}" (${fromDate} → ${toDate}) in ${chunks.length} ${chunkMode} chunks...`);
 
   const allVouchers: any[] = [];
   const chunkDetails: { label: string; count: number; ms: number }[] = [];

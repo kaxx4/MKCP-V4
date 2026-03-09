@@ -2,20 +2,17 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 interface TallyConnectionState {
-  // Connection settings
   proxyUrl: string;
   companyName: string;
   isConnected: boolean;
   lastSyncAt: string | null;
   lastError: string | null;
   isSyncing: boolean;
-  autoSyncMinutes: number;  // 0 = disabled
+  autoSyncMinutes: number;
+  fyFromDate: string;
+  fyToDate: string;
+  syncMode: "monthly" | "daily" | "weekly";
 
-  // FY date range for voucher fetching
-  fyFromDate: string;  // "20240401"
-  fyToDate: string;    // "20250331"
-
-  // Actions
   setProxyUrl: (url: string) => void;
   setCompanyName: (name: string) => void;
   setConnected: (v: boolean) => void;
@@ -24,6 +21,8 @@ interface TallyConnectionState {
   setSyncing: (v: boolean) => void;
   setAutoSync: (minutes: number) => void;
   setFyDates: (from: string, to: string) => void;
+  setSyncMode: (mode: "monthly" | "daily" | "weekly") => void;
+  resetToCurrentFY: () => void;
 }
 
 export const useTallyStore = create<TallyConnectionState>()(
@@ -38,6 +37,7 @@ export const useTallyStore = create<TallyConnectionState>()(
       autoSyncMinutes: 0,
       fyFromDate: getDefaultFYStart(),
       fyToDate: getDefaultFYEnd(),
+      syncMode: "monthly",
 
       setProxyUrl: (proxyUrl) => set({ proxyUrl }),
       setCompanyName: (companyName) => set({ companyName }),
@@ -47,49 +47,53 @@ export const useTallyStore = create<TallyConnectionState>()(
       setSyncing: (isSyncing) => set({ isSyncing }),
       setAutoSync: (autoSyncMinutes) => set({ autoSyncMinutes }),
       setFyDates: (fyFromDate, fyToDate) => set({ fyFromDate, fyToDate }),
+      setSyncMode: (syncMode) => set({ syncMode }),
+      resetToCurrentFY: () => set({
+        fyFromDate: getDefaultFYStart(),
+        fyToDate: getDefaultFYEnd(),
+      }),
     }),
     {
       name: "mkcycles-tally",
       partialize: (state) => {
-        // Exclude isSyncing from persistence — it's transient runtime state.
-        // If a sync hangs, we don't want buttons stuck disabled forever.
         const { isSyncing, ...rest } = state;
         return rest;
       },
-      version: 1,
+      version: 2,
       migrate: (persisted: any, version: number) => {
-        if (version < 1) {
-          // v0 → v1: Fix FY dates from "previous FY" to "current FY"
+        if (version < 2) {
           persisted.fyFromDate = getDefaultFYStart();
           persisted.fyToDate = getDefaultFYEnd();
+          persisted.syncMode = "monthly";
         }
         return persisted;
       },
       onRehydrateStorage: () => (state) => {
-        // Always reset isSyncing on page load — clear any stuck state
-        if (state) state.isSyncing = false;
+        if (state) {
+          state.isSyncing = false;
+          const from = state.fyFromDate;
+          const to = state.fyToDate;
+          if (!from || !to || from.length !== 8 || to.length !== 8 || from >= to) {
+            state.fyFromDate = getDefaultFYStart();
+            state.fyToDate = getDefaultFYEnd();
+          }
+          if (from === to) {
+            state.fyFromDate = getDefaultFYStart();
+            state.fyToDate = getDefaultFYEnd();
+          }
+        }
       },
     }
   )
 );
 
-/**
- * Calculate default FY start date - uses the CURRENT financial year.
- * Indian FY: April 1 to March 31.
- * Example: If today is March 2026, current FY = April 1, 2025 → March 31, 2026.
- */
-function getDefaultFYStart(): string {
+export function getDefaultFYStart(): string {
   const now = new Date();
-  // If Jan-Mar (month 0-2), FY started previous calendar year; else this year
   const fyStartYear = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
   return `${fyStartYear}0401`;
 }
 
-/**
- * Calculate default FY end date - end of the CURRENT financial year.
- * Example: If today is March 2026, return March 31, 2026.
- */
-function getDefaultFYEnd(): string {
+export function getDefaultFYEnd(): string {
   const now = new Date();
   const fyEndYear = now.getMonth() < 3 ? now.getFullYear() : now.getFullYear() + 1;
   return `${fyEndYear}0331`;

@@ -64,11 +64,14 @@ export default function ImportPage() {
     isSyncing,
     fyFromDate,
     fyToDate,
+    syncMode,
     setCompanyName,
     setConnected,
     setLastSync,
     setSyncing,
     setFyDates,
+    setSyncMode,
+    resetToCurrentFY,
   } = useTallyStore();
 
   // Upload state
@@ -276,9 +279,9 @@ export default function ImportPage() {
     setReport(null);
     setPendingData(null);
     try {
-      addLog(`Syncing Day Book for "${companyName}" (${fyFromDate} → ${fyToDate})...`);
-      addLog("Fetching vouchers month-by-month for reliability.");
-      const result = await syncDayBook(companyName, fyFromDate, fyToDate);
+      addLog(`Syncing Day Book for "${companyName}" (${fyFromDate} → ${fyToDate}) [${syncMode} chunks]...`);
+      addLog("Fetching vouchers chunk-by-chunk for reliability.");
+      const result = await syncDayBook(companyName, fyFromDate, fyToDate, syncMode);
 
       if (result.errors?.length) {
         for (const err of result.errors) addLog(`⚠ ${err}`);
@@ -356,9 +359,9 @@ export default function ImportPage() {
       if (mastersResult.errors?.length) mastersResult.errors.forEach(e => addLog(`⚠ ${e}`));
       addLog(`✓ ${mastersResult.stats.stockGroups} groups, ${mastersResult.stats.units} units, ${mastersResult.stats.stockItems} stock items, ${mastersResult.stats.ledgers} ledgers, ${mastersResult.stats.godowns ?? 0} godowns, ${mastersResult.stats.costCentres ?? 0} cost centres`);
 
-      // Step 2: Sync Day Book (monthly chunks)
-      addLog("Step 2/2: Fetching vouchers month-by-month (this may take 2-5 minutes)...");
-      const dayBookResult = await syncDayBook(companyName, fyFromDate, fyToDate);
+      // Step 2: Sync Day Book (chunked)
+      addLog(`Step 2/2: Fetching vouchers [${syncMode} chunks] (this may take 2-10 minutes)...`);
+      const dayBookResult = await syncDayBook(companyName, fyFromDate, fyToDate, syncMode);
       if (dayBookResult.errors?.length) dayBookResult.errors.forEach(e => addLog(`⚠ ${e}`));
       addLog(`✓ ${dayBookResult.stats.vouchers} vouchers fetched (${dayBookResult.stats.chunksSucceeded}/${dayBookResult.stats.chunksTotal} chunks)`);
       if (dayBookResult.stats.chunkDetails) {
@@ -735,11 +738,15 @@ export default function ImportPage() {
     }
 
     const freshPredictions = generatePredictions(merged.vouchers, merged.items, "Sales");
+    const { generateItemForecasts } = await import("../engine/prediction");
+    const { forecasts: itemForecasts, alerts: inventoryAlerts } = generateItemForecasts(merged.vouchers, merged.items);
     await saveToStore("predictions", "latest", {
       generatedAt: new Date().toISOString(),
       predictions: freshPredictions,
+      itemForecasts,
+      inventoryAlerts,
     });
-    addLog(`Generated ${freshPredictions.length} fresh predictions`);
+    addLog(`Generated ${freshPredictions.length} party predictions + ${itemForecasts.length} item forecasts + ${inventoryAlerts.length} alerts`);
 
     toast(`Imported ${report!.items} items, ${report!.ledgers} ledgers, ${report!.vouchers} vouchers`, "success");
     navigate("/orders");
@@ -905,9 +912,6 @@ export default function ImportPage() {
               <div>
                 <label className="block text-sm font-medium text-primary mb-2">
                   FY From Date
-                  <span className="text-xs text-muted ml-2 font-normal">
-                    (Default: Previous FY start)
-                  </span>
                 </label>
                 <input
                   type="date"
@@ -922,9 +926,6 @@ export default function ImportPage() {
               <div>
                 <label className="block text-sm font-medium text-primary mb-2">
                   FY To Date
-                  <span className="text-xs text-muted ml-2 font-normal">
-                    (Default: Previous FY end)
-                  </span>
                 </label>
                 <input
                   type="date"
@@ -937,9 +938,43 @@ export default function ImportPage() {
                 />
               </div>
             </div>
+            {/* Date range summary + Reset + Chunk mode */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex-1 text-xs text-muted bg-bg border border-bg-border rounded-lg px-3 py-2">
+                <strong>Range:</strong> {fyFromDate.slice(6,8)}/{fyFromDate.slice(4,6)}/{fyFromDate.slice(0,4)} — {fyToDate.slice(6,8)}/{fyToDate.slice(4,6)}/{fyToDate.slice(0,4)} ({formatFYRange(fyFromDate, fyToDate)})
+                {fyFromDate === fyToDate && <span className="text-danger ml-2 font-bold">⚠ SINGLE DAY — click Reset FY!</span>}
+                {fyFromDate > fyToDate && <span className="text-danger ml-2 font-bold">⚠ FROM after TO — click Reset FY!</span>}
+              </div>
+              <button
+                onClick={() => {
+                  resetToCurrentFY();
+                  addLog("✓ Dates reset to current FY");
+                }}
+                className="text-xs px-3 py-2 bg-warn/20 hover:bg-warn/30 text-warn font-semibold rounded-lg transition whitespace-nowrap"
+              >
+                Reset to Current FY
+              </button>
+            </div>
+
+            {/* Chunk mode selector */}
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted font-medium">Sync Mode:</span>
+              {(["monthly", "weekly", "daily"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setSyncMode(mode)}
+                  className={`text-xs px-3 py-1.5 rounded-md font-medium transition ${
+                    syncMode === mode
+                      ? "bg-accent text-white"
+                      : "bg-bg-border text-muted hover:text-primary"
+                  }`}
+                >
+                  {mode === "monthly" ? "Monthly (fast)" : mode === "weekly" ? "Weekly (balanced)" : "Daily (safest)"}
+                </button>
+              ))}
+            </div>
             <div className="text-xs text-muted bg-bg border border-bg-border rounded-lg px-3 py-2">
-              💡 <strong>Tip:</strong> Vouchers are fetched month-by-month for reliability (no data loss).
-              Current FY: {formatFYRange(fyFromDate, fyToDate)}
+              💡 <strong>Tip:</strong> Use <strong>Monthly</strong> for fast syncs. If you get empty/partial data, try <strong>Weekly</strong> or <strong>Daily</strong> mode — it makes smaller requests that are less likely to timeout or fail.
             </div>
 
             {/* Primary Import All Button */}

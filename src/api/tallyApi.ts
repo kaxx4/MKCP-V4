@@ -110,14 +110,14 @@ export async function syncMasters(company: string): Promise<MastersSyncResult> {
   }
 }
 
-export async function syncDayBook(company: string, fromDate: string, toDate: string): Promise<DayBookSyncResult> {
+export async function syncDayBook(company: string, fromDate: string, toDate: string, chunkMode: "monthly" | "daily" | "weekly" = "monthly"): Promise<DayBookSyncResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 900_000); // 15 min
   try {
     const r = await fetch(`${BASE}/api/tally/sync-daybook`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ company, fromDate, toDate }),
+      body: JSON.stringify({ company, fromDate, toDate, chunkMode }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
