@@ -102,6 +102,54 @@ export function convertUnits(parsed: any): { tallymessage: any[] } {
   };
 }
 
+export function convertGodowns(parsed: any): { tallymessage: any[] } {
+  const root = dig(parsed,
+    ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
+    ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
+    ["ENVELOPE", "BODY", "DATA"],
+    ["ENVELOPE", "BODY"],
+  );
+  const godowns = arr(root?.GODOWN ?? root?.["GODOWN.LIST"]);
+  console.log(`[convert] Godowns: ${godowns.length}`);
+  return {
+    tallymessage: godowns.map((g: any) => {
+      const name = g["@_NAME"] || txt(g.NAME);
+      if (!name) return null;
+      return {
+        metadata: { type: "Godown", name },
+        name,
+        parent: txt(g.PARENT, "Main Location"),
+        hasnospace: txt(g.HASNOSPACE) === "Yes",
+        guid: txt(g.GUID),
+      };
+    }).filter(Boolean),
+  };
+}
+
+export function convertCostCentres(parsed: any): { tallymessage: any[] } {
+  const root = dig(parsed,
+    ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
+    ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
+    ["ENVELOPE", "BODY", "DATA"],
+    ["ENVELOPE", "BODY"],
+  );
+  const centres = arr(root?.COSTCENTRE ?? root?.["COSTCENTRE.LIST"]);
+  console.log(`[convert] Cost Centres: ${centres.length}`);
+  return {
+    tallymessage: centres.map((c: any) => {
+      const name = c["@_NAME"] || txt(c.NAME);
+      if (!name) return null;
+      return {
+        metadata: { type: "Cost Centre", name },
+        name,
+        parent: txt(c.PARENT),
+        category: txt(c.CATEGORY),
+        guid: txt(c.GUID),
+      };
+    }).filter(Boolean),
+  };
+}
+
 export function convertStockItems(parsed: any): { tallymessage: any[] } {
   // Tally "All Stock Items" collection response:
   //   ENVELOPE.BODY.DATA.COLLECTION.STOCKITEM[]  or  ENVELOPE.BODY.DATA.TALLYMESSAGE.STOCKITEM[]

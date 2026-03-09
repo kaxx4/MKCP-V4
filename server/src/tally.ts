@@ -17,7 +17,7 @@ const xmlParser = new XMLParser({
 });
 
 const ARRAY_TAGS = new Set([
-  "TALLYMESSAGE", "VOUCHER", "LEDGER", "STOCKITEM", "STOCKGROUP", "UNIT", "COMPANY",
+  "TALLYMESSAGE", "VOUCHER", "LEDGER", "STOCKITEM", "STOCKGROUP", "UNIT", "COMPANY", "GODOWN", "COSTCENTRE",
   "ALLLEDGERENTRIES", "LEDGERENTRIES", "ALLINVENTORYENTRIES", "INVENTORYENTRIES",
   "BILLALLOCATIONS", "BATCHALLOCATIONS", "ACCOUNTINGALLOCATIONS",
   "BANKALLOCATIONS", "COSTCENTREALLOCATIONS", "COSTALLOCATIONS",
@@ -133,6 +133,30 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
   });
 }
 
+export async function tallyPostWithRetry(
+  tallyUrl: string, xml: string, timeoutMs = 300_000, rawMode = false, maxRetries = 2
+): Promise<any> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      if (attempt > 0) {
+        console.log(`[tally] Retry ${attempt}/${maxRetries}...`);
+        await new Promise(r => setTimeout(r, 2000 * attempt));
+      }
+      return await tallyPost(tallyUrl, xml, timeoutMs, rawMode);
+    } catch (e: any) {
+      lastError = e;
+      const retriable = e.message?.includes('timeout') ||
+                        e.message?.includes('ECONNREFUSED') ||
+                        e.message?.includes('ECONNRESET') ||
+                        e.message?.includes('XML parse failed');
+      if (!retriable || attempt === maxRetries) throw e;
+      console.error(`[tally] ✗ Attempt ${attempt + 1} failed: ${e.message}`);
+    }
+  }
+  throw lastError;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // XML REQUEST BUILDERS
 // Using EXACT formats from official Tally documentation:
@@ -207,7 +231,7 @@ export function unitsXml(company: string): string {
 <VERSION>1</VERSION>
 <TALLYREQUEST>Export</TALLYREQUEST>
 <TYPE>Collection</TYPE>
-<ID>List of Units</ID>
+<ID>MKCPUnits</ID>
 </HEADER>
 <BODY>
 <DESC>
@@ -217,7 +241,8 @@ export function unitsXml(company: string): string {
 </STATICVARIABLES>
 <TDL>
 <TDLMESSAGE>
-<COLLECTION NAME="List of Units" ISMODIFY="Yes">
+<COLLECTION NAME="MKCPUnits" ISMODIFY="No">
+<TYPE>Unit</TYPE>
 <NATIVEMETHOD>Name</NATIVEMETHOD>
 <NATIVEMETHOD>OriginalName</NATIVEMETHOD>
 <NATIVEMETHOD>BaseUnits</NATIVEMETHOD>
@@ -225,6 +250,72 @@ export function unitsXml(company: string): string {
 <NATIVEMETHOD>Conversion</NATIVEMETHOD>
 <NATIVEMETHOD>IsFormallyCompound</NATIVEMETHOD>
 <NATIVEMETHOD>IsSimpleUnit</NATIVEMETHOD>
+<NATIVEMETHOD>GUID</NATIVEMETHOD>
+</COLLECTION>
+</TDLMESSAGE>
+</TDL>
+</DESC>
+</BODY>
+</ENVELOPE>`;
+}
+
+/**
+ * Godowns — Collection export for all godowns
+ */
+export function godownsXml(company: string): string {
+  return `<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Collection</TYPE>
+<ID>MKCPGodowns</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+<TDL>
+<TDLMESSAGE>
+<COLLECTION NAME="MKCPGodowns" ISMODIFY="No">
+<TYPE>Godown</TYPE>
+<NATIVEMETHOD>Name</NATIVEMETHOD>
+<NATIVEMETHOD>Parent</NATIVEMETHOD>
+<NATIVEMETHOD>HasNoSpace</NATIVEMETHOD>
+<NATIVEMETHOD>GUID</NATIVEMETHOD>
+</COLLECTION>
+</TDLMESSAGE>
+</TDL>
+</DESC>
+</BODY>
+</ENVELOPE>`;
+}
+
+/**
+ * Cost Centres — Collection export for all cost centres
+ */
+export function costCentresXml(company: string): string {
+  return `<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Collection</TYPE>
+<ID>MKCPCostCentres</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+<TDL>
+<TDLMESSAGE>
+<COLLECTION NAME="MKCPCostCentres" ISMODIFY="No">
+<TYPE>CostCentre</TYPE>
+<NATIVEMETHOD>Name</NATIVEMETHOD>
+<NATIVEMETHOD>Parent</NATIVEMETHOD>
+<NATIVEMETHOD>Category</NATIVEMETHOD>
 <NATIVEMETHOD>GUID</NATIVEMETHOD>
 </COLLECTION>
 </TDLMESSAGE>

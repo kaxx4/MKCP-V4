@@ -7,7 +7,7 @@ export interface TallySyncResult {
   errors?: string[];
   masters: { tallymessage: any[] };
   transactions: { tallymessage: any[] };
-  stats: { stockGroups: number; units: number; stockItems: number; ledgers: number; vouchers: number; elapsedSeconds: number };
+  stats: { stockGroups: number; units: number; stockItems: number; ledgers: number; godowns: number; costCentres: number; vouchers: number; elapsedSeconds: number };
 }
 
 export async function checkTallyHealth(): Promise<{ connected: boolean; error?: string; tallyUrl: string }> {
@@ -70,7 +70,7 @@ export interface MastersSyncResult {
   success: boolean;
   errors?: string[];
   data: { tallymessage: any[] };
-  stats: { stockGroups: number; units: number; stockItems: number; ledgers: number; elapsedSeconds: number };
+  stats: { stockGroups: number; units: number; stockItems: number; ledgers: number; godowns: number; costCentres: number; elapsedSeconds: number };
 }
 
 export interface DayBookSyncResult {
@@ -144,4 +144,16 @@ export function subscribeToProgress(onLog: (msg: string) => void): () => void {
     // Silently reconnect — EventSource handles this automatically
   };
   return () => es.close();
+}
+
+export async function detectCompany(): Promise<{ success: boolean; companies: { name: string }[]; current: string | null }> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    const r = await fetch(`${BASE}/api/tally/company`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    return r.json();
+  } catch {
+    return { success: false, companies: [], current: null };
+  }
 }
