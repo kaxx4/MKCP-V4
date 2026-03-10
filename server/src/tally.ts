@@ -422,17 +422,50 @@ export function ledgersXml(company: string): string {
 }
 
 /**
- * Vouchers — from Tally docs:
- * TYPE=Data, ID=Day Book with date range
- * Date format: YYYYMMDD (TallyPrime XML API standard)
+ * Vouchers — Period-based export using "Export Data" request format.
+ * CRITICAL: Must use <TALLYREQUEST>Export Data</TALLYREQUEST> with
+ * EXPORTDATA/REQUESTDESC/REPORTNAME structure for date filtering to work.
+ * The old Export/TYPE/ID format ignores SVFROMDATE/SVTODATE.
+ * Dates: YYYYMMDD format. EXPLODEFLAG expands sub-voucher details.
  */
 export function vouchersXml(company: string, from: string, to: string): string {
+  console.log(`[tally] vouchersXml (Export Data): ${from} → ${to}`);
+  return `<ENVELOPE>
+<HEADER>
+<TALLYREQUEST>Export Data</TALLYREQUEST>
+</HEADER>
+<BODY>
+<EXPORTDATA>
+<REQUESTDESC>
+<REPORTNAME>Day Book</REPORTNAME>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
+<SVFROMDATE>${from}</SVFROMDATE>
+<SVTODATE>${to}</SVTODATE>
+<EXPLODEFLAG>Yes</EXPLODEFLAG>
+</STATICVARIABLES>
+</REQUESTDESC>
+</EXPORTDATA>
+</BODY>
+</ENVELOPE>`;
+}
+
+/**
+ * Fallback: Collection-based voucher export using FETCH.
+ * Bypasses the Day Book report entirely and directly queries the VOUCHER
+ * collection. Uses FETCH instead of NATIVEMETHOD to bypass UI filtering.
+ * TDL formula $$InDateRange filters by date at the collection level.
+ * Dates: YYYYMMDD format in SVFROMDATE/SVTODATE.
+ */
+export function vouchersCollectionXml(company: string, from: string, to: string): string {
+  console.log(`[tally] vouchersCollectionXml (Collection+FETCH): ${from} → ${to}`);
   return `<ENVELOPE>
 <HEADER>
 <VERSION>1</VERSION>
 <TALLYREQUEST>Export</TALLYREQUEST>
-<TYPE>Data</TYPE>
-<ID>Day Book</ID>
+<TYPE>Collection</TYPE>
+<ID>MKCPVouchers</ID>
 </HEADER>
 <BODY>
 <DESC>
@@ -442,6 +475,16 @@ export function vouchersXml(company: string, from: string, to: string): string {
 <SVFROMDATE>${from}</SVFROMDATE>
 <SVTODATE>${to}</SVTODATE>
 </STATICVARIABLES>
+<TDL>
+<TDLMESSAGE>
+<COLLECTION NAME="MKCPVouchers" ISMODIFY="No">
+<TYPE>Voucher</TYPE>
+<FETCH>*, *.*</FETCH>
+<FILTER>MKCPDateFilter</FILTER>
+</COLLECTION>
+<SYSTEM TYPE="Formulae" NAME="MKCPDateFilter">$$InDateRange:$Date:$$SvFromDate:$$SvToDate</SYSTEM>
+</TDLMESSAGE>
+</TDL>
 </DESC>
 </BODY>
 </ENVELOPE>`;
@@ -558,6 +601,19 @@ export function getWeeklyChunks(fromDate: string, toDate: string): DateChunk[] {
   }
 
   return chunks;
+}
+
+/**
+ * Convert YYYYMMDD → D-Mon-YYYY (e.g., "20250401" → "1-Apr-2025").
+ * TallyPrime's SVFROMDATE/SVTODATE static variables require this format.
+ * The YYYYMMDD format only works for <DATE> tags inside voucher data,
+ * NOT for static variable date parameters.
+ */
+function toTallyDate(yyyymmdd: string): string {
+  const y = yyyymmdd.slice(0, 4);
+  const m = parseInt(yyyymmdd.slice(4, 6), 10); // 1-based
+  const d = parseInt(yyyymmdd.slice(6, 8), 10); // no leading zero
+  return `${d}-${MONTH_NAMES[m - 1]}-${y}`;
 }
 
 function esc(s: string): string {

@@ -253,7 +253,17 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
   }
 
   // TALLYMESSAGE can be an array (multiple messages) or single object
-  const messages = arr(data.TALLYMESSAGE);
+  let messages = arr(data.TALLYMESSAGE);
+
+  // Fallback: Collection export returns COLLECTION.VOUCHER[] instead of TALLYMESSAGE[]
+  if (messages.length === 0 && data.COLLECTION) {
+    const collVouchers = arr(data.COLLECTION?.VOUCHER ?? data.COLLECTION?.["VOUCHER.LIST"]);
+    if (collVouchers.length > 0) {
+      console.log(`[convert] Found ${collVouchers.length} vouchers via COLLECTION path`);
+      messages = [{ VOUCHER: collVouchers }];
+    }
+  }
+
   console.log(`[convert] Found ${messages.length} TALLYMESSAGE nodes`);
 
   // Collect all vouchers from all TALLYMESSAGE nodes

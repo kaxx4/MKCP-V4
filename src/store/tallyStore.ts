@@ -12,6 +12,9 @@ interface TallyConnectionState {
   fyFromDate: string;
   fyToDate: string;
   syncMode: "monthly" | "daily" | "weekly";
+  lastVoucherDate: string | null;
+  lastMastersSyncAt: string | null;
+  lastVouchersSyncAt: string | null;
 
   setProxyUrl: (url: string) => void;
   setCompanyName: (name: string) => void;
@@ -23,6 +26,9 @@ interface TallyConnectionState {
   setFyDates: (from: string, to: string) => void;
   setSyncMode: (mode: "monthly" | "daily" | "weekly") => void;
   resetToCurrentFY: () => void;
+  setLastVoucherDate: (d: string | null) => void;
+  setLastMastersSync: (at: string) => void;
+  setLastVouchersSync: (at: string) => void;
 }
 
 export const useTallyStore = create<TallyConnectionState>()(
@@ -38,6 +44,9 @@ export const useTallyStore = create<TallyConnectionState>()(
       fyFromDate: getDefaultFYStart(),
       fyToDate: getDefaultFYEnd(),
       syncMode: "monthly",
+      lastVoucherDate: null,
+      lastMastersSyncAt: null,
+      lastVouchersSyncAt: null,
 
       setProxyUrl: (proxyUrl) => set({ proxyUrl }),
       setCompanyName: (companyName) => set({ companyName }),
@@ -48,6 +57,9 @@ export const useTallyStore = create<TallyConnectionState>()(
       setAutoSync: (autoSyncMinutes) => set({ autoSyncMinutes }),
       setFyDates: (fyFromDate, fyToDate) => set({ fyFromDate, fyToDate }),
       setSyncMode: (syncMode) => set({ syncMode }),
+      setLastVoucherDate: (lastVoucherDate) => set({ lastVoucherDate }),
+      setLastMastersSync: (lastMastersSyncAt) => set({ lastMastersSyncAt }),
+      setLastVouchersSync: (lastVouchersSyncAt) => set({ lastVouchersSyncAt }),
       resetToCurrentFY: () => set({
         fyFromDate: getDefaultFYStart(),
         fyToDate: getDefaultFYEnd(),
@@ -59,12 +71,17 @@ export const useTallyStore = create<TallyConnectionState>()(
         const { isSyncing, ...rest } = state;
         return rest;
       },
-      version: 2,
+      version: 3,
       migrate: (persisted: any, version: number) => {
         if (version < 2) {
           persisted.fyFromDate = getDefaultFYStart();
           persisted.fyToDate = getDefaultFYEnd();
           persisted.syncMode = "monthly";
+        }
+        if (version < 3) {
+          persisted.lastVoucherDate = null;
+          persisted.lastMastersSyncAt = null;
+          persisted.lastVouchersSyncAt = null;
         }
         return persisted;
       },

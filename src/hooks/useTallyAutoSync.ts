@@ -28,6 +28,8 @@ export function useTallyAutoSync() {
   const { mergeData } = useDataStore();
   const { toast } = useToast();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isSyncingRef = useRef(isSyncing);
+  useEffect(() => { isSyncingRef.current = isSyncing; }, [isSyncing]);
 
   useEffect(() => {
     // Clear any existing interval
@@ -43,7 +45,7 @@ export function useTallyAutoSync() {
 
     const runAutoSync = async () => {
       // Skip if already syncing
-      if (isSyncing) {
+      if (isSyncingRef.current) {
         console.log("[auto-sync] Skipping - sync already in progress");
         return;
       }
@@ -71,7 +73,10 @@ export function useTallyAutoSync() {
 
         // Merge and save
         mergeData(data);
-        await saveData("parsedData", serializeParsedData(data));
+        const merged = useDataStore.getState().data!;
+        if (merged) {
+          await saveData("parsedData", serializeParsedData(merged));
+        }
 
         setLastSync(new Date().toISOString());
         console.log(`[auto-sync] Complete: ${result.stats.vouchers} vouchers, ${result.stats.stockItems} items`);
@@ -101,5 +106,5 @@ export function useTallyAutoSync() {
         intervalRef.current = null;
       }
     };
-  }, [isConnected, autoSyncMinutes, companyName, fyFromDate, fyToDate, isSyncing]);
+  }, [isConnected, autoSyncMinutes, companyName, fyFromDate, fyToDate]);
 }
