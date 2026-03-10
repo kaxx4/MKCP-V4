@@ -65,6 +65,9 @@ export default function ImportPage() {
     fyFromDate,
     fyToDate,
     syncMode,
+    lastVoucherDate,
+    lastMastersSyncAt,
+    lastVouchersSyncAt,
     setCompanyName,
     setConnected,
     setLastSync,
@@ -72,6 +75,9 @@ export default function ImportPage() {
     setFyDates,
     setSyncMode,
     resetToCurrentFY,
+    setLastVoucherDate,
+    setLastMastersSync,
+    setLastVouchersSync,
   } = useTallyStore();
 
   // Upload state
@@ -261,6 +267,7 @@ export default function ImportPage() {
       await saveData("parsedData", serializeParsedData(data));
 
       setLastSync(new Date().toISOString());
+      setLastMastersSync(new Date().toISOString());
       addLog("✓ Masters saved to app. You can now sync Day Book or go to Orders.");
       toast(`Synced ${parsed.stockGroups.length} groups, ${parsed.units.length} units, ${parsed.items.size} items, ${parsed.ledgers.size} ledgers`, "success");
     } catch (err: any) {
@@ -331,12 +338,104 @@ export default function ImportPage() {
       await saveData("parsedData", serializeParsedData(merged));
 
       setLastSync(new Date().toISOString());
+      // Track latest voucher date for incremental sync
+      const allDates = merged.vouchers.filter(v => !v.isCancelled).map(v => v.date).sort();
+      const latestDate = allDates.length > 0 ? allDates[allDates.length - 1] : null;
+      if (latestDate) setLastVoucherDate(latestDate);
+      setLastVouchersSync(new Date().toISOString());
+
       const totalVouchers = merged.vouchers.length;
       addLog(`✓ Day Book saved. Total vouchers now: ${totalVouchers}`);
       toast(`Synced ${parsed.vouchers.length} vouchers (${totalVouchers} total)`, "success");
     } catch (err: any) {
       addLog(`ERROR: ${err.message}`);
       toast(`Day Book sync failed: ${err.message}`, "error");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleIncrementalSync() {
+    if (!companyName.trim()) { toast("Enter company name", "warn"); return; }
+    setSyncing(true);
+    setDebugLog([]);
+    setReport(null);
+    setPendingData(null);
+    try {
+      // Determine start date: day after last known voucher, or FY start
+      let incrementalFrom = fyFromDate;
+      if (lastVoucherDate) {
+        // Parse YYYY-MM-DD to YYYYMMDD and add 1 day
+        const d = new Date(lastVoucherDate);
+        d.setDate(d.getDate() + 1);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        incrementalFrom = `${yyyy}${mm}${dd}`;
+        addLog(`Incremental sync: fetching from ${lastVoucherDate} + 1 day (${incrementalFrom}) to ${fyToDate}`);
+      } else {
+        addLog(`No previous voucher date found — falling back to full FY range (${fyFromDate} → ${fyToDate})`);
+      }
+
+      // If incremental start is after the end date, nothing to sync
+      if (incrementalFrom > fyToDate) {
+        addLog("Already up to date — no new vouchers to fetch.");
+        toast("Already up to date", "success");
+        setSyncing(false);
+        return;
+      }
+
+      const result = await syncDayBook(companyName, incrementalFrom, fyToDate, syncMode);
+
+      if (result.errors?.length) {
+        for (const err of result.errors) addLog(`⚠ ${err}`);
+      }
+
+      if (!result.success || result.stats.vouchers === 0) {
+        addLog(result.error || "Zero new vouchers found since last sync.");
+        toast("No new vouchers found", "info");
+        setSyncing(false);
+        return;
+      }
+      addLog(`✓ ${result.stats.vouchers} new vouchers fetched in ${result.stats.elapsedSeconds}s`);
+
+      addLog("Parsing transactions...");
+      const parsed = parseTransactions(result.data);
+      addLog(`Parsed: ${parsed.vouchers.length} vouchers`);
+
+      const existingRaw = await loadData<unknown>("parsedData");
+      const existing = existingRaw ? deserializeParsedData(existingRaw) : null;
+
+      const data: ParsedData = {
+        company: existing?.company ?? { name: companyName, fyStartMonth: 4 },
+        items: existing?.items ?? new Map(),
+        ledgers: existing?.ledgers ?? new Map(),
+        vouchers: parsed.vouchers,
+        importedAt: new Date().toISOString(),
+        sourceFiles: ["tally-incremental-sync"],
+        warnings: parsed.warnings,
+      };
+
+      if (existing) {
+        await createBackup(existingRaw, `pre-incremental-sync`);
+      }
+      mergeData(data);
+
+      const merged = useDataStore.getState().data!;
+      await saveData("parsedData", serializeParsedData(merged));
+
+      // Track latest voucher date for next incremental sync
+      const allDates = merged.vouchers.filter(v => !v.isCancelled).map(v => v.date).sort();
+      const latestDate = allDates.length > 0 ? allDates[allDates.length - 1] : null;
+      if (latestDate) setLastVoucherDate(latestDate);
+      setLastVouchersSync(new Date().toISOString());
+      setLastSync(new Date().toISOString());
+
+      addLog(`✓ Incremental sync complete. Total vouchers: ${merged.vouchers.length}`);
+      toast(`Added ${parsed.vouchers.length} new vouchers (${merged.vouchers.length} total)`, "success");
+    } catch (err: any) {
+      addLog(`ERROR: ${err.message}`);
+      toast(`Incremental sync failed: ${err.message}`, "error");
     } finally {
       setSyncing(false);
     }
@@ -424,6 +523,13 @@ export default function ImportPage() {
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       setLastSync(new Date().toISOString());
+      setLastMastersSync(new Date().toISOString());
+      // Track latest voucher date for incremental sync
+      const allDates = merged.vouchers.filter(v => !v.isCancelled).map(v => v.date).sort();
+      const latestDate = allDates.length > 0 ? allDates[allDates.length - 1] : null;
+      if (latestDate) setLastVoucherDate(latestDate);
+      setLastVouchersSync(new Date().toISOString());
+
       addLog(`✓ Import All complete in ${elapsed}s — ${merged.items.size} items, ${merged.ledgers.size} ledgers, ${merged.vouchers.length} vouchers`);
       toast(`Imported ${merged.items.size} items, ${merged.ledgers.size} ledgers, ${merged.vouchers.length} vouchers`, "success");
     } catch (err: any) {
@@ -868,6 +974,17 @@ export default function ImportPage() {
                 Last sync: {new Date(lastSyncAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
               </div>
             )}
+            {lastMastersSyncAt && (
+              <div className="text-xs text-muted">
+                Masters: {new Date(lastMastersSyncAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+              </div>
+            )}
+            {lastVouchersSyncAt && (
+              <div className="text-xs text-muted">
+                Vouchers: {new Date(lastVouchersSyncAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                {lastVoucherDate && ` (up to ${lastVoucherDate})`}
+              </div>
+            )}
           </div>
 
           {/* Sync Form */}
@@ -988,7 +1105,7 @@ export default function ImportPage() {
             </button>
 
             {/* Secondary: Individual Sync Buttons */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <button
                 onClick={handleSyncMasters}
                 disabled={isSyncing || !isConnected || !companyName.trim()}
@@ -1004,6 +1121,14 @@ export default function ImportPage() {
               >
                 {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <FileJson size={14} />}
                 Vouchers Only (Monthly Chunks)
+              </button>
+              <button
+                onClick={handleIncrementalSync}
+                disabled={isSyncing || !isConnected || !companyName.trim()}
+                className="flex items-center justify-center gap-2 bg-bg-border hover:bg-bg-border/70 disabled:opacity-50 disabled:cursor-not-allowed text-muted hover:text-primary font-medium px-4 py-2.5 rounded-lg transition text-sm"
+              >
+                {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                {lastVoucherDate ? `Since ${lastVoucherDate}` : "Incremental Sync"}
               </button>
             </div>
           </div>

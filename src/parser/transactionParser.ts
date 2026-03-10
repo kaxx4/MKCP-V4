@@ -180,10 +180,13 @@ function parseOneVoucher(rv: any, warnings: ImportWarning[]): CanonicalVoucher |
   let partyLedgerId: string | undefined;
   let partyName = rv.partyledgername ?? rv.partyName ?? rv.PARTYLEDGERNAME;
 
-  // Build voucherId with partyLedgerId to ensure uniqueness
-  const voucherId = partyName
-    ? `${voucherType}|${voucherNumber}|${date}|${String(partyName).toUpperCase().trim()}`
-    : `${voucherType}|${voucherNumber}|${date}`;
+  // Build voucherId: prefer Tally GUID (globally unique), fall back to composite key
+  const tallyGuid = String(rv.guid ?? rv.GUID ?? "").trim();
+  const voucherId = tallyGuid
+    ? tallyGuid  // Tally GUID is the most reliable unique identifier
+    : partyName
+      ? `${voucherType}|${voucherNumber}|${date}|${String(partyName).toUpperCase().trim()}`
+      : `${voucherType}|${voucherNumber}|${date}`;
 
   const lines: CanonicalVoucherLine[] = [];
   let totalAmount = 0;

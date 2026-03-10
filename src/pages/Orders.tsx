@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, Minus, Trash2, Download, X, Upload, Package, Filter, FolderPlus, FolderOpen, Save, Copy } from "lucide-react";
+import { Search, Plus, Minus, Trash2, Download, X, Upload, Package, Filter, FolderPlus, FolderOpen, Save, Copy, ChevronDown, ChevronUp, BarChart3 } from "lucide-react";
 import Fuse from "fuse.js";
 import * as XLSX from "xlsx";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -54,6 +54,7 @@ export default function Orders() {
   const [stockFilterOp, setStockFilterOp] = useState<"<=" | ">=" | "=">("<=");
   const [stockFilterValue, setStockFilterValue] = useState("0");
   const [showGroupPanel, setShowGroupPanel] = useState(false);
+  const [showChart, setShowChart] = useState(true);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupDesc, setNewGroupDesc] = useState("");
 
@@ -639,7 +640,7 @@ export default function Orders() {
         {/* CENTER: Item Detail & Graph */}
         <div className="flex-1 flex flex-col bg-bg min-h-0">
           {focusedItem ? (
-            <div className="p-4 flex flex-col gap-4 overflow-y-auto">
+            <div className="p-4 flex flex-col gap-4 overflow-y-auto flex-1">
               <div>
                 <h2 className="text-lg font-bold text-primary leading-tight">{focusedItem.name}</h2>
                 <div className="text-muted text-xs mt-0.5">{focusedItem.group} · {focusedItem.baseUnit}{focusedItem.pkgUnit ? ` · ${focusedItem.unitsPerPkg}/${focusedItem.pkgUnit}` : ""}</div>
@@ -670,7 +671,7 @@ export default function Orders() {
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 return (
-                  <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                  <div className={clsx("bg-bg-card border border-bg-border rounded-xl overflow-hidden", !showChart && "flex-1 flex flex-col")}>
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="border-b border-bg-border">
@@ -681,12 +682,12 @@ export default function Orders() {
                       </thead>
                       <tbody>
                         {focusedMonthlyBuckets.map((b) => (
-                          <tr key={b.yearMonth} className="border-b border-bg-border/50">
-                            <td className="px-3 py-1.5 text-muted">{b.label}</td>
-                            <td className="px-3 py-1.5 font-mono text-primary">{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
-                            <td className="px-3 py-1.5 font-mono text-success">{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
-                            <td className="px-3 py-1.5 font-mono text-danger">{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
-                            <td className="px-3 py-1.5 font-mono text-primary font-semibold">{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
+                          <tr key={b.yearMonth} className={clsx("border-b border-bg-border/50", !showChart && "h-full")}>
+                            <td className={clsx("px-3 text-muted", showChart ? "py-1.5" : "py-2.5")}>{b.label}</td>
+                            <td className={clsx("px-3 font-mono text-primary", showChart ? "py-1.5" : "py-2.5")}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
+                            <td className={clsx("px-3 font-mono text-success", showChart ? "py-1.5" : "py-2.5")}>{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
+                            <td className={clsx("px-3 font-mono text-danger", showChart ? "py-1.5" : "py-2.5")}>{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
+                            <td className={clsx("px-3 font-mono text-primary font-semibold", showChart ? "py-1.5" : "py-2.5")}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -695,31 +696,44 @@ export default function Orders() {
                 );
               })()}
 
-              {/* Chart */}
+              {/* Chart Toggle + Chart */}
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 return (
-                  <div className="bg-bg-card border border-bg-border rounded-xl p-3">
-                    <div className="text-xs text-muted mb-2 font-medium">8-Month History</div>
-                    <ResponsiveContainer width="100%" height={180}>
-                      <ComposedChart data={focusedMonthlyBuckets.map((b) => ({
-                        label: b.label,
-                        in: toDisplay(item, b.inwardsBase, unitMode).value,
-                        out: toDisplay(item, b.outwardsBase, unitMode).value,
-                        closing: toDisplay(item, b.closingQtyBase, unitMode).value,
-                      }))}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} />
-                        <YAxis tick={{ fontSize: 10, fill: "#64748b" }} />
-                        <Tooltip
-                          contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
-                          labelStyle={{ color: "#0f172a" }}
-                        />
-                        <Bar dataKey="in" fill="#10b981" name="In" radius={[2, 2, 0, 0]} barSize={12} />
-                        <Bar dataKey="out" fill="#ef4444" name="Out" radius={[2, 2, 0, 0]} barSize={12} />
-                        <Line type="monotone" dataKey="closing" stroke="#3b82f6" dot={false} strokeWidth={2} name="Stock" />
-                      </ComposedChart>
-                    </ResponsiveContainer>
+                  <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                    <button
+                      onClick={() => setShowChart(!showChart)}
+                      className="w-full flex items-center justify-between px-3 py-2 hover:bg-bg-border/30 transition-colors"
+                    >
+                      <div className="flex items-center gap-1.5 text-xs text-muted font-medium">
+                        <BarChart3 size={12} />
+                        8-Month History
+                      </div>
+                      {showChart ? <ChevronUp size={14} className="text-muted" /> : <ChevronDown size={14} className="text-muted" />}
+                    </button>
+                    {showChart && (
+                      <div className="px-3 pb-3">
+                        <ResponsiveContainer width="100%" height={180}>
+                          <ComposedChart data={focusedMonthlyBuckets.map((b) => ({
+                            label: b.label,
+                            in: toDisplay(item, b.inwardsBase, unitMode).value,
+                            out: toDisplay(item, b.outwardsBase, unitMode).value,
+                            closing: toDisplay(item, b.closingQtyBase, unitMode).value,
+                          }))}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                            <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} />
+                            <YAxis tick={{ fontSize: 10, fill: "#64748b" }} />
+                            <Tooltip
+                              contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
+                              labelStyle={{ color: "#0f172a" }}
+                            />
+                            <Bar dataKey="in" fill="#10b981" name="In" radius={[2, 2, 0, 0]} barSize={12} />
+                            <Bar dataKey="out" fill="#ef4444" name="Out" radius={[2, 2, 0, 0]} barSize={12} />
+                            <Line type="monotone" dataKey="closing" stroke="#3b82f6" dot={false} strokeWidth={2} name="Stock" />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
                   </div>
                 );
               })()}

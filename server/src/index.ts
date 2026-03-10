@@ -1,11 +1,14 @@
 import express from "express";
 import cors from "cors";
-import { tallyPost, tallyPostWithRetry, stockItemsXml, stockGroupsXml, unitsXml, godownsXml, costCentresXml, ledgersXml, vouchersXml, getMonthlyChunks, getDailyChunks, getWeeklyChunks, HEALTH_XML } from "./tally.js";
+import { tallyPost, tallyPostWithRetry, stockItemsXml, stockGroupsXml, unitsXml, godownsXml, costCentresXml, ledgersXml, vouchersXml, vouchersCollectionXml, getMonthlyChunks, getDailyChunks, getWeeklyChunks, HEALTH_XML } from "./tally.js";
 import { convertStockItems, convertStockGroups, convertUnits, convertGodowns, convertCostCentres, convertLedgers, convertVouchers, convertCompanies } from "./convert.js";
 
 const app = express();
 const PORT = 3100;
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
+
+// Prevent duplicate concurrent syncs for the same company
+const activeSyncs = new Map<string, Promise<any>>();
 
 app.use(cors());
 app.use(express.json({ limit: "100mb" }));
@@ -227,6 +230,13 @@ app.post("/api/tally/sync-masters", async (req, res) => {
   const { company } = req.body;
   if (!company) return res.status(400).json({ success: false, error: "company required" });
 
+  const lockKey = `${company}_${req.path}`;
+  if (activeSyncs.has(lockKey)) {
+    console.log(`[MASTERS] Duplicate request blocked for ${lockKey}`);
+    return res.status(409).json({ success: false, error: "Sync already in progress for this company" });
+  }
+
+  activeSyncs.set(lockKey, Promise.resolve());
   res.setTimeout(300_000); // 5 min
   const t0 = Date.now();
   console.log(`\n[MASTERS] Syncing masters for "${company}"...`);
@@ -332,6 +342,7 @@ app.post("/api/tally/sync-masters", async (req, res) => {
       elapsedSeconds: parseFloat(elapsed),
     },
   });
+  activeSyncs.delete(lockKey);
 });
 
 // ── Sync Day Book (vouchers for a period) — CONFIGURABLE CHUNKING ──
@@ -339,6 +350,12 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
   const { company, fromDate, toDate, chunkMode = "monthly" } = req.body;
   if (!company) return res.status(400).json({ success: false, error: "company required" });
   if (!fromDate || !toDate) return res.status(400).json({ success: false, error: "fromDate and toDate required (YYYYMMDD)" });
+
+  const lockKey = `${company}_${req.path}`;
+  if (activeSyncs.has(lockKey)) {
+    console.log(`[DAYBOOK] Duplicate request blocked for ${lockKey}`);
+    return res.status(409).json({ success: false, error: "Sync already in progress for this company" });
+  }
 
   // Validate dates
   if (fromDate.length !== 8 || toDate.length !== 8) {
@@ -351,6 +368,7 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
     console.warn(`[DAYBOOK] ⚠ Single day range detected (${fromDate}). This will only fetch one day of data.`);
   }
 
+  activeSyncs.set(lockKey, Promise.resolve());
   res.setTimeout(900_000); // 15 min
   const t0 = Date.now();
 
@@ -382,8 +400,32 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
           await new Promise(r => setTimeout(r, 2000));
         }
         console.log(`[DAYBOOK] Chunk ${i + 1}/${chunks.length}: ${chunk.label} (${chunk.from} → ${chunk.to})...`);
-        const xml = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+        let xml: any;
+        try {
+          xml = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+        } catch (primaryErr: any) {
+          console.log(`[DAYBOOK]   Day Book failed for ${chunk.label}, trying Collection-based fallback...`);
+          try {
+            xml = await tallyPostWithRetry(TALLY, vouchersCollectionXml(company, chunk.from, chunk.to), 120_000, false, 1);
+          } catch (fallbackErr: any) {
+            throw new Error(`Both Day Book and Collection export failed for ${chunk.label}: ${primaryErr.message} / ${fallbackErr.message}`);
+          }
+        }
         const vouchers = convertVouchers(xml);
+
+        // Date verification: detect if Tally ignored our date range
+        if (vouchers.tallymessage.length > 0) {
+          let outOfRange = 0;
+          for (const v of vouchers.tallymessage) {
+            const vDate = String(v.date ?? "").replace(/-/g, "");
+            const vNum = parseInt(vDate, 10);
+            if (vNum && (vNum < parseInt(chunk.from, 10) || vNum > parseInt(chunk.to, 10))) outOfRange++;
+          }
+          if (outOfRange > vouchers.tallymessage.length * 0.5) {
+            console.warn(`[DAYBOOK] ⚠ DATE MISMATCH: ${outOfRange}/${vouchers.tallymessage.length} vouchers outside ${chunk.from}→${chunk.to}. Tally may have ignored the date range!`);
+          }
+        }
+
         const ms = Date.now() - chunkT0;
         allVouchers.push(...vouchers.tallymessage);
         chunkDetails.push({ label: chunk.label, count: vouchers.tallymessage.length, ms });
@@ -420,6 +462,7 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
       elapsedSeconds: parseFloat(elapsed),
     },
   });
+  activeSyncs.delete(lockKey);
 });
 
 // Full sync — the main endpoint
@@ -427,6 +470,13 @@ app.post("/api/tally/sync", async (req, res) => {
   const { company, fromDate, toDate } = req.body;
   if (!company) return res.status(400).json({ success: false, error: "company required" });
 
+  const lockKey = `${company}_${req.path}`;
+  if (activeSyncs.has(lockKey)) {
+    console.log(`[SYNC] Duplicate request blocked for ${lockKey}`);
+    return res.status(409).json({ success: false, error: "Sync already in progress for this company" });
+  }
+
+  activeSyncs.set(lockKey, Promise.resolve());
   // Increase Express response timeout to 15 minutes
   res.setTimeout(900_000);
 
@@ -527,8 +577,32 @@ app.post("/api/tally/sync", async (req, res) => {
             await new Promise(r => setTimeout(r, 2000));
           }
           console.log(`[SYNC]   Chunk ${i + 1}/${chunks.length}: ${chunk.label}...`);
-          const xml = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+          let xml: any;
+          try {
+            xml = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+          } catch (primaryErr: any) {
+            console.log(`[SYNC]   Day Book failed for ${chunk.label}, trying Collection-based fallback...`);
+            try {
+              xml = await tallyPostWithRetry(TALLY, vouchersCollectionXml(company, chunk.from, chunk.to), 120_000, false, 1);
+            } catch (fallbackErr: any) {
+              throw new Error(`Both Day Book and Collection export failed for ${chunk.label}: ${primaryErr.message} / ${fallbackErr.message}`);
+            }
+          }
           const vouchers = convertVouchers(xml);
+
+          // Date verification: detect if Tally ignored our date range
+          if (vouchers.tallymessage.length > 0) {
+            let outOfRange = 0;
+            for (const v of vouchers.tallymessage) {
+              const vDate = String(v.date ?? "").replace(/-/g, "");
+              const vNum = parseInt(vDate, 10);
+              if (vNum && (vNum < parseInt(chunk.from, 10) || vNum > parseInt(chunk.to, 10))) outOfRange++;
+            }
+            if (outOfRange > vouchers.tallymessage.length * 0.5) {
+              console.warn(`[SYNC] ⚠ DATE MISMATCH: ${outOfRange}/${vouchers.tallymessage.length} vouchers outside ${chunk.from}→${chunk.to}. Tally may have ignored the date range!`);
+            }
+          }
+
           allVouchers.push(...vouchers.tallymessage);
           chunkDone = true;
           console.log(`[SYNC]   ✓ ${chunk.label}: ${vouchers.tallymessage.length} vouchers (${Date.now() - chunkT0}ms)`);
@@ -580,6 +654,7 @@ app.post("/api/tally/sync", async (req, res) => {
     transactions: { tallymessage: allVouchers },
     stats,
   });
+  activeSyncs.delete(lockKey);
 });
 
 // Debug — test individual requests and see raw XML response
