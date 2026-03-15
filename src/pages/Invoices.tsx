@@ -116,10 +116,16 @@ export default function Invoices() {
             </button>
           ))}
         </div>
-        <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-          className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none" />
-        <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-          className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none" />
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="invoice-from" className="text-xs text-muted">From</label>
+          <input id="invoice-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+            className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="invoice-to" className="text-xs text-muted">To</label>
+          <input id="invoice-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+            className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none" />
+        </div>
       </div>
 
       {/* Table */}
@@ -211,24 +217,28 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                     <div className="bg-bg border-b border-bg-border px-6 py-4">
                       <div className="text-xs space-y-2">
                         <div className="text-muted font-medium mb-2">Voucher Lines</div>
-                        {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => (
+                        {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => {
+                          const ledgerName = line.type === "ledger" && line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
+                          const itemName = line.type === "inventory" && line.itemId ? (data.items.get(line.itemId)?.name ?? line.itemId) : "";
+                          return (
                           <div key={i} className="flex gap-4 font-mono text-primary">
                             {line.type === "ledger" ? (
                               <>
                                 <span className="text-muted w-16">{line.isDebit ? "Dr" : "Cr"}</span>
-                                <span>{line.ledgerId}</span>
+                                <span className="truncate flex-1" title={ledgerName}>{ledgerName}</span>
                                 <span className="ml-auto">{fmtINR(line.amount ?? 0)}</span>
                               </>
                             ) : (
                               <>
                                 <span className="text-muted w-16">Inv</span>
-                                <span>{line.itemId}</span>
+                                <span className="truncate" title={itemName}>{itemName}</span>
                                 <span className="text-muted">{line.qtyBase} {" × "} {fmtINR(line.ratePerBase ?? 0)}</span>
                                 <span className="ml-auto">{fmtINR(line.lineAmount ?? 0)}</span>
                               </>
                             )}
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}

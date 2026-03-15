@@ -297,20 +297,56 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
 
   return {
     tallymessage: allVouchers.map((v: any) => {
-      const le = arr(v["ALLLEDGERENTRIES.LIST"] ?? v.ALLLEDGERENTRIES ?? v["LEDGERENTRIES.LIST"] ?? v.LEDGERENTRIES);
-      const ie = arr(v["ALLINVENTORYENTRIES.LIST"] ?? v.ALLINVENTORYENTRIES ?? v["INVENTORYENTRIES.LIST"] ?? v.INVENTORYENTRIES);
+      // Use length-aware fallback: [] is not nullish, so ?? won't fall through.
+      // ALLLEDGERENTRIES.LIST is used by Receipt/Payment/Journal vouchers,
+      // LEDGERENTRIES.LIST is used by Sales/Purchase vouchers with inventory.
+      const allLE = arr(v["ALLLEDGERENTRIES.LIST"] ?? v.ALLLEDGERENTRIES);
+      const simpleLE = arr(v["LEDGERENTRIES.LIST"] ?? v.LEDGERENTRIES);
+      const le = allLE.length > 0 ? allLE : simpleLE;
 
-      const ledgerentries = le.map((e: any) => ({
-        ledgername: e.LEDGERNAME || "",
-        isdeemedpositive: e.ISDEEMEDPOSITIVE === "Yes",
-        ispartyledger: e.ISPARTYLEDGER === "Yes",
-        amount: e.AMOUNT || "0",
-        billallocations: arr(e["BILLALLOCATIONS.LIST"] ?? e.BILLALLOCATIONS).map((b: any) => ({
-          name: b.NAME || "",
-          billtype: b.BILLTYPE || "New Ref",
-          amount: b.AMOUNT || "0",
-        })),
-      }));
+      const allIE = arr(v["ALLINVENTORYENTRIES.LIST"] ?? v.ALLINVENTORYENTRIES);
+      const simpleIE = arr(v["INVENTORYENTRIES.LIST"] ?? v.INVENTORYENTRIES);
+      const ie = allIE.length > 0 ? allIE : simpleIE;
+
+      // Voucher-level party name — the authoritative source for party identification.
+      // Individual ledger entries may BOTH have ISPARTYLEDGER=Yes (e.g. party + bank
+      // in Receipt/Payment vouchers), so we use PARTYLEDGERNAME to disambiguate.
+      const voucherPartyName = (v.PARTYLEDGERNAME || "").trim().toUpperCase();
+
+      // Check if voucher party name matches any ledger entry name
+      const hasNameMatch = voucherPartyName && le.some((e: any) =>
+        (e.LEDGERNAME || "").trim().toUpperCase() === voucherPartyName
+      );
+
+      const ledgerentries = le.map((e: any, idx: number) => {
+        const ledgername = e.LEDGERNAME || "";
+        const tallyIsParty = e.ISPARTYLEDGER === "Yes";
+
+        let ispartyledger: boolean;
+        if (hasNameMatch) {
+          // Match by voucher-level PARTYLEDGERNAME — only the matching entry is the party line
+          ispartyledger = ledgername.trim().toUpperCase() === voucherPartyName;
+        } else if (voucherPartyName) {
+          // PARTYLEDGERNAME set but no exact match — use first Tally-flagged entry only
+          const firstFlaggedIdx = le.findIndex((x: any) => x.ISPARTYLEDGER === "Yes");
+          ispartyledger = tallyIsParty && idx === firstFlaggedIdx;
+        } else {
+          // No voucher-level party: fall back to Tally's flag as-is
+          ispartyledger = tallyIsParty;
+        }
+
+        return {
+          ledgername,
+          isdeemedpositive: e.ISDEEMEDPOSITIVE === "Yes",
+          ispartyledger,
+          amount: e.AMOUNT || "0",
+          billallocations: arr(e["BILLALLOCATIONS.LIST"] ?? e.BILLALLOCATIONS).map((b: any) => ({
+            name: b.NAME || "",
+            billtype: b.BILLTYPE || "New Ref",
+            amount: b.AMOUNT || "0",
+          })),
+        };
+      });
 
       const inventoryentries = ie.map((e: any) => ({
         stockitemname: e.STOCKITEMNAME || "",

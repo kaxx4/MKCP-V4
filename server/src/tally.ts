@@ -422,44 +422,83 @@ export function ledgersXml(company: string): string {
 }
 
 /**
- * Vouchers — Period-based export using "Export Data" request format.
- * CRITICAL: Must use <TALLYREQUEST>Export Data</TALLYREQUEST> with
- * EXPORTDATA/REQUESTDESC/REPORTNAME structure for date filtering to work.
- * The old Export/TYPE/ID format ignores SVFROMDATE/SVTODATE.
- * Dates: YYYYMMDD format. EXPLODEFLAG expands sub-voucher details.
+ * Vouchers — Period-based Day Book export using official Tally XML format.
+ * Reference: TallyPrime Integration Guide - "Exporting Transactions (Day Book)"
+ *
+ * Uses <TALLYREQUEST>Export</TALLYREQUEST> with <TYPE>Data</TYPE> and <ID>Day Book</ID>.
+ * This is the officially documented format for exporting Day Book data.
+ * SVFROMDATE/SVTODATE use TYPE="Date" attribute as per documentation.
+ * EXPLODEFLAG=Yes ensures all sub-voucher details (ledger entries, inventory entries,
+ * bill allocations) are expanded in the response.
  */
 export function vouchersXml(company: string, from: string, to: string): string {
-  console.log(`[tally] vouchersXml (Export Data): ${from} → ${to}`);
+  const tallyFrom = toTallyDate(from);
+  const tallyTo = toTallyDate(to);
+  console.log(`[tally] vouchersXml: YYYYMMDD ${from}->${to} | Tally format: ${tallyFrom}->${tallyTo}`);
   return `<ENVELOPE>
 <HEADER>
-<TALLYREQUEST>Export Data</TALLYREQUEST>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Data</TYPE>
+<ID>Day Book</ID>
 </HEADER>
 <BODY>
-<EXPORTDATA>
-<REQUESTDESC>
-<REPORTNAME>Day Book</REPORTNAME>
+<DESC>
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
-<SVFROMDATE>${from}</SVFROMDATE>
-<SVTODATE>${to}</SVTODATE>
+<SVFROMDATE TYPE="Date">${tallyFrom}</SVFROMDATE>
+<SVTODATE TYPE="Date">${tallyTo}</SVTODATE>
 <EXPLODEFLAG>Yes</EXPLODEFLAG>
 </STATICVARIABLES>
-</REQUESTDESC>
-</EXPORTDATA>
+</DESC>
 </BODY>
 </ENVELOPE>`;
 }
 
 /**
- * Fallback: Collection-based voucher export using FETCH.
- * Bypasses the Day Book report entirely and directly queries the VOUCHER
- * collection. Uses FETCH instead of NATIVEMETHOD to bypass UI filtering.
- * TDL formula $$InDateRange filters by date at the collection level.
- * Dates: YYYYMMDD format in SVFROMDATE/SVTODATE.
+ * PRIMARY: Collection-based voucher export with reliable date filtering.
+ * Directly queries the VOUCHER collection using TDL with explicit FETCH.
+ *
+ * KEY INSIGHT: TallyPrime's $$InDateRange and SVFROMDATE/SVTODATE are broken for
+ * Collection exports (always returns 0). We use $$YearOfDate/$$MonthOfDate/$$DayOfDate
+ * to build a numeric YYYYMMDD comparison that reliably filters by date.
+ *
+ * FETCH INSIGHT: Wildcard `*` only fetches primitive attributes, NOT sub-collections
+ * (like ALLLEDGERENTRIES, LEDGERENTRIES, INVENTORYENTRIES). These must be explicitly
+ * named in the FETCH list to be included in the response.
+ *
+ * Sub-collections fetched:
+ * - AllLedgerEntries (Receipt/Payment vouchers) + BillAllocations
+ * - LedgerEntries (Sales/Purchase vouchers) + BillAllocations
+ * - AllInventoryEntries (Sales/Purchase invoice mode) + BatchAllocations
+ * - InventoryEntries + AccountingAllocations
+ *
+ * @param from YYYYMMDD start date
+ * @param to   YYYYMMDD end date
  */
 export function vouchersCollectionXml(company: string, from: string, to: string): string {
-  console.log(`[tally] vouchersCollectionXml (Collection+FETCH): ${from} → ${to}`);
+  const fromInt = parseInt(from, 10);
+  const toInt = parseInt(to, 10);
+  console.log(`[tally] vouchersCollectionXml: date range ${from}->${to} (numeric: ${fromInt}->${toInt})`);
+  // Explicit FETCH list: * for all primitive attrs, then each sub-collection + its children
+  const fetchList = [
+    "*",
+    "AllLedgerEntries", "AllLedgerEntries.*",
+    "AllLedgerEntries.BillAllocations", "AllLedgerEntries.BillAllocations.*",
+    "AllLedgerEntries.BankAllocations", "AllLedgerEntries.BankAllocations.*",
+    "AllLedgerEntries.CostCentreAllocations", "AllLedgerEntries.CostCentreAllocations.*",
+    "LedgerEntries", "LedgerEntries.*",
+    "LedgerEntries.BillAllocations", "LedgerEntries.BillAllocations.*",
+    "LedgerEntries.BankAllocations", "LedgerEntries.BankAllocations.*",
+    "LedgerEntries.CostCentreAllocations", "LedgerEntries.CostCentreAllocations.*",
+    "AllInventoryEntries", "AllInventoryEntries.*",
+    "AllInventoryEntries.BatchAllocations", "AllInventoryEntries.BatchAllocations.*",
+    "AllInventoryEntries.AccountingAllocations", "AllInventoryEntries.AccountingAllocations.*",
+    "InventoryEntries", "InventoryEntries.*",
+    "InventoryEntries.BatchAllocations", "InventoryEntries.BatchAllocations.*",
+    "InventoryEntries.AccountingAllocations", "InventoryEntries.AccountingAllocations.*",
+  ].join(", ");
   return `<ENVELOPE>
 <HEADER>
 <VERSION>1</VERSION>
@@ -472,17 +511,15 @@ export function vouchersCollectionXml(company: string, from: string, to: string)
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
-<SVFROMDATE>${from}</SVFROMDATE>
-<SVTODATE>${to}</SVTODATE>
 </STATICVARIABLES>
 <TDL>
 <TDLMESSAGE>
 <COLLECTION NAME="MKCPVouchers" ISMODIFY="No">
 <TYPE>Voucher</TYPE>
-<FETCH>*, *.*</FETCH>
+<FETCH>${fetchList}</FETCH>
 <FILTER>MKCPDateFilter</FILTER>
 </COLLECTION>
-<SYSTEM TYPE="Formulae" NAME="MKCPDateFilter">$$InDateRange:$Date:$$SvFromDate:$$SvToDate</SYSTEM>
+<SYSTEM TYPE="Formulae" NAME="MKCPDateFilter">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) &gt;= ${fromInt} AND ($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) &lt;= ${toInt}</SYSTEM>
 </TDLMESSAGE>
 </TDL>
 </DESC>

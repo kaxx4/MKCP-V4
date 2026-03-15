@@ -45,7 +45,7 @@ export function computeOutstandingInvoices(
   // Build bill reference → payment amount map
   const billPayments: Record<string, number> = {};
   for (const v of vouchers) {
-    if (!["Receipt", "Payment"].includes(v.voucherType)) continue;
+    if (!["Receipt", "Payment", "Credit Note", "Debit Note"].includes(v.voucherType)) continue;
     if (v.isCancelled) continue;
     for (const line of v.lines) {
       if (line.type !== "ledger") continue;
@@ -235,14 +235,19 @@ export function computeItemMargins(
   for (const v of vouchers) {
     if (v.isCancelled || v.isOptional) continue;
     if (startDate && v.date < startDate) continue;
-    if (v.voucherType !== "Sales" && v.voucherType !== "Purchase") continue;
+    // Include Sales, Purchase, Credit Note (sales return), Debit Note (purchase return)
+    const isSalesSide = v.voucherType === "Sales" || v.voucherType === "Credit Note";
+    const isPurchaseSide = v.voucherType === "Purchase" || v.voucherType === "Debit Note";
+    if (!isSalesSide && !isPurchaseSide) continue;
+    // Returns subtract from totals
+    const sign = (v.voucherType === "Credit Note" || v.voucherType === "Debit Note") ? -1 : 1;
 
     for (const line of v.lines) {
       if (line.type !== "inventory" || !line.itemId) continue;
-      const qty = line.qtyBase ?? 0;
-      const value = line.lineAmount ?? 0;
+      const qty = (line.qtyBase ?? 0) * sign;
+      const value = (line.lineAmount ?? 0) * sign;
 
-      if (v.voucherType === "Sales") {
+      if (isSalesSide) {
         salesQty.set(line.itemId, (salesQty.get(line.itemId) ?? 0) + qty);
         salesValue.set(line.itemId, (salesValue.get(line.itemId) ?? 0) + value);
       } else {

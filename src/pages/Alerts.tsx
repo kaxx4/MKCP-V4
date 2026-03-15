@@ -162,10 +162,10 @@ export default function Alerts() {
 
   const severityBadge = (severity: AlertRow["severity"]) => {
     const styles = {
-      Critical: "bg-red-500/10 text-red-600",
-      Low: "bg-yellow-500/10 text-yellow-600",
-      Reorder: "bg-orange-500/10 text-orange-600",
-      OK: "bg-green-500/10 text-green-600",
+      Critical: "bg-danger/10 text-danger",
+      Low: "bg-warn/10 text-warn",
+      Reorder: "bg-accent/10 text-accent",
+      OK: "bg-success/10 text-success",
     };
     return (
       <span className={clsx("px-2 py-0.5 rounded-full text-xs font-medium", styles[severity])}>
@@ -208,8 +208,8 @@ export default function Alerts() {
           {
             label: "Items Needing Reorder",
             value: fmtNum(kpis.totalReorder, 0),
-            color: "text-orange-600",
-            bg: "bg-orange-500/10",
+            color: "text-warn",
+            bg: "bg-warn/10",
           },
           {
             label: "Total Reorder Value",
@@ -220,14 +220,14 @@ export default function Alerts() {
           {
             label: "Zero Stock Items",
             value: fmtNum(kpis.zeroStock, 0),
-            color: "text-red-600",
-            bg: "bg-red-500/10",
+            color: "text-danger",
+            bg: "bg-danger/10",
           },
           {
             label: "< 1 Month Supply",
             value: fmtNum(kpis.lowSupply, 0),
-            color: "text-yellow-600",
-            bg: "bg-yellow-500/10",
+            color: "text-warn",
+            bg: "bg-warn/10",
           },
         ].map(({ label, value, color, bg }) => (
           <div key={label} className="bg-bg-card border border-bg-border rounded-xl p-4">
@@ -305,13 +305,13 @@ export default function Alerts() {
               let monthsColor: string;
               if (d.stock <= 0) {
                 monthsLabel = "0";
-                monthsColor = "text-red-600 font-bold";
+                monthsColor = "text-danger font-bold";
               } else if (d.avgOut === 0) {
                 monthsLabel = "\u221E";
                 monthsColor = "text-muted";
               } else {
                 monthsLabel = (d.stock / d.avgOut).toFixed(1);
-                monthsColor = d.monthsRemaining < 1 ? "text-yellow-600" : "text-primary";
+                monthsColor = d.monthsRemaining < 1 ? "text-warn" : "text-primary";
               }
 
               return (
@@ -348,14 +348,14 @@ export default function Alerts() {
                   <div className="w-24 px-3 text-center">{severityBadge(d.severity)}</div>
                   <div className="w-28 px-3 text-center">
                     {isAdded ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-green-600 font-medium">
+                      <span className="inline-flex items-center gap-1 text-xs text-success font-medium">
                         <Check size={12} />
                         Added
                       </span>
                     ) : d.suggested > 0 ? (
                       <button
                         onClick={() => handleAdd(d)}
-                        className="inline-flex items-center gap-1 text-xs bg-accent/10 hover:bg-accent/20 text-accent font-medium px-2.5 py-1 rounded-lg transition"
+                        className="inline-flex items-center gap-1 text-xs bg-accent/10 hover:bg-accent/20 text-accent font-medium px-2.5 py-1 rounded-lg transition cursor-pointer"
                       >
                         <ShoppingCart size={12} />
                         Add
