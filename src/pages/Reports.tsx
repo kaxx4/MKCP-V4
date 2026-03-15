@@ -9,16 +9,23 @@ import { useDataStore } from "../store/dataStore";
 import { getCurrentStockIndexed, computeItemTurnover, computeABCXYZ, computePeriodComparison, type ABCXYZItem, type PeriodComparisonItem } from "../engine/inventory";
 import { monthlyTotals, computeItemMargins, type ItemMarginData } from "../engine/financial";
 import { computeGSTR1, computeGSTR3B, type GSTR1Summary, type GSTR3BSummary } from "../engine/gst";
+import { computeBalanceSheet, computeProfitAndLoss, computeTrialBalance, type BSGroupTotal, type TrialBalanceEntry } from "../engine/balanceSheet";
+import { computeAdvanceTax, COMPANY_TAX_REGIMES } from "../engine/advanceTax";
 import { toDisplay } from "../engine/unitEngine";
 import { useUIStore } from "../store/uiStore";
 import { fmtINR, fmtNum, fmtDate, fmtDateShort } from "../utils/format";
-import { Upload, BarChart2, TrendingUp, ChevronDown, ChevronRight, Download, RefreshCw, Calendar, Filter, ChevronLeft, ShoppingBag, Zap } from "lucide-react";
+import { Upload, BarChart2, TrendingUp, ChevronDown, ChevronRight, Download, RefreshCw, Calendar, Filter, ChevronLeft, ShoppingBag, Zap, DollarSign, FileText } from "lucide-react";
 import clsx from "clsx";
 import { loadFromStore } from "../db/idb";
 import { generatePredictions, type PartyOrderPattern, type PredictionSnapshot, type PredictionAccuracy, type UpsellSuggestion } from "../engine/prediction";
 import type { CanonicalVoucher, CanonicalItem } from "../types/canonical";
+import FinancialCommandCenter from "./reports/FinancialCommandCenter";
+import CashflowIntelligence from "./reports/CashflowIntelligence";
+import LedgerIntelligence from "./reports/LedgerIntelligence";
+import TaxRadar from "./reports/TaxRadar";
+import BusinessIntelligence from "./reports/BusinessIntelligence";
 
-const TABS = ["Inventory", "Sales Trend", "Top Items", "Turnover", "Predictions", "Purchase Orders", "Calendar", "ABC-XYZ", "Period Compare", "Margins", "GST Summary"] as const;
+const TABS = ["Inventory", "Sales Trend", "Top Items", "Turnover", "Predictions", "Purchase Orders", "Calendar", "ABC-XYZ", "Period Compare", "Margins", "GST Summary", "Balance Sheet", "Advance Tax", "Financial HQ", "Cashflow Intel", "Ledger Intel", "Tax Radar", "Business Intel"] as const;
 type Tab = typeof TABS[number];
 
 // ─── Daily Purchase Order types ─────────────────────────────
@@ -103,16 +110,41 @@ export default function Reports() {
   const [gstView, setGstView] = useState<"GSTR1" | "GSTR3B">("GSTR1");
   const [gstExpandedParty, setGstExpandedParty] = useState<string | null>(null);
 
+  // Balance Sheet state
+  const [bsView, setBsView] = useState<"bs" | "pl" | "tb">("bs");
+  const [bsExpandedGroup, setBsExpandedGroup] = useState<string | null>(null);
+
+  // Advance Tax state
+  const [taxRegime, setTaxRegime] = useState("Section 115BAA (New Regime)");
+
+  // Build party→dominant voucher type map for prediction filtering
+  const partyDominantType = useMemo(() => {
+    if (!data) return new Map<string, "Sales" | "Purchase">();
+    const counts = new Map<string, { sales: number; purchase: number }>();
+    for (const v of data.vouchers) {
+      if (v.isCancelled || !v.partyLedgerId) continue;
+      if (v.voucherType !== "Sales" && v.voucherType !== "Purchase") continue;
+      let c = counts.get(v.partyLedgerId);
+      if (!c) { c = { sales: 0, purchase: 0 }; counts.set(v.partyLedgerId, c); }
+      if (v.voucherType === "Sales") c.sales++;
+      else c.purchase++;
+    }
+    const result = new Map<string, "Sales" | "Purchase">();
+    for (const [partyId, c] of counts) {
+      result.set(partyId, c.sales >= c.purchase ? "Sales" : "Purchase");
+    }
+    return result;
+  }, [data]);
+
   // Load predictions when tab changes to Predictions
   useEffect(() => {
     if (tab === "Predictions" && data) {
       (async () => {
         const snapshot = await loadFromStore<PredictionSnapshot>("predictions", "latest");
         if (snapshot) {
-          const filtered = snapshot.predictions.filter(p => {
-            const firstVoucher = data.vouchers.find(v => v.partyLedgerId === p.partyLedgerId);
-            return firstVoucher?.voucherType === predictionType;
-          });
+          const filtered = snapshot.predictions.filter(p =>
+            partyDominantType.get(p.partyLedgerId) === predictionType
+          );
           setPredictions(filtered);
         } else {
           const fresh = generatePredictions(data.vouchers, data.items, predictionType);
@@ -123,7 +155,7 @@ export default function Reports() {
         setAccuracyData(accuracy ?? null);
       })();
     }
-  }, [tab, predictionType, data]);
+  }, [tab, predictionType, data, partyDominantType]);
 
   // Initialize calendar month from latest voucher date
   useEffect(() => {
@@ -629,10 +661,10 @@ export default function Reports() {
       <h1 className="text-2xl font-bold text-primary">Reports</h1>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-bg-card border border-bg-border rounded-xl p-1 w-fit flex-wrap">
+      <div className="flex gap-1 bg-bg-card border border-bg-border rounded-xl p-1 overflow-x-auto scrollbar-thin" role="tablist">
         {TABS.map((t) => (
-          <button key={t} onClick={() => setTab(t)}
-            className={clsx("px-4 py-2 rounded-lg text-sm transition", tab === t ? "bg-accent text-white font-medium" : "text-muted hover:text-primary")}>
+          <button key={t} onClick={() => setTab(t)} role="tab" aria-selected={tab === t}
+            className={clsx("px-4 py-2 rounded-lg text-sm transition whitespace-nowrap cursor-pointer", tab === t ? "bg-accent text-white font-medium" : "text-muted hover:text-primary hover:bg-bg-border/50")}>
             {t}
           </button>
         ))}
@@ -1619,6 +1651,396 @@ export default function Reports() {
           )}
         </div>
       )}
+
+      {/* ═══════════ Balance Sheet / P&L / Trial Balance ═══════════ */}
+      {tab === "Balance Sheet" && data && (() => {
+        const bs = computeBalanceSheet(data.ledgers, data.vouchers, data.items);
+        const pl = computeProfitAndLoss(data.ledgers, data.vouchers, data.items);
+        const tb = computeTrialBalance(data.ledgers, data.vouchers);
+
+        const renderGroupTable = (groups: BSGroupTotal[], label: string, color: string) => (
+          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+            <div className={`px-4 py-3 border-b border-bg-border flex justify-between items-center`}>
+              <h3 className={`font-semibold ${color}`}>{label}</h3>
+              <span className={`font-mono font-bold ${color}`}>
+                {fmtINR(groups.reduce((s, g) => s + Math.abs(g.total), 0))}
+              </span>
+            </div>
+            <div className="divide-y divide-bg-border/50">
+              {groups.map(g => (
+                <div key={g.group}>
+                  <button
+                    className="w-full flex justify-between items-center px-4 py-2 hover:bg-bg-border/20 transition-colors"
+                    onClick={() => setBsExpandedGroup(bsExpandedGroup === g.group ? null : g.group)}
+                  >
+                    <span className="text-primary text-sm flex items-center gap-2">
+                      {bsExpandedGroup === g.group ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      {g.group}
+                    </span>
+                    <span className="font-mono text-sm">{fmtINR(Math.abs(g.total))}</span>
+                  </button>
+                  {bsExpandedGroup === g.group && (
+                    <div className="bg-bg-border/10 px-6 py-1">
+                      {g.ledgers.sort((a, b) => Math.abs(b.closingBalance) - Math.abs(a.closingBalance)).map(l => (
+                        <div key={l.ledgerId} className="flex justify-between py-1 text-xs">
+                          <span className="text-muted">{l.name}</span>
+                          <span className="font-mono">{fmtINR(Math.abs(l.closingBalance))}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+
+        return (
+          <div className="space-y-4">
+            {/* Sub-tabs */}
+            <div className="flex gap-2">
+              {(["bs", "pl", "tb"] as const).map(v => (
+                <button
+                  key={v}
+                  className={clsx("px-4 py-2 rounded-lg text-sm font-medium transition-colors",
+                    bsView === v ? "bg-accent text-white" : "bg-bg-card text-muted hover:text-primary")}
+                  onClick={() => setBsView(v)}
+                >
+                  {v === "bs" ? "Balance Sheet" : v === "pl" ? "Profit & Loss" : "Trial Balance"}
+                </button>
+              ))}
+            </div>
+
+            {bsView === "bs" && (
+              <div className="space-y-4">
+                {/* Summary cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                    <div className="text-xs text-muted mb-1">Total Assets</div>
+                    <div className="font-mono font-bold text-success text-lg">{fmtINR(bs.totalAssets)}</div>
+                  </div>
+                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                    <div className="text-xs text-muted mb-1">Total Liabilities</div>
+                    <div className="font-mono font-bold text-danger text-lg">{fmtINR(bs.totalLiabilities)}</div>
+                  </div>
+                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                    <div className="text-xs text-muted mb-1">Capital</div>
+                    <div className="font-mono font-bold text-accent text-lg">{fmtINR(bs.totalCapital)}</div>
+                  </div>
+                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                    <div className="text-xs text-muted mb-1">Net Profit</div>
+                    <div className={clsx("font-mono font-bold text-lg", bs.netProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(bs.netProfit)}</div>
+                  </div>
+                </div>
+
+                {bs.stockValue > 0 && (
+                  <div className="text-xs text-muted bg-bg-card border border-bg-border rounded-lg px-3 py-2">
+                    Stock-in-Hand (from inventory): <span className="font-mono text-success">{fmtINR(bs.stockValue)}</span> included in Assets
+                  </div>
+                )}
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  {renderGroupTable(bs.assets, "Assets", "text-success")}
+                  <div className="space-y-4">
+                    {renderGroupTable(bs.liabilities, "Liabilities", "text-danger")}
+                    {renderGroupTable(bs.capital, "Capital & Reserves", "text-accent")}
+                  </div>
+                </div>
+
+                {/* Balance check */}
+                <div className={clsx("rounded-xl p-4 text-center font-mono text-sm border",
+                  Math.abs(bs.totalAssets - bs.totalLiabilitiesAndCapital) < 1
+                    ? "bg-success/10 border-success/30 text-success"
+                    : "bg-warning/10 border-warning/30 text-warning"
+                )}>
+                  Assets ({fmtINR(bs.totalAssets)}) {Math.abs(bs.totalAssets - bs.totalLiabilitiesAndCapital) < 1 ? "=" : "≠"} Liabilities + Capital + Profit ({fmtINR(bs.totalLiabilitiesAndCapital)})
+                  {Math.abs(bs.totalAssets - bs.totalLiabilitiesAndCapital) >= 1 && (
+                    <span className="ml-2 text-xs">(Diff: {fmtINR(Math.abs(bs.totalAssets - bs.totalLiabilitiesAndCapital))})</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {bsView === "pl" && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                    <div className="text-xs text-muted mb-1">Total Income</div>
+                    <div className="font-mono font-bold text-success text-lg">{fmtINR(pl.totalIncome)}</div>
+                  </div>
+                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                    <div className="text-xs text-muted mb-1">Total Expenses</div>
+                    <div className="font-mono font-bold text-danger text-lg">{fmtINR(pl.totalExpenses)}</div>
+                  </div>
+                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                    <div className="text-xs text-muted mb-1">Gross Profit</div>
+                    <div className={clsx("font-mono font-bold text-lg", pl.grossProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(pl.grossProfit)}</div>
+                  </div>
+                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                    <div className="text-xs text-muted mb-1">Net Profit</div>
+                    <div className={clsx("font-mono font-bold text-lg", pl.netProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(pl.netProfit)}</div>
+                  </div>
+                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                    <div className="text-xs text-muted mb-1">Net Profit %</div>
+                    <div className={clsx("font-mono font-bold text-lg", pl.netProfit >= 0 ? "text-success" : "text-danger")}>
+                      {pl.directIncome > 0 ? ((pl.netProfit / pl.directIncome) * 100).toFixed(2) : "0"}%
+                    </div>
+                  </div>
+                </div>
+
+                {pl.openingStock > 0 && (
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-bg-card border border-bg-border rounded-lg px-3 py-2 text-center">
+                      <div className="text-xs text-muted">Opening Stock</div>
+                      <div className="font-mono text-sm font-semibold">{fmtINR(pl.openingStock)}</div>
+                    </div>
+                    <div className="bg-bg-card border border-bg-border rounded-lg px-3 py-2 text-center">
+                      <div className="text-xs text-muted">Closing Stock</div>
+                      <div className="font-mono text-sm font-semibold">{fmtINR(pl.closingStock)}</div>
+                    </div>
+                    <div className="bg-bg-card border border-bg-border rounded-lg px-3 py-2 text-center">
+                      <div className="text-xs text-muted">Stock Adjustment</div>
+                      <div className={clsx("font-mono text-sm font-semibold", pl.stockAdjustment > 0 ? "text-danger" : "text-success")}>
+                        {pl.stockAdjustment > 0 ? "+" : ""}{fmtINR(pl.stockAdjustment)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  {/* Income */}
+                  <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-bg-border">
+                      <h3 className="font-semibold text-success">Income</h3>
+                    </div>
+                    <div className="divide-y divide-bg-border/50">
+                      {pl.income.map(g => (
+                        <div key={g.group}>
+                          <button className="w-full flex justify-between items-center px-4 py-2 hover:bg-bg-border/20 transition-colors"
+                            onClick={() => setBsExpandedGroup(bsExpandedGroup === `pl-${g.group}` ? null : `pl-${g.group}`)}>
+                            <span className="text-primary text-sm flex items-center gap-2">
+                              {bsExpandedGroup === `pl-${g.group}` ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                              {g.group}
+                            </span>
+                            <span className="font-mono text-sm text-success">{fmtINR(g.total)}</span>
+                          </button>
+                          {bsExpandedGroup === `pl-${g.group}` && (
+                            <div className="bg-bg-border/10 px-6 py-1">
+                              {g.ledgers.sort((a, b) => b.amount - a.amount).map((l, i) => (
+                                <div key={i} className="flex justify-between py-1 text-xs">
+                                  <span className="text-muted">{l.name}</span>
+                                  <span className="font-mono">{fmtINR(l.amount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Expenses */}
+                  <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-bg-border">
+                      <h3 className="font-semibold text-danger">Expenses</h3>
+                    </div>
+                    <div className="divide-y divide-bg-border/50">
+                      {pl.expenses.map(g => (
+                        <div key={g.group}>
+                          <button className="w-full flex justify-between items-center px-4 py-2 hover:bg-bg-border/20 transition-colors"
+                            onClick={() => setBsExpandedGroup(bsExpandedGroup === `pl-${g.group}` ? null : `pl-${g.group}`)}>
+                            <span className="text-primary text-sm flex items-center gap-2">
+                              {bsExpandedGroup === `pl-${g.group}` ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                              {g.group}
+                            </span>
+                            <span className="font-mono text-sm text-danger">{fmtINR(g.total)}</span>
+                          </button>
+                          {bsExpandedGroup === `pl-${g.group}` && (
+                            <div className="bg-bg-border/10 px-6 py-1">
+                              {g.ledgers.sort((a, b) => b.amount - a.amount).map((l, i) => (
+                                <div key={i} className="flex justify-between py-1 text-xs">
+                                  <span className="text-muted">{l.name}</span>
+                                  <span className="font-mono">{fmtINR(l.amount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {bsView === "tb" && (
+              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-bg-border bg-bg-border/20 sticky top-0">
+                    <tr>
+                      {["Ledger", "Group", "Opening", "Debit", "Credit", "Closing"].map(h => (
+                        <th key={h} className="text-left text-muted px-3 py-2 font-medium text-xs">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tb.filter(e => Math.abs(e.closingBalance) > 0.5 || e.totalDebit > 0 || e.totalCredit > 0)
+                      .sort((a, b) => Math.abs(b.closingBalance) - Math.abs(a.closingBalance))
+                      .slice(0, 200)
+                      .map(e => (
+                        <tr key={e.ledgerId} className="border-b border-bg-border/30 hover:bg-bg-border/10">
+                          <td className="px-3 py-1.5 text-primary text-xs">{e.name}</td>
+                          <td className="px-3 py-1.5 text-muted text-xs">{e.group}</td>
+                          <td className="px-3 py-1.5 font-mono text-xs">{fmtINR(e.openingBalance)}</td>
+                          <td className="px-3 py-1.5 font-mono text-xs text-success">{e.totalDebit > 0 ? fmtINR(e.totalDebit) : "-"}</td>
+                          <td className="px-3 py-1.5 font-mono text-xs text-danger">{e.totalCredit > 0 ? fmtINR(e.totalCredit) : "-"}</td>
+                          <td className={clsx("px-3 py-1.5 font-mono text-xs font-semibold", e.closingBalance >= 0 ? "text-success" : "text-danger")}>{fmtINR(e.closingBalance)}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                  <tfoot className="border-t-2 border-bg-border bg-bg-border/20">
+                    <tr>
+                      <td colSpan={3} className="px-3 py-2 font-semibold text-primary text-sm">Total</td>
+                      <td className="px-3 py-2 font-mono font-bold text-success text-sm">{fmtINR(tb.reduce((s, e) => s + e.totalDebit, 0))}</td>
+                      <td className="px-3 py-2 font-mono font-bold text-danger text-sm">{fmtINR(tb.reduce((s, e) => s + e.totalCredit, 0))}</td>
+                      <td className="px-3 py-2 font-mono font-bold text-sm">{fmtINR(tb.reduce((s, e) => s + e.closingBalance, 0))}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ═══════════ Advance Tax ═══════════ */}
+      {tab === "Advance Tax" && data && (() => {
+        const atData = computeAdvanceTax(data.ledgers, data.vouchers, taxRegime);
+        return (
+          <div className="space-y-4">
+            {/* Regime selector */}
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-muted">Tax Regime:</span>
+              <select
+                className="bg-bg-card border border-bg-border rounded-lg px-3 py-2 text-sm text-primary"
+                value={taxRegime}
+                onChange={e => setTaxRegime(e.target.value)}
+              >
+                {Object.keys(COMPANY_TAX_REGIMES).map(k => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </div>
+
+            {/* Summary */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                <div className="text-xs text-muted mb-1">Estimated Profit (FY {atData.fyYear})</div>
+                <div className={clsx("font-mono font-bold text-lg", atData.annualProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(atData.annualProfit)}</div>
+              </div>
+              <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                <div className="text-xs text-muted mb-1">Taxable Income</div>
+                <div className="font-mono font-bold text-primary text-lg">{fmtINR(atData.taxableIncome)}</div>
+              </div>
+              <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                <div className="text-xs text-muted mb-1">Effective Rate</div>
+                <div className="font-mono font-bold text-accent text-lg">{atData.regime.effectiveRate.toFixed(2)}%</div>
+              </div>
+              <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                <div className="text-xs text-muted mb-1">Total Tax Liability</div>
+                <div className="font-mono font-bold text-danger text-lg">{fmtINR(atData.totalTax)}</div>
+              </div>
+            </div>
+
+            {/* Tax breakdown */}
+            <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-bg-border">
+                <h3 className="font-semibold text-primary">Tax Computation</h3>
+              </div>
+              <table className="w-full text-sm">
+                <tbody>
+                  {[
+                    ["Basic Tax", `${atData.regime.rate}%`, atData.basicTax],
+                    ["Surcharge", `${atData.regime.surchargeRate}%`, atData.surcharge],
+                    ["Health & Education Cess", `${atData.regime.cessRate}%`, atData.cess],
+                  ].map(([label, rate, amt]) => (
+                    <tr key={label as string} className="border-b border-bg-border/30">
+                      <td className="px-4 py-2 text-primary">{label}</td>
+                      <td className="px-4 py-2 font-mono text-muted text-right">{rate}</td>
+                      <td className="px-4 py-2 font-mono text-danger text-right">{fmtINR(amt as number)}</td>
+                    </tr>
+                  ))}
+                  <tr className="bg-bg-border/10 font-bold">
+                    <td className="px-4 py-2 text-primary">Total Tax</td>
+                    <td className="px-4 py-2 font-mono text-muted text-right">{atData.regime.effectiveRate.toFixed(2)}%</td>
+                    <td className="px-4 py-2 font-mono text-danger text-right">{fmtINR(atData.totalTax)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Quarterly installments */}
+            <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-bg-border">
+                <h3 className="font-semibold text-primary">Quarterly Advance Tax Installments</h3>
+              </div>
+              <table className="w-full text-sm">
+                <thead className="border-b border-bg-border">
+                  <tr>
+                    {["Quarter", "Period", "Due Date", "Cumulative %", "Installment", "Cumulative Due", "Profit to Date"].map(h => (
+                      <th key={h} className="text-left text-muted px-3 py-2 font-medium text-xs">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {atData.quarters.map(q => (
+                    <tr key={q.quarter} className="border-b border-bg-border/30 hover:bg-bg-border/10">
+                      <td className="px-3 py-2 font-semibold text-primary">{q.quarter}</td>
+                      <td className="px-3 py-2 text-muted">{q.label}</td>
+                      <td className="px-3 py-2 text-accent font-medium">{q.dueDate}</td>
+                      <td className="px-3 py-2 font-mono">{q.cumulativePct}%</td>
+                      <td className="px-3 py-2 font-mono text-danger">{fmtINR(q.installmentAmount)}</td>
+                      <td className="px-3 py-2 font-mono text-danger font-semibold">{fmtINR(q.cumulativeAmount)}</td>
+                      <td className={clsx("px-3 py-2 font-mono", q.profitToDate >= 0 ? "text-success" : "text-danger")}>{fmtINR(q.profitToDate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Monthly profit chart */}
+            {atData.monthlyProfitTrend.length > 0 && (
+              <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+                <h3 className="font-semibold text-primary mb-3">Monthly Profit Trend</h3>
+                <ResponsiveContainer width="100%" height={250}>
+                  <ComposedChart data={atData.monthlyProfitTrend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-bg-border)" />
+                    <XAxis dataKey="month" tick={{ fontSize: 10, fill: "var(--color-text-muted)" }} />
+                    <YAxis tick={{ fontSize: 10, fill: "var(--color-text-muted)" }} tickFormatter={v => fmtINR(v)} />
+                    <Tooltip formatter={(v: number) => fmtINR(v)} />
+                    <Bar dataKey="profit" fill="var(--color-accent)" name="Monthly Profit" />
+                    <Line type="monotone" dataKey="cumulative" stroke="var(--color-success)" strokeWidth={2} dot={false} name="Cumulative" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ═══ Financial Command Center ═══ */}
+      {tab === "Financial HQ" && <FinancialCommandCenter data={data} voucherIndex={voucherIndex} />}
+
+      {/* ═══ Cashflow Intelligence ═══ */}
+      {tab === "Cashflow Intel" && <CashflowIntelligence data={data} voucherIndex={voucherIndex} />}
+
+      {/* ═══ Ledger Intelligence ═══ */}
+      {tab === "Ledger Intel" && <LedgerIntelligence data={data} voucherIndex={voucherIndex} />}
+
+      {/* ═══ Tax & Compliance Radar ═══ */}
+      {tab === "Tax Radar" && <TaxRadar data={data} voucherIndex={voucherIndex} />}
+
+      {/* ═══ Business Intelligence ═══ */}
+      {tab === "Business Intel" && <BusinessIntelligence data={data} voucherIndex={voucherIndex} />}
+
     </div>
   );
 }
@@ -2135,3 +2557,4 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
     </div>
   );
 }
+

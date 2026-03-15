@@ -115,7 +115,8 @@ export function NavBar() {
       {/* Collapse toggle */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
-        className="flex items-center justify-center p-3 border-t border-bg-border text-muted hover:text-primary transition"
+        className="flex items-center justify-center p-3 border-t border-bg-border text-muted hover:text-primary transition cursor-pointer"
+        aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
       >
         {sidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
       </button>

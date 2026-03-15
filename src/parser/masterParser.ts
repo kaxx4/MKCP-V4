@@ -364,9 +364,10 @@ function parseOneItem(raw: any, warnings: ImportWarning[]): CanonicalItem | null
     openingQtyBase: openingQty,
     openingRate,
     openingValue,
-    closingQtyBase: closingQty || undefined,
-    closingRate: closingRate || undefined,
-    closingValue: closingValueRaw || undefined,
+    closingQtyBase: closingQty > 0 ? closingQty : undefined,
+    closingRate: closingRate > 0 ? closingRate : undefined,
+    // closingValue=0 is valid (item fully sold out) — don't use || which treats 0 as falsy
+    closingValue: closingValueRaw,
     hsn: raw.hsn ? String(raw.hsn) : undefined,
     gstRate: raw.gstRate ? Number(raw.gstRate) : undefined,
   };

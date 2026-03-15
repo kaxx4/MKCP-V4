@@ -19,7 +19,7 @@ import { useDataStore } from "../store/dataStore";
 import { useUIStore } from "../store/uiStore";
 import { useOrderStore } from "../store/orderStore";
 import { useOrderGroupStore, type OrderGroup } from "../store/orderGroupStore";
-import { getCurrentStock, getCurrentStockIndexed, computeMonthlyBuckets, computeMonthlyBucketsIndexed, suggestedReorder } from "../engine/inventory";
+import { getCurrentStock, getCurrentStockIndexed, computeMonthlyBuckets, computeMonthlyBucketsIndexed, suggestedReorder, suggestedReorderIndexed, avgMonthlyOutwardIndexed } from "../engine/inventory";
 import { toDisplay, fromDisplay } from "../engine/unitEngine";
 import { UnitToggle } from "../components/UnitToggle";
 import { fmtNum } from "../utils/format";
@@ -151,9 +151,9 @@ export default function Orders() {
 
   const suggested = useMemo(() => {
     if (!selectedItem || !data) return 0;
-    const s = suggestedReorder(selectedItem, data.vouchers, currentStock, coverMonths);
+    const s = suggestedReorderIndexed(selectedItem, voucherIndex, currentStock, coverMonths);
     return Math.max(0, s);
-  }, [selectedItem, data, currentStock, coverMonths]);
+  }, [selectedItem, data, voucherIndex, currentStock, coverMonths]);
 
 
   function selectItem(item: CanonicalItem) {
@@ -163,7 +163,7 @@ export default function Orders() {
       const disp = toDisplay(item, existing.qtyBase, unitMode);
       setOrderQty(String(disp.value));
     } else {
-      const s = Math.max(0, suggestedReorder(item, data?.vouchers ?? [], getCurrentStock(item, data?.vouchers ?? []), coverMonths));
+      const s = Math.max(0, suggestedReorderIndexed(item, voucherIndex, getCurrentStockIndexed(item, voucherIndex), coverMonths));
       const disp = toDisplay(item, s, unitMode);
       setOrderQty(s > 0 ? String(disp.value) : "");
     }
@@ -336,8 +336,9 @@ export default function Orders() {
 
   function getStockColor(item: CanonicalItem, stock: number) {
     if (stock <= 0) return "text-danger";
-    const avg = suggested;
-    if (avg > 0 && stock < avg) return "text-warn";
+    // Use item's own avg monthly outward to determine if stock is low
+    const avg = avgMonthlyOutwardIndexed(item, voucherIndex);
+    if (avg > 0 && stock < avg * coverMonths) return "text-warn";
     return "text-success";
   }
 
@@ -755,13 +756,13 @@ export default function Orders() {
             </div>
             <div className="flex gap-2">
               <UnitToggle />
-              <button onClick={exportCSV} className="flex items-center gap-1.5 text-xs bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-2 py-1.5 rounded-lg transition">
+              <button onClick={exportCSV} className="flex items-center gap-1.5 text-xs bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-2 py-1.5 rounded-lg transition cursor-pointer" aria-label="Export as CSV" title="Export CSV">
                 <Download size={12} />
               </button>
-              <button onClick={exportXLSX} className="flex items-center gap-1.5 text-xs bg-accent hover:bg-accent-hover text-white px-2 py-1.5 rounded-lg transition">
+              <button onClick={exportXLSX} className="flex items-center gap-1.5 text-xs bg-accent hover:bg-accent-hover text-white px-2 py-1.5 rounded-lg transition cursor-pointer" aria-label="Export as Excel" title="Export Excel">
                 <Download size={12} />
               </button>
-              <button onClick={clearAll} className="text-xs bg-danger/20 hover:bg-danger/30 text-danger px-2 py-1.5 rounded-lg transition">
+              <button onClick={clearAll} className="text-xs bg-danger/20 hover:bg-danger/30 text-danger px-2 py-1.5 rounded-lg transition cursor-pointer" aria-label="Clear all order items" title="Clear order">
                 <Trash2 size={12} />
               </button>
             </div>

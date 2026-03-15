@@ -199,11 +199,20 @@ export function generatePredictions(
       if (line.type !== "inventory" || !line.itemId) continue;
       const qty = line.qtyBase ?? 0;
 
-      // Stock tracking (all voucher types)
+      // Stock tracking (all voucher types that affect inventory)
       if (v.voucherType === "Purchase") {
         itemStockMap.set(line.itemId, (itemStockMap.get(line.itemId) ?? 0) + qty);
       } else if (v.voucherType === "Sales") {
         itemStockMap.set(line.itemId, (itemStockMap.get(line.itemId) ?? 0) - qty);
+      } else if (v.voucherType === "Credit Note") {
+        // Sales return → goods come back in
+        itemStockMap.set(line.itemId, (itemStockMap.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Debit Note") {
+        // Purchase return → goods go back out
+        itemStockMap.set(line.itemId, (itemStockMap.get(line.itemId) ?? 0) - qty);
+      } else if (v.voucherType === "Stock Journal") {
+        // Stock Journal qty can be +ve (in) or -ve (out)
+        itemStockMap.set(line.itemId, (itemStockMap.get(line.itemId) ?? 0) + qty);
       }
 
       // Only process target voucher type for predictions
@@ -313,21 +322,13 @@ export function generatePredictions(
 
     if (intervals.length === 0) continue;
 
-    // EWMA interval calculation
-    const alpha = 0.3;
+    // EWMA interval calculation — adaptive alpha based on data volume
+    // More data → higher alpha (more responsive to recent changes)
+    const alpha = Math.min(0.5, 0.2 + intervals.length * 0.02);
     let ewma = intervals[0];
     for (let i = 1; i < intervals.length; i++) {
       ewma = alpha * intervals[i] + (1 - alpha) * ewma;
     }
-
-    // Seasonal interval adjustment
-    const seasonalMultiplierForParty = getPartySeasonalFactor(partyId, partyMonthlyOrders, nextMonth);
-    const seasonAdjustedInterval = seasonalMultiplierForParty > 0
-      ? ewma / seasonalMultiplierForParty
-      : ewma;
-
-    // Apply aggression factor
-    const aggressiveInterval = Math.max(1, Math.round(seasonAdjustedInterval * 0.85));
 
     const simpleAvg = intervals.reduce((s, d) => s + d, 0) / intervals.length;
     const stdDev = Math.sqrt(
@@ -337,6 +338,17 @@ export function generatePredictions(
     // Order consistency (inverse CV)
     const cv = simpleAvg > 0 ? stdDev / simpleAvg : 1;
     const orderConsistency = Math.max(0, Math.min(1, 1 - cv));
+
+    // Seasonal interval adjustment
+    const seasonalMultiplierForParty = getPartySeasonalFactor(partyId, partyMonthlyOrders, nextMonth);
+    const seasonAdjustedInterval = seasonalMultiplierForParty > 0
+      ? ewma / seasonalMultiplierForParty
+      : ewma;
+
+    // Apply aggression factor — scale by order consistency
+    // High consistency (regular orders) → tighter window (0.95), low consistency → wider (0.80)
+    const aggressionFactor = 0.80 + orderConsistency * 0.15; // range: 0.80 to 0.95
+    const aggressiveInterval = Math.max(1, Math.round(seasonAdjustedInterval * aggressionFactor));
 
     // Seasonality score for this party
     const monthlyCounts = partyMonthlyOrders.get(partyId) ?? new Array(12).fill(0);
@@ -622,14 +634,16 @@ export function generateItemForecasts(
     itemMonthlyPurchases.set(itemId, new Array(12).fill(0));
   }
 
+  // Track ALL voucher movements for accurate stock (not limited to 12 months)
+  const itemAllTimePurchases = new Map<string, number>();
+  const itemAllTimeSales = new Map<string, number>();
+  const itemAllTimeCreditNotes = new Map<string, number>();
+  const itemAllTimeDebitNotes = new Map<string, number>();
+  const itemAllTimeStockJournals = new Map<string, number>();
+
   // Accumulate voucher data
   for (const v of vouchers) {
     if (v.isCancelled || v.isOptional) continue;
-    if (v.date < twelveMonthsAgoStr) continue;
-
-    const calendarMonth = getMonthIndex(v.date);
-    const recentIdx = getRecentMonthIndex(v.date);
-    if (recentIdx < 0 || recentIdx > 11) continue;
 
     for (const line of v.lines) {
       if (line.type !== "inventory" || !line.itemId) continue;
@@ -637,6 +651,26 @@ export function generateItemForecasts(
 
       const qty = line.qtyBase ?? 0;
       const rate = line.ratePerBase ?? 0;
+
+      // All-time stock tracking (every voucher regardless of date)
+      if (v.voucherType === "Purchase") {
+        itemAllTimePurchases.set(line.itemId, (itemAllTimePurchases.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Sales") {
+        itemAllTimeSales.set(line.itemId, (itemAllTimeSales.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Credit Note") {
+        itemAllTimeCreditNotes.set(line.itemId, (itemAllTimeCreditNotes.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Debit Note") {
+        itemAllTimeDebitNotes.set(line.itemId, (itemAllTimeDebitNotes.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Stock Journal") {
+        itemAllTimeStockJournals.set(line.itemId, (itemAllTimeStockJournals.get(line.itemId) ?? 0) + qty);
+      }
+
+      // Recent 12-month analysis for forecasting
+      if (v.date < twelveMonthsAgoStr) continue;
+
+      const calendarMonth = getMonthIndex(v.date);
+      const recentIdx = getRecentMonthIndex(v.date);
+      if (recentIdx < 0 || recentIdx > 11) continue;
 
       if (v.voucherType === "Sales") {
         const monthly = itemMonthlyDemand.get(line.itemId)!;
@@ -672,9 +706,10 @@ export function generateItemForecasts(
     const monthlyPurchases = itemMonthlyPurchases.get(itemId) ?? new Array(12).fill(0);
     const calendarDemand = itemMonthlyDemand.get(itemId) ?? new Array(12).fill(0);
 
-    // Weighted moving average (recent months get 3x weight)
-    // Weights: months 0-5 get weight 1, months 6-9 get weight 2, months 10-11 get weight 3
-    const weights = [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3];
+    // Weighted moving average — exponentially increasing recency bias
+    // Oldest months contribute minimally, most recent months dominate
+    // This captures recent demand shifts faster for seasonal businesses
+    const weights = [1, 1, 1, 2, 2, 2, 3, 3, 4, 5, 6, 8];
     let weightedSum = 0;
     let weightTotal = 0;
     let activeMonths = 0;
@@ -719,11 +754,16 @@ export function generateItemForecasts(
     }
     next3MonthForecast = Math.round(next3MonthForecast);
 
-    // Current stock (opening + purchases - sales)
+    // Current stock: opening + all purchases + credit notes + stock journals - all sales - debit notes
     const opening = item.openingQtyBase ?? 0;
-    const totalPurchases = monthlyPurchases.reduce((s, v) => s + v, 0);
-    const totalSales = monthlySales.reduce((s, v) => s + v, 0);
-    const currentStock = Math.round(opening + totalPurchases - totalSales);
+    const currentStock = Math.round(
+      opening
+      + (itemAllTimePurchases.get(itemId) ?? 0)
+      - (itemAllTimeSales.get(itemId) ?? 0)
+      + (itemAllTimeCreditNotes.get(itemId) ?? 0)  // sales returns come back
+      - (itemAllTimeDebitNotes.get(itemId) ?? 0)    // purchase returns go out
+      + (itemAllTimeStockJournals.get(itemId) ?? 0) // stock journal net effect
+    );
 
     // Days of stock remaining
     const dailyDemand = avgMonthlyDemand / 30;

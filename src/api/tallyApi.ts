@@ -23,9 +23,9 @@ export async function checkTallyHealth(): Promise<{ connected: boolean; error?: 
 }
 
 export async function fullSync(company: string, fromDate?: string, toDate?: string): Promise<TallySyncResult> {
-  // 15 MINUTE timeout — monthly chunking can take longer
+  // 90 MINUTE timeout — weekly full-FY can take 60+ min
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 900_000);
+  const timer = setTimeout(() => ctrl.abort(), 5_400_000);
 
   try {
     console.log(`[fullSync] Starting sync request for "${company}" (${fromDate} → ${toDate})`);
@@ -60,7 +60,7 @@ export async function fullSync(company: string, fromDate?: string, toDate?: stri
     clearTimeout(timer);
     console.error(`[fullSync] Error:`, e);
     if (e.name === "AbortError") {
-      throw new Error("Sync timed out after 15 minutes. Try narrowing the date range (e.g., 6 months instead of full year).");
+      throw new Error("Sync timed out after 90 minutes. Try narrowing the date range or using weekly mode.");
     }
     throw e;
   }
@@ -112,7 +112,7 @@ export async function syncMasters(company: string): Promise<MastersSyncResult> {
 
 export async function syncDayBook(company: string, fromDate: string, toDate: string, chunkMode: "monthly" | "daily" | "weekly" = "monthly"): Promise<DayBookSyncResult> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 900_000); // 15 min
+  const timer = setTimeout(() => ctrl.abort(), 5_400_000); // 90 min — weekly full-FY can take 60+ min
   try {
     const r = await fetch(`${BASE}/api/tally/sync-daybook`, {
       method: "POST",
@@ -125,7 +125,7 @@ export async function syncDayBook(company: string, fromDate: string, toDate: str
     return await r.json();
   } catch (e: any) {
     clearTimeout(timer);
-    if (e.name === "AbortError") throw new Error("Day Book sync timed out (15 min). Try a shorter period.");
+    if (e.name === "AbortError") throw new Error("Day Book sync timed out (90 min). Try a shorter period.");
     throw e;
   }
 }

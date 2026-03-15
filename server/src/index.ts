@@ -318,31 +318,36 @@ app.post("/api/tally/sync-masters", async (req, res) => {
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[MASTERS] Done in ${elapsed}s`);
 
-  res.json({
-    success: stocks.tallymessage.length > 0 || ledgers.tallymessage.length > 0,
-    errors: errors.length > 0 ? errors : undefined,
-    data: {
-      tallymessage: [
-        { metadata: { type: "Company", name: company }, name: company, fystart: 4 },
-        ...groups.tallymessage,
-        ...units.tallymessage,
-        ...stocks.tallymessage,
-        ...ledgers.tallymessage,
-        ...godowns.tallymessage,
-        ...costCentres.tallymessage,
-      ],
-    },
-    stats: {
-      stockGroups: groups.tallymessage.length,
-      units: units.tallymessage.length,
-      stockItems: stocks.tallymessage.length,
-      ledgers: ledgers.tallymessage.length,
-      godowns: godowns.tallymessage.length,
-      costCentres: costCentres.tallymessage.length,
-      elapsedSeconds: parseFloat(elapsed),
-    },
-  });
-  activeSyncs.delete(lockKey);
+  try {
+    res.json({
+      success: stocks.tallymessage.length > 0 || ledgers.tallymessage.length > 0,
+      errors: errors.length > 0 ? errors : undefined,
+      data: {
+        tallymessage: [
+          { metadata: { type: "Company", name: company }, name: company, fystart: 4 },
+          ...groups.tallymessage,
+          ...units.tallymessage,
+          ...stocks.tallymessage,
+          ...ledgers.tallymessage,
+          ...godowns.tallymessage,
+          ...costCentres.tallymessage,
+        ],
+      },
+      stats: {
+        stockGroups: groups.tallymessage.length,
+        units: units.tallymessage.length,
+        stockItems: stocks.tallymessage.length,
+        ledgers: ledgers.tallymessage.length,
+        godowns: godowns.tallymessage.length,
+        costCentres: costCentres.tallymessage.length,
+        elapsedSeconds: parseFloat(elapsed),
+      },
+    });
+  } catch (e: any) {
+    console.error(`[MASTERS] Failed to send response: ${e.message}`);
+  } finally {
+    activeSyncs.delete(lockKey);
+  }
 });
 
 // ── Sync Day Book (vouchers for a period) — CONFIGURABLE CHUNKING ──
@@ -369,7 +374,7 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
   }
 
   activeSyncs.set(lockKey, Promise.resolve());
-  res.setTimeout(900_000); // 15 min
+  res.setTimeout(5_400_000); // 90 min — weekly full-FY can take 60+ min
   const t0 = Date.now();
 
   // Select chunking strategy
@@ -384,62 +389,111 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
   console.log(`\n[DAYBOOK] Syncing vouchers for "${company}" (${fromDate} → ${toDate}) in ${chunks.length} ${chunkMode} chunks...`);
 
   const allVouchers: any[] = [];
+  const seenGuids = new Set<string>();
   const chunkDetails: { label: string; count: number; ms: number }[] = [];
   const errors: string[] = [];
   let chunksSucceeded = 0;
   let chunksFailed = 0;
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    let chunkDone = false;
-    for (let attempt = 0; attempt < 2 && !chunkDone; attempt++) {
-      const chunkT0 = Date.now();
-      try {
-        if (attempt > 0) {
-          console.log(`[DAYBOOK]   Retrying ${chunk.label}...`);
-          await new Promise(r => setTimeout(r, 2000));
-        }
-        console.log(`[DAYBOOK] Chunk ${i + 1}/${chunks.length}: ${chunk.label} (${chunk.from} → ${chunk.to})...`);
-        let xml: any;
-        try {
-          xml = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
-        } catch (primaryErr: any) {
-          console.log(`[DAYBOOK]   Day Book failed for ${chunk.label}, trying Collection-based fallback...`);
-          try {
-            xml = await tallyPostWithRetry(TALLY, vouchersCollectionXml(company, chunk.from, chunk.to), 120_000, false, 1);
-          } catch (fallbackErr: any) {
-            throw new Error(`Both Day Book and Collection export failed for ${chunk.label}: ${primaryErr.message} / ${fallbackErr.message}`);
-          }
-        }
-        const vouchers = convertVouchers(xml);
+  const VOUCHER_TIMEOUT = 180_000; // 3 minutes per chunk
 
-        // Date verification: detect if Tally ignored our date range
-        if (vouchers.tallymessage.length > 0) {
-          let outOfRange = 0;
-          for (const v of vouchers.tallymessage) {
+  // Helper: fetch a single date range and collect vouchers
+  async function fetchChunkRange(from: string, to: string, label: string): Promise<ReturnType<typeof convertVouchers>> {
+    let vouchers: ReturnType<typeof convertVouchers>;
+    try {
+      const xml = await tallyPostWithRetry(TALLY, vouchersCollectionXml(company, from, to), VOUCHER_TIMEOUT, false, 1);
+      vouchers = convertVouchers(xml);
+      if (vouchers.tallymessage.length === 0) {
+        console.log(`[DAYBOOK]   Collection returned 0 for ${label}, trying Day Book fallback...`);
+        const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, from, to), VOUCHER_TIMEOUT, false, 1);
+        const fallback = convertVouchers(xml2);
+        if (fallback.tallymessage.length > 0) {
+          let inRange = 0;
+          for (const v of fallback.tallymessage) {
             const vDate = String(v.date ?? "").replace(/-/g, "");
             const vNum = parseInt(vDate, 10);
-            if (vNum && (vNum < parseInt(chunk.from, 10) || vNum > parseInt(chunk.to, 10))) outOfRange++;
+            if (vNum && vNum >= parseInt(from, 10) && vNum <= parseInt(to, 10)) inRange++;
           }
-          if (outOfRange > vouchers.tallymessage.length * 0.5) {
-            console.warn(`[DAYBOOK] ⚠ DATE MISMATCH: ${outOfRange}/${vouchers.tallymessage.length} vouchers outside ${chunk.from}→${chunk.to}. Tally may have ignored the date range!`);
+          if (inRange > 0) {
+            console.log(`[DAYBOOK]   Day Book returned ${fallback.tallymessage.length} vouchers, ${inRange} in date range`);
+            vouchers = fallback;
+          } else {
+            console.warn(`[DAYBOOK]   Day Book returned ${fallback.tallymessage.length} vouchers but NONE in range ${from}→${to} — discarding`);
           }
         }
+      }
+    } catch (primaryErr: any) {
+      console.log(`[DAYBOOK]   Collection failed for ${label}, trying Day Book fallback...`);
+      const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, from, to), VOUCHER_TIMEOUT, false, 1);
+      vouchers = convertVouchers(xml2);
+    }
+    return vouchers;
+  }
 
+  // Helper: collect voucher results into allVouchers with dedup
+  function collectVouchers(vouchers: ReturnType<typeof convertVouchers>, label: string): number {
+    let added = 0;
+    for (const v of vouchers.tallymessage) {
+      const guid = v.guid || v.GUID || "";
+      if (guid && seenGuids.has(guid)) continue;
+      if (guid) seenGuids.add(guid);
+      allVouchers.push(v);
+      added++;
+    }
+    const dupes = vouchers.tallymessage.length - added;
+    if (dupes > 0) console.log(`[DAYBOOK]   Deduped: ${dupes} duplicate vouchers skipped in ${label}`);
+    return added;
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const chunkT0 = Date.now();
+    try {
+      console.log(`[DAYBOOK] Chunk ${i + 1}/${chunks.length}: ${chunk.label} (${chunk.from} → ${chunk.to})...`);
+      const vouchers = await fetchChunkRange(chunk.from, chunk.to, chunk.label);
+      const added = collectVouchers(vouchers, chunk.label);
+      const ms = Date.now() - chunkT0;
+      chunkDetails.push({ label: chunk.label, count: added, ms });
+      chunksSucceeded++;
+      console.log(`[DAYBOOK] ✓ ${chunk.label}: ${added} vouchers (${ms}ms)`);
+    } catch (e: any) {
+      const isTimeout = e.message?.includes("timeout") || e.message?.includes("TIMEOUT");
+
+      // Auto-fallback: if a monthly chunk timed out, retry with weekly sub-chunks
+      if (isTimeout && chunkMode === "monthly" && chunk.from !== chunk.to) {
+        console.log(`[DAYBOOK] ⚡ ${chunk.label} timed out — auto-splitting into weekly sub-chunks...`);
+        const subChunks = getWeeklyChunks(chunk.from, chunk.to);
+        let subTotal = 0;
+        let subFailed = false;
+        for (const sub of subChunks) {
+          try {
+            console.log(`[DAYBOOK]   Sub-chunk: ${sub.label} (${sub.from} → ${sub.to})...`);
+            const subVouchers = await fetchChunkRange(sub.from, sub.to, sub.label);
+            const added = collectVouchers(subVouchers, sub.label);
+            subTotal += added;
+            console.log(`[DAYBOOK]   ✓ ${sub.label}: ${added} vouchers`);
+          } catch (subErr: any) {
+            console.error(`[DAYBOOK]   ✗ ${sub.label}: ${subErr.message}`);
+            errors.push(`${sub.label}: ${subErr.message}`);
+            subFailed = true;
+          }
+        }
         const ms = Date.now() - chunkT0;
-        allVouchers.push(...vouchers.tallymessage);
-        chunkDetails.push({ label: chunk.label, count: vouchers.tallymessage.length, ms });
-        chunksSucceeded++;
-        chunkDone = true;
-        console.log(`[DAYBOOK] ✓ ${chunk.label}: ${vouchers.tallymessage.length} vouchers (${ms}ms)`);
-      } catch (e: any) {
-        if (attempt === 1) {
-          const ms = Date.now() - chunkT0;
+        if (subTotal > 0) {
+          chunkDetails.push({ label: `${chunk.label} (weekly fallback)`, count: subTotal, ms });
+          chunksSucceeded++;
+          console.log(`[DAYBOOK] ✓ ${chunk.label} (weekly fallback): ${subTotal} vouchers total (${ms}ms)`);
+        } else {
           chunksFailed++;
           chunkDetails.push({ label: chunk.label, count: 0, ms });
-          errors.push(`${chunk.label}: ${e.message}`);
-          console.error(`[DAYBOOK] ✗ ${chunk.label}: ${e.message} (gave up after 2 attempts)`);
+          if (!subFailed) errors.push(`${chunk.label}: no vouchers from weekly fallback`);
         }
+      } else {
+        const ms = Date.now() - chunkT0;
+        chunksFailed++;
+        chunkDetails.push({ label: chunk.label, count: 0, ms });
+        errors.push(`${chunk.label}: ${e.message}`);
+        console.error(`[DAYBOOK] ✗ ${chunk.label}: ${e.message}`);
       }
     }
   }
@@ -447,22 +501,27 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[DAYBOOK] ✓ Total: ${allVouchers.length} vouchers in ${elapsed}s (${chunksSucceeded}/${chunks.length} chunks succeeded)`);
 
-  res.json({
-    success: allVouchers.length > 0,
-    errors: errors.length > 0 ? errors : undefined,
-    data: { tallymessage: allVouchers },
-    stats: {
-      vouchers: allVouchers.length,
-      fromDate,
-      toDate,
-      chunksTotal: chunks.length,
-      chunksSucceeded,
-      chunksFailed,
-      chunkDetails,
-      elapsedSeconds: parseFloat(elapsed),
-    },
-  });
-  activeSyncs.delete(lockKey);
+  try {
+    res.json({
+      success: allVouchers.length > 0,
+      errors: errors.length > 0 ? errors : undefined,
+      data: { tallymessage: allVouchers },
+      stats: {
+        vouchers: allVouchers.length,
+        fromDate,
+        toDate,
+        chunksTotal: chunks.length,
+        chunksSucceeded,
+        chunksFailed,
+        chunkDetails,
+        elapsedSeconds: parseFloat(elapsed),
+      },
+    });
+  } catch (e: any) {
+    console.error(`[DAYBOOK] Failed to send response: ${e.message}`);
+  } finally {
+    activeSyncs.delete(lockKey);
+  }
 });
 
 // Full sync — the main endpoint
@@ -477,8 +536,8 @@ app.post("/api/tally/sync", async (req, res) => {
   }
 
   activeSyncs.set(lockKey, Promise.resolve());
-  // Increase Express response timeout to 15 minutes
-  res.setTimeout(900_000);
+  // 90 min — weekly full-FY can take 60+ min
+  res.setTimeout(5_400_000);
 
   const t0 = Date.now();
   console.log(`\n${"=".repeat(60)}`);
@@ -562,6 +621,7 @@ app.post("/api/tally/sync", async (req, res) => {
 
   // ── Step 7: Vouchers (Monthly Chunking) ──
   const allVouchers: any[] = [];
+  const seenGuids = new Set<string>();
   if (fromDate && toDate) {
     const chunks = getMonthlyChunks(fromDate, toDate);
     console.log(`[SYNC] Step 7/7: Fetching vouchers month-by-month (${chunks.length} chunks)...`);
@@ -577,35 +637,54 @@ app.post("/api/tally/sync", async (req, res) => {
             await new Promise(r => setTimeout(r, 2000));
           }
           console.log(`[SYNC]   Chunk ${i + 1}/${chunks.length}: ${chunk.label}...`);
-          let xml: any;
+          let vouchers: ReturnType<typeof convertVouchers>;
+          // PRIMARY: Collection-based export with reliable TDL date filtering
           try {
-            xml = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+            const xml = await tallyPostWithRetry(TALLY, vouchersCollectionXml(company, chunk.from, chunk.to), 120_000, false, 1);
+            vouchers = convertVouchers(xml);
+            // If Collection returned 0 vouchers, try Day Book fallback
+            if (vouchers.tallymessage.length === 0) {
+              console.log(`[SYNC]   Collection returned 0 for ${chunk.label}, trying Day Book fallback...`);
+              const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+              const fallback = convertVouchers(xml2);
+              // Day Book may ignore dates — verify results are in range before accepting
+              if (fallback.tallymessage.length > 0) {
+                let inRange = 0;
+                for (const v of fallback.tallymessage) {
+                  const vDate = String(v.date ?? "").replace(/-/g, "");
+                  const vNum = parseInt(vDate, 10);
+                  if (vNum && vNum >= parseInt(chunk.from, 10) && vNum <= parseInt(chunk.to, 10)) inRange++;
+                }
+                if (inRange > 0) {
+                  console.log(`[SYNC]   Day Book returned ${fallback.tallymessage.length} vouchers, ${inRange} in date range`);
+                  vouchers = fallback;
+                } else {
+                  console.warn(`[SYNC]   Day Book returned ${fallback.tallymessage.length} vouchers but NONE in range — discarding`);
+                }
+              }
+            }
           } catch (primaryErr: any) {
-            console.log(`[SYNC]   Day Book failed for ${chunk.label}, trying Collection-based fallback...`);
+            console.log(`[SYNC]   Collection failed for ${chunk.label}, trying Day Book fallback...`);
             try {
-              xml = await tallyPostWithRetry(TALLY, vouchersCollectionXml(company, chunk.from, chunk.to), 120_000, false, 1);
+              const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+              vouchers = convertVouchers(xml2);
             } catch (fallbackErr: any) {
-              throw new Error(`Both Day Book and Collection export failed for ${chunk.label}: ${primaryErr.message} / ${fallbackErr.message}`);
-            }
-          }
-          const vouchers = convertVouchers(xml);
-
-          // Date verification: detect if Tally ignored our date range
-          if (vouchers.tallymessage.length > 0) {
-            let outOfRange = 0;
-            for (const v of vouchers.tallymessage) {
-              const vDate = String(v.date ?? "").replace(/-/g, "");
-              const vNum = parseInt(vDate, 10);
-              if (vNum && (vNum < parseInt(chunk.from, 10) || vNum > parseInt(chunk.to, 10))) outOfRange++;
-            }
-            if (outOfRange > vouchers.tallymessage.length * 0.5) {
-              console.warn(`[SYNC] ⚠ DATE MISMATCH: ${outOfRange}/${vouchers.tallymessage.length} vouchers outside ${chunk.from}→${chunk.to}. Tally may have ignored the date range!`);
+              throw new Error(`Both Collection and Day Book export failed for ${chunk.label}: ${primaryErr.message} / ${fallbackErr.message}`);
             }
           }
 
-          allVouchers.push(...vouchers.tallymessage);
+          let added = 0;
+          for (const v of vouchers.tallymessage) {
+            const guid = v.guid || v.GUID || "";
+            if (guid && seenGuids.has(guid)) continue;
+            if (guid) seenGuids.add(guid);
+            allVouchers.push(v);
+            added++;
+          }
+          const dupes = vouchers.tallymessage.length - added;
+          if (dupes > 0) console.log(`[SYNC]   Deduped: ${dupes} duplicate vouchers skipped in ${chunk.label}`);
           chunkDone = true;
-          console.log(`[SYNC]   ✓ ${chunk.label}: ${vouchers.tallymessage.length} vouchers (${Date.now() - chunkT0}ms)`);
+          console.log(`[SYNC]   ✓ ${chunk.label}: ${added} vouchers (${Date.now() - chunkT0}ms)`);
         } catch (e: any) {
           if (attempt === 1) {
             console.error(`[SYNC]   ✗ ${chunk.label}: ${e.message} (gave up after 2 attempts)`);
@@ -636,25 +715,30 @@ app.post("/api/tally/sync", async (req, res) => {
 
   const hasData = stats.stockItems > 0 || stats.ledgers > 0 || stats.vouchers > 0;
 
-  res.json({
-    success: hasData,
-    errors: errors.length > 0 ? errors : undefined,
-    error: !hasData ? "Tally returned zero data. Verify: (1) Company name matches EXACTLY as shown in TallyPrime (2) Company is loaded/open (3) Date range is within company period" : undefined,
-    masters: {
-      tallymessage: [
-        { metadata: { type: "Company", name: company }, name: company, fystart: 4 },
-        ...groups.tallymessage,
-        ...units.tallymessage,
-        ...stocks.tallymessage,
-        ...ledgers.tallymessage,
-        ...godowns.tallymessage,
-        ...costCentres.tallymessage,
-      ],
-    },
-    transactions: { tallymessage: allVouchers },
-    stats,
-  });
-  activeSyncs.delete(lockKey);
+  try {
+    res.json({
+      success: hasData,
+      errors: errors.length > 0 ? errors : undefined,
+      error: !hasData ? "Tally returned zero data. Verify: (1) Company name matches EXACTLY as shown in TallyPrime (2) Company is loaded/open (3) Date range is within company period" : undefined,
+      masters: {
+        tallymessage: [
+          { metadata: { type: "Company", name: company }, name: company, fystart: 4 },
+          ...groups.tallymessage,
+          ...units.tallymessage,
+          ...stocks.tallymessage,
+          ...ledgers.tallymessage,
+          ...godowns.tallymessage,
+          ...costCentres.tallymessage,
+        ],
+      },
+      transactions: { tallymessage: allVouchers },
+      stats,
+    });
+  } catch (e: any) {
+    console.error(`[SYNC] Failed to send response: ${e.message}`);
+  } finally {
+    activeSyncs.delete(lockKey);
+  }
 });
 
 // Debug — test individual requests and see raw XML response

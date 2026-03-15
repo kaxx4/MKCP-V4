@@ -251,13 +251,25 @@ export default function Dashboard() {
       {/* Low Stock Alerts */}
       {lowStockItems.length > 0 && (
         <div className="bg-bg-card border border-warn/30 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <AlertCircle size={16} className="text-warn" />
-            <h3 className="text-sm font-semibold text-warn">Low Stock Items</h3>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={16} className="text-warn" />
+              <h3 className="text-sm font-semibold text-warn">Low Stock Items</h3>
+            </div>
+            <button
+              onClick={() => navigate("/alerts")}
+              className="text-xs text-accent hover:text-accent-hover font-medium transition cursor-pointer"
+            >
+              View All →
+            </button>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-1">
             {lowStockItems.map((item) => (
-              <div key={item.name} className="flex items-center justify-between text-sm">
+              <div
+                key={item.name}
+                onClick={() => navigate("/alerts")}
+                className="flex items-center justify-between text-sm py-1.5 px-2 -mx-2 rounded-lg hover:bg-warn/5 cursor-pointer transition-colors"
+              >
                 <div>
                   <span className="text-primary font-medium">{item.name.length > 40 ? item.name.slice(0, 40) + "…" : item.name}</span>
                   <span className="text-muted ml-2 text-xs">Stock: {item.stock.toFixed(0)}</span>
