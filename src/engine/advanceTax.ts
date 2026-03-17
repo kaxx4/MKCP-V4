@@ -1,5 +1,5 @@
-import type { CanonicalLedger, CanonicalVoucher } from "../types/canonical";
-import { computeProfitAndLoss } from "./balanceSheet";
+import type { CanonicalLedger, CanonicalVoucher, TallyPLSnapshot } from "../types/canonical";
+import { computeProfitAndLoss, classifyLedgerGroup } from "./balanceSheet";
 
 // ─── Indian Advance Income Tax Computation ──────────────────────────────
 // For companies: Section 115BAA (new regime) = 22% + 10% surcharge + 4% cess
@@ -74,12 +74,13 @@ export function computeAdvanceTax(
   ledgers: Map<string, CanonicalLedger>,
   vouchers: CanonicalVoucher[],
   regimeKey: string = "Section 115BAA (New Regime)",
-  fyStartMonth: number = 4 // April
+  fyStartMonth: number = 4, // April
+  tallyPL?: TallyPLSnapshot
 ): AdvanceTaxData {
   const regime = COMPANY_TAX_REGIMES[regimeKey] ?? COMPANY_TAX_REGIMES["Section 115BAA (New Regime)"];
 
-  // Compute P&L
-  const pl = computeProfitAndLoss(ledgers, vouchers);
+  // Compute P&L (use Tally's authoritative stock values if available)
+  const pl = computeProfitAndLoss(ledgers, vouchers, undefined, tallyPL);
 
   // Monthly profit breakdown
   const monthlyIncome: Record<string, number> = {};
@@ -87,19 +88,30 @@ export function computeAdvanceTax(
 
   for (const v of vouchers) {
     if (v.isCancelled || v.isOptional) continue;
+    // Skip non-operational vouchers (Journal/Contra are balance adjustments)
+    if (["Journal", "Contra", "Stock Journal"].includes(v.voucherType)) continue;
     const ym = v.date.slice(0, 7);
+    // DN/CN sign reversal
+    const isReturn = v.voucherType === "Credit Note" || v.voucherType === "Debit Note";
+    const sign = isReturn ? -1 : 1;
+
     for (const line of v.lines) {
       if (line.type !== "ledger" || !line.ledgerId) continue;
       const ledger = ledgers.get(line.ledgerId);
       if (!ledger) continue;
-      const g = ledger.group.toLowerCase();
-      const amt = Math.abs(line.amount ?? 0);
+      const cat = classifyLedgerGroup(ledger.group);
+      const amt = line.amount ?? 0;
 
-      const isIncome = g.includes("sale") || g.includes("income") || g.includes("revenue");
-      const isExpense = g.includes("purchase") || g.includes("expense") || g.includes("cost") || g.includes("manufacturing");
-
-      if (isIncome) monthlyIncome[ym] = (monthlyIncome[ym] ?? 0) + amt;
-      if (isExpense) monthlyExpense[ym] = (monthlyExpense[ym] ?? 0) + amt;
+      // Revenue: credit to income = income; debit to income = contra-income (e.g. Trade Discounts)
+      if (cat === "income") {
+        const rev = (line.isDebit ? -amt : amt) * sign;
+        monthlyIncome[ym] = (monthlyIncome[ym] ?? 0) + rev;
+      }
+      // Expense: debit to expense = expense; credit to expense = contra-expense
+      if (cat === "expense") {
+        const exp = (line.isDebit ? amt : -amt) * sign;
+        monthlyExpense[ym] = (monthlyExpense[ym] ?? 0) + exp;
+      }
     }
   }
 

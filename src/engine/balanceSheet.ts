@@ -1,4 +1,4 @@
-import type { CanonicalLedger, CanonicalVoucher, CanonicalItem } from "../types/canonical";
+import type { CanonicalLedger, CanonicalVoucher, CanonicalItem, TallyPLSnapshot, TallyBSSnapshot } from "../types/canonical";
 
 // ─── Tally Standard Group Classification ────────────────────────────────
 
@@ -59,6 +59,74 @@ export function classifyLedgerGroup(group: string): BSCategory {
   if (g.includes("income") || g.includes("sale") || g.includes("revenue")) return "income";
   if (g.includes("expense") || g.includes("purchase") || g.includes("cost")) return "expense";
   return "unknown";
+}
+
+// ─── Stock Valuation (Weighted Average from Vouchers) ───────────────────
+// Computes opening & closing stock from item opening data + voucher movements.
+// Uses periodic weighted average costing (matches Tally's default Average Cost method).
+// This is needed because ClosingValue is NOT fetched from Tally (timeout-prone query).
+
+function computeStockTotals(
+  items: Map<string, CanonicalItem>,
+  vouchers: CanonicalVoucher[]
+): { openingStock: number; closingStock: number } {
+  // Accumulate purchase qty/value and sales qty per item
+  const purchaseQty = new Map<string, number>();
+  const purchaseValue = new Map<string, number>();
+  const salesQty = new Map<string, number>();
+
+  for (const v of vouchers) {
+    if (v.isCancelled || v.isOptional) continue;
+    const isPurchase = v.voucherType === "Purchase";
+    const isSale = v.voucherType === "Sales";
+    const isCreditNote = v.voucherType === "Credit Note";   // sales return → reduces sales
+    const isDebitNote = v.voucherType === "Debit Note";      // purchase return → reduces purchases
+    if (!isPurchase && !isSale && !isCreditNote && !isDebitNote) continue;
+
+    for (const line of v.lines) {
+      if (line.type !== "inventory" || !line.itemId) continue;
+      const qty = line.qtyBase ?? 0;
+      const value = line.lineAmount ?? 0;
+
+      if (isPurchase) {
+        purchaseQty.set(line.itemId, (purchaseQty.get(line.itemId) ?? 0) + qty);
+        purchaseValue.set(line.itemId, (purchaseValue.get(line.itemId) ?? 0) + value);
+      } else if (isDebitNote) {
+        // Purchase return: reduce purchases
+        purchaseQty.set(line.itemId, (purchaseQty.get(line.itemId) ?? 0) - qty);
+        purchaseValue.set(line.itemId, (purchaseValue.get(line.itemId) ?? 0) - value);
+      } else if (isSale) {
+        salesQty.set(line.itemId, (salesQty.get(line.itemId) ?? 0) + qty);
+      } else if (isCreditNote) {
+        // Sales return: reduce sales
+        salesQty.set(line.itemId, (salesQty.get(line.itemId) ?? 0) - qty);
+      }
+    }
+  }
+
+  let openingStock = 0;
+  let closingStock = 0;
+
+  for (const [itemId, item] of items) {
+    openingStock += item.openingValue;
+
+    const pQty = purchaseQty.get(itemId) ?? 0;
+    const pValue = purchaseValue.get(itemId) ?? 0;
+    const sQty = salesQty.get(itemId) ?? 0;
+
+    // Total available = opening + purchases (net of returns)
+    const totalAvailQty = item.openingQtyBase + pQty;
+    const totalAvailValue = item.openingValue + pValue;
+
+    // Weighted average cost per unit
+    const avgCost = totalAvailQty > 0.001 ? totalAvailValue / totalAvailQty : 0;
+
+    // Closing qty = available - sold (net of returns), floor at 0
+    const closingQty = Math.max(totalAvailQty - sQty, 0);
+    closingStock += closingQty * avgCost;
+  }
+
+  return { openingStock, closingStock };
 }
 
 // ─── Trial Balance ──────────────────────────────────────────────────────
@@ -143,7 +211,9 @@ export interface BalanceSheetData {
 export function computeBalanceSheet(
   ledgers: Map<string, CanonicalLedger>,
   vouchers: CanonicalVoucher[],
-  items?: Map<string, CanonicalItem>
+  items?: Map<string, CanonicalItem>,
+  tallyPL?: TallyPLSnapshot,
+  tallyBS?: TallyBSSnapshot
 ): BalanceSheetData {
   const tb = computeTrialBalance(ledgers, vouchers);
 
@@ -169,17 +239,20 @@ export function computeBalanceSheet(
   const expenseGroups = groups.filter(g => g.category === "expense");
 
   // Compute P&L (with stock adjustment matching Tally)
-  const totalIncome = incomeGroups.reduce((s, g) => s + Math.abs(g.total), 0);
-  const totalExpenses = expenseGroups.reduce((s, g) => s + Math.abs(g.total), 0);
+  // Income groups have negative totals (credit balance), expense groups have positive totals (debit balance)
+  // Use signed values: negate income (credit→positive), keep expense (debit→positive)
+  const totalIncome = incomeGroups.reduce((s, g) => s + (-g.total), 0);
+  const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0);
 
-  // Stock value from items
-  let stockValue = 0;
-  let openingStockValue = 0;
-  if (items) {
-    for (const [, item] of items) {
-      stockValue += item.closingValue ?? item.openingValue;
-      openingStockValue += item.openingValue;
-    }
+  // Stock valuation — prefer Tally's authoritative P&L, fallback to voucher-based weighted average
+  let openingStockValue: number;
+  let stockValue: number;
+  if (tallyPL) {
+    openingStockValue = tallyPL.openingStock;
+    stockValue = tallyPL.closingStock;
+  } else {
+    ({ openingStock: openingStockValue, closingStock: stockValue } =
+      items ? computeStockTotals(items, vouchers) : { openingStock: 0, closingStock: 0 });
   }
   // Stock adjustment = Opening Stock - Closing Stock (added to COGS)
   const stockAdjustment = openingStockValue - stockValue;
@@ -189,6 +262,10 @@ export function computeBalanceSheet(
   const totalLiabilities = Math.abs(liabilities.reduce((s, g) => s + g.total, 0));
   const totalCapital = Math.abs(capital.reduce((s, g) => s + g.total, 0));
 
+  // For BS equation, prefer Tally's cumulative P&L (includes retained earnings from prior FYs)
+  // Our computed netProfit only covers current FY vouchers
+  const bsProfitFigure = tallyBS?.profitAndLoss ?? netProfit;
+
   return {
     assets,
     liabilities,
@@ -196,8 +273,8 @@ export function computeBalanceSheet(
     totalAssets,
     totalLiabilities,
     totalCapital,
-    netProfit,
-    totalLiabilitiesAndCapital: totalLiabilities + totalCapital + netProfit,
+    netProfit: bsProfitFigure,
+    totalLiabilitiesAndCapital: totalLiabilities + totalCapital + bsProfitFigure,
     stockValue,
   };
 }
@@ -229,7 +306,8 @@ export interface ProfitAndLossData {
 export function computeProfitAndLoss(
   ledgers: Map<string, CanonicalLedger>,
   vouchers: CanonicalVoucher[],
-  items?: Map<string, CanonicalItem>
+  items?: Map<string, CanonicalItem>,
+  tallyPL?: TallyPLSnapshot
 ): ProfitAndLossData {
   const tb = computeTrialBalance(ledgers, vouchers);
 
@@ -280,15 +358,15 @@ export function computeProfitAndLoss(
   const directIncome = income.filter(g => isDirectIncome(g.group)).reduce((s, g) => s + g.total, 0);
   const directExpenses = expenses.filter(g => isDirectExpense(g.group)).reduce((s, g) => s + g.total, 0);
 
-  // Stock valuation adjustment (Tally P&L includes Opening/Closing Stock)
-  // Opening Stock - Closing Stock is added to COGS (cost side)
-  let openingStock = 0;
-  let closingStock = 0;
-  if (items) {
-    for (const [, item] of items) {
-      openingStock += item.openingValue;
-      closingStock += item.closingValue ?? item.openingValue;
-    }
+  // Stock valuation — prefer Tally's authoritative P&L, fallback to voucher-based weighted average
+  let openingStock: number;
+  let closingStock: number;
+  if (tallyPL) {
+    openingStock = tallyPL.openingStock;
+    closingStock = tallyPL.closingStock;
+  } else {
+    ({ openingStock, closingStock } =
+      items ? computeStockTotals(items, vouchers) : { openingStock: 0, closingStock: 0 });
   }
   const stockAdjustment = openingStock - closingStock; // positive = stock decreased = adds to cost
 

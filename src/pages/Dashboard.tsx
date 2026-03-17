@@ -145,19 +145,17 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-primary">{data.company?.name ?? "Dashboard"}</h1>
-          <p className="text-muted text-sm mt-0.5">
-            {data.items.size} items · {data.vouchers.length.toLocaleString("en-IN")} vouchers ·
-            Imported {fmtDate(data.importedAt.slice(0, 10))}
-          </p>
-        </div>
+    <div className="space-y-4 md:space-y-6">
+      <div>
+        <h1 className="text-lg md:text-2xl font-bold text-primary">{data.company?.name ?? "Dashboard"}</h1>
+        <p className="text-muted text-xs md:text-sm mt-0.5">
+          {data.items.size} items · {data.vouchers.length.toLocaleString("en-IN")} vouchers ·
+          Imported {fmtDate(data.importedAt.slice(0, 10))}
+        </p>
       </div>
 
       {/* KPI Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
         <KPICard
           title={`Sales (${fmtDate(latestDate)})`}
           value={fmtINR(kpis?.latestDaySales ?? 0)}
@@ -182,9 +180,9 @@ export default function Dashboard() {
       </div>
 
       {/* Charts row */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6">
         {/* Sales Trend */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bg-bg-card border border-bg-border rounded-xl p-3 md:p-4">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-primary">Sales Trend</h3>
             <select
@@ -214,7 +212,7 @@ export default function Dashboard() {
         </div>
 
         {/* Top Items */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bg-bg-card border border-bg-border rounded-xl p-3 md:p-4">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-primary">Top Items (by Qty)</h3>
             <select
@@ -250,7 +248,7 @@ export default function Dashboard() {
 
       {/* Low Stock Alerts */}
       {lowStockItems.length > 0 && (
-        <div className="bg-bg-card border border-warn/30 rounded-xl p-4">
+        <div className="bg-bg-card border border-warn/30 rounded-xl p-3 md:p-4">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <AlertCircle size={16} className="text-warn" />
@@ -270,12 +268,12 @@ export default function Dashboard() {
                 onClick={() => navigate("/alerts")}
                 className="flex items-center justify-between text-sm py-1.5 px-2 -mx-2 rounded-lg hover:bg-warn/5 cursor-pointer transition-colors"
               >
-                <div>
-                  <span className="text-primary font-medium">{item.name.length > 40 ? item.name.slice(0, 40) + "…" : item.name}</span>
-                  <span className="text-muted ml-2 text-xs">Stock: {item.stock.toFixed(0)}</span>
+                <div className="min-w-0">
+                  <span className="text-primary font-medium text-xs md:text-sm">{item.name.length > 30 ? item.name.slice(0, 30) + "…" : item.name}</span>
+                  <span className="text-muted ml-2 text-xs hidden sm:inline">Stock: {item.stock.toFixed(0)}</span>
                 </div>
-                <div className="flex items-center gap-4">
-                  <span className="text-muted text-xs">Avg/mo: {item.avgOut.toFixed(0)}</span>
+                <div className="flex items-center gap-2 md:gap-4 flex-shrink-0">
+                  <span className="text-muted text-xs hidden md:inline">Avg/mo: {item.avgOut.toFixed(0)}</span>
                   <span className="text-warn text-xs font-mono font-semibold">Reorder: {item.reorder.toFixed(0)}</span>
                 </div>
               </div>

@@ -52,7 +52,7 @@ export default function FinancialCommandCenter({ data }: Props) {
       </div>
 
       {/* Secondary KPIs */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {[
           { label: "Avg Daily Revenue", value: fmtINR(summary.avgDailyRevenue) },
           { label: "Avg Daily Expense", value: fmtINR(summary.avgDailyExpense) },

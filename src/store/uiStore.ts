@@ -9,6 +9,8 @@ interface UIState {
   setFyYear: (y: string) => void;
   sidebarOpen: boolean;
   setSidebarOpen: (v: boolean) => void;
+  isMobile: boolean;
+  setIsMobile: (v: boolean) => void;
   coverMonths: number;
   setCoverMonths: (n: number) => void;
   leadTimeMonths: number;
@@ -22,13 +24,15 @@ export const useUIStore = create<UIState>()(
     (set) => ({
       unitMode: "BASE",
       fyYear: getCurrentFY(),
-      sidebarOpen: true,
+      sidebarOpen: typeof window !== "undefined" ? window.innerWidth >= 768 : true,
+      isMobile: typeof window !== "undefined" ? window.innerWidth < 768 : false,
       coverMonths: 2,
       leadTimeMonths: 1.5,
       defaultCreditDays: 30,
       toggleUnitMode: () => set((s) => ({ unitMode: s.unitMode === "BASE" ? "PKG" : "BASE" })),
       setFyYear: (fyYear) => set({ fyYear }),
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
+      setIsMobile: (isMobile) => set({ isMobile }),
       setCoverMonths: (coverMonths) => set({ coverMonths }),
       setLeadTimeMonths: (leadTimeMonths) => set({ leadTimeMonths }),
       setDefaultCreditDays: (defaultCreditDays) => set({ defaultCreditDays }),

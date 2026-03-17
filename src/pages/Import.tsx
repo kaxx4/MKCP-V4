@@ -509,7 +509,11 @@ export default function ImportPage() {
         importedAt: new Date().toISOString(),
         sourceFiles: ["tally-import-all"],
         warnings: [...parsedMasters.warnings, ...parsedTx.warnings],
+        tallyPL: mastersResult.tallyFinancials?.pl ?? undefined,
+        tallyBS: mastersResult.tallyFinancials?.bs ?? undefined,
       };
+      if (data.tallyPL) addLog(`✓ Tally P&L: Sales=${(data.tallyPL.sales/100000).toFixed(1)}L, Closing Stock=${(data.tallyPL.closingStock/100000).toFixed(1)}L`);
+      if (data.tallyBS) addLog(`✓ Tally BS: Capital=${(data.tallyBS.capitalAccount/100000).toFixed(1)}L, P&L=${(data.tallyBS.profitAndLoss/100000).toFixed(1)}L`);
 
       // Backup existing data
       if (existing) {

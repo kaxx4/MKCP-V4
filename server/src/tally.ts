@@ -33,8 +33,9 @@ const ARRAY_TAGS = new Set([
  * @param xml       XML request body
  * @param timeoutMs Socket timeout (default 5 minutes)
  * @param rawMode   If true, return raw string instead of parsed object
+ * @param signal    Optional AbortSignal to cancel the request externally
  */
-export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, rawMode = false): Promise<any> {
+export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, rawMode = false, signal?: AbortSignal): Promise<any> {
   return new Promise((resolve, reject) => {
     const url = new URL(tallyUrl);
     const label = xml.match(/<ID[^>]*>([^<]+)/)?.[1] || "request";
@@ -57,6 +58,22 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
       settled = true;
       clearTimeout(hardDeadline);
       fn();
+    }
+
+    // Handle external abort (client disconnect)
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(hardDeadline);
+        return reject(new Error(`Aborted: ${label}`));
+      }
+      signal.addEventListener("abort", () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(hardDeadline);
+          req.destroy();
+          reject(new Error(`Aborted: ${label}`));
+        }
+      }, { once: true });
     }
 
     const req = http.request(
@@ -134,18 +151,21 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
 }
 
 export async function tallyPostWithRetry(
-  tallyUrl: string, xml: string, timeoutMs = 300_000, rawMode = false, maxRetries = 2
+  tallyUrl: string, xml: string, timeoutMs = 300_000, rawMode = false, maxRetries = 2, signal?: AbortSignal
 ): Promise<any> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      if (signal?.aborted) throw new Error("Aborted");
       if (attempt > 0) {
         console.log(`[tally] Retry ${attempt}/${maxRetries}...`);
         await new Promise(r => setTimeout(r, 2000 * attempt));
       }
-      return await tallyPost(tallyUrl, xml, timeoutMs, rawMode);
+      return await tallyPost(tallyUrl, xml, timeoutMs, rawMode, signal);
     } catch (e: any) {
       lastError = e;
+      // Abort errors are never retriable
+      if (e.message?.includes('Aborted')) throw e;
       const retriable = e.message?.includes('timeout') ||
                         e.message?.includes('ECONNREFUSED') ||
                         e.message?.includes('ECONNRESET') ||
@@ -355,15 +375,8 @@ export function stockItemsXml(company: string): string {
 <NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>
 <NATIVEMETHOD>OpeningRate</NATIVEMETHOD>
 <NATIVEMETHOD>OpeningValue</NATIVEMETHOD>
-<NATIVEMETHOD>ClosingBalance</NATIVEMETHOD>
-<NATIVEMETHOD>ClosingRate</NATIVEMETHOD>
-<NATIVEMETHOD>ClosingValue</NATIVEMETHOD>
 <NATIVEMETHOD>GSTApplicable</NATIVEMETHOD>
 <NATIVEMETHOD>GSTTypeOfSupply</NATIVEMETHOD>
-<NATIVEMETHOD>CostingMethod</NATIVEMETHOD>
-<NATIVEMETHOD>ValuationMethod</NATIVEMETHOD>
-<NATIVEMETHOD>IsBatchWiseOn</NATIVEMETHOD>
-<NATIVEMETHOD>IsCostCentresOn</NATIVEMETHOD>
 <NATIVEMETHOD>GSTDetails</NATIVEMETHOD>
 <NATIVEMETHOD>HSNDetails</NATIVEMETHOD>
 <NATIVEMETHOD>GUID</NATIVEMETHOD>
@@ -655,4 +668,125 @@ function toTallyDate(yyyymmdd: string): string {
 
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// ─── Financial Reports (lightweight) ────────────────────────────────────
+
+/** Fetch Tally P&L report — returns opening/closing stock, sales, purchases, expenses */
+export function profitAndLossXml(company: string): string {
+  return `<ENVELOPE>
+<HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
+<BODY><EXPORTDATA><REQUESTDESC>
+<REPORTNAME>Profit and Loss</REPORTNAME>
+<STATICVARIABLES>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+</REQUESTDESC></EXPORTDATA></BODY>
+</ENVELOPE>`;
+}
+
+/** Fetch Tally Balance Sheet report */
+export function balanceSheetXml(company: string): string {
+  return `<ENVELOPE>
+<HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
+<BODY><EXPORTDATA><REQUESTDESC>
+<REPORTNAME>Balance Sheet</REPORTNAME>
+<STATICVARIABLES>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+</REQUESTDESC></EXPORTDATA></BODY>
+</ENVELOPE>`;
+}
+
+/** Parse P&L report XML to extract key financial numbers */
+export function parsePLReport(xml: string): {
+  sales: number;
+  costOfSales: number;
+  openingStock: number;
+  purchases: number;
+  closingStock: number;
+  directExpenses: number;
+  indirectIncome: number;
+  indirectExpenses: number;
+  netProfit: number;
+} | null {
+  try {
+    const parsed = xmlParser.parse(xml);
+    const env = parsed?.ENVELOPE;
+    if (!env) return null;
+
+    // P&L report has alternating DSPACCNAME and PLAMT blocks
+    // Extract the main amounts by name
+    const result = {
+      sales: 0, costOfSales: 0, openingStock: 0, purchases: 0,
+      closingStock: 0, directExpenses: 0, indirectIncome: 0, indirectExpenses: 0, netProfit: 0,
+    };
+
+    // Parse flat arrays — DSPACCNAME and PLAMT alternate
+    const names = Array.isArray(env.DSPACCNAME) ? env.DSPACCNAME : [env.DSPACCNAME];
+    const amounts = Array.isArray(env.PLAMT) ? env.PLAMT : [env.PLAMT];
+
+    for (let i = 0; i < names.length; i++) {
+      const name = (names[i]?.DSPDISPNAME ?? "").trim().toLowerCase();
+      const mainAmt = parseFloat(amounts[i]?.BSMAINAMT ?? "0") || 0;
+      const subAmt = parseFloat(amounts[i]?.PLSUBAMT ?? "0") || 0;
+
+      if (name.includes("sales accounts")) result.sales = Math.abs(mainAmt);
+      else if (name === "cost of sales :") result.costOfSales = Math.abs(mainAmt);
+      else if (name.includes("opening stock")) result.openingStock = Math.abs(subAmt);
+      else if (name.includes("purchase accounts")) result.purchases = Math.abs(subAmt);
+      else if (name.includes("closing stock")) result.closingStock = Math.abs(subAmt);
+      else if (name.includes("direct expenses")) result.directExpenses = Math.abs(subAmt || mainAmt);
+      else if (name.includes("indirect incomes") || name.includes("indirect income")) result.indirectIncome = Math.abs(mainAmt);
+      else if (name.includes("indirect expenses") || name.includes("indirect expense")) result.indirectExpenses = Math.abs(mainAmt);
+    }
+
+    // Net Profit = Sales - CostOfSales + IndirectIncome - IndirectExpenses
+    result.netProfit = result.sales - result.costOfSales + result.indirectIncome - result.indirectExpenses;
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse Balance Sheet report XML */
+export function parseBSReport(xml: string): {
+  capitalAccount: number;
+  loans: number;
+  currentLiabilities: number;
+  profitAndLoss: number;
+  fixedAssets: number;
+  investments: number;
+  currentAssets: number;
+} | null {
+  try {
+    const parsed = xmlParser.parse(xml);
+    const env = parsed?.ENVELOPE;
+    if (!env) return null;
+
+    const result = {
+      capitalAccount: 0, loans: 0, currentLiabilities: 0, profitAndLoss: 0,
+      fixedAssets: 0, investments: 0, currentAssets: 0,
+    };
+
+    const names = Array.isArray(env.BSNAME) ? env.BSNAME : [env.BSNAME];
+    const amounts = Array.isArray(env.BSAMT) ? env.BSAMT : [env.BSAMT];
+
+    for (let i = 0; i < names.length; i++) {
+      const name = (names[i]?.DSPACCNAME?.DSPDISPNAME ?? "").trim().toLowerCase();
+      const mainAmt = parseFloat(amounts[i]?.BSMAINAMT ?? "0") || 0;
+
+      if (name.includes("capital account")) result.capitalAccount = Math.abs(mainAmt);
+      else if (name.includes("loans")) result.loans = Math.abs(mainAmt);
+      else if (name.includes("current liabilities")) result.currentLiabilities = Math.abs(mainAmt);
+      else if (name.includes("profit") && name.includes("loss")) result.profitAndLoss = Math.abs(mainAmt);
+      else if (name.includes("fixed assets")) result.fixedAssets = Math.abs(mainAmt);
+      else if (name.includes("investments")) result.investments = Math.abs(mainAmt);
+      else if (name.includes("current assets")) result.currentAssets = Math.abs(mainAmt);
+    }
+
+    return result;
+  } catch {
+    return null;
+  }
 }

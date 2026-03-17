@@ -66,10 +66,22 @@ export async function fullSync(company: string, fromDate?: string, toDate?: stri
   }
 }
 
+export interface TallyPLReport {
+  sales: number; costOfSales: number; openingStock: number; purchases: number;
+  closingStock: number; directExpenses: number; indirectIncome: number;
+  indirectExpenses: number; netProfit: number;
+}
+
+export interface TallyBSReport {
+  capitalAccount: number; loans: number; currentLiabilities: number;
+  profitAndLoss: number; fixedAssets: number; investments: number; currentAssets: number;
+}
+
 export interface MastersSyncResult {
   success: boolean;
   errors?: string[];
   data: { tallymessage: any[] };
+  tallyFinancials?: { pl: TallyPLReport | null; bs: TallyBSReport | null };
   stats: { stockGroups: number; units: number; stockItems: number; ledgers: number; godowns: number; costCentres: number; elapsedSeconds: number };
 }
 
@@ -92,7 +104,7 @@ export interface DayBookSyncResult {
 
 export async function syncMasters(company: string): Promise<MastersSyncResult> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 300_000); // 5 min
+  const timer = setTimeout(() => ctrl.abort(), 1_200_000); // 20 min — stock items XML can be very large
   try {
     const r = await fetch(`${BASE}/api/tally/sync-masters`, {
       method: "POST",
@@ -105,7 +117,7 @@ export async function syncMasters(company: string): Promise<MastersSyncResult> {
     return await r.json();
   } catch (e: any) {
     clearTimeout(timer);
-    if (e.name === "AbortError") throw new Error("Masters sync timed out (5 min)");
+    if (e.name === "AbortError") throw new Error("Masters sync timed out (20 min)");
     throw e;
   }
 }

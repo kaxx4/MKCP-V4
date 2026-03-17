@@ -43,7 +43,7 @@ export default function TaxRadar({ data }: Props) {
       </div>
 
       {/* Secondary KPIs */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
           { label: "Taxable Revenue", value: fmtINR(summary.totalTaxableRevenue) },
           { label: "Non-Taxable Revenue", value: fmtINR(summary.totalNonTaxableRevenue) },
