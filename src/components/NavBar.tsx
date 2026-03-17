@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
   Upload,
@@ -14,6 +15,8 @@ import {
   Bike,
   Wifi,
   WifiOff,
+  MoreHorizontal,
+  X,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
@@ -30,9 +33,14 @@ const NAV_ITEMS = [
   { path: "/settings", icon: Settings, label: "Settings" },
 ];
 
+// Top 5 items shown in mobile bottom bar
+const MOBILE_PRIMARY = NAV_ITEMS.slice(0, 5);
+const MOBILE_OVERFLOW = NAV_ITEMS.slice(5);
+
 export function NavBar() {
-  const { sidebarOpen, setSidebarOpen } = useUIStore();
+  const { sidebarOpen, setSidebarOpen, isMobile } = useUIStore();
   const { isConnected, lastSyncAt } = useTallyStore();
+  const [moreOpen, setMoreOpen] = useState(false);
 
   const formatLastSync = () => {
     if (!lastSyncAt) return "Never";
@@ -46,6 +54,113 @@ export function NavBar() {
     return date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
   };
 
+  // ─── Mobile: Bottom Tab Bar ───────────────────────────────────────
+  if (isMobile) {
+    return (
+      <>
+        {/* Bottom tab bar */}
+        <nav className="fixed bottom-0 left-0 right-0 h-14 bg-bg-card border-t border-bg-border flex items-center justify-around z-30 px-1">
+          {MOBILE_PRIMARY.map(({ path, icon: Icon, label }) => (
+            <NavLink
+              key={path}
+              to={path}
+              className={({ isActive }) =>
+                clsx(
+                  "flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-lg min-w-[48px] transition-colors",
+                  isActive
+                    ? "text-accent"
+                    : "text-muted"
+                )
+              }
+            >
+              <Icon size={20} />
+              <span className="text-[10px] font-medium leading-none">{label}</span>
+            </NavLink>
+          ))}
+
+          {/* More button */}
+          <button
+            onClick={() => setMoreOpen(true)}
+            className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-lg min-w-[48px] text-muted cursor-pointer"
+          >
+            <MoreHorizontal size={20} />
+            <span className="text-[10px] font-medium leading-none">More</span>
+          </button>
+        </nav>
+
+        {/* More menu overlay */}
+        {moreOpen && (
+          <div className="fixed inset-0 z-40 flex flex-col justify-end">
+            {/* Backdrop */}
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setMoreOpen(false)}
+            />
+
+            {/* Slide-up sheet */}
+            <div className="relative bg-bg-card rounded-t-2xl border-t border-bg-border p-4 pb-6 animate-slide-up">
+              {/* Handle bar */}
+              <div className="w-10 h-1 bg-bg-border rounded-full mx-auto mb-4" />
+
+              {/* Close button */}
+              <button
+                onClick={() => setMoreOpen(false)}
+                className="absolute top-4 right-4 text-muted hover:text-primary cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+
+              {/* Overflow nav items */}
+              <div className="flex flex-col gap-1 mb-4">
+                {MOBILE_OVERFLOW.map(({ path, icon: Icon, label }) => (
+                  <NavLink
+                    key={path}
+                    to={path}
+                    onClick={() => setMoreOpen(false)}
+                    className={({ isActive }) =>
+                      clsx(
+                        "flex items-center gap-3 px-3 py-3 rounded-lg transition-colors text-sm",
+                        isActive
+                          ? "bg-accent/15 text-accent font-medium"
+                          : "text-muted hover:text-primary hover:bg-bg-border/50"
+                      )
+                    }
+                  >
+                    <Icon size={18} />
+                    <span>{label}</span>
+                  </NavLink>
+                ))}
+              </div>
+
+              {/* Tally connection status */}
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-bg-border">
+                {isConnected ? (
+                  <Wifi size={14} className="text-success flex-shrink-0" />
+                ) : (
+                  <WifiOff size={14} className="text-danger flex-shrink-0" />
+                )}
+                <div className="flex flex-col">
+                  <span className={clsx(
+                    "text-xs font-medium",
+                    isConnected ? "text-success" : "text-danger"
+                  )}>
+                    {isConnected ? "Tally Connected" : "Tally Offline"}
+                  </span>
+                  {lastSyncAt && (
+                    <span className="text-[10px] text-muted">
+                      Last sync: {formatLastSync()}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // ─── Desktop: Sidebar ─────────────────────────────────────────────
   return (
     <nav
       className={clsx(

@@ -29,5 +29,7 @@ export function deserializeParsedData(raw: any): ParsedData {
     importedAt: raw.importedAt ?? new Date().toISOString(),
     sourceFiles: Array.isArray(raw.sourceFiles) ? raw.sourceFiles : [],
     warnings: Array.isArray(raw.warnings) ? raw.warnings : [],
+    tallyPL: raw.tallyPL ?? undefined,
+    tallyBS: raw.tallyBS ?? undefined,
   };
 }

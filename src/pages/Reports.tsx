@@ -64,7 +64,7 @@ interface DayActivity {
 export default function Reports() {
   const navigate = useNavigate();
   const { data, voucherIndex } = useDataStore();
-  const { unitMode } = useUIStore();
+  const { unitMode, isMobile } = useUIStore();
   const [tab, setTab] = useState<Tab>("Inventory");
   const [predictionType, setPredictionType] = useState<"Sales" | "Purchase">("Sales");
   const [predictions, setPredictions] = useState<PartyOrderPattern[]>([]);
@@ -657,14 +657,14 @@ export default function Reports() {
   }
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-primary">Reports</h1>
+    <div className="space-y-3 md:space-y-4">
+      <h1 className="text-lg md:text-2xl font-bold text-primary">Reports</h1>
 
       {/* Tabs */}
       <div className="flex gap-1 bg-bg-card border border-bg-border rounded-xl p-1 overflow-x-auto scrollbar-thin" role="tablist">
         {TABS.map((t) => (
           <button key={t} onClick={() => setTab(t)} role="tab" aria-selected={tab === t}
-            className={clsx("px-4 py-2 rounded-lg text-sm transition whitespace-nowrap cursor-pointer", tab === t ? "bg-accent text-white font-medium" : "text-muted hover:text-primary hover:bg-bg-border/50")}>
+            className={clsx("px-2.5 md:px-4 py-1.5 md:py-2 rounded-lg text-xs md:text-sm transition whitespace-nowrap cursor-pointer", tab === t ? "bg-accent text-white font-medium" : "text-muted hover:text-primary hover:bg-bg-border/50")}>
             {t}
           </button>
         ))}
@@ -844,7 +844,7 @@ export default function Reports() {
           {accuracyData && accuracyData.length > 0 && (
             <div className="bg-bg-card border border-bg-border rounded-xl p-4">
               <h3 className="font-semibold text-primary mb-2 flex items-center gap-2"><TrendingUp size={16} />Prediction Accuracy</h3>
-              <div className="grid grid-cols-3 gap-4 mt-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-3">
                 <div className="bg-bg border border-bg-border rounded-lg p-3 text-center">
                   <div className="text-2xl font-bold text-accent">{(accuracyData.reduce((s, a) => s + a.dateAccuracyScore, 0) / accuracyData.length * 100).toFixed(0)}%</div>
                   <div className="text-muted text-xs mt-1">Date Accuracy</div>
@@ -1654,8 +1654,8 @@ export default function Reports() {
 
       {/* ═══════════ Balance Sheet / P&L / Trial Balance ═══════════ */}
       {tab === "Balance Sheet" && data && (() => {
-        const bs = computeBalanceSheet(data.ledgers, data.vouchers, data.items);
-        const pl = computeProfitAndLoss(data.ledgers, data.vouchers, data.items);
+        const bs = computeBalanceSheet(data.ledgers, data.vouchers, data.items, data.tallyPL, data.tallyBS);
+        const pl = computeProfitAndLoss(data.ledgers, data.vouchers, data.items, data.tallyPL);
         const tb = computeTrialBalance(data.ledgers, data.vouchers);
 
         const renderGroupTable = (groups: BSGroupTotal[], label: string, color: string) => (
@@ -1789,7 +1789,7 @@ export default function Reports() {
                 </div>
 
                 {pl.openingStock > 0 && (
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className="bg-bg-card border border-bg-border rounded-lg px-3 py-2 text-center">
                       <div className="text-xs text-muted">Opening Stock</div>
                       <div className="font-mono text-sm font-semibold">{fmtINR(pl.openingStock)}</div>
@@ -1915,7 +1915,7 @@ export default function Reports() {
 
       {/* ═══════════ Advance Tax ═══════════ */}
       {tab === "Advance Tax" && data && (() => {
-        const atData = computeAdvanceTax(data.ledgers, data.vouchers, taxRegime);
+        const atData = computeAdvanceTax(data.ledgers, data.vouchers, taxRegime, 4, data.tallyPL);
         return (
           <div className="space-y-4">
             {/* Regime selector */}

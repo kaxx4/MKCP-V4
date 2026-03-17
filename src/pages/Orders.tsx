@@ -20,6 +20,7 @@ import { useUIStore } from "../store/uiStore";
 import { useOrderStore } from "../store/orderStore";
 import { useOrderGroupStore, type OrderGroup } from "../store/orderGroupStore";
 import { getCurrentStock, getCurrentStockIndexed, computeMonthlyBuckets, computeMonthlyBucketsIndexed, suggestedReorder, suggestedReorderIndexed, avgMonthlyOutwardIndexed } from "../engine/inventory";
+import { getItemMovements, type MovementRecord, type MovementDirection } from "../engine/audit/movementTracer";
 import { toDisplay, fromDisplay } from "../engine/unitEngine";
 import { UnitToggle } from "../components/UnitToggle";
 import { fmtNum } from "../utils/format";
@@ -29,7 +30,7 @@ import clsx from "clsx";
 export default function Orders() {
   const navigate = useNavigate();
   const { data, voucherIndex } = useDataStore();
-  const { unitMode, coverMonths, setCoverMonths } = useUIStore();
+  const { unitMode, coverMonths, setCoverMonths, isMobile } = useUIStore();
   const { lines: orderLines, setLine, removeLine, clearAll, getAllLines } = useOrderStore();
   const {
     groups: orderGroupsMap,
@@ -57,6 +58,8 @@ export default function Orders() {
   const [showChart, setShowChart] = useState(true);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupDesc, setNewGroupDesc] = useState("");
+  const [movementModal, setMovementModal] = useState<{ direction: MovementDirection; month?: string } | null>(null);
+  const [mobileTab, setMobileTab] = useState<"list" | "detail" | "order">("list");
 
   const searchRef = useRef<HTMLInputElement>(null);
   const qtyRef = useRef<HTMLInputElement>(null);
@@ -167,7 +170,11 @@ export default function Orders() {
       const disp = toDisplay(item, s, unitMode);
       setOrderQty(s > 0 ? String(disp.value) : "");
     }
-    setTimeout(() => qtyRef.current?.focus(), 50);
+    if (isMobile) {
+      setMobileTab("detail");
+    } else {
+      setTimeout(() => qtyRef.current?.focus(), 50);
+    }
   }
 
   function addToOrder() {
@@ -379,7 +386,7 @@ export default function Orders() {
   return (
     <div className="flex flex-col h-[calc(100vh-112px)] gap-0">
       {/* Order Groups Bar */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-bg-card border border-bg-border rounded-t-xl mb-0">
+      <div className="flex items-center gap-2 px-2 md:px-3 py-2 bg-bg-card border border-bg-border rounded-t-xl mb-0 overflow-x-auto">
         <button
           onClick={() => setShowGroupPanel(!showGroupPanel)}
           className={clsx(
@@ -420,7 +427,7 @@ export default function Orders() {
       {showGroupPanel && (
         <div className="bg-bg-card border-x border-b border-bg-border p-4 space-y-3 mb-0">
           {/* Create new group */}
-          <div className="flex items-end gap-3">
+          <div className="flex flex-col md:flex-row items-stretch md:items-end gap-2 md:gap-3">
             <div className="flex-1">
               <label className="text-xs text-muted font-medium mb-1 block">Group Name</label>
               <input
@@ -524,10 +531,31 @@ export default function Orders() {
         </div>
       )}
 
+      {/* Mobile tab switcher */}
+      {isMobile && (
+        <div className="flex bg-bg-card border border-bg-border rounded-xl p-1 gap-1">
+          {([["list", "Items"], ["detail", "Detail"], ["order", "Order"]] as const).map(([tab, label]) => (
+            <button
+              key={tab}
+              onClick={() => setMobileTab(tab)}
+              className={clsx(
+                "flex-1 py-2 text-xs font-medium rounded-lg transition",
+                mobileTab === tab ? "bg-accent text-white" : "text-muted hover:text-primary"
+              )}
+            >
+              {label} {tab === "order" && orderLinesList.length > 0 && `(${orderLinesList.length})`}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Top 3-panel area */}
-      <div className="flex gap-0 flex-1 min-h-0 overflow-hidden rounded-xl border border-bg-border">
+      <div className={clsx("flex gap-0 flex-1 min-h-0 overflow-hidden rounded-xl border border-bg-border", isMobile && "flex-col")}>
         {/* LEFT: Item List */}
-        <div className="w-[26%] flex flex-col border-r border-bg-border bg-bg-card">
+        <div className={clsx(
+          "flex flex-col border-bg-border bg-bg-card",
+          isMobile ? (mobileTab === "list" ? "flex-1" : "hidden") : "w-[26%] border-r"
+        )}>
           <div className="p-3 border-b border-bg-border space-y-2">
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
@@ -639,29 +667,65 @@ export default function Orders() {
         </div>
 
         {/* CENTER: Item Detail & Graph */}
-        <div className="flex-1 flex flex-col bg-bg min-h-0">
+        <div className={clsx(
+          "flex flex-col bg-bg min-h-0",
+          isMobile ? (mobileTab === "detail" ? "flex-1" : "hidden") : "flex-1"
+        )}>
           {focusedItem ? (
             <div className="p-4 flex flex-col gap-4 overflow-y-auto flex-1">
               <div>
-                <h2 className="text-lg font-bold text-primary leading-tight">{focusedItem.name}</h2>
+                <h2 className="text-base md:text-lg font-bold text-primary leading-tight">{focusedItem.name}</h2>
                 <div className="text-muted text-xs mt-0.5">{focusedItem.group} · {focusedItem.baseUnit}{focusedItem.pkgUnit ? ` · ${focusedItem.unitsPerPkg}/${focusedItem.pkgUnit}` : ""}</div>
               </div>
+
+              {/* Mobile quick-add to order */}
+              {isMobile && selectedItem && (
+                <div className="flex items-center gap-2 bg-bg-card border border-bg-border rounded-lg p-2">
+                  <span className="text-xs text-muted flex-shrink-0">Order Qty:</span>
+                  <input
+                    ref={qtyRef}
+                    type="text"
+                    inputMode="decimal"
+                    value={orderQty}
+                    onChange={(e) => setOrderQty(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addToOrder()}
+                    placeholder="0"
+                    className="flex-1 bg-bg border border-bg-border rounded px-2 py-1.5 font-mono text-sm text-center outline-none focus:border-accent/60"
+                  />
+                  <button
+                    onClick={addToOrder}
+                    disabled={!orderQty}
+                    className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition"
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
+              )}
 
               {/* Mini KPIs */}
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 const last = focusedMonthlyBuckets[focusedMonthlyBuckets.length - 1]!;
+                const kpis = [
+                  { label: "Opening", val: toDisplay(item, last.openingQtyBase, unitMode).formatted, color: "text-muted", clickable: false },
+                  { label: "In", val: toDisplay(item, last.inwardsBase, unitMode).formatted, color: "text-success", clickable: true, direction: "inward" as MovementDirection },
+                  { label: "Out", val: toDisplay(item, last.outwardsBase, unitMode).formatted, color: "text-danger", clickable: true, direction: "outward" as MovementDirection },
+                  { label: "Closing", val: toDisplay(item, focusedStock, unitMode).formatted, color: focusedStock <= 0 ? "text-danger" : "text-primary", clickable: false },
+                ];
                 return (
-                  <div className="grid grid-cols-4 gap-2">
-                    {[
-                      { label: "Opening", val: toDisplay(item, last.openingQtyBase, unitMode).formatted, color: "text-muted" },
-                      { label: "In", val: toDisplay(item, last.inwardsBase, unitMode).formatted, color: "text-success" },
-                      { label: "Out", val: toDisplay(item, last.outwardsBase, unitMode).formatted, color: "text-danger" },
-                      { label: "Closing", val: toDisplay(item, focusedStock, unitMode).formatted, color: focusedStock <= 0 ? "text-danger" : "text-primary" },
-                    ].map(({ label, val, color }) => (
-                      <div key={label} className="bg-bg-card border border-bg-border rounded-lg p-2 text-center">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {kpis.map(({ label, val, color, clickable, direction }) => (
+                      <div
+                        key={label}
+                        onClick={clickable && direction ? () => setMovementModal({ direction, month: last.yearMonth }) : undefined}
+                        className={clsx(
+                          "bg-bg-card border border-bg-border rounded-lg p-2 text-center",
+                          clickable && "cursor-pointer hover:border-accent/50 hover:bg-accent/5 transition-colors"
+                        )}
+                        title={clickable ? `Click to view ${label.toLowerCase()} transactions` : undefined}
+                      >
                         <div className={`text-sm font-mono font-semibold ${color}`}>{val}</div>
-                        <div className="text-muted text-xs mt-0.5">{label}</div>
+                        <div className="text-muted text-xs mt-0.5">{label} {clickable && "▸"}</div>
                       </div>
                     ))}
                   </div>
@@ -686,8 +750,16 @@ export default function Orders() {
                           <tr key={b.yearMonth} className={clsx("border-b border-bg-border/50", !showChart && "h-full")}>
                             <td className={clsx("px-3 text-muted", showChart ? "py-1.5" : "py-2.5")}>{b.label}</td>
                             <td className={clsx("px-3 font-mono text-primary", showChart ? "py-1.5" : "py-2.5")}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
-                            <td className={clsx("px-3 font-mono text-success", showChart ? "py-1.5" : "py-2.5")}>{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
-                            <td className={clsx("px-3 font-mono text-danger", showChart ? "py-1.5" : "py-2.5")}>{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
+                            <td
+                              className={clsx("px-3 font-mono text-success cursor-pointer hover:underline", showChart ? "py-1.5" : "py-2.5")}
+                              onClick={() => setMovementModal({ direction: "inward", month: b.yearMonth })}
+                              title="Click to view inward transactions"
+                            >{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
+                            <td
+                              className={clsx("px-3 font-mono text-danger cursor-pointer hover:underline", showChart ? "py-1.5" : "py-2.5")}
+                              onClick={() => setMovementModal({ direction: "outward", month: b.yearMonth })}
+                              title="Click to view outward transactions"
+                            >{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
                             <td className={clsx("px-3 font-mono text-primary font-semibold", showChart ? "py-1.5" : "py-2.5")}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
                           </tr>
                         ))}
@@ -739,6 +811,74 @@ export default function Orders() {
                 );
               })()}
 
+              {/* Movement Transaction Modal */}
+              {movementModal && focusedItem && (() => {
+                const movements = getItemMovements(
+                  focusedItem,
+                  voucherIndex,
+                  movementModal.direction,
+                  movementModal.month,
+                );
+                const dirLabel = movementModal.direction === "inward" ? "Inward" : "Outward";
+                const monthLabel = movementModal.month
+                  ? new Date(Number(movementModal.month.split("-")[0]), Number(movementModal.month.split("-")[1]) - 1, 1)
+                      .toLocaleString("en-IN", { month: "short", year: "2-digit" })
+                  : "All";
+                return (
+                  <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={() => setMovementModal(null)}>
+                    <div className={clsx("bg-bg-card border border-bg-border rounded-xl shadow-2xl flex flex-col", isMobile ? "w-full h-full rounded-none" : "w-[700px] max-h-[80vh]")} onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
+                        <div>
+                          <h3 className="text-sm font-bold text-primary">{focusedItem.name} — {dirLabel} Transactions</h3>
+                          <p className="text-xs text-muted mt-0.5">Month: {monthLabel} · {movements.length} transactions</p>
+                        </div>
+                        <button onClick={() => setMovementModal(null)} className="text-muted hover:text-primary p-1"><X size={16} /></button>
+                      </div>
+                      <div className="overflow-y-auto flex-1">
+                        {movements.length === 0 ? (
+                          <div className="text-center text-muted text-sm py-8">No {dirLabel.toLowerCase()} transactions found</div>
+                        ) : (
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-bg-card">
+                              <tr className="border-b border-bg-border">
+                                <th className="text-left text-muted px-3 py-2 font-medium">Date</th>
+                                <th className="text-left text-muted px-3 py-2 font-medium">Voucher</th>
+                                <th className="text-left text-muted px-3 py-2 font-medium">Type</th>
+                                <th className="text-left text-muted px-3 py-2 font-medium">Party</th>
+                                <th className="text-right text-muted px-3 py-2 font-medium">Qty</th>
+                                <th className="text-right text-muted px-3 py-2 font-medium">Rate</th>
+                                <th className="text-right text-muted px-3 py-2 font-medium">Amount</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {movements.map((m, i) => (
+                                <tr key={`${m.voucherId}-${i}`} className="border-b border-bg-border/50 hover:bg-bg-border/20">
+                                  <td className="px-3 py-1.5 text-muted">{m.date}</td>
+                                  <td className="px-3 py-1.5 font-mono text-primary">{m.voucherNumber}</td>
+                                  <td className="px-3 py-1.5 text-muted">{m.voucherType}</td>
+                                  <td className="px-3 py-1.5 text-primary truncate max-w-[160px]" title={m.partyName}>{m.partyName}</td>
+                                  <td className="px-3 py-1.5 font-mono text-right">{fmtNum(m.qty)}</td>
+                                  <td className="px-3 py-1.5 font-mono text-right text-muted">{m.rate > 0 ? fmtNum(m.rate) : "—"}</td>
+                                  <td className="px-3 py-1.5 font-mono text-right font-semibold">{fmtNum(m.amount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr className="border-t-2 border-bg-border bg-bg-border/10">
+                                <td colSpan={4} className="px-3 py-2 font-semibold text-primary">Total</td>
+                                <td className="px-3 py-2 font-mono text-right font-bold">{fmtNum(movements.reduce((s, m) => s + m.qty, 0))}</td>
+                                <td className="px-3 py-2"></td>
+                                <td className="px-3 py-2 font-mono text-right font-bold">{fmtNum(movements.reduce((s, m) => s + m.amount, 0))}</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
             </div>
           ) : (
             <div className="flex items-center justify-center h-full text-muted text-sm">
@@ -748,7 +888,10 @@ export default function Orders() {
         </div>
 
         {/* RIGHT: Order Entry (All Items) — Virtualized */}
-        <div className="w-[28%] flex flex-col border-l border-bg-border bg-bg-card min-h-0">
+        <div className={clsx(
+          "flex flex-col border-bg-border bg-bg-card min-h-0",
+          isMobile ? (mobileTab === "order" ? "flex-1" : "hidden") : "w-[28%] border-l"
+        )}>
           <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
             <div className="flex items-center gap-3">
               <span className="text-sm font-semibold text-primary">Order Entry</span>

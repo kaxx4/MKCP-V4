@@ -48,7 +48,7 @@ export default function CashflowIntelligence({ data }: Props) {
       </div>
 
       {/* Secondary KPIs */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
           { label: "Avg Daily Inflow", value: fmtINR(summary.avgDailyInflow) },
           { label: "Avg Daily Outflow", value: fmtINR(summary.avgDailyOutflow) },

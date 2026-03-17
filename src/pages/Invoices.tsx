@@ -4,6 +4,7 @@ import { Search, ChevronDown, ChevronUp, Download, Upload, FileText } from "luci
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
+import { useUIStore } from "../store/uiStore";
 import { computeOutstandingInvoices, type InvoiceRecord } from "../engine/financial";
 import { fmtINR, fmtDate } from "../utils/format";
 
@@ -12,6 +13,7 @@ type FilterType = "All" | "Sales" | "Purchase";
 export default function Invoices() {
   const navigate = useNavigate();
   const { data } = useDataStore();
+  const { isMobile } = useUIStore();
 
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<FilterType>("All");
@@ -77,33 +79,33 @@ export default function Invoices() {
   const totalAP = filtered.filter((i) => i.type === "payable").reduce((s, i) => s + i.outstanding, 0);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3 md:space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-primary">Invoices</h1>
-        <button onClick={exportCSV} className="flex items-center gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-4 py-2 rounded-lg transition text-sm">
-          <Download size={14} />Export CSV
+        <h1 className="text-lg md:text-2xl font-bold text-primary">Invoices</h1>
+        <button onClick={exportCSV} className="flex items-center gap-1.5 md:gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-2.5 md:px-4 py-1.5 md:py-2 rounded-lg transition text-xs md:text-sm">
+          <Download size={14} />Export
         </button>
       </div>
 
       {/* Summary */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-          <div className="text-muted text-xs">Total Outstanding AR</div>
-          <div className="text-success text-xl font-mono font-bold mt-1">{fmtINR(totalAR)}</div>
+      <div className="grid grid-cols-3 gap-2 md:gap-4">
+        <div className="bg-bg-card border border-bg-border rounded-xl p-2.5 md:p-4">
+          <div className="text-muted text-[10px] md:text-xs">Outstanding AR</div>
+          <div className="text-success text-sm md:text-xl font-mono font-bold mt-0.5 md:mt-1">{fmtINR(totalAR)}</div>
         </div>
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-          <div className="text-muted text-xs">Total Outstanding AP</div>
-          <div className="text-danger text-xl font-mono font-bold mt-1">{fmtINR(totalAP)}</div>
+        <div className="bg-bg-card border border-bg-border rounded-xl p-2.5 md:p-4">
+          <div className="text-muted text-[10px] md:text-xs">Outstanding AP</div>
+          <div className="text-danger text-sm md:text-xl font-mono font-bold mt-0.5 md:mt-1">{fmtINR(totalAP)}</div>
         </div>
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-          <div className="text-muted text-xs">Invoices Shown</div>
-          <div className="text-primary text-xl font-mono font-bold mt-1">{filtered.length}</div>
+        <div className="bg-bg-card border border-bg-border rounded-xl p-2.5 md:p-4">
+          <div className="text-muted text-[10px] md:text-xs">Invoices</div>
+          <div className="text-primary text-sm md:text-xl font-mono font-bold mt-0.5 md:mt-1">{filtered.length}</div>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-3 bg-bg-card border border-bg-border rounded-xl p-4">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="flex flex-wrap gap-2 md:gap-3 bg-bg-card border border-bg-border rounded-xl p-3 md:p-4">
+        <div className="relative flex-1 min-w-[140px] md:min-w-[200px]">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search party / voucher#"
             className="w-full bg-bg border border-bg-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-primary placeholder-muted outline-none" />
@@ -111,25 +113,29 @@ export default function Invoices() {
         <div className="flex gap-1">
           {(["All", "Sales", "Purchase"] as FilterType[]).map((t) => (
             <button key={t} onClick={() => setTypeFilter(t)}
-              className={clsx("px-3 py-1.5 rounded-lg text-sm transition", typeFilter === t ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>
+              className={clsx("px-2.5 md:px-3 py-1.5 rounded-lg text-xs md:text-sm transition", typeFilter === t ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>
               {t}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="hidden md:flex items-center gap-1.5">
           <label htmlFor="invoice-from" className="text-xs text-muted">From</label>
           <input id="invoice-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
             className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none" />
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="hidden md:flex items-center gap-1.5">
           <label htmlFor="invoice-to" className="text-xs text-muted">To</label>
           <input id="invoice-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
             className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none" />
         </div>
       </div>
 
-      {/* Table */}
-      <InvoiceTable filtered={filtered} expandedId={expandedId} setExpandedId={setExpandedId} agingColor={agingColor} data={data} />
+      {/* Table (desktop) / Cards (mobile) */}
+      {isMobile ? (
+        <MobileInvoiceCards filtered={filtered} expandedId={expandedId} setExpandedId={setExpandedId} agingColor={agingColor} data={data} />
+      ) : (
+        <InvoiceTable filtered={filtered} expandedId={expandedId} setExpandedId={setExpandedId} agingColor={agingColor} data={data} />
+      )}
     </div>
   );
 }
@@ -161,7 +167,7 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
 
   return (
     <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-      <div className="overflow-x-auto" style={{ minWidth: "900px" }}>
+      <div className="overflow-x-auto" style={{ minWidth: "700px" }}>
         {/* Header */}
         <div className="grid text-xs text-muted font-medium border-b border-bg-border"
              style={{ gridTemplateColumns: COL_TEMPLATE }}>
@@ -252,6 +258,82 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
           <div className="text-center py-12 text-muted text-sm">No outstanding invoices found</div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Mobile-friendly stacked card view for invoices */
+function MobileInvoiceCards({ filtered, expandedId, setExpandedId, agingColor, data }: {
+  filtered: InvoiceRecord[];
+  expandedId: string | null;
+  setExpandedId: (id: string | null) => void;
+  agingColor: (inv: InvoiceRecord) => string;
+  data: import("../types/canonical").ParsedData;
+}) {
+  return (
+    <div className="space-y-2">
+      {filtered.length === 0 && (
+        <div className="text-center py-12 text-muted text-sm bg-bg-card border border-bg-border rounded-xl">
+          No outstanding invoices found
+        </div>
+      )}
+      {filtered.slice(0, 100).map((inv) => {
+        const isExpanded = expandedId === inv.voucherId;
+        const voucher = isExpanded ? data.vouchers.find((v: import("../types/canonical").CanonicalVoucher) => v.voucherId === inv.voucherId) : null;
+        return (
+          <div
+            key={inv.voucherId}
+            className="bg-bg-card border border-bg-border rounded-xl overflow-hidden"
+          >
+            <div
+              className="p-3 cursor-pointer active:bg-bg-border/20"
+              onClick={() => setExpandedId(isExpanded ? null : inv.voucherId)}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium text-primary truncate mr-2">{inv.partyName}</span>
+                <span className={clsx("text-xs px-2 py-0.5 rounded-full flex-shrink-0", inv.type === "receivable" ? "bg-success/10 text-success" : "bg-danger/10 text-danger")}>
+                  {inv.type === "receivable" ? "Sales" : "Purchase"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted">{fmtDate(inv.date)} · {inv.voucherNumber}</span>
+                <span className="font-mono font-semibold text-primary">{fmtINR(inv.totalAmount)}</span>
+              </div>
+              {inv.outstanding > 0 && (
+                <div className="flex items-center justify-between mt-1 text-xs">
+                  <span className={clsx("px-1.5 py-0.5 rounded", agingColor(inv))}>
+                    {inv.daysPastDue > 0 ? `${inv.daysPastDue}d overdue` : "Current"}
+                  </span>
+                  <span className="text-muted">Due: <span className="font-mono font-medium text-primary">{fmtINR(inv.outstanding)}</span></span>
+                </div>
+              )}
+            </div>
+
+            {isExpanded && voucher && (
+              <div className="border-t border-bg-border bg-bg px-3 py-2 space-y-1">
+                <div className="text-[10px] text-muted font-medium mb-1">Voucher Lines</div>
+                {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => {
+                  const ledgerName = line.type === "ledger" && line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
+                  const itemName = line.type === "inventory" && line.itemId ? (data.items.get(line.itemId)?.name ?? line.itemId) : "";
+                  return (
+                    <div key={i} className="flex justify-between text-xs font-mono gap-2">
+                      <span className="truncate text-primary">
+                        {line.type === "ledger" ? `${line.isDebit ? "Dr" : "Cr"} ${ledgerName}` : `${itemName}`}
+                      </span>
+                      <span className="flex-shrink-0">{fmtINR(line.amount ?? line.lineAmount ?? 0)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {filtered.length > 100 && (
+        <div className="text-center text-xs text-muted py-2">
+          Showing first 100 of {filtered.length} invoices
+        </div>
+      )}
     </div>
   );
 }

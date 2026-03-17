@@ -76,6 +76,19 @@ export interface CanonicalVoucher {
   lines: CanonicalVoucherLine[];
 }
 
+/** Tally's authoritative P&L report — fetched directly from Tally during sync */
+export interface TallyPLSnapshot {
+  sales: number; costOfSales: number; openingStock: number; purchases: number;
+  closingStock: number; directExpenses: number; indirectIncome: number;
+  indirectExpenses: number; netProfit: number;
+}
+
+/** Tally's authoritative Balance Sheet — fetched directly from Tally during sync */
+export interface TallyBSSnapshot {
+  capitalAccount: number; loans: number; currentLiabilities: number;
+  profitAndLoss: number; fixedAssets: number; investments: number; currentAssets: number;
+}
+
 export interface ParsedData {
   company: CompanyInfo | null;
   items: Map<string, CanonicalItem>;      // key = itemId
@@ -84,6 +97,8 @@ export interface ParsedData {
   importedAt: string;
   sourceFiles: string[];
   warnings: ImportWarning[];
+  tallyPL?: TallyPLSnapshot;   // authoritative P&L from Tally (if fetched)
+  tallyBS?: TallyBSSnapshot;   // authoritative BS from Tally (if fetched)
 }
 
 export interface ImportWarning {

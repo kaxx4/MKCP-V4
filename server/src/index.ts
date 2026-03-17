@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { tallyPost, tallyPostWithRetry, stockItemsXml, stockGroupsXml, unitsXml, godownsXml, costCentresXml, ledgersXml, vouchersXml, vouchersCollectionXml, getMonthlyChunks, getDailyChunks, getWeeklyChunks, HEALTH_XML } from "./tally.js";
+import { tallyPost, tallyPostWithRetry, stockItemsXml, stockGroupsXml, unitsXml, godownsXml, costCentresXml, ledgersXml, vouchersXml, vouchersCollectionXml, getMonthlyChunks, getDailyChunks, getWeeklyChunks, HEALTH_XML, profitAndLossXml, balanceSheetXml, parsePLReport, parseBSReport } from "./tally.js";
 import { convertStockItems, convertStockGroups, convertUnits, convertGodowns, convertCostCentres, convertLedgers, convertVouchers, convertCompanies } from "./convert.js";
 
 const app = express();
@@ -236,87 +236,69 @@ app.post("/api/tally/sync-masters", async (req, res) => {
     return res.status(409).json({ success: false, error: "Sync already in progress for this company" });
   }
 
+  // Abort in-flight Tally requests when client disconnects
+  const ac = new AbortController();
+  req.on("close", () => { if (!res.writableEnded) { console.log("[MASTERS] Client disconnected — aborting"); ac.abort(); } });
+
   activeSyncs.set(lockKey, Promise.resolve());
-  res.setTimeout(300_000); // 5 min
+  res.setTimeout(1_200_000); // 20 min — stock items XML can be very large
   const t0 = Date.now();
   console.log(`\n[MASTERS] Syncing masters for "${company}"...`);
 
-  let groups = { tallymessage: [] as any[] };
-  let units = { tallymessage: [] as any[] };
-  let stocks = { tallymessage: [] as any[] };
-  let ledgers = { tallymessage: [] as any[] };
   const errors: string[] = [];
 
-  // Step 1: Stock Groups
-  try {
-    console.log(`[MASTERS] Step 1/6: Fetching stock groups...`);
-    const xml = await tallyPostWithRetry(TALLY, stockGroupsXml(company), 30_000);
-    groups = convertStockGroups(xml);
-    console.log(`[MASTERS] ✓ ${groups.tallymessage.length} stock groups`);
-  } catch (e: any) {
-    console.error(`[MASTERS] ✗ Stock groups: ${e.message}`);
-    errors.push(`Stock groups: ${e.message}`);
-  }
+  // Parallel fetch: groups + units + godowns + costCentres + financial reports (small/fast)
+  // Then sequential: stock items + ledgers (large/slow)
+  const [groupsRes, unitsRes, godownsRes, costCentresRes, plReportRes, bsReportRes] = await Promise.allSettled([
+    (async () => { console.log(`[MASTERS] Fetching stock groups...`); const xml = await tallyPostWithRetry(TALLY, stockGroupsXml(company), 30_000, false, 1, ac.signal); return convertStockGroups(xml); })(),
+    (async () => { console.log(`[MASTERS] Fetching units...`); const xml = await tallyPostWithRetry(TALLY, unitsXml(company), 30_000, false, 1, ac.signal); return convertUnits(xml); })(),
+    (async () => { console.log(`[MASTERS] Fetching godowns...`); const xml = await tallyPostWithRetry(TALLY, godownsXml(company), 30_000, false, 1, ac.signal); return convertGodowns(xml); })(),
+    (async () => { console.log(`[MASTERS] Fetching cost centres...`); const xml = await tallyPostWithRetry(TALLY, costCentresXml(company), 30_000, false, 1, ac.signal); return convertCostCentres(xml); })(),
+    (async () => { console.log(`[MASTERS] Fetching P&L report...`); const xml = await tallyPostWithRetry(TALLY, profitAndLossXml(company), 30_000, true, 1, ac.signal); return parsePLReport(xml); })(),
+    (async () => { console.log(`[MASTERS] Fetching Balance Sheet...`); const xml = await tallyPostWithRetry(TALLY, balanceSheetXml(company), 30_000, true, 1, ac.signal); return parseBSReport(xml); })(),
+  ]);
 
-  // Step 2: Units
-  try {
-    console.log(`[MASTERS] Step 2/6: Fetching units...`);
-    const xml = await tallyPostWithRetry(TALLY, unitsXml(company), 30_000);
-    units = convertUnits(xml);
-    console.log(`[MASTERS] ✓ ${units.tallymessage.length} units`);
-  } catch (e: any) {
-    console.error(`[MASTERS] ✗ Units: ${e.message}`);
-    errors.push(`Units: ${e.message}`);
-  }
+  const groups = groupsRes.status === "fulfilled" ? groupsRes.value : (() => { errors.push(`Stock groups: ${(groupsRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
+  const units = unitsRes.status === "fulfilled" ? unitsRes.value : (() => { errors.push(`Units: ${(unitsRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
+  const godowns = godownsRes.status === "fulfilled" ? godownsRes.value : (() => { errors.push(`Godowns: ${(godownsRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
+  const costCentres = costCentresRes.status === "fulfilled" ? costCentresRes.value : (() => { errors.push(`Cost centres: ${(costCentresRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
+  const plReport = plReportRes.status === "fulfilled" ? plReportRes.value : (() => { console.warn(`[MASTERS] P&L report failed: ${(plReportRes as PromiseRejectedResult).reason?.message}`); return null; })();
+  const bsReport = bsReportRes.status === "fulfilled" ? bsReportRes.value : (() => { console.warn(`[MASTERS] Balance Sheet failed: ${(bsReportRes as PromiseRejectedResult).reason?.message}`); return null; })();
 
-  // Step 3: Stock Items
+  if (plReport) console.log(`[MASTERS] ✓ P&L: Sales=${(plReport.sales/100000).toFixed(1)}L, Closing Stock=${(plReport.closingStock/100000).toFixed(1)}L, Net Profit=${(plReport.netProfit/100000).toFixed(1)}L`);
+  if (bsReport) console.log(`[MASTERS] ✓ BS: Capital=${(bsReport.capitalAccount/100000).toFixed(1)}L, P&L=${(bsReport.profitAndLoss/100000).toFixed(1)}L`);
+  console.log(`[MASTERS] ✓ Parallel batch: ${groups.tallymessage.length} groups, ${units.tallymessage.length} units, ${godowns.tallymessage.length} godowns, ${costCentres.tallymessage.length} cost centres`);
+
+  // Stock Items (large)
+  let stocks = { tallymessage: [] as any[] };
+  if (!ac.signal.aborted) {
   try {
-    console.log(`[MASTERS] Step 3/6: Fetching stock items...`);
-    const xml = await tallyPostWithRetry(TALLY, stockItemsXml(company), 120_000);
+    console.log(`[MASTERS] Fetching stock items...`);
+    const xml = await tallyPostWithRetry(TALLY, stockItemsXml(company), 900_000, false, 1, ac.signal);
     stocks = convertStockItems(xml);
     console.log(`[MASTERS] ✓ ${stocks.tallymessage.length} stock items`);
   } catch (e: any) {
-    console.error(`[MASTERS] ✗ Stock items: ${e.message}`);
-    errors.push(e.message);
+    if (!e.message?.includes("Aborted")) { console.error(`[MASTERS] ✗ Stock items: ${e.message}`); errors.push(e.message); }
+  }
   }
 
-  // Step 4: Ledgers
+  // Ledgers (large)
+  let ledgers = { tallymessage: [] as any[] };
+  if (!ac.signal.aborted) {
   try {
-    console.log(`[MASTERS] Step 4/6: Fetching ledgers...`);
-    const xml = await tallyPostWithRetry(TALLY, ledgersXml(company), 120_000);
+    console.log(`[MASTERS] Fetching ledgers...`);
+    const xml = await tallyPostWithRetry(TALLY, ledgersXml(company), 900_000, false, 1, ac.signal);
     ledgers = convertLedgers(xml);
     console.log(`[MASTERS] ✓ ${ledgers.tallymessage.length} ledgers`);
   } catch (e: any) {
-    console.error(`[MASTERS] ✗ Ledgers: ${e.message}`);
-    errors.push(e.message);
+    if (!e.message?.includes("Aborted")) { console.error(`[MASTERS] ✗ Ledgers: ${e.message}`); errors.push(e.message); }
   }
-
-  // Step 5: Godowns
-  let godowns = { tallymessage: [] as any[] };
-  try {
-    console.log(`[MASTERS] Step 5/6: Fetching godowns...`);
-    const xml = await tallyPostWithRetry(TALLY, godownsXml(company), 30_000);
-    godowns = convertGodowns(xml);
-    console.log(`[MASTERS] ✓ ${godowns.tallymessage.length} godowns`);
-  } catch (e: any) {
-    console.error(`[MASTERS] ✗ Godowns: ${e.message}`);
-    errors.push(`Godowns: ${e.message}`);
-  }
-
-  // Step 6: Cost Centres
-  let costCentres = { tallymessage: [] as any[] };
-  try {
-    console.log(`[MASTERS] Step 6/6: Fetching cost centres...`);
-    const xml = await tallyPostWithRetry(TALLY, costCentresXml(company), 30_000);
-    costCentres = convertCostCentres(xml);
-    console.log(`[MASTERS] ✓ ${costCentres.tallymessage.length} cost centres`);
-  } catch (e: any) {
-    console.error(`[MASTERS] ✗ Cost centres: ${e.message}`);
-    errors.push(`Cost centres: ${e.message}`);
   }
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[MASTERS] Done in ${elapsed}s`);
+
+  if (ac.signal.aborted) { activeSyncs.delete(lockKey); return; }
 
   try {
     res.json({
@@ -333,6 +315,7 @@ app.post("/api/tally/sync-masters", async (req, res) => {
           ...costCentres.tallymessage,
         ],
       },
+      tallyFinancials: plReport || bsReport ? { pl: plReport, bs: bsReport } : undefined,
       stats: {
         stockGroups: groups.tallymessage.length,
         units: units.tallymessage.length,
@@ -373,6 +356,10 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
     console.warn(`[DAYBOOK] ⚠ Single day range detected (${fromDate}). This will only fetch one day of data.`);
   }
 
+  // Abort in-flight Tally requests when client disconnects
+  const ac = new AbortController();
+  req.on("close", () => { if (!res.writableEnded) { console.log("[DAYBOOK] Client disconnected — aborting"); ac.abort(); } });
+
   activeSyncs.set(lockKey, Promise.resolve());
   res.setTimeout(5_400_000); // 90 min — weekly full-FY can take 60+ min
   const t0 = Date.now();
@@ -401,11 +388,11 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
   async function fetchChunkRange(from: string, to: string, label: string): Promise<ReturnType<typeof convertVouchers>> {
     let vouchers: ReturnType<typeof convertVouchers>;
     try {
-      const xml = await tallyPostWithRetry(TALLY, vouchersCollectionXml(company, from, to), VOUCHER_TIMEOUT, false, 1);
+      const xml = await tallyPostWithRetry(TALLY, vouchersCollectionXml(company, from, to), VOUCHER_TIMEOUT, false, 1, ac.signal);
       vouchers = convertVouchers(xml);
       if (vouchers.tallymessage.length === 0) {
         console.log(`[DAYBOOK]   Collection returned 0 for ${label}, trying Day Book fallback...`);
-        const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, from, to), VOUCHER_TIMEOUT, false, 1);
+        const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, from, to), VOUCHER_TIMEOUT, false, 1, ac.signal);
         const fallback = convertVouchers(xml2);
         if (fallback.tallymessage.length > 0) {
           let inRange = 0;
@@ -423,8 +410,9 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
         }
       }
     } catch (primaryErr: any) {
+      if (primaryErr.message?.includes("Aborted")) throw primaryErr;
       console.log(`[DAYBOOK]   Collection failed for ${label}, trying Day Book fallback...`);
-      const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, from, to), VOUCHER_TIMEOUT, false, 1);
+      const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, from, to), VOUCHER_TIMEOUT, false, 1, ac.signal);
       vouchers = convertVouchers(xml2);
     }
     return vouchers;
@@ -446,6 +434,7 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
   }
 
   for (let i = 0; i < chunks.length; i++) {
+    if (ac.signal.aborted) { console.log("[DAYBOOK] Aborted — stopping chunk loop"); break; }
     const chunk = chunks[i];
     const chunkT0 = Date.now();
     try {
@@ -501,6 +490,8 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[DAYBOOK] ✓ Total: ${allVouchers.length} vouchers in ${elapsed}s (${chunksSucceeded}/${chunks.length} chunks succeeded)`);
 
+  if (ac.signal.aborted) { activeSyncs.delete(lockKey); return; }
+
   try {
     res.json({
       success: allVouchers.length > 0,
@@ -535,6 +526,10 @@ app.post("/api/tally/sync", async (req, res) => {
     return res.status(409).json({ success: false, error: "Sync already in progress for this company" });
   }
 
+  // Abort in-flight Tally requests when client disconnects
+  const ac = new AbortController();
+  req.on("close", () => { if (!res.writableEnded) { console.log("[SYNC] Client disconnected — aborting"); ac.abort(); } });
+
   activeSyncs.set(lockKey, Promise.resolve());
   // 90 min — weekly full-FY can take 60+ min
   res.setTimeout(5_400_000);
@@ -547,76 +542,46 @@ app.post("/api/tally/sync", async (req, res) => {
 
   const errors: string[] = [];
 
-  // ── Step 1: Stock Groups ──
-  let groups = { tallymessage: [] as any[] };
-  try {
-    console.log(`[SYNC] Step 1/7: Fetching stock groups...`);
-    const xml = await tallyPostWithRetry(TALLY, stockGroupsXml(company), 30_000);
-    groups = convertStockGroups(xml);
-    console.log(`[SYNC] ✓ Stock groups: ${groups.tallymessage.length}`);
-  } catch (e: any) {
-    console.error(`[SYNC] ✗ Stock groups failed: ${e.message}`);
-    errors.push(`Stock groups: ${e.message}`);
-  }
+  // ── Steps 1-2,5-6: Parallel small masters ──
+  console.log(`[SYNC] Steps 1-2,5-6: Fetching small masters in parallel...`);
+  const [groupsRes, unitsRes, godownsRes, costCentresRes] = await Promise.allSettled([
+    (async () => { const xml = await tallyPostWithRetry(TALLY, stockGroupsXml(company), 30_000, false, 1, ac.signal); return convertStockGroups(xml); })(),
+    (async () => { const xml = await tallyPostWithRetry(TALLY, unitsXml(company), 30_000, false, 1, ac.signal); return convertUnits(xml); })(),
+    (async () => { const xml = await tallyPostWithRetry(TALLY, godownsXml(company), 30_000, false, 1, ac.signal); return convertGodowns(xml); })(),
+    (async () => { const xml = await tallyPostWithRetry(TALLY, costCentresXml(company), 30_000, false, 1, ac.signal); return convertCostCentres(xml); })(),
+  ]);
 
-  // ── Step 2: Units ──
-  let units = { tallymessage: [] as any[] };
-  try {
-    console.log(`[SYNC] Step 2/7: Fetching units...`);
-    const xml = await tallyPostWithRetry(TALLY, unitsXml(company), 30_000);
-    units = convertUnits(xml);
-    console.log(`[SYNC] ✓ Units: ${units.tallymessage.length}`);
-  } catch (e: any) {
-    console.error(`[SYNC] ✗ Units failed: ${e.message}`);
-    errors.push(`Units: ${e.message}`);
-  }
+  const groups = groupsRes.status === "fulfilled" ? groupsRes.value : (() => { errors.push(`Stock groups: ${(groupsRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
+  const units = unitsRes.status === "fulfilled" ? unitsRes.value : (() => { errors.push(`Units: ${(unitsRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
+  const godowns = godownsRes.status === "fulfilled" ? godownsRes.value : (() => { errors.push(`Godowns: ${(godownsRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
+  const costCentres = costCentresRes.status === "fulfilled" ? costCentresRes.value : (() => { errors.push(`Cost centres: ${(costCentresRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
 
-  // ── Step 3: Stock Items ──
+  console.log(`[SYNC] ✓ Parallel batch: ${groups.tallymessage.length} groups, ${units.tallymessage.length} units, ${godowns.tallymessage.length} godowns, ${costCentres.tallymessage.length} cost centres`);
+
+  // ── Step 3: Stock Items (large — sequential) ──
   let stocks = { tallymessage: [] as any[] };
-  try {
-    console.log(`[SYNC] Step 3/7: Fetching stock items...`);
-    const xml = await tallyPostWithRetry(TALLY, stockItemsXml(company), 300_000);
-    stocks = convertStockItems(xml);
-    console.log(`[SYNC] ✓ Stock items: ${stocks.tallymessage.length}`);
-  } catch (e: any) {
-    console.error(`[SYNC] ✗ Stock items failed: ${e.message}`);
-    errors.push(`Stock items: ${e.message}`);
+  if (!ac.signal.aborted) {
+    try {
+      console.log(`[SYNC] Step 3/7: Fetching stock items...`);
+      const xml = await tallyPostWithRetry(TALLY, stockItemsXml(company), 300_000, false, 1, ac.signal);
+      stocks = convertStockItems(xml);
+      console.log(`[SYNC] ✓ Stock items: ${stocks.tallymessage.length}`);
+    } catch (e: any) {
+      if (!e.message?.includes("Aborted")) { console.error(`[SYNC] ✗ Stock items failed: ${e.message}`); errors.push(`Stock items: ${e.message}`); }
+    }
   }
 
-  // ── Step 4: Ledgers ──
+  // ── Step 4: Ledgers (large — sequential) ──
   let ledgers = { tallymessage: [] as any[] };
-  try {
-    console.log(`[SYNC] Step 4/7: Fetching ledgers...`);
-    const xml = await tallyPostWithRetry(TALLY, ledgersXml(company), 300_000);
-    ledgers = convertLedgers(xml);
-    console.log(`[SYNC] ✓ Ledgers: ${ledgers.tallymessage.length}`);
-  } catch (e: any) {
-    console.error(`[SYNC] ✗ Ledgers failed: ${e.message}`);
-    errors.push(`Ledgers: ${e.message}`);
-  }
-
-  // ── Step 5: Godowns ──
-  let godowns = { tallymessage: [] as any[] };
-  try {
-    console.log(`[SYNC] Step 5/7: Fetching godowns...`);
-    const xml = await tallyPostWithRetry(TALLY, godownsXml(company), 30_000);
-    godowns = convertGodowns(xml);
-    console.log(`[SYNC] ✓ Godowns: ${godowns.tallymessage.length}`);
-  } catch (e: any) {
-    console.error(`[SYNC] ✗ Godowns failed: ${e.message}`);
-    errors.push(`Godowns: ${e.message}`);
-  }
-
-  // ── Step 6: Cost Centres ──
-  let costCentres = { tallymessage: [] as any[] };
-  try {
-    console.log(`[SYNC] Step 6/7: Fetching cost centres...`);
-    const xml = await tallyPostWithRetry(TALLY, costCentresXml(company), 30_000);
-    costCentres = convertCostCentres(xml);
-    console.log(`[SYNC] ✓ Cost centres: ${costCentres.tallymessage.length}`);
-  } catch (e: any) {
-    console.error(`[SYNC] ✗ Cost centres failed: ${e.message}`);
-    errors.push(`Cost centres: ${e.message}`);
+  if (!ac.signal.aborted) {
+    try {
+      console.log(`[SYNC] Step 4/7: Fetching ledgers...`);
+      const xml = await tallyPostWithRetry(TALLY, ledgersXml(company), 300_000, false, 1, ac.signal);
+      ledgers = convertLedgers(xml);
+      console.log(`[SYNC] ✓ Ledgers: ${ledgers.tallymessage.length}`);
+    } catch (e: any) {
+      if (!e.message?.includes("Aborted")) { console.error(`[SYNC] ✗ Ledgers failed: ${e.message}`); errors.push(`Ledgers: ${e.message}`); }
+    }
   }
 
   // ── Step 7: Vouchers (Monthly Chunking) ──
@@ -627,6 +592,7 @@ app.post("/api/tally/sync", async (req, res) => {
     console.log(`[SYNC] Step 7/7: Fetching vouchers month-by-month (${chunks.length} chunks)...`);
 
     for (let i = 0; i < chunks.length; i++) {
+      if (ac.signal.aborted) { console.log("[SYNC] Aborted — stopping voucher chunk loop"); break; }
       const chunk = chunks[i];
       let chunkDone = false;
       for (let attempt = 0; attempt < 2 && !chunkDone; attempt++) {
@@ -640,12 +606,12 @@ app.post("/api/tally/sync", async (req, res) => {
           let vouchers: ReturnType<typeof convertVouchers>;
           // PRIMARY: Collection-based export with reliable TDL date filtering
           try {
-            const xml = await tallyPostWithRetry(TALLY, vouchersCollectionXml(company, chunk.from, chunk.to), 120_000, false, 1);
+            const xml = await tallyPostWithRetry(TALLY, vouchersCollectionXml(company, chunk.from, chunk.to), 120_000, false, 1, ac.signal);
             vouchers = convertVouchers(xml);
             // If Collection returned 0 vouchers, try Day Book fallback
             if (vouchers.tallymessage.length === 0) {
               console.log(`[SYNC]   Collection returned 0 for ${chunk.label}, trying Day Book fallback...`);
-              const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+              const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1, ac.signal);
               const fallback = convertVouchers(xml2);
               // Day Book may ignore dates — verify results are in range before accepting
               if (fallback.tallymessage.length > 0) {
@@ -664,9 +630,10 @@ app.post("/api/tally/sync", async (req, res) => {
               }
             }
           } catch (primaryErr: any) {
+            if (primaryErr.message?.includes("Aborted")) throw primaryErr;
             console.log(`[SYNC]   Collection failed for ${chunk.label}, trying Day Book fallback...`);
             try {
-              const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1);
+              const xml2 = await tallyPostWithRetry(TALLY, vouchersXml(company, chunk.from, chunk.to), 120_000, false, 1, ac.signal);
               vouchers = convertVouchers(xml2);
             } catch (fallbackErr: any) {
               throw new Error(`Both Collection and Day Book export failed for ${chunk.label}: ${primaryErr.message} / ${fallbackErr.message}`);
@@ -714,6 +681,8 @@ app.post("/api/tally/sync", async (req, res) => {
   if (errors.length > 0) console.log(`[SYNC] Errors: ${errors.join("; ")}`);
 
   const hasData = stats.stockItems > 0 || stats.ledgers > 0 || stats.vouchers > 0;
+
+  if (ac.signal.aborted) { activeSyncs.delete(lockKey); return; }
 
   try {
     res.json({
