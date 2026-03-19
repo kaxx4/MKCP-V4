@@ -137,8 +137,8 @@ export default function Ledgers() {
     // Show list view
     return (
       <div className="flex flex-col h-[calc(100vh-112px)]">
-        <div className="mb-2">
-          <h1 className="text-lg font-bold text-primary">Ledgers</h1>
+        <div className="mb-4">
+          <h1 className="text-2xl md:text-3xl font-bold text-primary">Ledgers</h1>
         </div>
         <div className="bento-card !p-0 flex flex-col flex-1 overflow-hidden">
           <div className="p-3 border-b border-bg-border space-y-2">

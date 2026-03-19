@@ -248,7 +248,7 @@ export default function Settings() {
 
   return (
     <div className="max-w-xl space-y-6">
-      <h1 className="text-2xl font-bold text-primary flex items-center gap-3">
+      <h1 className="text-2xl md:text-3xl font-bold text-primary flex items-center gap-3">
         <SettingsIcon size={24} className="text-accent" />
         Settings
       </h1>

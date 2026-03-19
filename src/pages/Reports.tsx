@@ -703,7 +703,7 @@ export default function Reports() {
 
   return (
     <div className="page-section">
-      <h1 className="text-lg md:text-2xl font-bold text-primary">Reports</h1>
+      <h1 className="text-2xl md:text-3xl font-bold text-primary">Reports</h1>
 
       {/* Tabs — horizontally scrollable, no scrollbar on mobile */}
       <div className="overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0 scrollbar-thin" role="tablist">
