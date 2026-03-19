@@ -66,14 +66,16 @@ export function NavBar() {
               to={path}
               className={({ isActive }) =>
                 clsx(
-                  "flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-lg min-w-[48px] transition-colors",
+                  "flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[56px] transition-all duration-200 focus-visible:ring-2 focus-visible:ring-accent-300",
                   isActive
-                    ? "text-accent"
-                    : "text-muted"
+                    ? "text-accent bg-accent/5"
+                    : "text-muted hover:text-primary"
                 )
               }
+              aria-label={label}
+              title={label}
             >
-              <Icon size={20} />
+              <Icon size={20} aria-hidden="true" />
               <span className="text-[10px] font-medium leading-none">{label}</span>
             </NavLink>
           ))}
@@ -81,33 +83,39 @@ export function NavBar() {
           {/* More button */}
           <button
             onClick={() => setMoreOpen(true)}
-            className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-lg min-w-[48px] text-muted cursor-pointer"
+            className="flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[56px] text-muted hover:text-primary transition-all duration-200 focus-visible:ring-2 focus-visible:ring-accent-300"
+            aria-label="More navigation options"
+            aria-expanded={moreOpen}
           >
-            <MoreHorizontal size={20} />
+            <MoreHorizontal size={20} aria-hidden="true" />
             <span className="text-[10px] font-medium leading-none">More</span>
           </button>
         </nav>
 
         {/* More menu overlay */}
         {moreOpen && (
-          <div className="fixed inset-0 z-40 flex flex-col justify-end">
+          <div className="fixed inset-0 z-40 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Navigation menu">
             {/* Backdrop */}
             <div
               className="absolute inset-0 bg-black/40"
               onClick={() => setMoreOpen(false)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === 'Escape' && setMoreOpen(false)}
             />
 
             {/* Slide-up sheet */}
-            <div className="relative bg-bg-card rounded-t-2xl border-t border-bg-border p-4 pb-6 animate-slide-up">
+            <div className="relative bg-bg-card rounded-t-3xl border-t border-bg-border p-4 pb-6 animate-slide-up shadow-lg">
               {/* Handle bar */}
-              <div className="w-10 h-1 bg-bg-border rounded-full mx-auto mb-4" />
+              <div className="w-10 h-1 bg-bg-border/60 rounded-full mx-auto mb-4" aria-hidden="true" />
 
               {/* Close button */}
               <button
                 onClick={() => setMoreOpen(false)}
-                className="absolute top-4 right-4 text-muted hover:text-primary cursor-pointer"
+                className="absolute top-4 right-4 text-muted hover:text-primary transition-colors focus-visible:ring-2 focus-visible:ring-accent-300 rounded"
+                aria-label="Close navigation menu"
               >
-                <X size={20} />
+                <X size={20} aria-hidden="true" />
               </button>
 
               {/* Overflow nav items */}
@@ -119,14 +127,14 @@ export function NavBar() {
                     onClick={() => setMoreOpen(false)}
                     className={({ isActive }) =>
                       clsx(
-                        "flex items-center gap-3 px-3 py-3 rounded-lg transition-colors text-sm",
+                        "flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 text-sm focus-visible:ring-2 focus-visible:ring-accent-300",
                         isActive
                           ? "bg-accent/15 text-accent font-medium"
-                          : "text-muted hover:text-primary hover:bg-bg-border/50"
+                          : "text-muted hover:text-primary hover:bg-bg-hover"
                       )
                     }
                   >
-                    <Icon size={18} />
+                    <Icon size={18} aria-hidden="true" />
                     <span>{label}</span>
                   </NavLink>
                 ))}
@@ -184,15 +192,16 @@ export function NavBar() {
             to={path}
             className={({ isActive }) =>
               clsx(
-                "flex items-center gap-3 px-2 py-2.5 rounded-lg transition-colors text-sm",
+                "flex items-center gap-3 px-2 py-2.5 rounded-lg transition-all duration-200 text-sm focus-visible:ring-2 focus-visible:ring-accent-300",
                 isActive
-                  ? "bg-accent/15 text-accent font-medium"
-                  : "text-muted hover:text-primary hover:bg-bg-border/50"
+                  ? "bg-accent/10 text-accent font-medium shadow-sm"
+                  : "text-muted hover:text-primary hover:bg-bg-hover"
               )
             }
+            aria-label={label}
           >
-            <Icon size={18} className="flex-shrink-0" />
-            {sidebarOpen && <span className="font-sans">{label}</span>}
+            <Icon size={18} className="flex-shrink-0" aria-hidden="true" />
+            {sidebarOpen && <span className="font-sans truncate">{label}</span>}
           </NavLink>
         ))}
       </div>
