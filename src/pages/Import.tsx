@@ -877,8 +877,8 @@ export default function ImportPage() {
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-primary mb-1">Import Tally Data</h1>
-        <p className="text-muted text-sm">Connect live to TallyPrime or upload JSON files</p>
+        <h1 className="text-2xl md:text-3xl font-bold text-primary mb-1">Import Tally Data</h1>
+        <p className="text-muted text-xs md:text-sm">Connect live to TallyPrime or upload JSON files</p>
       </div>
 
       {/* Tab Switcher */}
@@ -1213,7 +1213,7 @@ export default function ImportPage() {
       {/* Report */}
       {report && (
         <div className="bento-card space-y-4 mt-6">
-          <h2 className="text-lg font-semibold text-primary">Import Summary</h2>
+          <h2 className="text-base md:text-lg font-semibold text-primary">Import Summary</h2>
 
           {/* Merge Info Banner */}
           {report.mergeMode && (

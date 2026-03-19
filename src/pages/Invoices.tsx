@@ -81,7 +81,7 @@ export default function Invoices() {
   return (
     <div className="page-section">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg md:text-2xl font-bold text-primary">Invoices</h1>
+        <h1 className="text-2xl md:text-3xl font-bold text-primary">Invoices</h1>
         <button onClick={exportCSV} className="flex items-center gap-1.5 md:gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-2.5 md:px-4 py-1.5 md:py-2 rounded-lg transition text-xs md:text-sm">
           <Download size={14} />Export
         </button>

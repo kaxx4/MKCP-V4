@@ -135,7 +135,7 @@ export default function Edit() {
     <div className="flex flex-col h-[calc(100vh-112px)] gap-3">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-        <h1 className="text-lg md:text-xl font-bold text-primary">Edit Units</h1>
+        <h1 className="text-2xl md:text-3xl font-bold text-primary">Edit Units</h1>
         <div className="flex items-center gap-2">
           {dirtyCount > 0 && (
             <>
