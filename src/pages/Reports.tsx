@@ -168,26 +168,27 @@ export default function Reports() {
     }
   }, [data, calendarMonth]);
 
-  // ─── Deduplicated prediction filter (Task 1D) ───────────
+  // ─── Deduplicated prediction filter ─────────────
   const filteredPredictions = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayMs = today.getTime();
+    const weekFromNow = todayMs + 7 * 86400000;
+    const monthFromNow = todayMs + 30 * 86400000;
+    const customStart = predictionCustomStartDate ? new Date(predictionCustomStartDate).getTime() : 0;
+    const customEnd = predictionCustomEndDate ? new Date(predictionCustomEndDate).getTime() : Infinity;
+
     return predictions.filter(pred => {
       if (pred.confidence * 100 < predictionConfidenceFilter) return false;
-      const predDate = new Date(pred.predictedNextDate);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const predMs = new Date(pred.predictedNextDate).getTime();
       if (predictionDateFilter === "overdue") {
         if (!pred.isOverdue) return false;
       } else if (predictionDateFilter === "week") {
-        const weekFromNow = new Date(today);
-        weekFromNow.setDate(weekFromNow.getDate() + 7);
-        if (predDate < today || predDate > weekFromNow) return false;
+        if (predMs < todayMs || predMs > weekFromNow) return false;
       } else if (predictionDateFilter === "month") {
-        const monthFromNow = new Date(today);
-        monthFromNow.setDate(monthFromNow.getDate() + 30);
-        if (predDate < today || predDate > monthFromNow) return false;
+        if (predMs < todayMs || predMs > monthFromNow) return false;
       } else if (predictionDateFilter === "custom") {
-        if (predictionCustomStartDate && predDate < new Date(predictionCustomStartDate)) return false;
-        if (predictionCustomEndDate && predDate > new Date(predictionCustomEndDate)) return false;
+        if (predMs < customStart || predMs > customEnd) return false;
       }
       return true;
     });
@@ -230,9 +231,9 @@ export default function Reports() {
   }, [data]);
 
   const turnoverData = useMemo(() => {
-    if (!data) return [];
+    if (!data || tab !== "Turnover") return [];
     return computeItemTurnover(data.items, data.vouchers, turnoverPeriod);
-  }, [data, turnoverPeriod]);
+  }, [data, turnoverPeriod, tab]);
 
   const turnoverGroups = useMemo(() => {
     const gs = new Set(turnoverData.map(t => t.group));
@@ -256,14 +257,17 @@ export default function Reports() {
 
   const turnoverSummary = useMemo(() => {
     if (!turnoverData.length) return { fast: 0, moderate: 0, slow: 0, dead: 0, avgRatio: 0, totalCOGS: 0, totalAvgInv: 0 };
-    const fast = turnoverData.filter(t => t.classification === "fast").length;
-    const moderate = turnoverData.filter(t => t.classification === "moderate").length;
-    const slow = turnoverData.filter(t => t.classification === "slow").length;
-    const dead = turnoverData.filter(t => t.classification === "dead").length;
-    const totalCOGS = turnoverData.reduce((s, t) => s + t.cogsValue, 0);
-    const totalAvgInv = turnoverData.reduce((s, t) => s + t.avgInventoryValue, 0);
-    const avgRatio = totalAvgInv > 0 ? totalCOGS / totalAvgInv : 0;
-    return { fast, moderate, slow, dead, avgRatio: Math.round(avgRatio * 100) / 100, totalCOGS, totalAvgInv };
+    let fast = 0, moderate = 0, slow = 0, dead = 0, totalCOGS = 0, totalAvgInv = 0;
+    for (const t of turnoverData) {
+      if (t.classification === "fast") fast++;
+      else if (t.classification === "moderate") moderate++;
+      else if (t.classification === "slow") slow++;
+      else if (t.classification === "dead") dead++;
+      totalCOGS += t.cogsValue;
+      totalAvgInv += t.avgInventoryValue;
+    }
+    const avgRatio = totalAvgInv > 0 ? Math.round((totalCOGS / totalAvgInv) * 100) / 100 : 0;
+    return { fast, moderate, slow, dead, avgRatio, totalCOGS, totalAvgInv };
   }, [turnoverData]);
 
   // ─── Financial Year Info ───────────────────────
@@ -331,6 +335,8 @@ export default function Reports() {
         };
       });
 
+      // Pre-sort items by value descending (avoids re-sorting on every render)
+      items.sort((a, b) => b.totalValue - a.totalValue);
       const totalValue = items.reduce((s, i) => s + i.totalValue, 0);
       return { date, voucherIds, partyNames, items, totalValue } as DailyPurchaseOrder;
     });
@@ -506,11 +512,11 @@ export default function Reports() {
     return map;
   }, [data, calendarMonth, predictions]);
 
-  // ─── ABC-XYZ data ───────────────────────────────
+  // ─── ABC-XYZ data (tab-gated) ───────────────────
   const abcxyzData = useMemo(() => {
-    if (!data) return [];
+    if (!data || tab !== "ABC-XYZ") return [];
     return computeABCXYZ(data.items, data.vouchers, 12);
-  }, [data]);
+  }, [data, tab]);
 
   const abcxyzFiltered = useMemo(() => {
     let result = abcxyzData;
@@ -572,11 +578,11 @@ export default function Reports() {
     }
   }, [availableMonths, gstMonth]);
 
-  // ─── Period comparison data ────────────────────
+  // ─── Period comparison data (tab-gated) ─────────
   const periodData = useMemo(() => {
-    if (!data || !periodMonthA || !periodMonthB) return [];
+    if (!data || !periodMonthA || !periodMonthB || tab !== "Period Compare") return [];
     return computePeriodComparison(data.items, voucherIndex, periodMonthA, periodMonthB);
-  }, [data, voucherIndex, periodMonthA, periodMonthB]);
+  }, [data, voucherIndex, periodMonthA, periodMonthB, tab]);
 
   const periodFiltered = useMemo(() => {
     let result = periodData;
@@ -595,6 +601,22 @@ export default function Reports() {
     }
     return result;
   }, [periodData, periodSearch, periodSort, periodSortDir]);
+
+  // ─── Balance Sheet / P&L / Trial Balance (tab-gated) ───
+  const bsData = useMemo(() => {
+    if (!data || tab !== "Balance Sheet") return null;
+    return {
+      bs: computeBalanceSheet(data.ledgers, data.vouchers, data.items, data.tallyPL, data.tallyBS),
+      pl: computeProfitAndLoss(data.ledgers, data.vouchers, data.items, data.tallyPL),
+      tb: computeTrialBalance(data.ledgers, data.vouchers),
+    };
+  }, [data, tab]);
+
+  // ─── Advance Tax (tab-gated) ──────────────────────────
+  const atData = useMemo(() => {
+    if (!data || tab !== "Advance Tax") return null;
+    return computeAdvanceTax(data.ledgers, data.vouchers, taxRegime, 4, data.tallyPL);
+  }, [data, tab, taxRegime]);
 
   // ─── Margins data ─────────────────────────────
   const marginData = useMemo(() => {
@@ -633,6 +655,29 @@ export default function Reports() {
     return { avgMargin, totalProfit, thinMargin, negativeMargin };
   }, [marginData]);
 
+  // Memoized chart data for Margins tab (was inline in JSX, causing re-computation on every render)
+  const marginChartTop20 = useMemo(() => {
+    return [...marginData]
+      .filter(d => !d.hasNoSales && !d.hasNoPurchases)
+      .sort((a, b) => b.totalProfit - a.totalProfit)
+      .slice(0, 20)
+      .map(d => ({ name: d.name.slice(0, 18), profit: d.totalProfit, pct: d.marginPct }));
+  }, [marginData]);
+
+  const marginChartTop20Colors = useMemo(() => {
+    return [...marginData]
+      .filter(d => !d.hasNoSales && !d.hasNoPurchases)
+      .sort((a, b) => b.totalProfit - a.totalProfit)
+      .slice(0, 20)
+      .map(d => d.marginPct > 20 ? "#10b981" : d.marginPct > 10 ? "#f59e0b" : "#ef4444");
+  }, [marginData]);
+
+  const marginScatterData = useMemo(() => {
+    return marginData
+      .filter(d => !d.hasNoSales && !d.hasNoPurchases && d.totalSalesValue > 0)
+      .map(d => ({ x: d.totalSalesValue, y: d.marginPct, name: d.name, color: d.marginPct > 20 ? "#10b981" : d.marginPct > 10 ? "#f59e0b" : "#ef4444" }));
+  }, [marginData]);
+
   // ─── GST data ──────────────────────────────────
   const gstr1Data = useMemo(() => {
     if (!data || !gstMonth) return null;
@@ -657,22 +702,24 @@ export default function Reports() {
   }
 
   return (
-    <div className="space-y-3 md:space-y-4">
+    <div className="page-section">
       <h1 className="text-lg md:text-2xl font-bold text-primary">Reports</h1>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-bg-card border border-bg-border rounded-xl p-1 overflow-x-auto scrollbar-thin" role="tablist">
-        {TABS.map((t) => (
-          <button key={t} onClick={() => setTab(t)} role="tab" aria-selected={tab === t}
-            className={clsx("px-2.5 md:px-4 py-1.5 md:py-2 rounded-lg text-xs md:text-sm transition whitespace-nowrap cursor-pointer", tab === t ? "bg-accent text-white font-medium" : "text-muted hover:text-primary hover:bg-bg-border/50")}>
-            {t}
-          </button>
-        ))}
+      {/* Tabs — horizontally scrollable, no scrollbar on mobile */}
+      <div className="overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0 scrollbar-thin" role="tablist">
+        <div className="flex gap-1 bento-card !p-1 w-max md:w-full md:flex-wrap">
+          {TABS.map((t) => (
+            <button key={t} onClick={() => setTab(t)} role="tab" aria-selected={tab === t}
+              className={clsx("px-2.5 md:px-3 py-1.5 rounded-lg text-[11px] md:text-xs transition whitespace-nowrap cursor-pointer", tab === t ? "bg-accent text-white font-medium" : "text-muted hover:text-primary hover:bg-bg-border/50")}>
+              {t}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ═══ Inventory Valuation ═══ */}
       {tab === "Inventory" && (
-        <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+        <div className="bento-card !p-0 overflow-hidden">
           <div className="px-4 py-3 border-b border-bg-border flex justify-between">
             <h3 className="font-semibold text-primary">Inventory Valuation</h3>
             <span className="text-muted text-sm font-mono">
@@ -710,7 +757,7 @@ export default function Reports() {
 
       {/* ═══ Sales Trend ═══ */}
       {tab === "Sales Trend" && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-4">12-Month Sales Trend</h3>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={salesTrend}>
@@ -727,8 +774,8 @@ export default function Reports() {
 
       {/* ═══ Top Items ═══ */}
       {tab === "Top Items" && (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
+          <div className="bento-card">
             <h3 className="font-semibold text-primary mb-4">Top 10 by Qty (last 30 days)</h3>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={topItems.map((i) => ({ name: i.name.slice(0, 18), qty: i.qty }))} layout="vertical">
@@ -740,7 +787,7 @@ export default function Reports() {
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+          <div className="bento-card !p-0 overflow-hidden">
             <div className="px-4 py-3 border-b border-bg-border">
               <h3 className="font-semibold text-primary">Top Items by Value</h3>
             </div>
@@ -784,7 +831,7 @@ export default function Reports() {
       {tab === "Predictions" && (
         <div className="space-y-4">
           {/* Type toggle and summary */}
-          <div className="flex items-center justify-between bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="flex items-center justify-between bento-card">
             <div className="flex items-center gap-4">
               <h3 className="font-semibold text-primary">Order Predictions</h3>
               <select value={predictionType} onChange={(e) => setPredictionType(e.target.value as "Sales" | "Purchase")}
@@ -801,7 +848,7 @@ export default function Reports() {
           </div>
 
           {/* Advanced Filters */}
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="bento-card">
             <div className="flex items-center gap-2 mb-3">
               <Filter size={16} className="text-accent" />
               <h3 className="font-semibold text-primary">Advanced Filters</h3>
@@ -842,7 +889,7 @@ export default function Reports() {
 
           {/* Accuracy */}
           {accuracyData && accuracyData.length > 0 && (
-            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+            <div className="bento-card">
               <h3 className="font-semibold text-primary mb-2 flex items-center gap-2"><TrendingUp size={16} />Prediction Accuracy</h3>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-3">
                 <div className="bg-bg border border-bg-border rounded-lg p-3 text-center">
@@ -862,7 +909,7 @@ export default function Reports() {
           )}
 
           {/* Predictions table — uses filteredPredictions (deduplicated) */}
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+          <div className="bento-card !p-0 overflow-hidden">
             <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between">
               <h3 className="font-semibold text-primary">Party Predictions (sorted by urgency)</h3>
               <div className="text-muted text-xs">Showing <span className="font-semibold text-primary">{filteredPredictions.length}</span> of {predictions.length}</div>
@@ -897,7 +944,7 @@ export default function Reports() {
       {tab === "Purchase Orders" && (
         <div className="space-y-4">
           {/* Header */}
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="bento-card">
             <div className="flex items-center gap-3 mb-2">
               <ShoppingBag size={16} className="text-purple-500" />
               <h3 className="font-semibold text-primary">Purchase Orders - {fyInfo.fyLabel}</h3>
@@ -910,23 +957,23 @@ export default function Reports() {
           {/* KPI Summary */}
           {dailyPOs.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="bento-card !p-3 text-center">
                 <div className="text-2xl font-bold font-mono text-purple-600">{fmtINR(poKPIs.totalSpend)}</div>
                 <div className="text-muted text-xs mt-1">Total Spend</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="bento-card !p-3 text-center">
                 <div className="text-2xl font-bold font-mono text-primary">{fmtINR(poKPIs.avgPOValue)}</div>
                 <div className="text-muted text-xs mt-1">Avg PO Value</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="bento-card !p-3 text-center">
                 <div className="text-lg font-bold text-accent truncate" title={poKPIs.topSupplier}>{poKPIs.topSupplier}</div>
                 <div className="text-muted text-xs mt-1">Top Supplier</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="bento-card !p-3 text-center">
                 <div className="text-2xl font-bold font-mono text-success">{poKPIs.poFrequency.toFixed(1)}/week</div>
                 <div className="text-muted text-xs mt-1">PO Frequency</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="bento-card !p-3 text-center">
                 <div className="text-2xl font-bold font-mono text-primary">{poKPIs.uniqueItems}</div>
                 <div className="text-muted text-xs mt-1">Unique Items</div>
               </div>
@@ -935,9 +982,9 @@ export default function Reports() {
 
           {/* Aggregate Charts */}
           {dailyPOs.length > 0 && (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
               {/* Monthly Purchase Value Trend */}
-              <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+              <div className="bento-card">
                 <h3 className="font-semibold text-primary mb-3 text-sm">Monthly Purchase Value Trend</h3>
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={monthlyPurchaseData}>
@@ -954,7 +1001,7 @@ export default function Reports() {
               </div>
 
               {/* Top 10 Purchased Items */}
-              <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+              <div className="bento-card">
                 <h3 className="font-semibold text-primary mb-3 text-sm">Top 10 Purchased Items (by Qty)</h3>
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={poTopItems} layout="vertical" barSize={14}>
@@ -972,7 +1019,7 @@ export default function Reports() {
 
           {/* Supplier Breakdown */}
           {poSupplierData.length > 0 && (
-            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+            <div className="bento-card">
               <h3 className="font-semibold text-primary mb-3 text-sm">Purchase by Supplier (Top 5)</h3>
               <ResponsiveContainer width="100%" height={140}>
                 <BarChart data={poSupplierData} layout="vertical" barSize={18}>
@@ -991,9 +1038,9 @@ export default function Reports() {
           <div className="space-y-2">
             {dailyPOs.map((po) => {
               const isExpanded = expandedPO === po.date;
-              const sortedItems = [...po.items].sort((a, b) => b.totalValue - a.totalValue);
+              const sortedItems = po.items; // pre-sorted in dailyPOs memo
               return (
-                <div key={po.date} className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                <div key={po.date} className="bento-card !p-0 overflow-hidden">
                   <div className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-bg-border/20"
                     onClick={() => setExpandedPO(isExpanded ? null : po.date)}>
                     <div className="flex items-center gap-3 flex-1">
@@ -1058,9 +1105,9 @@ export default function Reports() {
           {poItemChartData.length > 0 && (
             <div>
               <h3 className="font-semibold text-primary mb-3">Item Quantity Trends (Purchase)</h3>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
                 {poItemChartData.map(item => (
-                  <div key={item.itemId} className="bg-bg-card border border-bg-border rounded-xl p-4">
+                  <div key={item.itemId} className="bento-card">
                     <div className="text-sm font-semibold text-primary mb-2">{item.name}</div>
                     <ResponsiveContainer width="100%" height={160}>
                       <BarChart data={item.data} barSize={24}>
@@ -1091,26 +1138,26 @@ export default function Reports() {
         <div className="space-y-4">
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-success">{abcxyzData.filter(d => d.abcClass === "A").length}</div>
               <div className="text-muted text-xs mt-1">A Items</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-accent">{abcxyzData.filter(d => d.abcClass === "B").length}</div>
               <div className="text-muted text-xs mt-1">B Items</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-muted">{abcxyzData.filter(d => d.abcClass === "C").length}</div>
               <div className="text-muted text-xs mt-1">C Items</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-primary">{abcxyzData.length > 0 ? `${Math.round(abcxyzData.filter(d => d.abcClass === "A").reduce((s, d) => s + d.revenueShare, 0))}%` : "0%"}</div>
               <div className="text-muted text-xs mt-1">A Revenue Share</div>
             </div>
           </div>
 
           {/* 3x3 Matrix */}
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="bento-card">
             <h3 className="font-semibold text-primary mb-3">ABC-XYZ Matrix</h3>
             <div className="grid grid-cols-4 gap-1 text-sm">
               <div />
@@ -1137,7 +1184,7 @@ export default function Reports() {
           </div>
 
           {/* Pareto chart */}
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="bento-card">
             <h3 className="font-semibold text-primary mb-3">Pareto Chart (Revenue Distribution)</h3>
             <ResponsiveContainer width="100%" height={300}>
               <ComposedChart data={abcxyzData.slice(0, 50).map((d, i) => ({ name: d.name.slice(0, 15), revenue: d.totalRevenue, cumPct: d.cumulativeShare }))}>
@@ -1155,7 +1202,7 @@ export default function Reports() {
           </div>
 
           {/* Filters + Table */}
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+          <div className="bento-card !p-0 overflow-hidden">
             <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-3">
                 <h3 className="font-semibold text-primary">All Items ({abcxyzFiltered.length})</h3>
@@ -1220,7 +1267,7 @@ export default function Reports() {
       {tab === "Period Compare" && (
         <div className="space-y-4">
           {/* Month selectors */}
-          <div className="flex items-center gap-4 bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="flex items-center gap-4 bento-card">
             <div>
               <label className="text-xs text-muted mb-1 block">Period A</label>
               <select value={periodMonthA} onChange={e => setPeriodMonthA(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
@@ -1241,26 +1288,26 @@ export default function Reports() {
 
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-success">{periodData.filter(d => d.outwardsDelta > 0).length}</div>
               <div className="text-muted text-xs mt-1">Increased Outwards</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-danger">{periodData.filter(d => d.outwardsDelta < 0).length}</div>
               <div className="text-muted text-xs mt-1">Decreased Outwards</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-success">{periodData.filter(d => d.closingDelta > 0).length}</div>
               <div className="text-muted text-xs mt-1">Stock Increase</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-primary">{fmtNum(periodData.reduce((s, d) => s + d.closingDelta, 0), 0)}</div>
               <div className="text-muted text-xs mt-1">Net Stock Change</div>
             </div>
           </div>
 
           {/* Comparison table */}
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+          <div className="bento-card !p-0 overflow-hidden">
             <div className="px-4 py-3 border-b border-bg-border flex justify-between items-center">
               <h3 className="font-semibold text-primary">Comparison ({periodFiltered.length} items)</h3>
               <button onClick={() => {
@@ -1311,7 +1358,7 @@ export default function Reports() {
       {tab === "Margins" && (
         <div className="space-y-4">
           {/* Period selector */}
-          <div className="flex items-center gap-2 bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="flex items-center gap-2 bento-card">
             <h3 className="font-semibold text-primary mr-3">Profit Margins</h3>
             {[{l:"All Time",v:undefined},{l:"Last 12M",v:12},{l:"Last 6M",v:6},{l:"Last 3M",v:3}].map(p => (
               <button key={p.l} onClick={() => setMarginPeriod(p.v)} className={clsx("px-3 py-1.5 rounded-lg text-sm transition", marginPeriod === p.v ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>{p.l}</button>
@@ -1326,38 +1373,38 @@ export default function Reports() {
 
           {/* KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-accent">{marginKPIs.avgMargin.toFixed(1)}%</div>
               <div className="text-muted text-xs mt-1">Avg Margin</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-success">{fmtINR(marginKPIs.totalProfit)}</div>
               <div className="text-muted text-xs mt-1">Total Profit</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-warn">{marginKPIs.thinMargin}</div>
               <div className="text-muted text-xs mt-1">Thin Margin (&lt;10%)</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+            <div className="bento-card !p-3 text-center">
               <div className="text-2xl font-bold font-mono text-danger">{marginKPIs.negativeMargin}</div>
               <div className="text-muted text-xs mt-1">Negative Margin</div>
             </div>
           </div>
 
           {/* Charts */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
             {/* Top 20 by profit */}
-            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+            <div className="bento-card">
               <h3 className="font-semibold text-primary mb-3 text-sm">Top 20 by Profit</h3>
               <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={[...marginData].filter(d => !d.hasNoSales && !d.hasNoPurchases).sort((a, b) => b.totalProfit - a.totalProfit).slice(0, 20).map(d => ({ name: d.name.slice(0, 18), profit: d.totalProfit, pct: d.marginPct }))} layout="vertical" barSize={14}>
+                <BarChart data={marginChartTop20} layout="vertical" barSize={14}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                   <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => fmtINR(v)} />
                   <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fill: "#64748b" }} />
                   <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number, name: string) => [name === "profit" ? fmtINR(v) : `${v.toFixed(1)}%`, name === "profit" ? "Profit" : "Margin"]} />
                   <Bar dataKey="profit" radius={[0, 4, 4, 0]}>
-                    {[...marginData].filter(d => !d.hasNoSales && !d.hasNoPurchases).sort((a, b) => b.totalProfit - a.totalProfit).slice(0, 20).map((d, i) => (
-                      <Cell key={i} fill={d.marginPct > 20 ? "#10b981" : d.marginPct > 10 ? "#f59e0b" : "#ef4444"} />
+                    {marginChartTop20Colors.map((color, i) => (
+                      <Cell key={i} fill={color} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -1365,7 +1412,7 @@ export default function Reports() {
             </div>
 
             {/* Scatter: Revenue vs Margin */}
-            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+            <div className="bento-card">
               <h3 className="font-semibold text-primary mb-3 text-sm">Revenue vs Margin %</h3>
               <ResponsiveContainer width="100%" height={350}>
                 <ScatterChart>
@@ -1373,9 +1420,9 @@ export default function Reports() {
                   <XAxis type="number" dataKey="x" name="Sales Value" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}K`} />
                   <YAxis type="number" dataKey="y" name="Margin %" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => `${v}%`} />
                   <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number, name: string) => [name === "Sales Value" ? fmtINR(v) : `${v.toFixed(1)}%`, name]} />
-                  <Scatter data={marginData.filter(d => !d.hasNoSales && !d.hasNoPurchases && d.totalSalesValue > 0).map(d => ({ x: d.totalSalesValue, y: d.marginPct, name: d.name }))} fill="#3b82f6">
-                    {marginData.filter(d => !d.hasNoSales && !d.hasNoPurchases && d.totalSalesValue > 0).map((d, i) => (
-                      <Cell key={i} fill={d.marginPct > 20 ? "#10b981" : d.marginPct > 10 ? "#f59e0b" : "#ef4444"} />
+                  <Scatter data={marginScatterData} fill="#3b82f6">
+                    {marginScatterData.map((d, i) => (
+                      <Cell key={i} fill={d.color} />
                     ))}
                   </Scatter>
                 </ScatterChart>
@@ -1384,7 +1431,7 @@ export default function Reports() {
           </div>
 
           {/* Table */}
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+          <div className="bento-card !p-0 overflow-hidden">
             <div className="px-4 py-3 border-b border-bg-border flex justify-between items-center">
               <h3 className="font-semibold text-primary">All Items ({marginFiltered.length})</h3>
               <button onClick={() => {
@@ -1432,7 +1479,7 @@ export default function Reports() {
       {tab === "GST Summary" && (
         <div className="space-y-4">
           {/* Controls */}
-          <div className="flex items-center gap-4 bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="flex items-center gap-4 bento-card">
             <h3 className="font-semibold text-primary">GST Summary</h3>
             <select value={gstMonth} onChange={e => setGstMonth(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
               {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
@@ -1456,7 +1503,7 @@ export default function Reports() {
                   { v: fmtINR(gstr1Data.totalTax), l: "Total Tax", c: "text-success" },
                   { v: String(gstr1Data.totalInvoices), l: "Invoices", c: "text-primary" },
                 ].map(({ v, l, c }) => (
-                  <div key={l} className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+                  <div key={l} className="bento-card !p-3 text-center">
                     <div className={`text-xl font-bold font-mono ${c}`}>{v}</div>
                     <div className="text-muted text-xs mt-1">{l}</div>
                   </div>
@@ -1465,7 +1512,7 @@ export default function Reports() {
 
               {/* B2B Section */}
               {gstr1Data.b2b.length > 0 && (
-                <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                <div className="bento-card !p-0 overflow-hidden">
                   <div className="px-4 py-3 border-b border-bg-border">
                     <h3 className="font-semibold text-primary">B2B Supplies ({gstr1Data.b2b.length} parties)</h3>
                   </div>
@@ -1515,7 +1562,7 @@ export default function Reports() {
 
               {/* B2C Section */}
               {gstr1Data.b2cCount > 0 && (
-                <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+                <div className="bento-card">
                   <h3 className="font-semibold text-primary mb-2">B2C Supplies</h3>
                   <div className="flex gap-6 text-sm">
                     <span className="text-muted">Invoices: <span className="font-mono text-primary">{gstr1Data.b2cCount}</span></span>
@@ -1527,7 +1574,7 @@ export default function Reports() {
 
               {/* HSN Summary */}
               {gstr1Data.hsnSummary.length > 0 && (
-                <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                <div className="bento-card !p-0 overflow-hidden">
                   <div className="px-4 py-3 border-b border-bg-border flex justify-between items-center">
                     <h3 className="font-semibold text-primary">HSN Summary</h3>
                     <button onClick={() => {
@@ -1580,7 +1627,7 @@ export default function Reports() {
           {gstView === "GSTR3B" && gstr3bData && (
             <div className="space-y-4">
               {/* Table 3.1 - Outward */}
-              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+              <div className="bento-card !p-0 overflow-hidden">
                 <div className="px-4 py-3 border-b border-bg-border">
                   <h3 className="font-semibold text-primary">3.1 Outward Supplies (Sales)</h3>
                 </div>
@@ -1603,7 +1650,7 @@ export default function Reports() {
               </div>
 
               {/* Table 4 - ITC */}
-              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+              <div className="bento-card !p-0 overflow-hidden">
                 <div className="px-4 py-3 border-b border-bg-border">
                   <h3 className="font-semibold text-primary">4. Eligible ITC (Purchases)</h3>
                 </div>
@@ -1626,7 +1673,7 @@ export default function Reports() {
               </div>
 
               {/* Table 6 - Net */}
-              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+              <div className="bento-card !p-0 overflow-hidden">
                 <div className="px-4 py-3 border-b border-bg-border">
                   <h3 className="font-semibold text-primary">6. Net Tax Payable</h3>
                 </div>
@@ -1653,13 +1700,11 @@ export default function Reports() {
       )}
 
       {/* ═══════════ Balance Sheet / P&L / Trial Balance ═══════════ */}
-      {tab === "Balance Sheet" && data && (() => {
-        const bs = computeBalanceSheet(data.ledgers, data.vouchers, data.items, data.tallyPL, data.tallyBS);
-        const pl = computeProfitAndLoss(data.ledgers, data.vouchers, data.items, data.tallyPL);
-        const tb = computeTrialBalance(data.ledgers, data.vouchers);
+      {tab === "Balance Sheet" && bsData && (() => {
+        const { bs, pl, tb } = bsData;
 
         const renderGroupTable = (groups: BSGroupTotal[], label: string, color: string) => (
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+          <div className="bento-card !p-0 overflow-hidden">
             <div className={`px-4 py-3 border-b border-bg-border flex justify-between items-center`}>
               <h3 className={`font-semibold ${color}`}>{label}</h3>
               <span className={`font-mono font-bold ${color}`}>
@@ -1715,19 +1760,19 @@ export default function Reports() {
               <div className="space-y-4">
                 {/* Summary cards */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                  <div className="bento-card text-center">
                     <div className="text-xs text-muted mb-1">Total Assets</div>
                     <div className="font-mono font-bold text-success text-lg">{fmtINR(bs.totalAssets)}</div>
                   </div>
-                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                  <div className="bento-card text-center">
                     <div className="text-xs text-muted mb-1">Total Liabilities</div>
                     <div className="font-mono font-bold text-danger text-lg">{fmtINR(bs.totalLiabilities)}</div>
                   </div>
-                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                  <div className="bento-card text-center">
                     <div className="text-xs text-muted mb-1">Capital</div>
                     <div className="font-mono font-bold text-accent text-lg">{fmtINR(bs.totalCapital)}</div>
                   </div>
-                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                  <div className="bento-card text-center">
                     <div className="text-xs text-muted mb-1">Net Profit</div>
                     <div className={clsx("font-mono font-bold text-lg", bs.netProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(bs.netProfit)}</div>
                   </div>
@@ -1764,23 +1809,23 @@ export default function Reports() {
             {bsView === "pl" && (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                  <div className="bento-card text-center">
                     <div className="text-xs text-muted mb-1">Total Income</div>
                     <div className="font-mono font-bold text-success text-lg">{fmtINR(pl.totalIncome)}</div>
                   </div>
-                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                  <div className="bento-card text-center">
                     <div className="text-xs text-muted mb-1">Total Expenses</div>
                     <div className="font-mono font-bold text-danger text-lg">{fmtINR(pl.totalExpenses)}</div>
                   </div>
-                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                  <div className="bento-card text-center">
                     <div className="text-xs text-muted mb-1">Gross Profit</div>
                     <div className={clsx("font-mono font-bold text-lg", pl.grossProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(pl.grossProfit)}</div>
                   </div>
-                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                  <div className="bento-card text-center">
                     <div className="text-xs text-muted mb-1">Net Profit</div>
                     <div className={clsx("font-mono font-bold text-lg", pl.netProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(pl.netProfit)}</div>
                   </div>
-                  <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+                  <div className="bento-card text-center">
                     <div className="text-xs text-muted mb-1">Net Profit %</div>
                     <div className={clsx("font-mono font-bold text-lg", pl.netProfit >= 0 ? "text-success" : "text-danger")}>
                       {pl.directIncome > 0 ? ((pl.netProfit / pl.directIncome) * 100).toFixed(2) : "0"}%
@@ -1809,7 +1854,7 @@ export default function Reports() {
 
                 <div className="grid md:grid-cols-2 gap-4">
                   {/* Income */}
-                  <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                  <div className="bento-card !p-0 overflow-hidden">
                     <div className="px-4 py-3 border-b border-bg-border">
                       <h3 className="font-semibold text-success">Income</h3>
                     </div>
@@ -1840,7 +1885,7 @@ export default function Reports() {
                   </div>
 
                   {/* Expenses */}
-                  <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                  <div className="bento-card !p-0 overflow-hidden">
                     <div className="px-4 py-3 border-b border-bg-border">
                       <h3 className="font-semibold text-danger">Expenses</h3>
                     </div>
@@ -1874,7 +1919,7 @@ export default function Reports() {
             )}
 
             {bsView === "tb" && (
-              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+              <div className="bento-card !p-0 overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="border-b border-bg-border bg-bg-border/20 sticky top-0">
                     <tr>
@@ -1914,8 +1959,7 @@ export default function Reports() {
       })()}
 
       {/* ═══════════ Advance Tax ═══════════ */}
-      {tab === "Advance Tax" && data && (() => {
-        const atData = computeAdvanceTax(data.ledgers, data.vouchers, taxRegime, 4, data.tallyPL);
+      {tab === "Advance Tax" && atData && (() => {
         return (
           <div className="space-y-4">
             {/* Regime selector */}
@@ -1932,26 +1976,26 @@ export default function Reports() {
 
             {/* Summary */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+              <div className="bento-card text-center">
                 <div className="text-xs text-muted mb-1">Estimated Profit (FY {atData.fyYear})</div>
                 <div className={clsx("font-mono font-bold text-lg", atData.annualProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(atData.annualProfit)}</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+              <div className="bento-card text-center">
                 <div className="text-xs text-muted mb-1">Taxable Income</div>
                 <div className="font-mono font-bold text-primary text-lg">{fmtINR(atData.taxableIncome)}</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+              <div className="bento-card text-center">
                 <div className="text-xs text-muted mb-1">Effective Rate</div>
                 <div className="font-mono font-bold text-accent text-lg">{atData.regime.effectiveRate.toFixed(2)}%</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-4 text-center">
+              <div className="bento-card text-center">
                 <div className="text-xs text-muted mb-1">Total Tax Liability</div>
                 <div className="font-mono font-bold text-danger text-lg">{fmtINR(atData.totalTax)}</div>
               </div>
             </div>
 
             {/* Tax breakdown */}
-            <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+            <div className="bento-card !p-0 overflow-hidden">
               <div className="px-4 py-3 border-b border-bg-border">
                 <h3 className="font-semibold text-primary">Tax Computation</h3>
               </div>
@@ -1978,7 +2022,7 @@ export default function Reports() {
             </div>
 
             {/* Quarterly installments */}
-            <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+            <div className="bento-card !p-0 overflow-hidden">
               <div className="px-4 py-3 border-b border-bg-border">
                 <h3 className="font-semibold text-primary">Quarterly Advance Tax Installments</h3>
               </div>
@@ -2008,7 +2052,7 @@ export default function Reports() {
 
             {/* Monthly profit chart */}
             {atData.monthlyProfitTrend.length > 0 && (
-              <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+              <div className="bento-card">
                 <h3 className="font-semibold text-primary mb-3">Monthly Profit Trend</h3>
                 <ResponsiveContainer width="100%" height={250}>
                   <ComposedChart data={atData.monthlyProfitTrend}>
@@ -2186,7 +2230,7 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
   return (
     <div className="space-y-4">
       {/* Controls */}
-      <div className="flex items-center justify-between flex-wrap gap-3 bg-bg-card border border-bg-border rounded-xl p-4">
+      <div className="flex items-center justify-between flex-wrap gap-3 bento-card">
         <div className="flex items-center gap-3">
           <RefreshCw size={16} className="text-accent" />
           <h3 className="font-semibold text-primary">Inventory Turnover Analysis</h3>
@@ -2244,8 +2288,8 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
       </div>
 
       {/* Charts */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3 text-sm">Top 15 — Fastest Moving</h3>
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={[...turnoverData].sort((a, b) => b.turnoverRatio - a.turnoverRatio).slice(0, 15).map(t => ({ name: t.name.length > 20 ? t.name.slice(0, 20) + "..." : t.name, ratio: t.turnoverRatio }))} layout="vertical" barSize={14}>
@@ -2257,7 +2301,7 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
             </BarChart>
           </ResponsiveContainer>
         </div>
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3 text-sm">Bottom 15 — Slowest / Dead Stock</h3>
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={[...turnoverData].filter(t => t.avgInventoryValue > 0).sort((a, b) => a.turnoverRatio - b.turnoverRatio).slice(0, 15).map(t => ({ name: t.name.length > 20 ? t.name.slice(0, 20) + "..." : t.name, doi: isFinite(t.daysOfInventory) ? t.daysOfInventory : 999 }))} layout="vertical" barSize={14}>
@@ -2272,7 +2316,7 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
       </div>
 
       {/* Full table — virtualized if > 200 items */}
-      <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+      <div className="bento-card !p-0 overflow-hidden">
         <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between">
           <h3 className="font-semibold text-primary">All Items ({filteredTurnover.length})</h3>
           <select value={turnoverSort} onChange={(e) => setTurnoverSort(e.target.value as any)}
@@ -2414,7 +2458,7 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
   return (
     <div className="space-y-4">
       {/* Navigation */}
-      <div className="flex items-center justify-between bg-bg-card border border-bg-border rounded-xl p-4">
+      <div className="flex items-center justify-between bento-card">
         <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-muted hover:text-primary transition text-sm">
           <ChevronLeft size={16} />Prev
         </button>
@@ -2425,7 +2469,7 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
       </div>
 
       {/* Calendar grid */}
-      <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+      <div className="bento-card !p-0 overflow-hidden">
         {/* Header */}
         <div className="grid grid-cols-7 border-b border-bg-border">
           {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => (
@@ -2487,7 +2531,7 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
 
       {/* Day detail */}
       {selectedDay && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">{fmtDate(selectedDay)}</h3>
           {selectedActivity ? (
             <div className="space-y-3">

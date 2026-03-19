@@ -134,8 +134,8 @@ export default function Edit() {
   return (
     <div className="flex flex-col h-[calc(100vh-112px)] gap-3">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-primary">Edit Units</h1>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <h1 className="text-lg md:text-xl font-bold text-primary">Edit Units</h1>
         <div className="flex items-center gap-2">
           {dirtyCount > 0 && (
             <>
@@ -182,8 +182,8 @@ export default function Edit() {
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-auto bg-bg-card border border-bg-border rounded-xl">
-        <table className="w-full text-sm">
+      <div className="flex-1 overflow-auto bento-card !p-0">
+        <table className="w-full text-sm min-w-[540px]">
           <thead className="sticky top-0 bg-bg-card z-10">
             <tr className="border-b border-bg-border">
               <th className="text-left text-muted px-3 py-2.5 font-medium">Item</th>

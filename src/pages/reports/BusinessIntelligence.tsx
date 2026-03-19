@@ -43,14 +43,14 @@ export default function BusinessIntelligence({ data }: Props) {
   return (
     <div className="space-y-4">
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
         {[
           { label: "Revenue Growth", value: `${summary.revenueGrowthRate >= 0 ? "+" : ""}${fmtNum(summary.revenueGrowthRate, 1)}%`, color: summary.revenueGrowthRate >= 0 ? "text-success" : "text-danger", icon: <TrendingUp size={18} /> },
           { label: "Expense Growth", value: `${summary.expenseGrowthRate >= 0 ? "+" : ""}${fmtNum(summary.expenseGrowthRate, 1)}%`, color: summary.expenseGrowthRate <= 0 ? "text-success" : "text-danger", icon: <TrendingDown size={18} /> },
           { label: "Avg Profit Margin", value: `${fmtNum(summary.avgProfitMargin, 1)}%`, color: summary.avgProfitMargin > 0 ? "text-success" : "text-danger", icon: <Zap size={18} /> },
           { label: "Profit Trend", value: summary.profitTrend.charAt(0).toUpperCase() + summary.profitTrend.slice(1), color: summary.profitTrend === "improving" ? "text-success" : summary.profitTrend === "declining" ? "text-danger" : "text-accent", icon: <BarChart2 size={18} /> },
         ].map(({ label, value, color, icon }) => (
-          <div key={label} className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div key={label} className="bento-card">
             <div className="flex items-center gap-2 text-muted text-xs mb-2">{icon}{label}</div>
             <div className={clsx("text-2xl font-bold font-mono", color)}>{value}</div>
           </div>
@@ -58,13 +58,13 @@ export default function BusinessIntelligence({ data }: Props) {
       </div>
 
       {/* Secondary KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
         {[
           { label: "Best Month", value: summary.bestMonth || "-" },
           { label: "Worst Month", value: summary.worstMonth || "-" },
           { label: "Seasonal Strength", value: `${fmtNum(summary.seasonalStrength * 100, 0)}%` },
         ].map(({ label, value }) => (
-          <div key={label} className="bg-bg-card border border-bg-border rounded-xl p-3">
+          <div key={label} className="bento-card !p-3">
             <div className="text-muted text-xs mb-1">{label}</div>
             <div className="text-lg font-bold font-mono text-primary">{value}</div>
           </div>
@@ -73,7 +73,7 @@ export default function BusinessIntelligence({ data }: Props) {
 
       {/* Smart Insights */}
       {insights.length > 0 && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Smart Insights</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {insights.map((ins, i) => (
@@ -102,7 +102,7 @@ export default function BusinessIntelligence({ data }: Props) {
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Revenue & Profit Trend */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Revenue, Expense & Profit Trend</h3>
           <ResponsiveContainer width="100%" height={280}>
             <ComposedChart data={monthlyBI}>
@@ -118,7 +118,7 @@ export default function BusinessIntelligence({ data }: Props) {
         </div>
 
         {/* Profit Margin Trend */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Profit Margin Trend</h3>
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={monthlyBI}>
@@ -134,7 +134,7 @@ export default function BusinessIntelligence({ data }: Props) {
 
       {/* Seasonal Heatmap */}
       {seasonalHeatmap.length > 0 && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Seasonal Activity Heatmap</h3>
           <div className="grid grid-cols-12 gap-1">
             {MONTH_NAMES.map((m) => (
@@ -170,7 +170,7 @@ export default function BusinessIntelligence({ data }: Props) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Pattern Detection */}
         {patterns.length > 0 && (
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="bento-card">
             <h3 className="font-semibold text-primary mb-3">Pattern Detection</h3>
             <div className="space-y-3">
               {patterns.map((p, i) => (
@@ -200,7 +200,7 @@ export default function BusinessIntelligence({ data }: Props) {
 
         {/* Expense Category Trends */}
         {expenseTrends.length > 0 && (
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="bento-card">
             <h3 className="font-semibold text-primary mb-3">Expense Category Trends</h3>
             <div className="space-y-3 max-h-[350px] overflow-y-auto">
               {expenseTrends.slice(0, 8).map((et, i) => (
@@ -230,7 +230,7 @@ export default function BusinessIntelligence({ data }: Props) {
 
       {/* Growth Rate Chart */}
       {monthlyBI.length > 2 && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Monthly Growth Rates</h3>
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={monthlyBI.slice(1)}>

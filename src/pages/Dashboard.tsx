@@ -145,17 +145,17 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-4 md:space-y-6">
+    <div className="page-section">
       <div>
-        <h1 className="text-lg md:text-2xl font-bold text-primary">{data.company?.name ?? "Dashboard"}</h1>
-        <p className="text-muted text-xs md:text-sm mt-0.5">
+        <h1 className="text-2xl md:text-3xl font-bold text-primary">{data.company?.name ?? "Dashboard"}</h1>
+        <p className="text-muted text-xs md:text-sm mt-1">
           {data.items.size} items · {data.vouchers.length.toLocaleString("en-IN")} vouchers ·
           Imported {fmtDate(data.importedAt.slice(0, 10))}
         </p>
       </div>
 
-      {/* KPI Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
+      {/* KPI Bento Grid */}
+      <div className="bento-grid">
         <KPICard
           title={`Sales (${fmtDate(latestDate)})`}
           value={fmtINR(kpis?.latestDaySales ?? 0)}
@@ -180,11 +180,11 @@ export default function Dashboard() {
       </div>
 
       {/* Charts row */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
         {/* Sales Trend */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-3 md:p-4">
+        <div className="bento-card">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-primary">Sales Trend</h3>
+            <h3 className="text-base md:text-lg font-semibold text-primary">Sales Trend</h3>
             <select
               value={salesPeriod}
               onChange={(e) => setSalesPeriod(Number(e.target.value))}
@@ -212,9 +212,9 @@ export default function Dashboard() {
         </div>
 
         {/* Top Items */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-3 md:p-4">
+        <div className="bento-card">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-primary">Top Items (by Qty)</h3>
+            <h3 className="text-base md:text-lg font-semibold text-primary">Top Items (by Qty)</h3>
             <select
               value={topItemsPeriod}
               onChange={(e) => setTopItemsPeriod(e.target.value as "month" | "quarter" | "year")}
@@ -230,7 +230,7 @@ export default function Dashboard() {
               <BarChart data={topItems} layout="vertical" barSize={18}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                 <XAxis type="number" tick={{ fontSize: 11, fill: "#64748b" }} />
-                <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fill: "#64748b" }} />
+                <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 10, fill: "#64748b" }} />
                 <Tooltip
                   contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
                   labelStyle={{ color: "#0f172a" }}
@@ -248,7 +248,7 @@ export default function Dashboard() {
 
       {/* Low Stock Alerts */}
       {lowStockItems.length > 0 && (
-        <div className="bg-bg-card border border-warn/30 rounded-xl p-3 md:p-4">
+        <div className="bento-card border-warn/30">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <AlertCircle size={16} className="text-warn" />

@@ -33,14 +33,14 @@ export default function CashflowIntelligence({ data }: Props) {
   return (
     <div className="space-y-4">
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
         {[
           { label: "Total Inflow", value: fmtINR(summary.totalInflow), color: "text-success", icon: <TrendingUp size={18} /> },
           { label: "Total Outflow", value: fmtINR(summary.totalOutflow), color: "text-danger", icon: <TrendingDown size={18} /> },
           { label: "Net Cashflow", value: fmtINR(summary.netCashflow), color: summary.netCashflow >= 0 ? "text-success" : "text-danger", icon: <Activity size={18} /> },
           { label: "Volatility Score", value: `${fmtNum(summary.volatility * 100, 1)}%`, color: summary.volatility > 0.5 ? "text-warn" : "text-accent", icon: <Zap size={18} /> },
         ].map(({ label, value, color, icon }) => (
-          <div key={label} className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div key={label} className="bento-card">
             <div className="flex items-center gap-2 text-muted text-xs mb-2">{icon}{label}</div>
             <div className={clsx("text-2xl font-bold font-mono", color)}>{value}</div>
           </div>
@@ -48,14 +48,14 @@ export default function CashflowIntelligence({ data }: Props) {
       </div>
 
       {/* Secondary KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
         {[
           { label: "Avg Daily Inflow", value: fmtINR(summary.avgDailyInflow) },
           { label: "Avg Daily Outflow", value: fmtINR(summary.avgDailyOutflow) },
           { label: "Peak Inflow (day)", value: fmtINR(summary.peakInflow) },
           { label: "Peak Outflow (day)", value: fmtINR(summary.peakOutflow) },
         ].map(({ label, value }) => (
-          <div key={label} className="bg-bg-card border border-bg-border rounded-xl p-3">
+          <div key={label} className="bento-card !p-3">
             <div className="text-muted text-xs mb-1">{label}</div>
             <div className="text-lg font-bold font-mono text-primary">{value}</div>
           </div>
@@ -85,7 +85,7 @@ export default function CashflowIntelligence({ data }: Props) {
       )}
 
       {/* Cashflow Chart with View Toggle */}
-      <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+      <div className="bento-card">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-primary">Cash Flow</h3>
           <div className="flex gap-1 bg-bg-border/50 rounded-lg p-0.5">
@@ -117,7 +117,7 @@ export default function CashflowIntelligence({ data }: Props) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* 30-Day Prediction */}
         {predictions.length > 0 && (
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="bento-card">
             <h3 className="font-semibold text-primary mb-3">30-Day Cash Flow Prediction</h3>
             <ResponsiveContainer width="100%" height={250}>
               <AreaChart data={predictions}>
@@ -134,7 +134,7 @@ export default function CashflowIntelligence({ data }: Props) {
         )}
 
         {/* Anomalies */}
-        <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+        <div className="bento-card !p-0 overflow-hidden">
           <div className="px-4 py-3 border-b border-bg-border">
             <h3 className="font-semibold text-primary">Anomalies Detected</h3>
             <p className="text-xs text-muted mt-0.5">Transactions significantly above average</p>
@@ -173,7 +173,7 @@ export default function CashflowIntelligence({ data }: Props) {
 
       {/* Top Outflows */}
       {topOutflows.length > 0 && (
-        <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+        <div className="bento-card !p-0 overflow-hidden">
           <div className="px-4 py-3 border-b border-bg-border">
             <h3 className="font-semibold text-primary">Largest Cash Outflows</h3>
           </div>

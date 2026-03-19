@@ -911,7 +911,7 @@ export default function ImportPage() {
 
       {/* Existing Data Info */}
       {existingDataInfo && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4 mb-6">
+        <div className="bento-card mb-6">
           <div className="flex items-center gap-2 mb-3">
             <Calendar size={16} className="text-accent" />
             <h3 className="font-semibold text-primary">Current Data Status</h3>
@@ -992,7 +992,7 @@ export default function ImportPage() {
           </div>
 
           {/* Sync Form */}
-          <div className="bg-bg-card border border-bg-border rounded-xl p-6 space-y-4">
+          <div className="bento-card space-y-4">
             <div>
               <label className="block text-sm font-medium text-primary mb-2">Company Name</label>
               <div className="flex gap-2">
@@ -1192,7 +1192,7 @@ export default function ImportPage() {
 
       {/* Debug Log */}
       {debugLog.length > 0 && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4 mt-6">
+        <div className="bento-card mt-6">
           <h3 className="text-sm font-semibold text-primary mb-2 flex items-center gap-2">
             <Info size={14} />
             {tab === "live" ? "Sync Progress Log" : "Import Progress Log"}
@@ -1212,7 +1212,7 @@ export default function ImportPage() {
 
       {/* Report */}
       {report && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-6 space-y-4 mt-6">
+        <div className="bento-card space-y-4 mt-6">
           <h2 className="text-lg font-semibold text-primary">Import Summary</h2>
 
           {/* Merge Info Banner */}

@@ -745,14 +745,18 @@ export default function Orders() {
                         {focusedMonthlyBuckets.map((b) => {
                           const inwardVal = toDisplay(item, b.inwardsBase, unitMode).value;
                           const outwardVal = toDisplay(item, b.outwardsBase, unitMode).value;
+                          // Dynamic row height: base + scaling for months beyond 8-month baseline
+                          const dynamicPadding = showChart
+                            ? clsx("py-3", monthSpan > 8 && "md:py-2.5", monthSpan > 12 && "md:py-2")
+                            : clsx("py-4", monthSpan > 8 && "md:py-3", monthSpan > 12 && "md:py-2.5");
                           return (
                             <tr key={b.yearMonth} className={clsx("border-b border-bg-border/50 hover:bg-bg-card/50 transition-colors", !showChart && "h-full")}>
-                              <td className={clsx("px-4 text-text-primary font-medium", showChart ? "py-3" : "py-4")}>{b.label}</td>
-                              <td className={clsx("px-4 font-semibold text-text-primary", showChart ? "py-3" : "py-4")}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
+                              <td className={clsx("px-4 text-text-primary font-medium", dynamicPadding)}>{b.label}</td>
+                              <td className={clsx("px-4 font-semibold text-text-primary", dynamicPadding)}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
                               <td
                                 className={clsx("px-4 font-semibold cursor-pointer hover:underline transition-colors",
                                   inwardVal === 0 ? "text-bg-border/60 hover:text-bg-border/80" : "text-success hover:text-success-hover",
-                                  showChart ? "py-3" : "py-4"
+                                  dynamicPadding
                                 )}
                                 onClick={() => inwardVal !== 0 && setMovementModal({ direction: "inward", month: b.yearMonth })}
                                 title={inwardVal !== 0 ? "Click to view inward transactions" : "No inward movements"}
@@ -760,12 +764,12 @@ export default function Orders() {
                               <td
                                 className={clsx("px-4 font-semibold cursor-pointer hover:underline transition-colors",
                                   outwardVal === 0 ? "text-bg-border/60 hover:text-bg-border/80" : "text-danger hover:text-danger-hover",
-                                  showChart ? "py-3" : "py-4"
+                                  dynamicPadding
                                 )}
                                 onClick={() => outwardVal !== 0 && setMovementModal({ direction: "outward", month: b.yearMonth })}
                                 title={outwardVal !== 0 ? "Click to view outward transactions" : "No outward movements"}
                               >{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
-                              <td className={clsx("px-4 font-bold text-accent", showChart ? "py-3" : "py-4")}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
+                              <td className={clsx("px-4 font-bold text-accent", dynamicPadding)}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
                             </tr>
                           );
                         })}

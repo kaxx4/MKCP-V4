@@ -597,7 +597,7 @@ export default function Settings() {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+    <div className="bento-card">
       <h3 className="text-sm font-semibold text-muted mb-3">{title}</h3>
       {children}
     </div>

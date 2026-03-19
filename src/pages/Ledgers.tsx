@@ -140,7 +140,7 @@ export default function Ledgers() {
         <div className="mb-2">
           <h1 className="text-lg font-bold text-primary">Ledgers</h1>
         </div>
-        <div className="bg-bg-card border border-bg-border rounded-xl flex flex-col flex-1 overflow-hidden">
+        <div className="bento-card !p-0 flex flex-col flex-1 overflow-hidden">
           <div className="p-3 border-b border-bg-border space-y-2">
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
@@ -175,8 +175,10 @@ export default function Ledgers() {
   // ─── Desktop: Side-by-side layout ──────────────────────────────
   return (
     <div className="flex gap-4 h-[calc(100vh-112px)]">
+      {/* Page title for accessibility - hidden from view */}
+      <h1 className="sr-only">Ledger Accounts</h1>
       {/* Left: Ledger List */}
-      <div className="w-80 flex flex-col bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+      <div className="w-80 flex flex-col bento-card !p-0 overflow-hidden">
         <div className="p-3 border-b border-bg-border space-y-2">
           <div className="relative">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
@@ -207,7 +209,7 @@ export default function Ledgers() {
       </div>
 
       {/* Right: Ledger Detail */}
-      <div className="flex-1 flex flex-col bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+      <div className="flex-1 flex flex-col bento-card !p-0 overflow-hidden">
         {selectedLedger ? (
           <>
             <div className="p-4 border-b border-bg-border">
