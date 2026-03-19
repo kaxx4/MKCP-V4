@@ -159,23 +159,23 @@ export default function Dashboard() {
         <KPICard
           title={`Sales (${fmtDate(latestDate)})`}
           value={fmtINR(kpis?.latestDaySales ?? 0)}
-          icon={<TrendingUp size={16} />}
+          icon={<TrendingUp size={16} strokeWidth={2.5} />}
           accent
         />
         <KPICard
           title="Month Sales"
           value={fmtINR(kpis?.monthSales ?? 0)}
-          icon={<ShoppingCart size={16} />}
+          icon={<ShoppingCart size={16} strokeWidth={2.5} />}
         />
         <KPICard
           title="Cash + Bank"
           value={fmtINR(kpis?.bankBalance ?? 0)}
-          icon={<DollarSign size={16} />}
+          icon={<DollarSign size={16} strokeWidth={2.5} />}
         />
         <KPICard
           title="Stock Value"
           value={fmtINR(kpis?.stockValue ?? 0)}
-          icon={<Package size={16} />}
+          icon={<Package size={16} strokeWidth={2.5} />}
         />
       </div>
 
@@ -188,7 +188,7 @@ export default function Dashboard() {
             <select
               value={salesPeriod}
               onChange={(e) => setSalesPeriod(Number(e.target.value))}
-              className="text-xs border border-bg-border rounded px-2 py-1 bg-bg text-primary font-medium"
+              className="text-xs form-select border border-bg-border rounded px-2 py-1 bg-white text-primary font-medium transition-all duration-150"
             >
               <option value={3}>3 months</option>
               <option value={6}>6 months</option>
@@ -218,7 +218,7 @@ export default function Dashboard() {
             <select
               value={topItemsPeriod}
               onChange={(e) => setTopItemsPeriod(e.target.value as "month" | "quarter" | "year")}
-              className="text-xs border border-bg-border rounded px-2 py-1 bg-bg text-primary font-medium"
+              className="text-xs form-select border border-bg-border rounded px-2 py-1 bg-white text-primary font-medium transition-all duration-150"
             >
               <option value="month">This month</option>
               <option value="quarter">Last 3 months</option>
@@ -248,10 +248,10 @@ export default function Dashboard() {
 
       {/* Low Stock Alerts */}
       {lowStockItems.length > 0 && (
-        <div className="bento-card border-warn/30">
+        <div className="bento-card border-l-4 border-l-warn border-warn/30">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <AlertCircle size={16} className="text-warn" />
+              <AlertCircle size={16} className="text-warn flex-shrink-0" strokeWidth={2.5} />
               <h3 className="text-sm font-semibold text-warn">Low Stock Items</h3>
             </div>
             <button
