@@ -60,6 +60,7 @@ export default function Orders() {
   const [newGroupDesc, setNewGroupDesc] = useState("");
   const [movementModal, setMovementModal] = useState<{ direction: MovementDirection; month?: string } | null>(null);
   const [mobileTab, setMobileTab] = useState<"list" | "detail" | "order">("list");
+  const [monthSpan, setMonthSpan] = useState(8);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const qtyRef = useRef<HTMLInputElement>(null);
@@ -149,8 +150,8 @@ export default function Orders() {
 
   const monthlyBuckets = useMemo(() => {
     if (!selectedItem || !data) return [];
-    return computeMonthlyBucketsIndexed(selectedItem, voucherIndex, 8);
-  }, [selectedItem, data, voucherIndex]);
+    return computeMonthlyBucketsIndexed(selectedItem, voucherIndex, monthSpan);
+  }, [selectedItem, data, voucherIndex, monthSpan]);
 
   const suggested = useMemo(() => {
     if (!selectedItem || !data) return 0;
@@ -749,44 +750,66 @@ export default function Orders() {
                         </tr>
                       </thead>
                       <tbody>
-                        {focusedMonthlyBuckets.map((b) => (
-                          <tr key={b.yearMonth} className={clsx("border-b border-bg-border/50 hover:bg-bg-card/50 transition-colors", !showChart && "h-full")}>
-                            <td className={clsx("px-4 text-text-primary font-medium", showChart ? "py-3" : "py-4")}>{b.label}</td>
-                            <td className={clsx("px-4 font-semibold text-text-primary", showChart ? "py-3" : "py-4")}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
-                            <td
-                              className={clsx("px-4 font-semibold text-success cursor-pointer hover:text-success-hover hover:underline", showChart ? "py-3" : "py-4")}
-                              onClick={() => setMovementModal({ direction: "inward", month: b.yearMonth })}
-                              title="Click to view inward transactions"
-                            >{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
-                            <td
-                              className={clsx("px-4 font-semibold text-danger cursor-pointer hover:text-danger-hover hover:underline", showChart ? "py-3" : "py-4")}
-                              onClick={() => setMovementModal({ direction: "outward", month: b.yearMonth })}
-                              title="Click to view outward transactions"
-                            >{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
-                            <td className={clsx("px-4 font-bold text-accent", showChart ? "py-3" : "py-4")}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
-                          </tr>
-                        ))}
+                        {focusedMonthlyBuckets.map((b) => {
+                          const inwardVal = toDisplay(item, b.inwardsBase, unitMode).value;
+                          const outwardVal = toDisplay(item, b.outwardsBase, unitMode).value;
+                          return (
+                            <tr key={b.yearMonth} className={clsx("border-b border-bg-border/50 hover:bg-bg-card/50 transition-colors", !showChart && "h-full")}>
+                              <td className={clsx("px-4 text-text-primary font-medium", showChart ? "py-3" : "py-4")}>{b.label}</td>
+                              <td className={clsx("px-4 font-semibold text-text-primary", showChart ? "py-3" : "py-4")}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
+                              <td
+                                className={clsx("px-4 font-semibold cursor-pointer hover:underline transition-colors",
+                                  inwardVal === 0 ? "text-bg-border/60 hover:text-bg-border/80" : "text-success hover:text-success-hover",
+                                  showChart ? "py-3" : "py-4"
+                                )}
+                                onClick={() => inwardVal !== 0 && setMovementModal({ direction: "inward", month: b.yearMonth })}
+                                title={inwardVal !== 0 ? "Click to view inward transactions" : "No inward movements"}
+                              >{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
+                              <td
+                                className={clsx("px-4 font-semibold cursor-pointer hover:underline transition-colors",
+                                  outwardVal === 0 ? "text-bg-border/60 hover:text-bg-border/80" : "text-danger hover:text-danger-hover",
+                                  showChart ? "py-3" : "py-4"
+                                )}
+                                onClick={() => outwardVal !== 0 && setMovementModal({ direction: "outward", month: b.yearMonth })}
+                                title={outwardVal !== 0 ? "Click to view outward transactions" : "No outward movements"}
+                              >{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
+                              <td className={clsx("px-4 font-bold text-accent", showChart ? "py-3" : "py-4")}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
                 );
               })()}
 
-              {/* Chart Toggle + Chart */}
+              {/* Chart Toggle + Data Span Control */}
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 return (
                   <div className="bento-card !p-0 overflow-hidden">
-                    <button
-                      onClick={() => setShowChart(!showChart)}
-                      className="w-full flex items-center justify-between px-3 py-2 hover:bg-bg-border/30 transition-colors"
-                    >
-                      <div className="flex items-center gap-1.5 text-xs text-muted font-medium">
-                        <BarChart3 size={12} />
-                        8-Month History
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border hover:bg-bg-card/50 transition-colors">
+                      <button
+                        onClick={() => setShowChart(!showChart)}
+                        className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:text-accent transition-colors"
+                      >
+                        <BarChart3 size={16} />
+                        {monthSpan}-Month History
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-medium text-text-secondary">Show:</label>
+                        <select
+                          value={monthSpan}
+                          onChange={(e) => setMonthSpan(parseInt(e.target.value))}
+                          className="bg-bg-card border border-bg-border rounded px-2 py-1 text-xs font-medium text-text-primary hover:border-accent focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+                        >
+                          {[3, 6, 8, 12, 24].map((m) => (
+                            <option key={m} value={m}>{m} mo</option>
+                          ))}
+                        </select>
+                        {showChart ? <ChevronUp size={16} className="text-text-secondary" /> : <ChevronDown size={16} className="text-text-secondary" />}
                       </div>
-                      {showChart ? <ChevronUp size={14} className="text-muted" /> : <ChevronDown size={14} className="text-muted" />}
-                    </button>
+                    </div>
                     {showChart && (
                       <div className="px-3 pb-3">
                         <ResponsiveContainer width="100%" height={180}>
