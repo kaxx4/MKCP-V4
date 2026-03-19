@@ -728,53 +728,54 @@ export default function Orders() {
                 );
               })()}
 
-              {/* Monthly data table - Redesigned for Accessibility */}
+              {/* Monthly data table - Redesigned for Accessibility with Responsive Scrolling */}
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 return (
-                  <div className={clsx("bento-card !p-0 overflow-hidden", !showChart && "flex-1 flex flex-col")}>
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-bg-card border-b-2 border-bg-border">
-                          {["Month", "Opening", "In", "Out", "Closing"].map((h) => (
-                            <th key={h} className="text-left text-text-primary font-bold px-4 py-3">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {focusedMonthlyBuckets.map((b) => {
-                          const inwardVal = toDisplay(item, b.inwardsBase, unitMode).value;
-                          const outwardVal = toDisplay(item, b.outwardsBase, unitMode).value;
-                          // Dynamic row height: base + scaling for months beyond 8-month baseline
-                          const dynamicPadding = showChart
-                            ? clsx("py-3", monthSpan > 8 && "md:py-2.5", monthSpan > 12 && "md:py-2")
-                            : clsx("py-4", monthSpan > 8 && "md:py-3", monthSpan > 12 && "md:py-2.5");
-                          return (
-                            <tr key={b.yearMonth} className={clsx("border-b border-bg-border/50 hover:bg-bg-card/50 transition-colors", !showChart && "h-full")}>
-                              <td className={clsx("px-4 text-text-primary font-medium", dynamicPadding)}>{b.label}</td>
-                              <td className={clsx("px-4 font-semibold text-text-primary", dynamicPadding)}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
-                              <td
-                                className={clsx("px-4 font-semibold cursor-pointer hover:underline transition-colors",
-                                  inwardVal === 0 ? "text-bg-border/60 hover:text-bg-border/80" : "text-success hover:text-success-hover",
-                                  dynamicPadding
-                                )}
-                                onClick={() => inwardVal !== 0 && setMovementModal({ direction: "inward", month: b.yearMonth })}
-                                title={inwardVal !== 0 ? "Click to view inward transactions" : "No inward movements"}
-                              >{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
-                              <td
-                                className={clsx("px-4 font-semibold cursor-pointer hover:underline transition-colors",
-                                  outwardVal === 0 ? "text-bg-border/60 hover:text-bg-border/80" : "text-danger hover:text-danger-hover",
-                                  dynamicPadding
-                                )}
-                                onClick={() => outwardVal !== 0 && setMovementModal({ direction: "outward", month: b.yearMonth })}
-                                title={outwardVal !== 0 ? "Click to view outward transactions" : "No outward movements"}
-                              >{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
-                              <td className={clsx("px-4 font-bold text-accent", dynamicPadding)}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                  <div className={clsx("bento-card !p-0 overflow-hidden flex flex-col", !showChart && "flex-1")}>
+                    {/* Fixed table header with scrollable body */}
+                    <div className={clsx("overflow-y-auto", !showChart ? "flex-1 min-h-[300px]" : "max-h-[400px]")}>
+                      <table className="w-full text-sm">
+                        <thead className="sticky top-0 z-10">
+                          <tr className="bg-bg-card border-b-2 border-bg-border">
+                            {["Month", "Opening", "In", "Out", "Closing"].map((h) => (
+                              <th key={h} className="text-left text-primary font-bold px-4 py-3 whitespace-nowrap">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {focusedMonthlyBuckets.map((b) => {
+                            const inwardVal = toDisplay(item, b.inwardsBase, unitMode).value;
+                            const outwardVal = toDisplay(item, b.outwardsBase, unitMode).value;
+                            // Consistent row height for better scrolling UX
+                            const dynamicPadding = clsx("py-3", monthSpan > 12 && "md:py-2.5");
+                            return (
+                              <tr key={b.yearMonth} className={clsx("border-b border-bg-border/50 hover:bg-bg-hover/50 transition-colors")}>
+                                <td className={clsx("px-4 text-primary font-medium whitespace-nowrap", dynamicPadding)}>{b.label}</td>
+                                <td className={clsx("px-4 font-semibold text-primary", dynamicPadding)}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
+                                <td
+                                  className={clsx("px-4 font-semibold cursor-pointer hover:underline transition-colors",
+                                    inwardVal === 0 ? "text-muted-300 hover:text-muted-400" : "text-success-600 hover:text-success",
+                                    dynamicPadding
+                                  )}
+                                  onClick={() => inwardVal !== 0 && setMovementModal({ direction: "inward", month: b.yearMonth })}
+                                  title={inwardVal !== 0 ? "Click to view inward transactions" : "No inward movements"}
+                                >{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
+                                <td
+                                  className={clsx("px-4 font-semibold cursor-pointer hover:underline transition-colors",
+                                    outwardVal === 0 ? "text-muted-300 hover:text-muted-400" : "text-danger-600 hover:text-danger",
+                                    dynamicPadding
+                                  )}
+                                  onClick={() => outwardVal !== 0 && setMovementModal({ direction: "outward", month: b.yearMonth })}
+                                  title={outwardVal !== 0 ? "Click to view outward transactions" : "No outward movements"}
+                                >{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
+                                <td className={clsx("px-4 font-bold text-accent", dynamicPadding)}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 );
               })()}
