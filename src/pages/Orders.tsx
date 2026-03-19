@@ -381,11 +381,11 @@ export default function Orders() {
 
   const focusedMonthlyBuckets = useMemo(() => {
     if (!focusedItem || !data) return [];
-    return computeMonthlyBucketsIndexed(focusedItem, voucherIndex, 8);
-  }, [focusedItem, data, voucherIndex]);
+    return computeMonthlyBucketsIndexed(focusedItem, voucherIndex, monthSpan);
+  }, [focusedItem, data, voucherIndex, monthSpan]);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-112px)] gap-0">
+    <div className="flex flex-col h-screen gap-0">
       {/* Page title for accessibility - hidden from view */}
       <h1 className="sr-only">Purchase Orders</h1>
 
@@ -572,15 +572,7 @@ export default function Orders() {
                 onKeyDown={(e) => handleKeyDown(e, filteredItems)}
               />
             </div>
-            <select
-              value={groupFilter}
-              onChange={(e) => setGroupFilter(e.target.value)}
-              className="w-full bg-bg border border-bg-border rounded-lg px-2 py-1.5 text-sm text-primary outline-none"
-            >
-              {groups.map((g) => (
-                <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>
-              ))}
-            </select>
+            {/* Group filter hidden per user request */}
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setStockFilterEnabled((v) => !v)}
@@ -812,7 +804,7 @@ export default function Orders() {
                     </div>
                     {showChart && (
                       <div className="px-3 pb-3">
-                        <ResponsiveContainer width="100%" height={180}>
+                        <ResponsiveContainer width="100%" height={Math.max(180, 180 + (monthSpan - 8) * 15)}>
                           <ComposedChart data={focusedMonthlyBuckets.map((b) => ({
                             label: b.label,
                             in: toDisplay(item, b.inwardsBase, unitMode).value,
