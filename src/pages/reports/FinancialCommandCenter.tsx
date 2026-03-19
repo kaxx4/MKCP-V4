@@ -37,14 +37,14 @@ export default function FinancialCommandCenter({ data }: Props) {
   return (
     <div className="space-y-4">
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
         {[
           { label: "Total Revenue", value: fmtINR(summary.totalRevenue), color: "text-success", icon: <TrendingUp size={18} /> },
           { label: "Total Expense", value: fmtINR(summary.totalExpense), color: "text-danger", icon: <TrendingDown size={18} /> },
           { label: "Net Profit", value: fmtINR(summary.netProfit), color: summary.netProfit >= 0 ? "text-success" : "text-danger", icon: <DollarSign size={18} /> },
           { label: "Revenue Growth", value: `${summary.revenueGrowthPct >= 0 ? "+" : ""}${fmtNum(summary.revenueGrowthPct, 1)}%`, color: summary.revenueGrowthPct >= 0 ? "text-success" : "text-danger", icon: <Zap size={18} /> },
         ].map(({ label, value, color, icon }) => (
-          <div key={label} className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div key={label} className="bento-card">
             <div className="flex items-center gap-2 text-muted text-xs mb-2">{icon}{label}</div>
             <div className={clsx("text-2xl font-bold font-mono", color)}>{value}</div>
           </div>
@@ -52,13 +52,13 @@ export default function FinancialCommandCenter({ data }: Props) {
       </div>
 
       {/* Secondary KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
         {[
           { label: "Avg Daily Revenue", value: fmtINR(summary.avgDailyRevenue) },
           { label: "Avg Daily Expense", value: fmtINR(summary.avgDailyExpense) },
           { label: "Active Trading Days", value: fmtNum(summary.activeDays, 0) },
         ].map(({ label, value }) => (
-          <div key={label} className="bg-bg-card border border-bg-border rounded-xl p-3">
+          <div key={label} className="bento-card !p-3">
             <div className="text-muted text-xs mb-1">{label}</div>
             <div className="text-lg font-bold font-mono text-primary">{value}</div>
           </div>
@@ -68,7 +68,7 @@ export default function FinancialCommandCenter({ data }: Props) {
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Revenue vs Expense - Monthly */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Monthly Revenue vs Expense</h3>
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={monthlyMetrics}>
@@ -86,7 +86,7 @@ export default function FinancialCommandCenter({ data }: Props) {
         </div>
 
         {/* Profit Trend - Line */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Net Profit Trend</h3>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={monthlyMetrics}>
@@ -106,7 +106,7 @@ export default function FinancialCommandCenter({ data }: Props) {
       {/* Expense Categories + Top Ledgers */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Expense Categories Pie */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Expense Categories</h3>
           <ResponsiveContainer width="100%" height={240}>
             <PieChart>
@@ -121,7 +121,7 @@ export default function FinancialCommandCenter({ data }: Props) {
         </div>
 
         {/* Top Income Ledgers */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Top Income Ledgers</h3>
           <div className="space-y-2 max-h-[240px] overflow-y-auto">
             {topIncomeLedgers.slice(0, 8).map((l, i) => (
@@ -140,7 +140,7 @@ export default function FinancialCommandCenter({ data }: Props) {
         </div>
 
         {/* Top Expense Ledgers */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Top Expense Ledgers</h3>
           <div className="space-y-2 max-h-[240px] overflow-y-auto">
             {topExpenseLedgers.slice(0, 8).map((l, i) => (
@@ -161,7 +161,7 @@ export default function FinancialCommandCenter({ data }: Props) {
 
       {/* Smart Insights */}
       {insights.length > 0 && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Smart Insights</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {insights.map((ins, i) => (
@@ -183,7 +183,7 @@ export default function FinancialCommandCenter({ data }: Props) {
       )}
 
       {/* Largest Transactions */}
-      <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+      <div className="bento-card !p-0 overflow-hidden">
         <div className="px-4 py-3 border-b border-bg-border">
           <h3 className="font-semibold text-primary">Largest Transactions (30 days)</h3>
         </div>

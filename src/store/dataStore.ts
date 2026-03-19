@@ -127,8 +127,8 @@ export const useDataStore = create<DataState>((set, get) => ({
     get().setData(mergedRawData);
 
     // Auto-regenerate predictions after merge (Task 3E)
-    // Run async to not block the merge
-    (async () => {
+    // Defer to idle callback / setTimeout so we don't block the UI render
+    const deferredPredictions = () => (async () => {
       try {
         const { units, rates } = useOverrideStore.getState();
         const itemsWithOverrides = applyOverridesToItems(items, units, rates);
@@ -193,5 +193,10 @@ export const useDataStore = create<DataState>((set, get) => ({
         // Silently fail - predictions are non-critical
       }
     })();
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(deferredPredictions);
+    } else {
+      setTimeout(deferredPredictions, 100);
+    }
   },
 }));

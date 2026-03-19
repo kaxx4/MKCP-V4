@@ -21,8 +21,12 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-bg text-primary font-sans">
+      {/* Skip to main content link for keyboard navigation */}
+      <a href="#main-content" className="skip-to-content">Skip to main content</a>
+
       <NavBar />
       <main
+        id="main-content"
         className={clsx(
           "transition-all duration-200 min-h-screen",
           isMobile ? "ml-0 pb-16" : sidebarOpen ? "ml-[220px]" : "ml-14"

@@ -22,12 +22,16 @@
   * {
     box-sizing: border-box;
   }
+  html {
+    overflow-x: hidden;
+  }
   body {
-    background-color: #ffffff;  /* match tailwind bg.DEFAULT */
-    color: #0f172a;             /* match tailwind primary */
+    background-color: #f8fafc;
+    color: #0f172a;
     font-family: "DM Sans", sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
   }
   ::-webkit-scrollbar {
     width: 6px;
@@ -42,6 +46,111 @@
   }
   ::-webkit-scrollbar-thumb:hover {
     background: #94a3b8;
+  }
+}
+
+@layer components {
+  /* Bento card base — flat design with subtle border */
+  .bento-card {
+    @apply bg-white border border-bg-border rounded-2xl p-3 md:p-4;
+  }
+  /* Bento grid — auto-fit responsive grid */
+  .bento-grid {
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: repeat(2, 1fr);
+  }
+  @media (min-width: 768px) {
+    .bento-grid {
+      gap: 0.75rem;
+      grid-template-columns: repeat(4, 1fr);
+    }
+  }
+  /* Scrollable table wrapper — prevents overflow on mobile */
+  .table-scroll {
+    @apply overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0;
+  }
+  /* Page section spacing */
+  .page-section {
+    @apply space-y-3 md:space-y-4;
+  }
+
+  /* Standard page title */
+  .page-title {
+    @apply text-2xl md:text-3xl font-bold text-primary mb-6;
+  }
+
+  /* Standard section header */
+  .section-header {
+    @apply text-lg md:text-xl font-semibold text-primary mb-4;
+  }
+
+  /* Subsection header */
+  .subsection-header {
+    @apply text-base md:text-lg font-semibold text-primary mb-3;
+  }
+
+  /* Table header styling */
+  .table-header {
+    @apply text-sm font-bold uppercase text-primary bg-bg-card px-4 py-3;
+  }
+
+  /* Table cell styling */
+  .table-cell {
+    @apply text-sm font-normal px-4 py-3;
+  }
+
+  /* Table cell emphasis */
+  .table-cell-emphasis {
+    @apply text-sm font-semibold px-4 py-3;
+  }
+
+  /* Responsive table row with hover state */
+  .responsive-table-row {
+    @apply border-b border-bg-border/50 hover:bg-bg-card/50 transition-colors;
+  }
+
+  /* Form label styling */
+  .form-label {
+    @apply text-sm font-medium text-primary mb-2;
+  }
+
+  /* Form helper text */
+  .form-helper {
+    @apply text-xs text-muted mt-1;
+  }
+
+  /* Form input styling */
+  .form-input {
+    @apply min-h-10 md:min-h-11 px-3 md:px-4 py-2 text-sm md:text-base border border-bg-border rounded-lg focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all;
+  }
+
+  /* Button sizing */
+  .btn-primary {
+    @apply min-h-10 md:min-h-11 px-4 py-2 text-sm font-medium bg-accent text-white rounded-lg hover:bg-accent-hover transition-colors;
+  }
+
+  .btn-secondary {
+    @apply min-h-10 md:min-h-11 px-4 py-2 text-sm font-medium border border-bg-border text-primary hover:bg-bg-card/50 transition-colors rounded-lg;
+  }
+
+  .btn-icon {
+    @apply w-10 h-10 flex items-center justify-center rounded-lg hover:bg-bg-card/50 transition-colors;
+  }
+
+  /* KPI value styling */
+  .kpi-value {
+    @apply text-lg md:text-2xl font-semibold text-primary;
+  }
+
+  /* KPI label styling */
+  .kpi-label {
+    @apply text-xs md:text-sm font-medium text-text-secondary;
+  }
+
+  /* Badge/Tag styling */
+  .badge {
+    @apply px-2 py-1 text-xs font-medium rounded-full bg-accent/15 text-accent;
   }
 }
 
@@ -69,5 +178,26 @@
     to {
       transform: translateY(0);
     }
+  }
+  /* Prevent text overflow in KPI / card values */
+  .value-truncate {
+    @apply truncate max-w-full;
+  }
+  /* Responsive text that scales between mobile and desktop */
+  .text-responsive-xl {
+    @apply text-lg md:text-2xl;
+  }
+  .text-responsive-lg {
+    @apply text-base md:text-xl;
+  }
+  .text-responsive-sm {
+    @apply text-xs md:text-sm;
+  }
+  /* Skip to content link - hidden until focused */
+  .skip-to-content {
+    @apply absolute top-0 left-0 -translate-y-full px-4 py-2 bg-accent text-white font-semibold z-50 rounded-b;
+  }
+  .skip-to-content:focus {
+    @apply translate-y-0;
   }
 }

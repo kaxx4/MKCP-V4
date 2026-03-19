@@ -62,7 +62,7 @@ export default function LedgerIntelligence({ data }: Props) {
           { label: "Top Expense Group", value: summary.topExpenseGroup || "-", icon: <TrendingDown size={16} />, color: "text-danger", isText: true },
           { label: "Top Income Group", value: summary.topIncomeGroup || "-", icon: <TrendingUp size={16} />, color: "text-success", isText: true },
         ].map(({ label, value, icon, color, isText }) => (
-          <div key={label} className="bg-bg-card border border-bg-border rounded-xl p-3">
+          <div key={label} className="bento-card !p-3">
             <div className="flex items-center gap-1.5 text-muted text-xs mb-1.5">{icon}{label}</div>
             <div className={clsx(isText ? "text-sm font-semibold truncate" : "text-xl font-bold font-mono", color)}>{value}</div>
           </div>
@@ -71,7 +71,7 @@ export default function LedgerIntelligence({ data }: Props) {
 
       {/* Insights */}
       {insights.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
           {insights.slice(0, 6).map((ins, i) => (
             <div key={i} className={clsx("flex items-start gap-2 p-3 rounded-xl border",
               ins.severity === "danger" ? "bg-danger/5 border-danger/20" :
@@ -116,7 +116,7 @@ export default function LedgerIntelligence({ data }: Props) {
       {/* Leaderboard + Trend Chart */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Leaderboard */}
-        <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+        <div className="bento-card !p-0 overflow-hidden">
           <div className="px-4 py-3 border-b border-bg-border">
             <h3 className="font-semibold text-primary">{viewLabels[view]} Ledgers</h3>
             <p className="text-xs text-muted mt-0.5">{filtered.length} ledgers</p>
@@ -174,7 +174,7 @@ export default function LedgerIntelligence({ data }: Props) {
         </div>
 
         {/* Top Ledger Contribution Bar */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">
             {view === "income" || view === "declining" ? "Income" : "Expense"} Contribution
           </h3>

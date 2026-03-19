@@ -28,14 +28,14 @@ export default function TaxRadar({ data }: Props) {
   return (
     <div className="space-y-4">
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
         {[
           { label: "GST Collected (Output)", value: fmtINR(summary.totalGSTCollected), color: "text-success", icon: <TrendingUp size={18} /> },
           { label: "GST Paid (Input)", value: fmtINR(summary.totalGSTPaid), color: "text-accent", icon: <Shield size={18} /> },
           { label: "Net GST Liability", value: fmtINR(summary.netGSTLiability), color: summary.netGSTLiability > 0 ? "text-danger" : "text-success", icon: <FileText size={18} /> },
           { label: "Missing GST Entries", value: fmtNum(summary.missingEntryCount, 0), color: summary.missingEntryCount > 0 ? "text-warn" : "text-success", icon: <AlertTriangle size={18} /> },
         ].map(({ label, value, color, icon }) => (
-          <div key={label} className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div key={label} className="bento-card">
             <div className="flex items-center gap-2 text-muted text-xs mb-2">{icon}{label}</div>
             <div className={clsx("text-2xl font-bold font-mono", color)}>{value}</div>
           </div>
@@ -43,14 +43,14 @@ export default function TaxRadar({ data }: Props) {
       </div>
 
       {/* Secondary KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
         {[
           { label: "Taxable Revenue", value: fmtINR(summary.totalTaxableRevenue) },
           { label: "Non-Taxable Revenue", value: fmtINR(summary.totalNonTaxableRevenue) },
           { label: "Taxable Ratio", value: `${fmtNum(summary.taxableRatio, 1)}%` },
           { label: "High Exposure Month", value: summary.highExposureMonth || "-" },
         ].map(({ label, value }) => (
-          <div key={label} className="bg-bg-card border border-bg-border rounded-xl p-3">
+          <div key={label} className="bento-card !p-3">
             <div className="text-muted text-xs mb-1">{label}</div>
             <div className="text-lg font-bold font-mono text-primary">{value}</div>
           </div>
@@ -82,7 +82,7 @@ export default function TaxRadar({ data }: Props) {
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Monthly GST Collected vs Paid */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Monthly GST: Collected vs Paid</h3>
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={monthlyData}>
@@ -97,7 +97,7 @@ export default function TaxRadar({ data }: Props) {
         </div>
 
         {/* Net Liability Trend */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Net GST Liability Trend</h3>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={monthlyData}>
@@ -115,7 +115,7 @@ export default function TaxRadar({ data }: Props) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Tax Rate Breakdown */}
         {taxCategories.length > 0 && (
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="bento-card">
             <h3 className="font-semibold text-primary mb-3">Tax Rate Breakdown</h3>
             <ResponsiveContainer width="100%" height={240}>
               <PieChart>
@@ -148,7 +148,7 @@ export default function TaxRadar({ data }: Props) {
         )}
 
         {/* Taxable vs Non-Taxable Revenue by Month */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+        <div className="bento-card">
           <h3 className="font-semibold text-primary mb-3">Taxable vs Non-Taxable Revenue</h3>
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={monthlyData}>
@@ -165,7 +165,7 @@ export default function TaxRadar({ data }: Props) {
 
       {/* Missing GST Entries */}
       {missingGSTEntries.length > 0 && (
-        <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+        <div className="bento-card !p-0 overflow-hidden">
           <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between">
             <div>
               <h3 className="font-semibold text-primary">Possible Missing GST Entries</h3>
