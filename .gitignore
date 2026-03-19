@@ -42,3 +42,9 @@ public/sample/transactions.json
 MKCP_full_backup_*.json
 backup_*.json
 *_backup_*.json
+
+# Tally test data (exported from TallyPrime)
+TALLY TEST*/
+TALLY_TEST*/
+*tally_test*
+*.tally

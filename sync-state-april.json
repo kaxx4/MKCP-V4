@@ -1,0 +1,132 @@
+{
+  "company": "M.K.CYCLES (P) LTD",
+  "lastSyncTime": "2026-03-19T11:29:05.000Z",
+  "syncDuration": "341.2s",
+  "period": {
+    "from": "20250401",
+    "to": "20250430",
+    "description": "April 2025 (Full Month)"
+  },
+  "entities": {
+    "stockGroups": {
+      "count": 22,
+      "status": "complete"
+    },
+    "units": {
+      "count": 9,
+      "status": "complete"
+    },
+    "stockItems": {
+      "count": 559,
+      "sampleItem": "ALLOY WHEEL RIM 3.75 X 12",
+      "status": "complete"
+    },
+    "ledgers": {
+      "count": 472,
+      "status": "complete"
+    },
+    "godowns": {
+      "count": 1,
+      "status": "complete"
+    },
+    "costCentres": {
+      "count": 0,
+      "status": "configured"
+    }
+  },
+  "vouchers": {
+    "total": 399,
+    "byType": {
+      "Sales": 73,
+      "Purchase": 67,
+      "Journal": 4,
+      "Receipt": 100,
+      "Payment": 141,
+      "DebitNote": 5,
+      "Contra": 9
+    },
+    "byWeek": {
+      "week1_apr01_07": {
+        "count": 113,
+        "dataVolume": "16.8MB",
+        "parseTime": "77-126s",
+        "breakdown": {
+          "Sales": 34,
+          "Payment": 41,
+          "Receipt": 25,
+          "Purchase": 4,
+          "Journal": 1,
+          "Contra": 5,
+          "DebitNote": 3
+        }
+      },
+      "week2_apr08_14": {
+        "count": 101,
+        "dataVolume": "10.9MB",
+        "parseTime": "58-75s",
+        "breakdown": {
+          "Sales": 20,
+          "Purchase": 28,
+          "Receipt": 13,
+          "Contra": 5,
+          "Payment": 34,
+          "Journal": 1
+        }
+      },
+      "week3_apr15_21": {
+        "count": 77,
+        "dataVolume": "7.3MB",
+        "parseTime": "23-30s",
+        "breakdown": {
+          "Receipt": 42,
+          "Sales": 5,
+          "Purchase": 8,
+          "Payment": 18,
+          "Contra": 3,
+          "Journal": 1
+        }
+      },
+      "week4_apr22_28": {
+        "count": 108,
+        "dataVolume": "14.8MB",
+        "parseTime": "85-95s",
+        "breakdown": {
+          "Payment": 41,
+          "Purchase": 27,
+          "Sales": 15,
+          "Receipt": 20,
+          "DebitNote": 2,
+          "Contra": 3
+        }
+      }
+    }
+  },
+  "financial": {
+    "profitAndLoss": {
+      "sales": 1923.9,
+      "closingStock": 223.9,
+      "netProfit": 183.5,
+      "currency": "INR Lakhs"
+    },
+    "balanceSheet": {
+      "capitalAccount": 734.8,
+      "profitAndLoss": 110.2,
+      "currency": "INR Lakhs"
+    }
+  },
+  "systemMetrics": {
+    "mastersSync": "1.4-2.6s",
+    "vouchersSyncTotal": "341.2s",
+    "averageParseTime": "60s/week",
+    "dataVolumeTotal": "49MB",
+    "successRate": "100%"
+  },
+  "nextSteps": [
+    "1. Continue with May 2025 data (20250501-20250531)",
+    "2. Maintain sync state for incremental imports",
+    "3. Validate all 12 months before marking complete",
+    "4. Total FY projection: ~4800 vouchers, ~600MB data"
+  ],
+  "testStatus": "COMPLETE",
+  "validationResult": "PASS"
+}
