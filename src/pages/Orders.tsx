@@ -385,8 +385,11 @@ export default function Orders() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-112px)] gap-0">
+      {/* Page title for accessibility - hidden from view */}
+      <h1 className="sr-only">Purchase Orders</h1>
+
       {/* Order Groups Bar */}
-      <div className="flex items-center gap-2 px-2 md:px-3 py-2 bg-bg-card border border-bg-border rounded-t-xl mb-0 overflow-x-auto">
+      <div className="flex items-center gap-2 px-2 md:px-3 py-2 bg-white border border-bg-border rounded-t-2xl mb-0 overflow-x-auto">
         <button
           onClick={() => setShowGroupPanel(!showGroupPanel)}
           className={clsx(
@@ -533,7 +536,7 @@ export default function Orders() {
 
       {/* Mobile tab switcher */}
       {isMobile && (
-        <div className="flex bg-bg-card border border-bg-border rounded-xl p-1 gap-1">
+        <div className="flex bento-card !p-1 gap-1">
           {([["list", "Items"], ["detail", "Detail"], ["order", "Order"]] as const).map(([tab, label]) => (
             <button
               key={tab}
@@ -702,65 +705,65 @@ export default function Orders() {
                 </div>
               )}
 
-              {/* Mini KPIs */}
+              {/* Mini KPIs - Redesigned for Accessibility */}
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 const last = focusedMonthlyBuckets[focusedMonthlyBuckets.length - 1]!;
                 const kpis = [
-                  { label: "Opening", val: toDisplay(item, last.openingQtyBase, unitMode).formatted, color: "text-muted", clickable: false },
+                  { label: "Opening", val: toDisplay(item, last.openingQtyBase, unitMode).formatted, color: "text-text-primary", clickable: false },
                   { label: "In", val: toDisplay(item, last.inwardsBase, unitMode).formatted, color: "text-success", clickable: true, direction: "inward" as MovementDirection },
                   { label: "Out", val: toDisplay(item, last.outwardsBase, unitMode).formatted, color: "text-danger", clickable: true, direction: "outward" as MovementDirection },
-                  { label: "Closing", val: toDisplay(item, focusedStock, unitMode).formatted, color: focusedStock <= 0 ? "text-danger" : "text-primary", clickable: false },
+                  { label: "Closing", val: toDisplay(item, focusedStock, unitMode).formatted, color: focusedStock <= 0 ? "text-danger" : "text-accent", clickable: false },
                 ];
                 return (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {kpis.map(({ label, val, color, clickable, direction }) => (
                       <div
                         key={label}
                         onClick={clickable && direction ? () => setMovementModal({ direction, month: last.yearMonth }) : undefined}
                         className={clsx(
-                          "bg-bg-card border border-bg-border rounded-lg p-2 text-center",
-                          clickable && "cursor-pointer hover:border-accent/50 hover:bg-accent/5 transition-colors"
+                          "bg-bg-card border-2 border-bg-border rounded-lg p-4 text-center transition-all",
+                          clickable && "cursor-pointer hover:border-accent hover:bg-accent/10 hover:shadow-md"
                         )}
                         title={clickable ? `Click to view ${label.toLowerCase()} transactions` : undefined}
                       >
-                        <div className={`text-sm font-mono font-semibold ${color}`}>{val}</div>
-                        <div className="text-muted text-xs mt-0.5">{label} {clickable && "▸"}</div>
+                        <div className={`text-lg md:text-xl font-semibold ${color}`}>{val}</div>
+                        <div className="text-text-secondary text-sm font-medium mt-1">{label} {clickable && "→"}</div>
                       </div>
                     ))}
                   </div>
                 );
               })()}
 
-              {/* Monthly data table */}
+              {/* Monthly data table - Redesigned for Accessibility */}
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 return (
-                  <div className={clsx("bg-bg-card border border-bg-border rounded-xl overflow-hidden", !showChart && "flex-1 flex flex-col")}>
-                    <table className="w-full text-xs">
+                  <div className={clsx("bento-card !p-0 overflow-hidden", !showChart && "flex-1 flex flex-col")}>
+                    <table className="w-full text-sm">
                       <thead>
-                        <tr className="border-b border-bg-border">
+                        <tr className="bg-bg-card border-b-2 border-bg-border">
                           {["Month", "Opening", "In", "Out", "Closing"].map((h) => (
-                            <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>
+                            <th key={h} className="text-left text-text-primary font-bold px-4 py-3">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {focusedMonthlyBuckets.map((b) => (
-                          <tr key={b.yearMonth} className={clsx("border-b border-bg-border/50", !showChart && "h-full")}>
-                            <td className={clsx("px-3 text-muted", showChart ? "py-1.5" : "py-2.5")}>{b.label}</td>
-                            <td className={clsx("px-3 font-mono text-primary", showChart ? "py-1.5" : "py-2.5")}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
+                          <tr key={b.yearMonth} className={clsx("border-b border-bg-border/50 hover:bg-bg-card/50 transition-colors", !showChart && "h-full")}>
+                            <td className={clsx("px-4 text-text-primary font-medium", showChart ? "py-3" : "py-4")}>{b.label}</td>
+                            <td className={clsx("px-4 font-semibold text-text-primary", showChart ? "py-3" : "py-4")}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
                             <td
-                              className={clsx("px-3 font-mono text-success cursor-pointer hover:underline", showChart ? "py-1.5" : "py-2.5")}
+                              className={clsx("px-4 font-semibold text-success cursor-pointer hover:text-success-hover hover:underline", showChart ? "py-3" : "py-4")}
                               onClick={() => setMovementModal({ direction: "inward", month: b.yearMonth })}
                               title="Click to view inward transactions"
                             >{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
                             <td
-                              className={clsx("px-3 font-mono text-danger cursor-pointer hover:underline", showChart ? "py-1.5" : "py-2.5")}
+                              className={clsx("px-4 font-semibold text-danger cursor-pointer hover:text-danger-hover hover:underline", showChart ? "py-3" : "py-4")}
                               onClick={() => setMovementModal({ direction: "outward", month: b.yearMonth })}
                               title="Click to view outward transactions"
                             >{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
-                            <td className={clsx("px-3 font-mono text-primary font-semibold", showChart ? "py-1.5" : "py-2.5")}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
+                            <td className={clsx("px-4 font-bold text-accent", showChart ? "py-3" : "py-4")}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -773,7 +776,7 @@ export default function Orders() {
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 return (
-                  <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+                  <div className="bento-card !p-0 overflow-hidden">
                     <button
                       onClick={() => setShowChart(!showChart)}
                       className="w-full flex items-center justify-between px-3 py-2 hover:bg-bg-border/30 transition-colors"
@@ -826,7 +829,7 @@ export default function Orders() {
                   : "All";
                 return (
                   <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={() => setMovementModal(null)}>
-                    <div className={clsx("bg-bg-card border border-bg-border rounded-xl shadow-2xl flex flex-col", isMobile ? "w-full h-full rounded-none" : "w-[700px] max-h-[80vh]")} onClick={e => e.stopPropagation()}>
+                    <div className={clsx("bento-card shadow-2xl flex flex-col", isMobile ? "w-full h-full rounded-none" : "w-[700px] max-h-[80vh]")} onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
                         <div>
                           <h3 className="text-sm font-bold text-primary">{focusedItem.name} — {dirLabel} Transactions</h3>
