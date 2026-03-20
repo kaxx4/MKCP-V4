@@ -60,10 +60,10 @@ export default function Ledgers() {
 
   if (!data) {
     return (
-      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <BookOpen size={64} className="text-muted" />
-        <h2 className="text-xl font-semibold text-primary">No Data Loaded</h2>
-        <button onClick={() => navigate("/import")} className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white font-semibold px-5 py-2.5 rounded-lg transition mt-2">
+      <div className="empty-state">
+        <BookOpen size={64} className="empty-state-icon" />
+        <h2 className="empty-state-title">No Data Loaded</h2>
+        <button onClick={() => navigate("/import")} className="btn-primary mt-2">
           <Upload size={16} />Import Data
         </button>
       </div>
@@ -77,22 +77,22 @@ export default function Ledgers() {
       return (
         <div className="flex flex-col h-[calc(100vh-112px)]">
           {/* Header with back button */}
-          <div className="bg-bg-card border border-bg-border rounded-t-xl p-3 border-b">
+          <div className="section-card-header rounded-t-xl">
             <button
               onClick={() => setSelectedLedgerId(null)}
-              className="flex items-center gap-1.5 text-xs text-accent mb-2"
+              className="btn-ghost btn-sm mb-2"
             >
               <ArrowLeft size={14} />
               Back to list
             </button>
-            <h2 className="text-sm font-bold text-primary">{selectedLedger.name}</h2>
+            <h2 className="card-title">{selectedLedger.name}</h2>
             <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-xs">
-              <span className="text-muted">Group: <span className="text-primary">{selectedLedger.group}</span></span>
-              <span className="text-muted">Opening: <span className={clsx("font-mono", selectedLedger.openingBalance >= 0 ? "text-success" : "text-danger")}>
+              <span className="label-text">Group: <span className="text-primary">{selectedLedger.group}</span></span>
+              <span className="label-text">Opening: <span className={clsx("tabular-nums", selectedLedger.openingBalance >= 0 ? "text-success" : "text-danger")}>
                 {fmtINR(Math.abs(selectedLedger.openingBalance))} {selectedLedger.openingBalance >= 0 ? "Dr" : "Cr"}
               </span></span>
               {selectedLedger.gstin && (
-                <span className="text-muted">GSTIN: <span className="text-primary font-mono">{selectedLedger.gstin}</span></span>
+                <span className="label-text">GSTIN: <span className="text-primary tabular-nums">{selectedLedger.gstin}</span></span>
               )}
             </div>
           </div>
@@ -103,7 +103,7 @@ export default function Ledgers() {
             <div className="px-3 py-2 border-b border-bg-border bg-bg-border/10 text-xs">
               <div className="flex justify-between">
                 <span className="text-muted">Opening Balance</span>
-                <span className={clsx("font-mono font-medium", selectedLedger.openingBalance >= 0 ? "text-success" : "text-danger")}>
+                <span className={clsx("tabular-nums font-medium", selectedLedger.openingBalance >= 0 ? "text-success" : "text-danger")}>
                   {fmtINR(Math.abs(selectedLedger.openingBalance))} {selectedLedger.openingBalance >= 0 ? "Dr" : "Cr"}
                 </span>
               </div>
@@ -115,14 +115,14 @@ export default function Ledgers() {
                 <div key={i} className="px-3 py-2 border-b border-bg-border/50 text-xs">
                   <div className="flex items-center justify-between mb-0.5">
                     <span className="text-muted">{fmtDate(tx.date)} · {tx.type}</span>
-                    <span className="font-mono text-primary">{tx.voucherNumber}</span>
+                    <span className="tabular-nums text-primary">{tx.voucherNumber}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <div className="flex gap-3">
-                      {tx.debit > 0 && <span className="font-mono text-success">Dr {fmtINR(tx.debit)}</span>}
-                      {tx.credit > 0 && <span className="font-mono text-danger">Cr {fmtINR(tx.credit)}</span>}
+                      {tx.debit > 0 && <span className="tabular-nums text-success">Dr {fmtINR(tx.debit)}</span>}
+                      {tx.credit > 0 && <span className="tabular-nums text-danger">Cr {fmtINR(tx.credit)}</span>}
                     </div>
-                    <span className={clsx("font-mono font-medium", tx.running >= 0 ? "text-success" : "text-danger")}>
+                    <span className={clsx("tabular-nums font-medium", tx.running >= 0 ? "text-success" : "text-danger")}>
                       {fmtINR(Math.abs(tx.running))} {tx.running >= 0 ? "Dr" : "Cr"}
                     </span>
                   </div>
@@ -137,18 +137,18 @@ export default function Ledgers() {
     // Show list view
     return (
       <div className="flex flex-col h-[calc(100vh-112px)]">
-        <div className="mb-4">
-          <h1 className="text-2xl md:text-3xl font-bold text-primary">Ledgers</h1>
+        <div className="page-header">
+          <h1 className="page-title">Ledgers</h1>
         </div>
         <div className="bento-card !p-0 flex flex-col flex-1 overflow-hidden">
           <div className="p-3 border-b border-bg-border space-y-2">
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search ledgers…"
-                className="w-full bg-bg border border-bg-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-primary placeholder-muted outline-none" />
+                className="search-input pl-8" />
             </div>
             <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}
-              className="w-full bg-bg border border-bg-border rounded-lg px-2 py-1.5 text-sm text-primary outline-none">
+              className="form-select">
               {groups.map((g) => <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>)}
             </select>
           </div>
@@ -160,7 +160,7 @@ export default function Ledgers() {
                 <div className="text-xs font-sans text-primary truncate">{ledger.name}</div>
                 <div className="flex items-center justify-between mt-0.5">
                   <span className="text-muted text-xs truncate">{ledger.group}</span>
-                  <span className={clsx("text-xs font-mono", ledger.openingBalance >= 0 ? "text-success" : "text-danger")}>
+                  <span className={clsx("text-xs tabular-nums", ledger.openingBalance >= 0 ? "text-success" : "text-danger")}>
                     {fmtINR(Math.abs(ledger.openingBalance))} {ledger.openingBalance >= 0 ? "Dr" : "Cr"}
                   </span>
                 </div>
@@ -199,7 +199,7 @@ export default function Ledgers() {
               <div className="text-xs font-sans text-primary truncate">{ledger.name}</div>
               <div className="flex items-center justify-between mt-0.5">
                 <span className="text-muted text-xs truncate">{ledger.group}</span>
-                <span className={clsx("text-xs font-mono", ledger.openingBalance >= 0 ? "text-success" : "text-danger")}>
+                <span className={clsx("text-xs tabular-nums", ledger.openingBalance >= 0 ? "text-success" : "text-danger")}>
                   {fmtINR(Math.abs(ledger.openingBalance))} {ledger.openingBalance >= 0 ? "Dr" : "Cr"}
                 </span>
               </div>
@@ -213,28 +213,28 @@ export default function Ledgers() {
         {selectedLedger ? (
           <>
             <div className="p-4 border-b border-bg-border">
-              <h2 className="text-lg font-bold text-primary">{selectedLedger.name}</h2>
+              <h2 className="card-title text-lg">{selectedLedger.name}</h2>
               <div className="flex gap-6 mt-2 text-sm">
                 <div>
-                  <span className="text-muted text-xs">Group: </span>
+                  <span className="label-text">Group: </span>
                   <span className="text-primary">{selectedLedger.group}</span>
                 </div>
                 <div>
-                  <span className="text-muted text-xs">Opening: </span>
-                  <span className={clsx("font-mono", selectedLedger.openingBalance >= 0 ? "text-success" : "text-danger")}>
+                  <span className="label-text">Opening: </span>
+                  <span className={clsx("tabular-nums", selectedLedger.openingBalance >= 0 ? "text-success" : "text-danger")}>
                     {fmtINR(Math.abs(selectedLedger.openingBalance))} {selectedLedger.openingBalance >= 0 ? "Dr" : "Cr"}
                   </span>
                 </div>
                 {selectedLedger.creditDays > 0 && (
                   <div>
-                    <span className="text-muted text-xs">Credit Days: </span>
+                    <span className="label-text">Credit Days: </span>
                     <span className="text-primary">{selectedLedger.creditDays}</span>
                   </div>
                 )}
                 {selectedLedger.gstin && (
                   <div>
-                    <span className="text-muted text-xs">GSTIN: </span>
-                    <span className="text-primary font-mono text-xs">{selectedLedger.gstin}</span>
+                    <span className="label-text">GSTIN: </span>
+                    <span className="text-primary tabular-nums text-xs">{selectedLedger.gstin}</span>
                   </div>
                 )}
               </div>
@@ -243,30 +243,30 @@ export default function Ledgers() {
             <div className="flex-1 overflow-auto">
               {ledgerTransactions.length > 0 ? (
                 <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                  <thead className="table-header-sticky">
                     <tr>
                       {["Date", "Voucher#", "Type", "Debit", "Credit", "Balance"].map((h) => (
-                        <th key={h} className="text-left text-muted px-4 py-2.5 font-medium">{h}</th>
+                        <th key={h} className="table-header text-left">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     <tr className="border-b border-bg-border/50 bg-bg-border/10">
-                      <td className="px-4 py-2 text-muted" colSpan={3}>Opening Balance</td>
-                      <td className="px-4 py-2 font-mono text-success">{selectedLedger.openingBalance > 0 ? fmtINR(selectedLedger.openingBalance) : ""}</td>
-                      <td className="px-4 py-2 font-mono text-danger">{selectedLedger.openingBalance < 0 ? fmtINR(Math.abs(selectedLedger.openingBalance)) : ""}</td>
-                      <td className={clsx("px-4 py-2 font-mono", selectedLedger.openingBalance >= 0 ? "text-success" : "text-danger")}>
+                      <td className="table-cell text-muted" colSpan={3}>Opening Balance</td>
+                      <td className="table-cell-mono num-positive">{selectedLedger.openingBalance > 0 ? fmtINR(selectedLedger.openingBalance) : ""}</td>
+                      <td className="table-cell-mono num-negative">{selectedLedger.openingBalance < 0 ? fmtINR(Math.abs(selectedLedger.openingBalance)) : ""}</td>
+                      <td className={clsx("table-cell-mono", selectedLedger.openingBalance >= 0 ? "num-positive" : "num-negative")}>
                         {fmtINR(Math.abs(selectedLedger.openingBalance))} {selectedLedger.openingBalance >= 0 ? "Dr" : "Cr"}
                       </td>
                     </tr>
                     {ledgerTransactions.map((tx, i) => (
-                      <tr key={i} className="border-b border-bg-border/50 hover:bg-bg-border/20">
-                        <td className="px-4 py-2 text-muted">{fmtDate(tx.date)}</td>
-                        <td className="px-4 py-2 font-mono text-primary">{tx.voucherNumber}</td>
-                        <td className="px-4 py-2 text-muted">{tx.type}</td>
-                        <td className="px-4 py-2 font-mono text-success">{tx.debit > 0 ? fmtINR(tx.debit) : ""}</td>
-                        <td className="px-4 py-2 font-mono text-danger">{tx.credit > 0 ? fmtINR(tx.credit) : ""}</td>
-                        <td className={clsx("px-4 py-2 font-mono", tx.running >= 0 ? "text-success" : "text-danger")}>
+                      <tr key={i} className="responsive-table-row">
+                        <td className="table-cell text-muted">{fmtDate(tx.date)}</td>
+                        <td className="table-cell-mono">{tx.voucherNumber}</td>
+                        <td className="table-cell text-muted">{tx.type}</td>
+                        <td className="table-cell-mono num-positive">{tx.debit > 0 ? fmtINR(tx.debit) : ""}</td>
+                        <td className="table-cell-mono num-negative">{tx.credit > 0 ? fmtINR(tx.credit) : ""}</td>
+                        <td className={clsx("table-cell-mono", tx.running >= 0 ? "num-positive" : "num-negative")}>
                           {fmtINR(Math.abs(tx.running))} {tx.running >= 0 ? "Dr" : "Cr"}
                         </td>
                       </tr>
@@ -274,15 +274,15 @@ export default function Ledgers() {
                   </tbody>
                 </table>
               ) : (
-                <div className="flex items-center justify-center h-full text-muted text-sm">
-                  No transactions for this ledger
+                <div className="empty-state h-full">
+                  <span className="empty-state-description">No transactions for this ledger</span>
                 </div>
               )}
             </div>
           </>
         ) : (
-          <div className="flex items-center justify-center h-full text-muted text-sm">
-            Select a ledger to view transactions
+          <div className="empty-state h-full">
+            <span className="empty-state-description">Select a ledger to view transactions</span>
           </div>
         )}
       </div>

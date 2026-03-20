@@ -33,7 +33,8 @@
       "Bash(tasklist)",
       "Bash(cmd.exe /c \"taskkill /PID 7000 /F\")",
       "Bash(wmic process:*)",
-      "Bash(npx tsx:*)"
+      "Bash(npx tsx:*)",
+      "Read(//c/Users/kanis/Desktop/MKCP/mkcycles-dashboard/**)"
     ]
   }
 }
