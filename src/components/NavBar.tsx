@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   ShoppingCart,
   FileText,
-  BookOpen,
   BarChart2,
   Settings,
   Pencil,
@@ -22,6 +21,20 @@ import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
 import clsx from "clsx";
 
+// Apple HIG color tokens
+const COLORS = {
+  bg: "bg-white dark:bg-neutral-950",
+  border: "border-neutral-200 dark:border-neutral-800",
+  text: {
+    primary: "text-neutral-950 dark:text-neutral-50",
+    secondary: "text-neutral-600 dark:text-neutral-400",
+    tertiary: "text-neutral-700 dark:text-neutral-300",
+  },
+  hover: "hover:bg-neutral-100 dark:hover:bg-neutral-900",
+  bgHover: "bg-neutral-100 dark:bg-neutral-900",
+  accentBg: "bg-accent/10 dark:bg-accent/20",
+};
+
 const NAV_ITEMS = [
   { path: "/import", icon: Upload, label: "Import" },
   { path: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
@@ -33,7 +46,6 @@ const NAV_ITEMS = [
   { path: "/settings", icon: Settings, label: "Settings" },
 ];
 
-// Top 5 items shown in mobile bottom bar
 const MOBILE_PRIMARY = NAV_ITEMS.slice(0, 5);
 const MOBILE_OVERFLOW = NAV_ITEMS.slice(5);
 
@@ -51,75 +63,67 @@ export function NavBar() {
     if (diffMins < 60) return `${diffMins}m ago`;
     const diffHrs = Math.floor(diffMins / 60);
     if (diffHrs < 24) return `${diffHrs}h ago`;
-    return date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
+    return date.toLocaleDateString("en-IN", { month: "short", day: "numeric" });
   };
 
-  // ─── Mobile: Bottom Tab Bar ───────────────────────────────────────
+  // ─── Mobile: Bottom Tab Bar ─────────────────────────────────
   if (isMobile) {
     return (
       <>
-        {/* Bottom tab bar */}
-        <nav className="fixed bottom-0 left-0 right-0 h-14 bg-bg-card border-t border-bg-border flex items-center justify-around z-30 px-1">
+        <nav
+          className={clsx("fixed bottom-0 left-0 right-0 h-14 flex items-center justify-around z-30 px-1", COLORS.bg, "border-t", COLORS.border, "bg-white/95 dark:bg-neutral-950/95 backdrop-blur-md")}
+          aria-label="Main navigation"
+        >
           {MOBILE_PRIMARY.map(({ path, icon: Icon, label }) => (
             <NavLink
               key={path}
               to={path}
               className={({ isActive }) =>
                 clsx(
-                  "flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[56px] transition-all duration-200 focus-visible:ring-2 focus-visible:ring-accent-300",
-                  isActive
-                    ? "text-accent bg-accent/5"
-                    : "text-muted hover:text-primary"
+                  "flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[52px] transition-colors duration-150",
+                  isActive ? "text-accent font-medium" : clsx(COLORS.text.secondary, "hover:text-neutral-950 dark:hover:text-neutral-50")
                 )
               }
               aria-label={label}
-              title={label}
             >
-              <Icon size={20} aria-hidden="true" />
+              <Icon size={20} strokeWidth={1.75} aria-hidden="true" />
               <span className="text-[10px] font-medium leading-none">{label}</span>
             </NavLink>
           ))}
 
-          {/* More button */}
           <button
             onClick={() => setMoreOpen(true)}
-            className="flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[56px] text-muted hover:text-primary transition-all duration-200 focus-visible:ring-2 focus-visible:ring-accent-300"
+            className={clsx("flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[52px] transition-colors duration-150", COLORS.text.secondary, "hover:text-neutral-950 dark:hover:text-neutral-50")}
             aria-label="More navigation options"
             aria-expanded={moreOpen}
           >
-            <MoreHorizontal size={20} aria-hidden="true" />
+            <MoreHorizontal size={20} strokeWidth={1.75} aria-hidden="true" />
             <span className="text-[10px] font-medium leading-none">More</span>
           </button>
         </nav>
 
-        {/* More menu overlay */}
         {moreOpen && (
           <div className="fixed inset-0 z-40 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Navigation menu">
-            {/* Backdrop */}
             <div
-              className="absolute inset-0 bg-black/40"
+              className="absolute inset-0 bg-black/30 backdrop-blur-sm"
               onClick={() => setMoreOpen(false)}
               role="button"
               tabIndex={0}
-              onKeyDown={(e) => e.key === 'Escape' && setMoreOpen(false)}
+              onKeyDown={(e) => e.key === "Escape" && setMoreOpen(false)}
             />
 
-            {/* Slide-up sheet */}
-            <div className="relative bg-bg-card rounded-t-3xl border-t border-bg-border p-4 pb-6 animate-slide-up shadow-lg">
-              {/* Handle bar */}
-              <div className="w-10 h-1 bg-bg-border/60 rounded-full mx-auto mb-4" aria-hidden="true" />
+            <div className={clsx("relative rounded-t-2xl border-t p-4 pb-6 animate-slide-up shadow-xl", COLORS.bg, COLORS.border)}>
+              <div className="w-8 h-1 bg-neutral-300 dark:bg-neutral-700 rounded-full mx-auto mb-4" aria-hidden="true" />
 
-              {/* Close button */}
               <button
                 onClick={() => setMoreOpen(false)}
-                className="absolute top-4 right-4 text-muted hover:text-primary transition-colors focus-visible:ring-2 focus-visible:ring-accent-300 rounded"
+                className="absolute top-4 right-4 btn-icon"
                 aria-label="Close navigation menu"
               >
-                <X size={20} aria-hidden="true" />
+                <X size={18} aria-hidden="true" />
               </button>
 
-              {/* Overflow nav items */}
-              <div className="flex flex-col gap-1 mb-4">
+              <div className="flex flex-col gap-0.5 mb-4">
                 {MOBILE_OVERFLOW.map(({ path, icon: Icon, label }) => (
                   <NavLink
                     key={path}
@@ -127,38 +131,30 @@ export function NavBar() {
                     onClick={() => setMoreOpen(false)}
                     className={({ isActive }) =>
                       clsx(
-                        "flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 text-sm focus-visible:ring-2 focus-visible:ring-accent-300",
+                        "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors duration-150 text-sm",
                         isActive
-                          ? "bg-accent/15 text-accent font-medium"
-                          : "text-muted hover:text-primary hover:bg-bg-hover"
+                          ? clsx(COLORS.accentBg, "text-accent font-medium")
+                          : clsx(COLORS.text.secondary, "hover:text-neutral-950 dark:hover:text-neutral-50", COLORS.hover)
                       )
                     }
                   >
-                    <Icon size={18} aria-hidden="true" />
+                    <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
                     <span>{label}</span>
                   </NavLink>
                 ))}
               </div>
 
-              {/* Tally connection status */}
-              <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-bg-border">
+              <div className={clsx("flex items-center gap-2.5 px-3 py-2.5 rounded-lg border", COLORS.bgHover, COLORS.border)}>
                 {isConnected ? (
-                  <Wifi size={14} className="text-success flex-shrink-0" />
+                  <Wifi size={14} className="text-success-600 dark:text-success-400 flex-shrink-0" />
                 ) : (
-                  <WifiOff size={14} className="text-danger flex-shrink-0" />
+                  <WifiOff size={14} className="text-danger-600 dark:text-danger-400 flex-shrink-0" />
                 )}
                 <div className="flex flex-col">
-                  <span className={clsx(
-                    "text-xs font-medium",
-                    isConnected ? "text-success" : "text-danger"
-                  )}>
+                  <span className={clsx("text-xs font-medium", isConnected ? "text-success-600 dark:text-success-400" : "text-danger-600 dark:text-danger-400")}>
                     {isConnected ? "Tally Connected" : "Tally Offline"}
                   </span>
-                  {lastSyncAt && (
-                    <span className="text-[10px] text-muted">
-                      Last sync: {formatLastSync()}
-                    </span>
-                  )}
+                  {lastSyncAt && <span className={clsx("text-[10px]", COLORS.text.secondary)}>Last sync: {formatLastSync()}</span>}
                 </div>
               </div>
             </div>
@@ -168,78 +164,77 @@ export function NavBar() {
     );
   }
 
-  // ─── Desktop: Sidebar ─────────────────────────────────────────────
+  // ─── Desktop: Sidebar ──────────────────────────────────────
   return (
     <nav
       className={clsx(
-        "fixed left-0 top-0 h-full bg-bg-card border-r border-bg-border flex flex-col transition-all duration-200 z-20",
+        "fixed left-0 top-0 h-full flex flex-col transition-[width] duration-200 z-30",
+        COLORS.bg,
+        "border-r",
+        COLORS.border,
         sidebarOpen ? "w-[220px]" : "w-14"
       )}
+      aria-label="Main navigation"
     >
       {/* Logo */}
-      <div className="flex items-center gap-3 px-3 py-4 border-b border-bg-border h-14">
-        <Bike size={22} className="text-accent flex-shrink-0" />
+      <div className={clsx("flex items-center gap-3 px-3 h-14 border-b", COLORS.border)}>
+        <div className="w-8 h-8 rounded-lg bg-accent/10 dark:bg-accent/20 flex items-center justify-center flex-shrink-0">
+          <Bike size={18} className="text-accent" />
+        </div>
         {sidebarOpen && (
-          <span className="text-primary font-bold text-sm font-sans truncate">MK Cycles</span>
+          <span className={clsx("font-bold text-sm tracking-tight truncate", COLORS.text.primary)}>MK Cycles</span>
         )}
       </div>
 
       {/* Nav items */}
-      <div className="flex-1 py-3 flex flex-col gap-1 px-2">
+      <div className="flex-1 py-2 flex flex-col gap-0.5 px-2 overflow-y-auto">
         {NAV_ITEMS.map(({ path, icon: Icon, label }) => (
           <NavLink
             key={path}
             to={path}
             className={({ isActive }) =>
               clsx(
-                "flex items-center gap-3 px-2 py-2.5 rounded-lg transition-all duration-200 text-sm focus-visible:ring-2 focus-visible:ring-accent-300",
+                "flex items-center gap-3 px-2.5 py-2 rounded-lg transition-colors duration-150 text-sm",
                 isActive
-                  ? "bg-accent/10 text-accent font-medium shadow-sm"
-                  : "text-muted hover:text-primary hover:bg-bg-hover"
+                  ? clsx(COLORS.accentBg, "text-accent font-medium")
+                  : clsx(COLORS.text.secondary, "hover:text-neutral-950 dark:hover:text-neutral-50", COLORS.hover)
               )
             }
             aria-label={label}
           >
-            <Icon size={18} className="flex-shrink-0" aria-hidden="true" />
-            {sidebarOpen && <span className="font-sans truncate">{label}</span>}
+            <Icon size={18} strokeWidth={1.75} className="flex-shrink-0" aria-hidden="true" />
+            {sidebarOpen && <span className="truncate">{label}</span>}
           </NavLink>
         ))}
       </div>
 
       {/* Tally Connection Status */}
-      <NavLink
-        to="/import"
-        className="mx-2 mb-2 px-2 py-2 rounded-lg hover:bg-bg-border/50 transition border border-bg-border"
-        title={isConnected ? `Connected - Last sync: ${formatLastSync()}` : "Not connected - Click to connect"}
-      >
-        <div className="flex items-center gap-2">
+      <div className="px-2 pb-2">
+        <NavLink
+          to="/import"
+          className={clsx("flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors border", COLORS.hover, COLORS.border)}
+          title={isConnected ? `Connected - Last sync: ${formatLastSync()}` : "Not connected - Click to connect"}
+        >
           {isConnected ? (
-            <Wifi size={14} className="text-success flex-shrink-0" />
+            <Wifi size={14} className="text-success-600 dark:text-success-400 flex-shrink-0" />
           ) : (
-            <WifiOff size={14} className="text-danger flex-shrink-0" />
+            <WifiOff size={14} className="text-danger-600 dark:text-danger-400 flex-shrink-0" />
           )}
           {sidebarOpen && (
             <div className="flex flex-col min-w-0">
-              <span className={clsx(
-                "text-xs font-medium truncate",
-                isConnected ? "text-success" : "text-danger"
-              )}>
-                {isConnected ? "Tally Connected" : "Tally Offline"}
+              <span className={clsx("text-xs font-medium truncate", isConnected ? "text-success-600 dark:text-success-400" : "text-danger-600 dark:text-danger-400")}>
+                {isConnected ? "Connected" : "Offline"}
               </span>
-              {lastSyncAt && (
-                <span className="text-[10px] text-muted truncate">
-                  {formatLastSync()}
-                </span>
-              )}
+              {lastSyncAt && <span className={clsx("text-[10px] truncate", COLORS.text.secondary)}>{formatLastSync()}</span>}
             </div>
           )}
-        </div>
-      </NavLink>
+        </NavLink>
+      </div>
 
       {/* Collapse toggle */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
-        className="flex items-center justify-center p-3 border-t border-bg-border text-muted hover:text-primary transition cursor-pointer"
+        className={clsx("flex items-center justify-center h-10 border-t transition-colors cursor-pointer", COLORS.border, COLORS.text.secondary, COLORS.hover)}
         aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
       >
         {sidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
