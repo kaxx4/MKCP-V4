@@ -52,6 +52,7 @@
   }
 
   /* Dark Mode */
+  }
 
   /* Scrollbars */
   ::-webkit-scrollbar {
@@ -68,7 +69,10 @@
   ::-webkit-scrollbar-thumb:hover {
     background: #a1a1a6;
   }
-
+    ::-webkit-scrollbar-thumb:hover {
+      background: #6c6c70;
+    }
+  }
 
   /* Selection */
   ::selection {
@@ -91,14 +95,14 @@
     @apply bg-white rounded-lg border border-neutral-200 p-4 md:p-6
            transition-all duration-150;
   }
-
+  }
 
   /* Elevated card: subtle shadow, no border */
   .card-elevated {
     @apply bg-white rounded-lg shadow-sm p-4 md:p-6
            transition-all duration-150;
   }
-
+  }
 
   /* Interactive card: responds to user action */
   .card-interactive {
@@ -141,62 +145,62 @@
   /* Page Title: Large, bold, primary text */
   .page-title {
     @apply text-4xl font-bold tracking-tight
-           text-neutral-95050
+           text-neutral-950
            leading-tight;
   }
 
   /* Page Subtitle: Secondary text, smaller */
   .page-subtitle {
-    @apply text-sm text-neutral-600400
+    @apply text-sm text-neutral-600
            mt-2;
   }
 
   /* Section Header: Prominent section title */
   .section-header {
     @apply text-2xl font-semibold tracking-tight
-           text-neutral-950100
+           text-neutral-950
            leading-snug;
   }
 
   /* Subsection Header: Medium emphasis */
   .subsection-header {
     @apply text-lg font-semibold
-           text-neutral-950100;
+           text-neutral-950;
   }
 
   /* Card Title: Small section header */
   .card-title {
     @apply text-sm font-semibold
-           text-neutral-950100;
+           text-neutral-950;
   }
 
   /* Card Subtitle: Secondary text */
   .card-subtitle {
-    @apply text-xs text-neutral-600500;
+    @apply text-xs text-neutral-600;
   }
 
   /* Label Text: Caps, secondary */
   .label-text {
     @apply text-xs font-medium uppercase tracking-wider
-           text-neutral-700300;
+           text-neutral-700;
   }
 
   /* Caption Text: Small secondary */
   .caption-text {
-    @apply text-xs text-neutral-600500;
+    @apply text-xs text-neutral-600;
   }
 
   /* Metric Value: Large number display */
   .metric-value {
     @apply text-2xl md:text-3xl font-bold
-           text-neutral-95050
+           text-neutral-950
            tabular-nums tracking-tight;
   }
 
   /* Metric Label: Secondary text for metrics */
   .metric-label {
     @apply text-xs font-medium uppercase tracking-wider
-           text-neutral-700400;
+           text-neutral-700;
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -229,21 +233,21 @@
 
   .table-header {
     @apply text-xs font-semibold uppercase tracking-wider
-           text-neutral-700400
-           bg-neutral-100900
+           text-neutral-700
+           bg-neutral-100
            px-4 py-3 text-left whitespace-nowrap
-           border-b border-neutral-200800;
+           border-b border-neutral-200;
   }
 
   .table-header-sticky {
     @apply table-header sticky top-0 z-20 backdrop-blur-sm
-           bg-neutral-100/95900/95;
+           bg-neutral-100/95;
   }
 
   .table-cell {
     @apply text-sm px-4 py-3
-           text-neutral-950100
-           border-b border-neutral-100800;
+           text-neutral-950
+           border-b border-neutral-100;
   }
 
   .table-cell-emphasis {
@@ -251,11 +255,11 @@
   }
 
   .table-cell-muted {
-    @apply table-cell text-neutral-600400;
+    @apply table-cell text-neutral-600;
   }
 
   .table-cell-mono {
-    @apply table-cell font-mono text-neutral-950100
+    @apply table-cell font-mono text-neutral-950
            tabular-nums;
   }
 
@@ -264,12 +268,12 @@
   }
 
   .responsive-table-row {
-    @apply border-b border-neutral-100800
+    @apply border-b border-neutral-100
            transition-colors duration-75;
   }
 
   .responsive-table-row:hover {
-    @apply bg-neutral-100900;
+    @apply bg-neutral-100;
   }
 
   .responsive-table-row:last-child {
@@ -277,24 +281,24 @@
   }
 
   .table-row-hover {
-    @apply hover:bg-neutral-100:bg-neutral-900
+    @apply hover:bg-neutral-100
            transition-colors duration-75;
   }
 
   .table-row-striped:nth-child(even) {
-    @apply bg-neutral-50950;
+    @apply bg-neutral-50;
   }
 
   .table-footer-row {
-    @apply border-t-2 border-neutral-200800
-           bg-neutral-50950
+    @apply border-t-2 border-neutral-200
+           bg-neutral-50
            font-semibold;
   }
 
   .table-group-header {
-    @apply bg-neutral-100900
+    @apply bg-neutral-100
            font-semibold text-xs uppercase tracking-wider
-           text-neutral-700400
+           text-neutral-700
            px-4 py-2;
   }
 
@@ -303,7 +307,7 @@
      ═══════════════════════════════════════════════════════════ */
 
   .tab-list {
-    @apply flex gap-0 border-b border-neutral-200800
+    @apply flex gap-0 border-b border-neutral-200
            overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0;
     -ms-overflow-style: none;
     scrollbar-width: none;
@@ -315,17 +319,17 @@
 
   .tab-item {
     @apply px-4 py-3 text-sm font-medium
-           text-neutral-600400
+           text-neutral-600
            border-b-2 border-transparent
            transition-all duration-150 cursor-pointer
-           hover:text-neutral-950:text-neutral-100
-           hover:bg-neutral-50:bg-neutral-900/50
+           hover:text-neutral-950
+           hover:bg-neutral-50
            whitespace-nowrap;
   }
 
   .tab-item-active {
     @apply text-accent border-accent font-semibold
-           bg-accent/[0.04]/[0.08]
+           bg-accent/[0.04]
            text-neutral-950;
   }
 
@@ -336,15 +340,15 @@
 
   .tab-pill {
     @apply px-3 py-1.5 text-xs font-medium
-           text-neutral-700300
-           rounded-full border border-neutral-200700
+           text-neutral-700
+           rounded-full border border-neutral-200
            transition-all duration-150 cursor-pointer
-           hover:text-neutral-950:text-neutral-100
-           hover:bg-neutral-100:bg-neutral-900;
+           hover:text-neutral-950
+           hover:bg-neutral-100;
   }
 
   .tab-pill-active {
-    @apply text-accent bg-accent/10/20
+    @apply text-accent bg-accent/10
            border-accent/30 font-semibold;
   }
 
@@ -366,7 +370,7 @@
            bg-accent text-white font-semibold
            hover:bg-accent-700 active:bg-accent-800
            shadow-xs hover:shadow-sm
-          :bg-accent-600;
+          ;
   }
 
   /* Secondary: Border, white background */
@@ -374,18 +378,18 @@
     @apply btn-base min-h-9 px-4 py-2
            bg-white text-neutral-950 border border-neutral-200
            hover:bg-neutral-50 active:bg-neutral-100
-          900100
-          800:bg-neutral-800
-          :bg-neutral-700;
+          
+          
+          ;
   }
 
   /* Ghost: No background, text only */
   .btn-ghost {
     @apply btn-base px-3 py-2
-           text-neutral-700300
-           hover:text-neutral-950:text-neutral-100
-           hover:bg-neutral-100:bg-neutral-900
-           active:bg-neutral-200:bg-neutral-800;
+           text-neutral-700
+           hover:text-neutral-950
+           hover:bg-neutral-100
+           active:bg-neutral-200;
   }
 
   /* Danger: Red, filled */
@@ -393,24 +397,24 @@
     @apply btn-base min-h-9 px-4 py-2
            bg-danger text-white font-semibold
            hover:bg-danger-600 active:bg-danger-700
-          :bg-danger-700;
+          ;
   }
 
   /* Accent ghost: Blue text, subtle hover */
   .btn-accent-ghost {
     @apply btn-base px-3 py-2
            text-accent
-           hover:text-accent-700:text-accent-400
-           hover:bg-accent/10:bg-accent/20
-           active:bg-accent/20:bg-accent/30;
+           hover:text-accent-700
+           hover:bg-accent/10
+           active:bg-accent/20;
   }
 
   /* Icon button */
   .btn-icon {
     @apply flex items-center justify-center w-9 h-9
-           rounded-lg text-neutral-600400
-           hover:text-neutral-950:text-neutral-100
-           hover:bg-neutral-100:bg-neutral-900
+           rounded-lg text-neutral-600
+           hover:text-neutral-950
+           hover:bg-neutral-100
            transition-colors duration-150
            disabled:opacity-50;
   }
@@ -418,7 +422,7 @@
   .btn-icon-accent {
     @apply flex items-center justify-center w-9 h-9
            rounded-lg text-accent
-           hover:bg-accent/10:bg-accent/20
+           hover:bg-accent/10
            transition-colors duration-150;
   }
 
@@ -436,23 +440,23 @@
      ═══════════════════════════════════════════════════════════ */
 
   .form-label {
-    @apply text-sm font-medium text-neutral-950100;
+    @apply text-sm font-medium text-neutral-950;
   }
 
   .form-helper {
-    @apply text-xs text-neutral-600400 mt-1;
+    @apply text-xs text-neutral-600 mt-1;
   }
 
   .form-input {
     @apply min-h-9 px-3 py-2 text-sm
-           bg-white950
-           border border-neutral-200800
-           text-neutral-950100
-           placeholder:text-neutral-500:text-neutral-500
+           bg-white
+           border border-neutral-200
+           text-neutral-950
+           placeholder:text-neutral-500
            rounded-lg
            focus:border-accent focus:ring-2 focus:ring-accent/15
            transition-all duration-150
-           disabled:bg-neutral-100:bg-neutral-900
+           disabled:bg-neutral-100
            disabled:cursor-not-allowed disabled:opacity-60;
   }
 
@@ -465,7 +469,7 @@
   }
 
   .form-select {
-    @apply form-input appearance-none bg-white950 pr-8 cursor-pointer;
+    @apply form-input appearance-none bg-white pr-8 cursor-pointer;
     background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%238e8e93' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
     background-repeat: no-repeat;
     background-position: right 0.5rem center;
@@ -481,11 +485,11 @@
   }
 
   .input-label {
-    @apply text-sm font-medium text-neutral-950100;
+    @apply text-sm font-medium text-neutral-950;
   }
 
   .search-input {
-    @apply form-input pl-9 pr-4 bg-white950;
+    @apply form-input pl-9 pr-4 bg-white;
     background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='2'%3e%3ccircle cx='11' cy='11' r='8'/%3e%3cpath d='m21 21-4.35-4.35'/%3e%3c/svg%3e");
     background-repeat: no-repeat;
     background-position: left 0.625rem center;
@@ -498,33 +502,33 @@
 
   .badge {
     @apply inline-flex items-center px-2 py-0.5 text-xs font-medium
-           rounded-full bg-accent/10/20
+           rounded-full bg-accent/10
            text-accent;
   }
 
   .badge-success {
-    @apply bg-success/10/20
-           text-success-600400;
+    @apply bg-success/10
+           text-success-600;
   }
 
   .badge-danger {
-    @apply bg-danger/10/20
-           text-danger-600400;
+    @apply bg-danger/10
+           text-danger-600;
   }
 
   .badge-warn {
-    @apply bg-warn/10/20
-           text-warn-600400;
+    @apply bg-warn/10
+           text-warn-600;
   }
 
   .badge-muted {
-    @apply bg-neutral-200700
-           text-neutral-700300;
+    @apply bg-neutral-200
+           text-neutral-700;
   }
 
   .badge-info {
-    @apply bg-info/10/20
-           text-info-600400;
+    @apply bg-info/10
+           text-info-600;
   }
 
   .badge-pill {
@@ -549,18 +553,18 @@
   }
 
   .status-badge-active {
-    @apply bg-success/10/20
-           text-success-600400;
+    @apply bg-success/10
+           text-success-600;
   }
 
   .status-badge-inactive {
-    @apply bg-neutral-200700
-           text-neutral-700300;
+    @apply bg-neutral-200
+           text-neutral-700;
   }
 
   .status-badge-pending {
-    @apply bg-warn/10/20
-           text-warn-600400;
+    @apply bg-warn/10
+           text-warn-600;
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -572,23 +576,23 @@
   }
 
   .alert-info {
-    @apply border-accent/20 bg-accent/[0.04]/[0.08]
-           text-neutral-950100;
+    @apply border-accent/20 bg-accent/[0.04]
+           text-neutral-950;
   }
 
   .alert-success {
-    @apply border-success/20 bg-success/[0.04]/[0.08]
-           text-neutral-950100;
+    @apply border-success/20 bg-success/[0.04]
+           text-neutral-950;
   }
 
   .alert-warn {
-    @apply border-warn/20 bg-warn/[0.04]/[0.08]
-           text-neutral-950100;
+    @apply border-warn/20 bg-warn/[0.04]
+           text-neutral-950;
   }
 
   .alert-danger {
-    @apply border-danger/20 bg-danger/[0.04]/[0.08]
-           text-neutral-950100;
+    @apply border-danger/20 bg-danger/[0.04]
+           text-neutral-950;
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -597,35 +601,35 @@
 
   .kpi-value {
     @apply text-2xl md:text-3xl font-bold
-           text-neutral-95050
+           text-neutral-950
            tabular-nums tracking-tight;
   }
 
   .kpi-label {
     @apply text-xs font-medium uppercase tracking-wider
-           text-neutral-700400;
+           text-neutral-700;
   }
 
   .stat-card {
     @apply flex flex-col gap-1 p-4
-           bg-white950
-           border border-neutral-200800
+           bg-white
+           border border-neutral-200
            rounded-lg;
   }
 
   .stat-label {
     @apply text-xs font-medium uppercase tracking-wider
-           text-neutral-700400;
+           text-neutral-700;
   }
 
   .stat-value {
     @apply text-lg md:text-2xl font-bold
-           text-neutral-950100
+           text-neutral-950
            tabular-nums;
   }
 
   .stat-sub {
-    @apply text-xs text-neutral-600500;
+    @apply text-xs text-neutral-600;
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -637,7 +641,7 @@
   }
 
   .modal-content {
-    @apply bg-white950
+    @apply bg-white
            rounded-2xl shadow-lg
            max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto;
   }
@@ -663,14 +667,14 @@
   }
 
   .tooltip-trigger {
-    @apply cursor-help border-b border-dotted border-neutral-400600
+    @apply cursor-help border-b border-dotted border-neutral-400
            transition-colors;
   }
 
   .tooltip-text {
     @apply hidden absolute bottom-full left-1/2 -translate-x-1/2 mb-2
-           px-3 py-1.5 bg-neutral-950100
-           text-white950
+           px-3 py-1.5 bg-neutral-950
+           text-white
            text-xs rounded-lg whitespace-nowrap z-50 shadow-md;
   }
 
@@ -683,7 +687,7 @@
      ═══════════════════════════════════════════════════════════ */
 
   .skeleton {
-    @apply relative overflow-hidden bg-neutral-200800 rounded-md;
+    @apply relative overflow-hidden bg-neutral-200 rounded-md;
   }
 
   .skeleton::after {
@@ -708,15 +712,15 @@
   }
 
   .empty-state-icon {
-    @apply w-14 h-14 text-neutral-400600 mb-4;
+    @apply w-14 h-14 text-neutral-400 mb-4;
   }
 
   .empty-state-title {
-    @apply text-lg font-semibold text-neutral-950100 mb-1.5;
+    @apply text-lg font-semibold text-neutral-950 mb-1.5;
   }
 
   .empty-state-description {
-    @apply text-sm text-neutral-600400 mb-6 max-w-sm;
+    @apply text-sm text-neutral-600 mb-6 max-w-sm;
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -724,7 +728,7 @@
      ═══════════════════════════════════════════════════════════ */
 
   .progress-bar {
-    @apply h-1.5 bg-neutral-200800 rounded-full overflow-hidden;
+    @apply h-1.5 bg-neutral-200 rounded-full overflow-hidden;
   }
 
   .progress-bar-fill {
@@ -736,11 +740,11 @@
      ═══════════════════════════════════════════════════════════ */
 
   .divider {
-    @apply border-t border-neutral-200800;
+    @apply border-t border-neutral-200;
   }
 
   .divider-strong {
-    @apply border-t border-neutral-300700;
+    @apply border-t border-neutral-300;
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -748,15 +752,15 @@
      ═══════════════════════════════════════════════════════════ */
 
   .section-card {
-    @apply bg-white950
-           rounded-lg border border-neutral-200800
+    @apply bg-white
+           rounded-lg border border-neutral-200
            overflow-hidden;
   }
 
   .section-card-header {
     @apply flex items-center justify-between px-6 py-4
-           border-b border-neutral-200800
-           bg-neutral-50900;
+           border-b border-neutral-200
+           bg-neutral-50;
   }
 
   .section-card-body {
@@ -773,21 +777,21 @@
 
   .filter-bar {
     @apply flex flex-wrap items-center gap-2 p-4
-           bg-neutral-100900
-           rounded-lg border border-neutral-200800;
+           bg-neutral-100
+           rounded-lg border border-neutral-200;
   }
 
   .filter-chip {
     @apply inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
-           rounded-full border border-neutral-200700
-           bg-white950
-           text-neutral-700300
-           hover:border-accent/50 hover:text-accent hover:bg-accent/[0.04]:bg-accent/[0.08]
+           rounded-full border border-neutral-200
+           bg-white
+           text-neutral-700
+           hover:border-accent/50 hover:text-accent hover:bg-accent/[0.04]
            transition-all duration-150 cursor-pointer;
   }
 
   .filter-chip-active {
-    @apply bg-accent/10/20
+    @apply bg-accent/10
            border-accent/30 text-accent;
   }
 
@@ -796,11 +800,11 @@
      ═══════════════════════════════════════════════════════════ */
 
   .num-positive {
-    @apply text-success-600400 font-medium;
+    @apply text-success-600 font-medium;
   }
 
   .num-negative {
-    @apply text-danger-600400 font-medium;
+    @apply text-danger-600 font-medium;
   }
 
   .num-highlight {
@@ -808,7 +812,7 @@
   }
 
   .num-muted {
-    @apply text-neutral-600400 font-normal;
+    @apply text-neutral-600 font-normal;
   }
 }
 
@@ -890,6 +894,6 @@
 
   /* Glass Effect */
   .glass {
-    @apply bg-white/80950/80 backdrop-blur-md;
+    @apply bg-white/80 backdrop-blur-md;
   }
 }
