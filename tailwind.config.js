@@ -12,18 +12,34 @@ module.exports = {
           hover: "#f1f5f9",
           alt: "#f0f4f8"
         },
-        // Primary accent - blue with extended palette
+        // Primary accent - Brand Orange with extended palette
         accent: {
-          50: "#eff6ff",
-          100: "#dbeafe",
-          200: "#bfdbfe",
-          300: "#93c5fd",
-          400: "#60a5fa",
-          DEFAULT: "#2563eb",
-          600: "#2563eb",
-          700: "#1d4ed8",
-          800: "#1e40af",
-          900: "#1e3a8a"
+          50: "#FEF6F0",
+          100: "#FDD5B0",
+          200: "#FBB370",
+          300: "#F9A155",
+          DEFAULT: "#E8751A",
+          600: "#E8751A",
+          700: "#D6670F",
+          800: "#C45A04",
+          900: "#A84600"
+        },
+        // Secondary accent - Brand Green
+        secondary: {
+          50: "#F0F4F2",
+          100: "#D0E0D8",
+          DEFAULT: "#2D5A3D",
+          600: "#1F3A28",
+          700: "#0F1A13",
+          900: "#051208"
+        },
+        // Tertiary accent - Brand Cream
+        tertiary: {
+          50: "#FFFBF5",
+          100: "#FEF5ED",
+          200: "#FCE8D0",
+          DEFAULT: "#FFFBF5",
+          600: "#FCE8D0"
         },
         // Semantic colors - success, warning, danger
         success: {
