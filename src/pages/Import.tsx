@@ -876,9 +876,9 @@ export default function ImportPage() {
 
   return (
     <div className="max-w-4xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-2xl md:text-3xl font-bold text-primary mb-1">Import Tally Data</h1>
-        <p className="text-muted text-xs md:text-sm">Connect live to TallyPrime or upload JSON files</p>
+      <div className="page-header">
+        <h1 className="page-title">Import Tally Data</h1>
+        <p className="page-subtitle">Connect live to TallyPrime or upload JSON files</p>
       </div>
 
       {/* Tab Switcher */}
@@ -914,7 +914,7 @@ export default function ImportPage() {
         <div className="bento-card mb-6">
           <div className="flex items-center gap-2 mb-3">
             <Calendar size={16} className="text-accent" />
-            <h3 className="font-semibold text-primary">Current Data Status</h3>
+            <h3 className="card-title">Current Data Status</h3>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-bg border border-bg-border rounded-lg p-3">
@@ -935,7 +935,7 @@ export default function ImportPage() {
                 Period: {existingDataInfo.earliestTxDate} to {existingDataInfo.latestTxDate}
               </div>
               <div className="text-xs text-muted mt-1">
-                Last Entry: <span className="font-mono text-primary">{existingDataInfo.lastVoucherEntry}</span>
+                Last Entry: <span className="tabular-nums text-primary">{existingDataInfo.lastVoucherEntry}</span>
               </div>
             </div>
           </div>
@@ -947,8 +947,8 @@ export default function ImportPage() {
         <div className="space-y-6">
           {/* Connection Status */}
           <div className={clsx(
-            "border rounded-xl p-4",
-            isConnected ? "bg-success/10 border-success/30" : "bg-danger/10 border-danger/30"
+            "alert",
+            isConnected ? "alert-success" : "alert-danger"
           )}>
             <div className="flex items-center gap-3 mb-3">
               {isConnected ? (
@@ -968,7 +968,7 @@ export default function ImportPage() {
               </div>
               <button
                 onClick={checkConnection}
-                className="ml-auto text-sm px-3 py-1.5 bg-bg-border hover:bg-bg-border/70 rounded-md text-muted hover:text-primary"
+                className="ml-auto btn-secondary btn-sm"
               >
                 Test Connection
               </button>
@@ -994,13 +994,13 @@ export default function ImportPage() {
           {/* Sync Form */}
           <div className="bento-card space-y-4">
             <div>
-              <label className="block text-sm font-medium text-primary mb-2">Company Name</label>
+              <label className="form-label">Company Name</label>
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={companyName}
                   onChange={(e) => setCompanyName(e.target.value)}
-                  className="flex-1 px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary font-medium focus:outline-none focus:ring-2 focus:ring-accent"
+                  className="form-input flex-1"
                   placeholder="Enter exact company name from TallyPrime"
                 />
                 <button
@@ -1019,7 +1019,7 @@ export default function ImportPage() {
                     }
                   }}
                   disabled={isSyncing}
-                  className="px-4 py-2 bg-accent hover:bg-accent-hover disabled:opacity-50 text-white font-medium rounded-lg transition text-sm whitespace-nowrap"
+                  className="btn-primary btn-sm disabled:opacity-50 whitespace-nowrap"
                 >
                   Auto-Detect
                 </button>
@@ -1031,7 +1031,7 @@ export default function ImportPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-primary mb-2">
+                <label className="form-label">
                   FY From Date
                 </label>
                 <input
@@ -1041,11 +1041,11 @@ export default function ImportPage() {
                     const yyyymmdd = e.target.value.replace(/-/g, '');
                     setFyDates(yyyymmdd, fyToDate);
                   }}
-                  className="w-full px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary focus:outline-none focus:ring-2 focus:ring-accent"
+                  className="form-input"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-primary mb-2">
+                <label className="form-label">
                   FY To Date
                 </label>
                 <input
@@ -1055,13 +1055,13 @@ export default function ImportPage() {
                     const yyyymmdd = e.target.value.replace(/-/g, '');
                     setFyDates(fyFromDate, yyyymmdd);
                   }}
-                  className="w-full px-4 py-2 bg-bg border border-bg-border rounded-lg text-primary focus:outline-none focus:ring-2 focus:ring-accent"
+                  className="form-input"
                 />
               </div>
             </div>
             {/* Date range summary + Reset + Chunk mode */}
             <div className="flex flex-wrap items-center gap-3">
-              <div className="flex-1 text-xs text-muted bg-bg border border-bg-border rounded-lg px-3 py-2">
+              <div className="flex-1 alert alert-info text-xs">
                 <strong>Range:</strong> {fyFromDate.slice(6,8)}/{fyFromDate.slice(4,6)}/{fyFromDate.slice(0,4)} — {fyToDate.slice(6,8)}/{fyToDate.slice(4,6)}/{fyToDate.slice(0,4)} ({formatFYRange(fyFromDate, fyToDate)})
                 {fyFromDate === fyToDate && <span className="text-danger ml-2 font-bold">⚠ SINGLE DAY — click Reset FY!</span>}
                 {fyFromDate > fyToDate && <span className="text-danger ml-2 font-bold">⚠ FROM after TO — click Reset FY!</span>}
@@ -1071,7 +1071,7 @@ export default function ImportPage() {
                   resetToCurrentFY();
                   addLog("✓ Dates reset to current FY");
                 }}
-                className="text-xs px-3 py-2 bg-warn/20 hover:bg-warn/30 text-warn font-semibold rounded-lg transition whitespace-nowrap"
+                className="btn-sm bg-warn/20 hover:bg-warn/30 text-warn font-semibold whitespace-nowrap"
               >
                 Reset to Current FY
               </button>
@@ -1079,22 +1079,18 @@ export default function ImportPage() {
 
             {/* Chunk mode selector */}
             <div className="flex items-center gap-3">
-              <span className="text-xs text-muted font-medium">Sync Mode:</span>
+              <span className="label-text font-medium">Sync Mode:</span>
               {(["monthly", "weekly", "daily"] as const).map((mode) => (
                 <button
                   key={mode}
                   onClick={() => setSyncMode(mode)}
-                  className={`text-xs px-3 py-1.5 rounded-md font-medium transition ${
-                    syncMode === mode
-                      ? "bg-accent text-white"
-                      : "bg-bg-border text-muted hover:text-primary"
-                  }`}
+                  className={clsx("btn-sm", syncMode === mode ? "btn-primary" : "btn-secondary")}
                 >
                   {mode === "monthly" ? "Monthly (fast)" : mode === "weekly" ? "Weekly (balanced)" : "Daily (safest)"}
                 </button>
               ))}
             </div>
-            <div className="text-xs text-muted bg-bg border border-bg-border rounded-lg px-3 py-2">
+            <div className="alert alert-info text-xs">
               💡 <strong>Tip:</strong> Use <strong>Monthly</strong> for fast syncs. If you get empty/partial data, try <strong>Weekly</strong> or <strong>Daily</strong> mode — it makes smaller requests that are less likely to timeout or fail.
             </div>
 
@@ -1102,7 +1098,7 @@ export default function ImportPage() {
             <button
               onClick={handleImportAll}
               disabled={isSyncing || !isConnected || !companyName.trim() || !fyFromDate || !fyToDate}
-              className="flex items-center justify-center gap-2 w-full bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold px-6 py-3.5 rounded-lg transition text-base"
+              className="btn-primary w-full text-base py-3.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSyncing ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
               {isSyncing ? "Importing..." : "Import All from Tally"}
@@ -1113,7 +1109,7 @@ export default function ImportPage() {
               <button
                 onClick={handleSyncMasters}
                 disabled={isSyncing || !isConnected || !companyName.trim()}
-                className="flex items-center justify-center gap-2 bg-bg-border hover:bg-bg-border/70 disabled:opacity-50 disabled:cursor-not-allowed text-muted hover:text-primary font-medium px-4 py-2.5 rounded-lg transition text-sm"
+                className="btn-secondary btn-sm disabled:opacity-50 disabled:cursor-not-allowed justify-center"
               >
                 {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <Package size={14} />}
                 Masters Only (Groups + Units + Items + Ledgers)
@@ -1121,7 +1117,7 @@ export default function ImportPage() {
               <button
                 onClick={handleSyncDayBook}
                 disabled={isSyncing || !isConnected || !companyName.trim() || !fyFromDate || !fyToDate}
-                className="flex items-center justify-center gap-2 bg-bg-border hover:bg-bg-border/70 disabled:opacity-50 disabled:cursor-not-allowed text-muted hover:text-primary font-medium px-4 py-2.5 rounded-lg transition text-sm"
+                className="btn-secondary btn-sm disabled:opacity-50 disabled:cursor-not-allowed justify-center"
               >
                 {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <FileJson size={14} />}
                 Vouchers Only (Monthly Chunks)
@@ -1129,7 +1125,7 @@ export default function ImportPage() {
               <button
                 onClick={handleIncrementalSync}
                 disabled={isSyncing || !isConnected || !companyName.trim()}
-                className="flex items-center justify-center gap-2 bg-bg-border hover:bg-bg-border/70 disabled:opacity-50 disabled:cursor-not-allowed text-muted hover:text-primary font-medium px-4 py-2.5 rounded-lg transition text-sm"
+                className="btn-secondary btn-sm disabled:opacity-50 disabled:cursor-not-allowed justify-center"
               >
                 {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                 {lastVoucherDate ? `Since ${lastVoucherDate}` : "Incremental Sync"}
@@ -1173,7 +1169,7 @@ export default function ImportPage() {
             <button
               onClick={runImport}
               disabled={!txFile || importing}
-              className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-5 py-2.5 rounded-lg transition"
+              className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {importing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
               {importing ? "Importing..." : "Parse Files"}
@@ -1181,7 +1177,7 @@ export default function ImportPage() {
             <button
               onClick={loadSampleData}
               disabled={importing}
-              className="flex items-center gap-2 bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary font-medium px-5 py-2.5 rounded-lg transition"
+              className="btn-secondary"
             >
               <FlaskConical size={16} />
               Load Sample Data
@@ -1193,7 +1189,7 @@ export default function ImportPage() {
       {/* Debug Log */}
       {debugLog.length > 0 && (
         <div className="bento-card mt-6">
-          <h3 className="text-sm font-semibold text-primary mb-2 flex items-center gap-2">
+          <h3 className="section-header flex items-center gap-2">
             <Info size={14} />
             {tab === "live" ? "Sync Progress Log" : "Import Progress Log"}
           </h3>
@@ -1213,11 +1209,11 @@ export default function ImportPage() {
       {/* Report */}
       {report && (
         <div className="bento-card space-y-4 mt-6">
-          <h2 className="text-base md:text-lg font-semibold text-primary">Import Summary</h2>
+          <h2 className="section-header text-base md:text-lg">Import Summary</h2>
 
           {/* Merge Info Banner */}
           {report.mergeMode && (
-            <div className="bg-accent/10 border border-accent/30 rounded-lg p-4">
+            <div className="alert alert-info">
               <div className="flex items-center gap-2 mb-2 text-accent font-medium text-sm">
                 <CheckCircle size={14} />
                 Smart Merge Completed
@@ -1225,11 +1221,11 @@ export default function ImportPage() {
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div className="bg-bg-card border border-bg-border rounded-lg p-2">
                   <span className="text-muted">Duplicates Removed:</span>
-                  <span className="font-mono font-bold text-warn ml-2">{report.duplicatesRemoved}</span>
+                  <span className="tabular-nums font-bold text-warn ml-2">{report.duplicatesRemoved}</span>
                 </div>
                 <div className="bg-bg-card border border-bg-border rounded-lg p-2">
                   <span className="text-muted">New Vouchers Added:</span>
-                  <span className="font-mono font-bold text-success ml-2">{report.newVouchersAdded}</span>
+                  <span className="tabular-nums font-bold text-success ml-2">{report.newVouchersAdded}</span>
                 </div>
               </div>
             </div>
@@ -1244,16 +1240,16 @@ export default function ImportPage() {
               { label: "Ledgers", value: report.ledgers, color: "text-accent" },
               { label: "Total Vouchers", value: report.vouchers, color: "text-primary" },
             ].map(({ label, value, color }) => (
-              <div key={label} className="bg-bg border border-bg-border rounded-lg p-4 text-center">
-                <div className={`text-3xl font-mono font-bold ${color}`}>{value.toLocaleString("en-IN")}</div>
-                <div className="text-muted text-sm mt-1">{label}</div>
+              <div key={label} className="bento-card text-center">
+                <div className={clsx("text-3xl tabular-nums font-bold", color)}>{value.toLocaleString("en-IN")}</div>
+                <div className="metric-label mt-1">{label}</div>
               </div>
             ))}
           </div>
 
           {/* Reconciliation errors */}
           {report.reconErrors.length > 0 && (
-            <div className="bg-warn/10 border border-warn/30 rounded-lg p-4">
+            <div className="alert alert-warn">
               <div className="flex items-center gap-2 mb-2 text-warn font-medium text-sm">
                 <AlertTriangle size={14} />
                 {report.reconErrors.length} Reconciliation Issue(s)
@@ -1294,14 +1290,14 @@ export default function ImportPage() {
           <div className="flex gap-3 pt-2">
             <button
               onClick={acceptData}
-              className="flex items-center gap-2 bg-success hover:bg-success/80 text-white font-semibold px-6 py-2.5 rounded-lg transition"
+              className="btn-primary bg-success hover:bg-success/80"
             >
               <CheckCircle size={16} />
               Accept & Continue to Orders
             </button>
             <button
               onClick={downloadReport}
-              className="flex items-center gap-2 bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-5 py-2.5 rounded-lg transition text-sm"
+              className="btn-secondary btn-sm"
             >
               Download Report
             </button>
