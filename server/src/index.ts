@@ -785,6 +785,44 @@ app.post("/api/tally/debug/raw-test", async (req, res) => {
   }
 });
 
+// Sales Module - Tally Import Endpoint
+app.post("/api/tally/import", express.text({ type: "application/xml" }), async (req, res) => {
+  try {
+    if (!req.body) {
+      return res.status(400).json({ error: "XML body required" });
+    }
+
+    const xml = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+
+    // Store request for debugging
+    lastRawXml = {
+      request: xml,
+      response: "",
+      timestamp: new Date().toISOString(),
+      label: "import-voucher",
+    };
+
+    // Forward to Tally
+    const response = await tallyPost(TALLY, xml, 30_000, true);
+    const responseText = typeof response === "string" ? response : JSON.stringify(response);
+
+    // Store response for debugging
+    lastRawXml.response = responseText.slice(0, 50_000);
+
+    // Try to parse and extract result status
+    const isSuccess = responseText.toLowerCase().includes("successfully");
+
+    res.setHeader("Content-Type", "application/xml");
+    res.status(isSuccess ? 200 : 400).send(responseText);
+  } catch (e: any) {
+    console.error("Tally import error:", e.message);
+    res.status(500).json({
+      error: e.message,
+      message: "Failed to import invoice to Tally"
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`\n✓ MKCP Tally Proxy → http://localhost:${PORT}`);
   console.log(`   Target: ${TALLY}\n`);

@@ -4,11 +4,13 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { Plus, FileText, Send, AlertTriangle, CheckCircle } from "lucide-react";
+import { Plus, FileText, Send, AlertTriangle, CheckCircle, Download, Loader2 } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useSalesStore } from "../store/salesStore";
 import { validateInvoice, roundTallyStyle } from "../services/salesValidator";
+import { downloadInvoicePDF } from "../services/salesPDFExporter";
+import { pushInvoiceToTally, validateInvoiceForTally } from "../services/salesTallyConverter";
 import { useToast } from "../components/Toast";
 import type {
   SalesInvoice,
@@ -30,6 +32,8 @@ export default function SalesPage() {
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string>("");
+  const [isExporting, setIsExporting] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
 
   // Initialize empty invoice if none exists
   useEffect(() => {
@@ -198,21 +202,62 @@ export default function SalesPage() {
     setUnitMode(newMode);
   };
 
-  const handleExportPDF = () => {
+  const handleExportPDF = useCallback(() => {
+    if (!currentInvoice) return;
+
     if (!validationResult?.passed) {
       toast.error("Fix validation errors before exporting");
       return;
     }
-    toast.info("PDF export coming soon");
-  };
 
-  const handlePushToTally = () => {
-    if (!validationResult?.passed) {
-      toast.error("Cannot push invalid invoice to Tally");
+    try {
+      setIsExporting(true);
+      downloadInvoicePDF(currentInvoice);
+      toast.success(`Downloaded PDF: Invoice_${currentInvoice.header.invoiceNo || "DRAFT"}`);
+    } catch (error) {
+      toast.error("Failed to export PDF");
+      console.error("PDF export error:", error);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [currentInvoice, validationResult, toast]);
+
+  const handlePushToTally = useCallback(async () => {
+    if (!currentInvoice) return;
+
+    // First validate against Tally converter requirements
+    const validation = validateInvoiceForTally(currentInvoice);
+    if (!validation.valid) {
+      const errors = validation.errors.slice(0, 3).join("; ");
+      toast.error(`Cannot push to Tally: ${errors}`);
       return;
     }
-    toast.info("Tally push coming soon");
-  };
+
+    if (!validationResult?.passed) {
+      toast.error("Fix validation errors before pushing to Tally");
+      return;
+    }
+
+    try {
+      setIsPushing(true);
+      const result = await pushInvoiceToTally(currentInvoice);
+
+      if (result.success) {
+        toast.success(result.message);
+        if (result.tallyId) {
+          console.log(`Invoice pushed to Tally with ID: ${result.tallyId}`);
+        }
+      } else {
+        toast.error(result.error || result.message);
+        console.error("Tally push error:", result.error);
+      }
+    } catch (error) {
+      toast.error("Failed to push invoice to Tally");
+      console.error("Tally push error:", error);
+    } finally {
+      setIsPushing(false);
+    }
+  }, [currentInvoice, validationResult, toast]);
 
   if (!currentInvoice) {
     return <div className="p-6">Loading invoice...</div>;
@@ -471,18 +516,27 @@ export default function SalesPage() {
         </button>
         <button
           onClick={handleExportPDF}
-          disabled={!validationResult?.passed}
-          className="btn-primary"
+          disabled={!validationResult?.passed || isExporting}
+          className="btn-primary flex items-center gap-2"
         >
-          Export PDF
+          {isExporting ? (
+            <Loader2 size={18} className="animate-spin" />
+          ) : (
+            <Download size={18} />
+          )}
+          {isExporting ? "Exporting..." : "Export PDF"}
         </button>
         <button
           onClick={handlePushToTally}
-          disabled={!validationResult?.passed}
+          disabled={!validationResult?.passed || isPushing}
           className="btn-accent flex items-center gap-2"
         >
-          <Send size={18} />
-          Push to Tally
+          {isPushing ? (
+            <Loader2 size={18} className="animate-spin" />
+          ) : (
+            <Send size={18} />
+          )}
+          {isPushing ? "Pushing..." : "Push to Tally"}
         </button>
       </div>
     </div>
