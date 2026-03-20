@@ -9,6 +9,8 @@ import { useOverrideStore } from "./store/overrideStore";
 import { loadData, loadFromStore } from "./db/idb";
 import { deserializeParsedData } from "./utils/serialize";
 import { useTallyAutoSync } from "./hooks/useTallyAutoSync";
+import { usePersistenceMonitor } from "./hooks/usePersistenceMonitor";
+import "./utils/dataDebug"; // Initialize data persistence debug utilities
 
 // Lazy load pages
 const ImportPage = lazy(() => import("./pages/Import"));
@@ -36,36 +38,48 @@ function AppRoutes() {
   // Enable Tally auto-sync
   useTallyAutoSync();
 
-  // Restore from IndexedDB on first load
+  // Enable automatic data persistence and monitoring
+  usePersistenceMonitor({ verbose: true });
+
+  // Restore from IndexedDB on first load with comprehensive error handling
   useEffect(() => {
-    if (!data) {
-      (async () => {
-        try {
-          // Restore parsed data
-          const raw = await loadData<unknown>("parsedData");
-          if (raw) {
-            setData(deserializeParsedData(raw));
-          }
-
-          // Restore unit overrides from IDB if Zustand localStorage is empty
-          const currentOverrides = useOverrideStore.getState().units;
-          if (!currentOverrides || Object.keys(currentOverrides).length === 0) {
-            const storedOverrides = await loadFromStore<Record<string, any>>("unitOverrides", "latest");
-            if (storedOverrides && Object.keys(storedOverrides).length > 0) {
-              for (const [itemId, override] of Object.entries(storedOverrides)) {
-                useOverrideStore.getState().setUnitOverride(itemId, override);
-              }
-            }
-          }
-
-          // Load default overrides from repo if nothing exists
-          await useOverrideStore.getState().loadDefaults();
-        } catch (e) {
-          console.error("Failed to restore data from IDB:", e);
+    (async () => {
+      try {
+        // Always attempt to restore data, don't skip if data exists
+        const raw = await loadData<unknown>("parsedData");
+        if (raw) {
+          const parsed = deserializeParsedData(raw);
+          setData(parsed);
+          console.log(`[RESTORE] ✓ Loaded persisted data: ${parsed.vouchers?.length ?? 0} vouchers, ${parsed.items?.size ?? 0} items`);
+        } else {
+          console.log("[RESTORE] ℹ No persisted data found in IndexedDB");
         }
-      })();
-    }
-  }, []);
+
+        // Restore unit overrides from IDB if Zustand localStorage is empty
+        const currentOverrides = useOverrideStore.getState().units;
+        if (!currentOverrides || Object.keys(currentOverrides).length === 0) {
+          const storedOverrides = await loadFromStore<Record<string, any>>("unitOverrides", "latest");
+          if (storedOverrides && Object.keys(storedOverrides).length > 0) {
+            for (const [itemId, override] of Object.entries(storedOverrides)) {
+              useOverrideStore.getState().setUnitOverride(itemId, override);
+            }
+            console.log(`[RESTORE] ✓ Loaded ${Object.keys(storedOverrides).length} unit overrides`);
+          }
+        }
+
+        // Load default overrides from repo if nothing exists
+        await useOverrideStore.getState().loadDefaults();
+      } catch (e) {
+        console.error("[RESTORE] ✗ Failed to restore data from IndexedDB:", e);
+        // Still try to load defaults even if restore fails
+        try {
+          await useOverrideStore.getState().loadDefaults();
+        } catch (defaultErr) {
+          console.error("[RESTORE] ✗ Failed to load default overrides:", defaultErr);
+        }
+      }
+    })();
+  }, [setData]);
 
   return (
     <Layout>
