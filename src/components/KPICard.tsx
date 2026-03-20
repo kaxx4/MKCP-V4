@@ -16,19 +16,31 @@ export const KPICard = memo(function KPICard({ title, value, sub, icon, trend, a
   return (
     <article
       className={clsx(
-        "bento-card flex flex-col gap-1.5 md:gap-2 min-w-0 transition-all duration-200",
-        accent ? "border-accent/40 hover:shadow-base hover:border-accent/60" : danger ? "border-danger/40 hover:shadow-base hover:border-danger/60" : "border-bg-border hover:shadow-sm"
+        "card-elevated flex flex-col gap-3 min-w-0",
+        accent && "border border-accent/20",
+        danger && "border border-danger/20",
+        !accent && !danger && "border-0"
       )}
-      aria-label={`${title}: ${value}${sub ? `, ${sub}` : ''}`}
+      aria-label={`${title}: ${value}${sub ? `, ${sub}` : ""}`}
     >
-      <div className="flex items-center justify-between gap-1 min-w-0">
-        <h3 className="text-muted text-xs md:text-sm font-sans uppercase tracking-wider truncate font-semibold">{title}</h3>
-        {icon && <span className={clsx("flex-shrink-0", accent ? "text-accent" : danger ? "text-danger" : "text-muted-400")} aria-hidden="true">{icon}</span>}
+      <div className="flex items-center justify-between gap-3 min-w-0">
+        <h3 className="metric-label text-neutral-600 dark:text-neutral-400 truncate">{title}</h3>
+        {icon && (
+          <span
+            className={clsx(
+              "flex-shrink-0 w-5 h-5 flex items-center justify-center",
+              accent ? "text-accent" : danger ? "text-danger" : "text-neutral-500 dark:text-neutral-500"
+            )}
+            aria-hidden="true"
+          >
+            {icon}
+          </span>
+        )}
       </div>
       <div
         className={clsx(
-          "text-lg md:text-2xl font-sans font-semibold truncate",
-          accent ? "text-accent" : danger ? "text-danger" : "text-primary"
+          "metric-value truncate font-mono tracking-tight",
+          accent ? "text-accent" : danger ? "text-danger" : "text-neutral-950 dark:text-neutral-50"
         )}
         title={value}
       >
@@ -37,8 +49,10 @@ export const KPICard = memo(function KPICard({ title, value, sub, icon, trend, a
       {sub && (
         <p
           className={clsx(
-            "text-xs md:text-sm font-sans truncate",
-            trend === "up" ? "text-success-600 font-medium" : trend === "down" ? "text-danger-600 font-medium" : "text-muted"
+            "text-xs truncate font-medium",
+            trend === "up" && "text-success-600 dark:text-success-400",
+            trend === "down" && "text-danger-600 dark:text-danger-400",
+            trend !== "up" && trend !== "down" && "text-neutral-600 dark:text-neutral-400"
           )}
         >
           {sub}
