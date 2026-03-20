@@ -64,6 +64,23 @@
   .bento-card-elevated {
     @apply shadow-base border-0;
   }
+  /* Card variants — standard, subtle, premium, section */
+  .card-standard {
+    @apply bg-white border border-bg-border rounded-lg p-4;
+    @apply hover:shadow-sm transition-all duration-200;
+  }
+  .card-subtle {
+    @apply bg-bg-hover border border-bg-border/30 rounded-lg p-4;
+    @apply hover:shadow-sm hover:border-bg-border/50 transition-all;
+  }
+  .card-premium {
+    @apply bg-tertiary border-0 rounded-lg p-4;
+    @apply shadow-base hover:shadow-md transition-all;
+  }
+  .card-section {
+    @apply border-l-4 border-l-accent bg-white rounded-lg p-4;
+    @apply border-b border-bg-border;
+  }
   /* Bento grid — auto-fit responsive grid with improved spacing */
   .bento-grid {
     display: grid;
