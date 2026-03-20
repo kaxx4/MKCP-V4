@@ -248,10 +248,12 @@ export default function Settings() {
 
   return (
     <div className="max-w-xl space-y-6">
-      <h1 className="text-2xl md:text-3xl font-bold text-primary flex items-center gap-3">
-        <SettingsIcon size={24} className="text-accent" />
-        Settings
-      </h1>
+      <div className="page-header">
+        <h1 className="page-title flex items-center gap-3">
+          <SettingsIcon size={24} className="text-accent" />
+          Settings
+        </h1>
+      </div>
 
       {/* Local Data Storage */}
       <Section title="Local Data Storage">
@@ -288,9 +290,9 @@ export default function Settings() {
       {/* Unit Mode */}
       <Section title="Unit Mode">
         <div className="flex items-center gap-4">
-          <span className="text-sm text-muted">Currently: <span className="text-primary font-mono">{unitMode}</span></span>
+          <span className="text-sm text-muted">Currently: <span className="text-primary tabular-nums">{unitMode}</span></span>
           <button onClick={toggleUnitMode}
-            className="bg-accent hover:bg-accent-hover text-white px-4 py-1.5 rounded-lg text-sm transition">
+            className="btn-primary btn-sm">
             Switch to {unitMode === "BASE" ? "PKG" : "BASE"}
           </button>
         </div>
@@ -299,7 +301,7 @@ export default function Settings() {
       {/* Financial Year */}
       <Section title="Financial Year">
         <select value={fyYear} onChange={(e) => setFyYear(e.target.value)}
-          className="bg-bg border border-bg-border rounded-lg px-3 py-2 text-primary text-sm outline-none">
+          className="form-select">
           {fyOptions.map((y) => <option key={y} value={y}>{y}</option>)}
         </select>
       </Section>
@@ -309,7 +311,7 @@ export default function Settings() {
         <div className="flex gap-2">
           {[1, 1.5, 2, 3].map((m) => (
             <button key={m} onClick={() => setCoverMonths(m)}
-              className={`px-4 py-1.5 rounded-lg text-sm font-mono transition ${coverMonths === m ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary"}`}>
+              className={clsx("btn-sm tabular-nums", coverMonths === m ? "btn-primary" : "btn-secondary")}>
               {m}
             </button>
           ))}
@@ -320,14 +322,14 @@ export default function Settings() {
       <Section title="Lead Time Months">
         <input type="number" value={leadTimeMonths} min={0.5} max={6} step={0.5}
           onChange={(e) => setLeadTimeMonths(parseFloat(e.target.value) || 1.5)}
-          className="bg-bg border border-bg-border rounded-lg px-3 py-2 text-primary text-sm outline-none w-24" />
+          className="form-input w-24" />
       </Section>
 
       {/* Default Credit Days */}
       <Section title="Default Credit Days">
         <input type="number" value={defaultCreditDays} min={0} max={365}
           onChange={(e) => setDefaultCreditDays(parseInt(e.target.value) || 30)}
-          className="bg-bg border border-bg-border rounded-lg px-3 py-2 text-primary text-sm outline-none w-24" />
+          className="form-input w-24" />
       </Section>
 
       {/* Unit Configuration Export/Import */}
@@ -340,7 +342,7 @@ export default function Settings() {
             <button
               onClick={handleExportUnits}
               disabled={!data}
-              className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:bg-muted disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition text-sm"
+              className="btn-primary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <FileSpreadsheet size={14} />
               Export Template
@@ -348,7 +350,7 @@ export default function Settings() {
             <button
               onClick={handleImportUnitsClick}
               disabled={!data || isImporting}
-              className="flex items-center gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 rounded-lg transition text-sm"
+              className="btn-secondary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Upload size={14} />
               {isImporting ? "Importing..." : "Import Excel"}
@@ -379,7 +381,7 @@ export default function Settings() {
           <button
             onClick={handleRunAudit}
             disabled={!data || runningAudit}
-            className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:bg-muted disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition text-sm"
+            className="btn-primary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Activity size={14} />
             {runningAudit ? "Running Audit..." : "Run Audit"}
@@ -389,17 +391,17 @@ export default function Settings() {
             <div className="space-y-3 bg-bg border border-bg-border rounded-lg p-3 text-sm">
               {/* Summary */}
               <div className="grid grid-cols-2 gap-2">
-                <div className="bg-bg-card border border-bg-border rounded-lg p-2 text-center">
-                  <div className={`text-xl font-bold font-mono ${auditResults.failures.length === 0 ? "text-success" : "text-danger"}`}>
+                <div className="bento-card text-center">
+                  <div className={clsx("metric-value", auditResults.failures.length === 0 ? "text-success" : "text-danger")}>
                     {auditResults.passCount}/{auditResults.totalCount}
                   </div>
-                  <div className="text-muted text-xs">Items Passed</div>
+                  <div className="metric-label">Items Passed</div>
                 </div>
-                <div className="bg-bg-card border border-bg-border rounded-lg p-2 text-center">
-                  <div className={`text-xl font-bold font-mono ${auditResults.chainBreaks.length === 0 ? "text-success" : "text-warn"}`}>
+                <div className="bento-card text-center">
+                  <div className={clsx("metric-value", auditResults.chainBreaks.length === 0 ? "text-success" : "text-warn")}>
                     {auditResults.totalCount - auditResults.chainBreaks.length}/{auditResults.totalCount}
                   </div>
-                  <div className="text-muted text-xs">Chain Valid</div>
+                  <div className="metric-label">Chain Valid</div>
                 </div>
               </div>
 
@@ -407,9 +409,9 @@ export default function Settings() {
               <div className="border-t border-bg-border pt-2">
                 <div className="text-xs font-semibold text-muted mb-1">Invoice Balance</div>
                 <div className="grid grid-cols-3 gap-1 text-xs">
-                  <div><span className="text-muted">Billed:</span> <span className="font-mono text-primary">₹{(auditResults.invoiceAudit.totalBilled / 100000).toFixed(1)}L</span></div>
-                  <div><span className="text-muted">Paid:</span> <span className="font-mono text-success">₹{(auditResults.invoiceAudit.totalPaid / 100000).toFixed(1)}L</span></div>
-                  <div><span className="text-muted">Outstanding:</span> <span className="font-mono text-accent">₹{(auditResults.invoiceAudit.totalOutstanding / 100000).toFixed(1)}L</span></div>
+                  <div><span className="text-muted">Billed:</span> <span className="tabular-nums text-primary">₹{(auditResults.invoiceAudit.totalBilled / 100000).toFixed(1)}L</span></div>
+                  <div><span className="text-muted">Paid:</span> <span className="tabular-nums text-success">₹{(auditResults.invoiceAudit.totalPaid / 100000).toFixed(1)}L</span></div>
+                  <div><span className="text-muted">Outstanding:</span> <span className="tabular-nums text-accent">₹{(auditResults.invoiceAudit.totalOutstanding / 100000).toFixed(1)}L</span></div>
                 </div>
                 {auditResults.invoiceAudit.orphanedPayments.length > 0 && (
                   <div className="text-xs text-warn mt-1">⚠ {auditResults.invoiceAudit.orphanedPayments.length} orphaned payment(s)</div>
@@ -424,7 +426,7 @@ export default function Settings() {
                     const [type, counts] = entry;
                     return (
                       <div key={type}>
-                        <span className="text-muted">{type}:</span> <span className="font-mono text-primary">{counts.active}</span>
+                        <span className="text-muted">{type}:</span> <span className="tabular-nums text-primary">{counts.active}</span>
                         {counts.cancelled > 0 && <span className="text-danger ml-1">(-{counts.cancelled})</span>}
                         {counts.optional > 0 && <span className="text-warn ml-1">(~{counts.optional})</span>}
                       </div>
@@ -463,7 +465,7 @@ export default function Settings() {
       {/* Export Audit Log */}
       <Section title="Audit Log">
         <button onClick={handleExportAudit}
-          className="flex items-center gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-4 py-2 rounded-lg transition text-sm">
+          className="btn-secondary btn-sm">
           <Download size={14} />Export Audit Log
         </button>
       </Section>
@@ -499,10 +501,10 @@ export default function Settings() {
                     <button
                       onClick={() => handleRestoreBackup(backup.key)}
                       className={clsx(
-                        "flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition",
+                        "btn-sm",
                         confirmRestore === backup.key
-                          ? "bg-success/20 border border-success text-success"
-                          : "bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary"
+                          ? "btn-primary bg-success hover:bg-success/80"
+                          : "btn-secondary"
                       )}
                     >
                       <RotateCcw size={12} />
@@ -510,14 +512,14 @@ export default function Settings() {
                     </button>
                     <button
                       onClick={() => handleDownloadBackup(backup.key)}
-                      className="flex items-center gap-1 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg text-xs transition"
+                      className="btn-secondary btn-sm"
                     >
                       <Download size={12} />
                       Download
                     </button>
                     <button
                       onClick={() => handleDeleteBackup(backup.key)}
-                      className="flex items-center gap-1 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger px-3 py-1.5 rounded-lg text-xs transition"
+                      className="btn-danger btn-sm"
                     >
                       <Trash2 size={12} />
                       Delete
@@ -542,13 +544,13 @@ export default function Settings() {
           <div className="space-y-2">
             <p className="text-xs text-muted">Clear in-memory working data (does not delete persisted backups or JSON uploads).</p>
             {confirmClear && (
-              <div className="flex items-center gap-2 text-danger text-sm bg-danger/10 border border-danger/30 rounded-lg p-3">
+              <div className="alert alert-danger">
                 <AlertTriangle size={14} />
                 This will clear all imported data from memory. Click again to confirm.
               </div>
             )}
             <button onClick={handleClearData}
-              className="flex items-center gap-2 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger px-4 py-2 rounded-lg transition text-sm">
+              className="btn-danger btn-sm">
               <Trash2 size={14} />
               {confirmClear ? "Confirm Clear Working Data" : "Clear Working Data"}
             </button>
@@ -565,24 +567,24 @@ export default function Settings() {
               then permanently erases everything from your browser.
             </p>
             {eraseStep === "confirm" && (
-              <div className="flex items-center gap-2 text-danger text-sm bg-danger/10 border border-danger/30 rounded-lg p-3">
+              <div className="alert alert-danger">
                 <AlertTriangle size={14} />
                 A full backup will be downloaded first, then ALL data will be erased. Click again to proceed.
               </div>
             )}
             {eraseStep === "downloading" && (
-              <div className="flex items-center gap-2 text-accent text-sm bg-accent/10 border border-accent/30 rounded-lg p-3">
+              <div className="alert alert-info">
                 Downloading backup and erasing data...
               </div>
             )}
             {eraseStep === "done" && (
-              <div className="flex items-center gap-2 text-success text-sm bg-success/10 border border-success/30 rounded-lg p-3">
+              <div className="alert alert-success">
                 All data erased successfully. Backup was downloaded.
               </div>
             )}
             <button onClick={handleEraseData}
               disabled={eraseStep === "downloading" || eraseStep === "done"}
-              className="flex items-center gap-2 bg-danger hover:bg-danger/80 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition text-sm">
+              className="btn-danger btn-sm disabled:opacity-50 disabled:cursor-not-allowed">
               <Trash2 size={14} />
               {eraseStep === "idle" ? "Erase All Data (with backup)" :
                eraseStep === "confirm" ? "Confirm — Download Backup & Erase" :
@@ -598,7 +600,7 @@ export default function Settings() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="bento-card">
-      <h3 className="text-sm font-semibold text-muted mb-3">{title}</h3>
+      <h3 className="section-header">{title}</h3>
       {children}
     </div>
   );
@@ -606,9 +608,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="bg-bg border border-bg-border rounded-lg p-3">
-      <div className="text-xl font-mono font-bold text-accent">{value.toLocaleString("en-IN")}</div>
-      <div className="text-muted text-xs mt-0.5">{label}</div>
+    <div className="bento-card">
+      <div className="metric-value text-accent">{value.toLocaleString("en-IN")}</div>
+      <div className="metric-label">{label}</div>
     </div>
   );
 }
@@ -682,7 +684,7 @@ function TallyConnectionSection() {
           <button
             onClick={handleTestConnection}
             disabled={testing}
-            className="flex items-center gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg text-xs transition disabled:opacity-50"
+            className="btn-secondary btn-sm disabled:opacity-50"
           >
             <RefreshCw size={12} className={testing ? "animate-spin" : ""} />
             {testing ? "Testing..." : "Test"}
@@ -691,24 +693,24 @@ function TallyConnectionSection() {
 
         {/* Proxy URL */}
         <div>
-          <label className="block text-xs text-muted mb-1.5">Proxy URL</label>
+          <label className="form-label">Proxy URL</label>
           <input
             type="text"
             value={proxyUrl}
             onChange={(e) => setProxyUrl(e.target.value)}
             placeholder="http://localhost:3100"
-            className="w-full px-3 py-2 bg-bg border border-bg-border rounded-lg text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+            className="form-input tabular-nums"
           />
         </div>
 
         {/* Company Name */}
         <div>
-          <label className="block text-xs text-muted mb-1.5">Company Name (Fixed)</label>
+          <label className="form-label">Company Name (Fixed)</label>
           <input
             type="text"
             value={companyName}
             readOnly
-            className="w-full px-3 py-2 bg-bg-border border border-bg-border rounded-lg text-muted text-sm font-medium cursor-not-allowed"
+            className="form-input bg-bg-border text-muted cursor-not-allowed"
             title="Company name is permanently set to M.K.CYCLES (P) LTD."
           />
         </div>
@@ -716,34 +718,34 @@ function TallyConnectionSection() {
         {/* FY Date Range */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs text-muted mb-1.5">FY From (YYYYMMDD)</label>
+            <label className="form-label">FY From (YYYYMMDD)</label>
             <input
               type="text"
               value={fyFromDate}
               onChange={(e) => setFyDates(e.target.value, fyToDate)}
               placeholder="20240401"
-              className="w-full px-3 py-2 bg-bg border border-bg-border rounded-lg text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+              className="form-input tabular-nums"
             />
           </div>
           <div>
-            <label className="block text-xs text-muted mb-1.5">FY To (YYYYMMDD)</label>
+            <label className="form-label">FY To (YYYYMMDD)</label>
             <input
               type="text"
               value={fyToDate}
               onChange={(e) => setFyDates(fyFromDate, e.target.value)}
               placeholder="20250331"
-              className="w-full px-3 py-2 bg-bg border border-bg-border rounded-lg text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+              className="form-input tabular-nums"
             />
           </div>
         </div>
 
         {/* Auto-Sync */}
         <div>
-          <label className="block text-xs text-muted mb-1.5">Auto-Sync (minutes)</label>
+          <label className="form-label">Auto-Sync (minutes)</label>
           <select
             value={autoSyncMinutes}
             onChange={(e) => setAutoSync(Number(e.target.value))}
-            className="w-full px-3 py-2 bg-bg border border-bg-border rounded-lg text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+            className="form-select"
           >
             <option value="0">Disabled</option>
             <option value="5">Every 5 minutes</option>

@@ -65,10 +65,10 @@ export default function Invoices() {
 
   if (!data) {
     return (
-      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <FileText size={64} className="text-muted" />
-        <h2 className="text-xl font-semibold text-primary">No Data Loaded</h2>
-        <button onClick={() => navigate("/import")} className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white font-semibold px-5 py-2.5 rounded-lg transition mt-2">
+      <div className="empty-state">
+        <FileText size={64} className="empty-state-icon" />
+        <h2 className="empty-state-title">No Data Loaded</h2>
+        <button onClick={() => navigate("/import")} className="btn-primary mt-2">
           <Upload size={16} />Import Data
         </button>
       </div>
@@ -80,9 +80,9 @@ export default function Invoices() {
 
   return (
     <div className="page-section">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl md:text-3xl font-bold text-primary">Invoices</h1>
-        <button onClick={exportCSV} className="flex items-center gap-1.5 md:gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-2.5 md:px-4 py-1.5 md:py-2 rounded-lg transition text-xs md:text-sm">
+      <div className="page-header">
+        <h1 className="page-title">Invoices</h1>
+        <button onClick={exportCSV} className="btn-secondary btn-sm">
           <Download size={14} />Export
         </button>
       </div>
@@ -90,16 +90,16 @@ export default function Invoices() {
       {/* Summary — bento grid */}
       <div className="grid grid-cols-3 gap-2 md:gap-3">
         <div className="bento-card">
-          <div className="text-muted text-[10px] md:text-xs">Outstanding AR</div>
-          <div className="text-success text-sm md:text-xl font-mono font-bold mt-0.5 md:mt-1 truncate">{fmtINR(totalAR)}</div>
+          <div className="metric-label">Outstanding AR</div>
+          <div className="metric-value text-success truncate">{fmtINR(totalAR)}</div>
         </div>
         <div className="bento-card">
-          <div className="text-muted text-[10px] md:text-xs">Outstanding AP</div>
-          <div className="text-danger text-sm md:text-xl font-mono font-bold mt-0.5 md:mt-1 truncate">{fmtINR(totalAP)}</div>
+          <div className="metric-label">Outstanding AP</div>
+          <div className="metric-value text-danger truncate">{fmtINR(totalAP)}</div>
         </div>
         <div className="bento-card">
-          <div className="text-muted text-[10px] md:text-xs">Invoices</div>
-          <div className="text-primary text-sm md:text-xl font-mono font-bold mt-0.5 md:mt-1">{filtered.length}</div>
+          <div className="metric-label">Invoices</div>
+          <div className="metric-value text-primary">{filtered.length}</div>
         </div>
       </div>
 
@@ -108,7 +108,7 @@ export default function Invoices() {
         <div className="relative flex-1 min-w-[140px] md:min-w-[200px]">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search party / voucher#"
-            className="w-full bg-bg border border-bg-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-primary placeholder-muted outline-none" />
+            className="search-input pl-8" />
         </div>
         <div className="flex gap-1">
           {(["All", "Sales", "Purchase"] as FilterType[]).map((t) => (
@@ -119,14 +119,14 @@ export default function Invoices() {
           ))}
         </div>
         <div className="hidden md:flex items-center gap-1.5">
-          <label htmlFor="invoice-from" className="text-xs text-muted">From</label>
+          <label htmlFor="invoice-from" className="form-label">From</label>
           <input id="invoice-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-            className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none" />
+            className="form-input" />
         </div>
         <div className="hidden md:flex items-center gap-1.5">
-          <label htmlFor="invoice-to" className="text-xs text-muted">To</label>
+          <label htmlFor="invoice-to" className="form-label">To</label>
           <input id="invoice-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-            className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none" />
+            className="form-input" />
         </div>
       </div>
 
@@ -166,10 +166,10 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
   }, [expandedId, virtualizer]);
 
   return (
-    <div className="bento-card overflow-hidden !p-0">
-      <div className="overflow-x-auto" style={{ minWidth: "700px" }}>
+    <div className="section-card overflow-hidden">
+      <div className="table-scroll" style={{ minWidth: "700px" }}>
         {/* Header */}
-        <div className="grid text-xs text-muted font-medium border-b border-bg-border"
+        <div className="grid table-header"
              style={{ gridTemplateColumns: COL_TEMPLATE }}>
           {["Date", "Voucher#", "Type", "Party", "Amount", ""].map((h) => (
             <div key={h} className="px-4 py-3">{h}</div>
@@ -200,20 +200,20 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                 >
                   {/* Main row with grid layout */}
                   <div
-                    className="grid border-b border-bg-border/50 hover:bg-bg-border/20 cursor-pointer text-sm"
+                    className="grid responsive-table-row cursor-pointer"
                     style={{ gridTemplateColumns: COL_TEMPLATE }}
                     onClick={() => setExpandedId(isExpanded ? null : inv.voucherId)}
                   >
-                    <div className="px-4 py-3 text-muted">{fmtDate(inv.date)}</div>
-                    <div className="px-4 py-3 font-mono text-primary">{inv.voucherNumber}</div>
-                    <div className="px-4 py-3">
-                      <span className={clsx("text-xs px-2 py-0.5 rounded-full", inv.type === "receivable" ? "bg-success/10 text-success" : "bg-danger/10 text-danger")}>
+                    <div className="table-cell text-muted">{fmtDate(inv.date)}</div>
+                    <div className="table-cell-mono">{inv.voucherNumber}</div>
+                    <div className="table-cell">
+                      <span className={clsx("badge", inv.type === "receivable" ? "badge-success" : "badge-danger")}>
                         {inv.type === "receivable" ? "Sales" : "Purchase"}
                       </span>
                     </div>
-                    <div className="px-4 py-3 text-primary truncate">{inv.partyName}</div>
-                    <div className="px-4 py-3 font-mono text-primary">{fmtINR(inv.totalAmount)}</div>
-                    <div className="px-4 py-3 text-muted">
+                    <div className="table-cell-emphasis truncate">{inv.partyName}</div>
+                    <div className="table-cell-mono">{fmtINR(inv.totalAmount)}</div>
+                    <div className="table-cell text-muted">
                       {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                     </div>
                   </div>
@@ -227,7 +227,7 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                           const ledgerName = line.type === "ledger" && line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
                           const itemName = line.type === "inventory" && line.itemId ? (data.items.get(line.itemId)?.name ?? line.itemId) : "";
                           return (
-                          <div key={i} className="flex gap-4 font-mono text-primary">
+                          <div key={i} className="flex gap-4 tabular-nums text-primary">
                             {line.type === "ledger" ? (
                               <>
                                 <span className="text-muted w-16">{line.isDebit ? "Dr" : "Cr"}</span>
@@ -255,7 +255,7 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
         </div>
 
         {filtered.length === 0 && (
-          <div className="text-center py-12 text-muted text-sm">No outstanding invoices found</div>
+          <div className="empty-state"><span className="empty-state-description">No outstanding invoices found</span></div>
         )}
       </div>
     </div>
@@ -273,8 +273,8 @@ function MobileInvoiceCards({ filtered, expandedId, setExpandedId, agingColor, d
   return (
     <div className="space-y-2">
       {filtered.length === 0 && (
-        <div className="text-center py-12 text-muted text-sm bento-card">
-          No outstanding invoices found
+        <div className="bento-card empty-state">
+          <span className="empty-state-description">No outstanding invoices found</span>
         </div>
       )}
       {filtered.slice(0, 100).map((inv) => {
@@ -291,20 +291,20 @@ function MobileInvoiceCards({ filtered, expandedId, setExpandedId, agingColor, d
             >
               <div className="flex items-center justify-between mb-1">
                 <span className="text-sm font-medium text-primary truncate mr-2">{inv.partyName}</span>
-                <span className={clsx("text-xs px-2 py-0.5 rounded-full flex-shrink-0", inv.type === "receivable" ? "bg-success/10 text-success" : "bg-danger/10 text-danger")}>
+                <span className={clsx("badge flex-shrink-0", inv.type === "receivable" ? "badge-success" : "badge-danger")}>
                   {inv.type === "receivable" ? "Sales" : "Purchase"}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted">{fmtDate(inv.date)} · {inv.voucherNumber}</span>
-                <span className="font-mono font-semibold text-primary">{fmtINR(inv.totalAmount)}</span>
+                <span className="font-sans tabular-nums font-semibold text-primary">{fmtINR(inv.totalAmount)}</span>
               </div>
               {inv.outstanding > 0 && (
                 <div className="flex items-center justify-between mt-1 text-xs">
                   <span className={clsx("px-1.5 py-0.5 rounded", agingColor(inv))}>
                     {inv.daysPastDue > 0 ? `${inv.daysPastDue}d overdue` : "Current"}
                   </span>
-                  <span className="text-muted">Due: <span className="font-mono font-medium text-primary">{fmtINR(inv.outstanding)}</span></span>
+                  <span className="text-muted">Due: <span className="font-sans tabular-nums font-medium text-primary">{fmtINR(inv.outstanding)}</span></span>
                 </div>
               )}
             </div>
@@ -316,7 +316,7 @@ function MobileInvoiceCards({ filtered, expandedId, setExpandedId, agingColor, d
                   const ledgerName = line.type === "ledger" && line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
                   const itemName = line.type === "inventory" && line.itemId ? (data.items.get(line.itemId)?.name ?? line.itemId) : "";
                   return (
-                    <div key={i} className="flex justify-between text-xs font-mono gap-2">
+                    <div key={i} className="flex justify-between text-xs tabular-nums gap-2">
                       <span className="truncate text-primary">
                         {line.type === "ledger" ? `${line.isDebit ? "Dr" : "Cr"} ${ledgerName}` : `${itemName}`}
                       </span>
@@ -330,7 +330,7 @@ function MobileInvoiceCards({ filtered, expandedId, setExpandedId, agingColor, d
         );
       })}
       {filtered.length > 100 && (
-        <div className="text-center text-xs text-muted py-2">
+        <div className="caption-text text-center py-2">
           Showing first 100 of {filtered.length} invoices
         </div>
       )}

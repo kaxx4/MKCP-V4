@@ -6,7 +6,6 @@ import clsx from "clsx";
 export function Layout({ children }: { children: ReactNode }) {
   const { sidebarOpen, isMobile, setIsMobile, setSidebarOpen } = useUIStore();
 
-  // Listen for viewport changes
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 767px)");
     const handler = (e: MediaQueryListEvent | MediaQueryList) => {
@@ -14,25 +13,28 @@ export function Layout({ children }: { children: ReactNode }) {
       setIsMobile(mobile);
       if (mobile) setSidebarOpen(false);
     };
-    handler(mq); // initial check
+    handler(mq);
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, [setIsMobile, setSidebarOpen]);
 
   return (
-    <div className="min-h-screen bg-bg text-primary font-sans">
-      {/* Skip to main content link for keyboard navigation */}
-      <a href="#main-content" className="skip-to-content">Skip to main content</a>
+    <div className="min-h-screen bg-white dark:bg-neutral-950 text-neutral-950 dark:text-neutral-50 font-sans">
+      <a href="#main-content" className="skip-to-content">
+        Skip to main content
+      </a>
 
       <NavBar />
       <main
         id="main-content"
         className={clsx(
-          "transition-all duration-200 min-h-screen",
+          "transition-[margin] duration-200 min-h-screen",
           isMobile ? "ml-0 pb-16" : sidebarOpen ? "ml-[220px]" : "ml-14"
         )}
       >
-        <div className={clsx(isMobile ? "p-3" : "p-6")}>{children}</div>
+        <div className={clsx("mx-auto max-w-screen-2xl", isMobile ? "p-4" : "p-6 lg:p-8")}>
+          {children}
+        </div>
       </main>
     </div>
   );

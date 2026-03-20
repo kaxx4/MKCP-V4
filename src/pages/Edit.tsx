@@ -117,12 +117,12 @@ export default function Edit() {
 
   if (!data) {
     return (
-      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <Package size={64} className="text-muted" />
-        <h2 className="text-xl font-semibold text-primary">No Data Loaded</h2>
+      <div className="empty-state">
+        <Package size={64} className="empty-state-icon" />
+        <h2 className="empty-state-title">No Data Loaded</h2>
         <button
           onClick={() => navigate("/import")}
-          className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white font-semibold px-5 py-2.5 rounded-lg transition mt-2"
+          className="btn-primary mt-2"
         >
           <Upload size={16} />
           Import Data
@@ -135,21 +135,21 @@ export default function Edit() {
     <div className="flex flex-col h-[calc(100vh-112px)] gap-3">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-        <h1 className="text-2xl md:text-3xl font-bold text-primary">Edit Units</h1>
+        <h1 className="page-title">Edit Units</h1>
         <div className="flex items-center gap-2">
           {dirtyCount > 0 && (
             <>
-              <span className="text-xs text-warn font-mono">{dirtyCount} unsaved</span>
+              <span className="caption-text text-warn tabular-nums">{dirtyCount} unsaved</span>
               <button
                 onClick={resetAll}
-                className="flex items-center gap-1.5 text-xs bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-3 py-1.5 rounded-lg transition"
+                className="btn-secondary btn-sm"
               >
                 <RotateCcw size={12} />
                 Reset
               </button>
               <button
                 onClick={saveAll}
-                className="flex items-center gap-1.5 text-xs bg-accent hover:bg-accent-hover text-white px-3 py-1.5 rounded-lg transition"
+                className="btn-primary btn-sm"
               >
                 <Save size={12} />
                 Save All
@@ -167,13 +167,13 @@ export default function Edit() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search items…"
-            className="w-full bg-bg-card border border-bg-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-primary placeholder-muted focus:border-accent/60 outline-none"
+            className="search-input pl-8"
           />
         </div>
         <select
           value={groupFilter}
           onChange={(e) => setGroupFilter(e.target.value)}
-          className="bg-bg-card border border-bg-border rounded-lg px-2 py-1.5 text-sm text-primary outline-none"
+          className="form-select"
         >
           {groups.map((g) => (
             <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>
@@ -182,15 +182,15 @@ export default function Edit() {
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-auto bento-card !p-0">
+      <div className="flex-1 overflow-auto section-card">
         <table className="w-full text-sm min-w-[540px]">
-          <thead className="sticky top-0 bg-bg-card z-10">
+          <thead className="table-header-sticky">
             <tr className="border-b border-bg-border">
-              <th className="text-left text-muted px-3 py-2.5 font-medium">Item</th>
-              <th className="text-left text-muted px-3 py-2.5 font-medium">Group</th>
-              <th className="text-left text-muted px-3 py-2.5 font-medium w-24">Base Unit</th>
-              <th className="text-left text-muted px-3 py-2.5 font-medium w-24">Pkg Unit</th>
-              <th className="text-left text-muted px-3 py-2.5 font-medium w-28">Units/Pkg</th>
+              <th className="table-header text-left">Item</th>
+              <th className="table-header text-left">Group</th>
+              <th className="table-header text-left w-24">Base Unit</th>
+              <th className="table-header text-left w-24">Pkg Unit</th>
+              <th className="table-header text-left w-28">Units/Pkg</th>
             </tr>
           </thead>
           <tbody>
@@ -200,34 +200,34 @@ export default function Edit() {
                 <tr
                   key={item.itemId}
                   className={clsx(
-                    "border-b border-bg-border/50 transition-colors",
-                    row.dirty ? "bg-accent/5" : "hover:bg-bg-border/20"
+                    "responsive-table-row",
+                    row.dirty ? "bg-accent/5" : ""
                   )}
                 >
-                  <td className="px-3 py-2 text-primary truncate max-w-[250px]">{item.name}</td>
-                  <td className="px-3 py-2 text-muted truncate max-w-[180px] text-xs">{item.group}</td>
-                  <td className="px-3 py-2">
+                  <td className="table-cell-emphasis truncate max-w-[250px]">{item.name}</td>
+                  <td className="table-cell text-muted truncate max-w-[180px]">{item.group}</td>
+                  <td className="table-cell">
                     <input
                       value={row.baseUnit}
                       onChange={(e) => updateRow(item.itemId, "baseUnit", e.target.value.toUpperCase())}
-                      className="w-full bg-bg border border-bg-border rounded px-2 py-1 text-primary font-mono text-xs outline-none focus:border-accent/60"
+                      className="form-input tabular-nums text-xs"
                     />
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="table-cell">
                     <input
                       value={row.pkgUnit}
                       onChange={(e) => updateRow(item.itemId, "pkgUnit", e.target.value.toUpperCase())}
                       placeholder="—"
-                      className="w-full bg-bg border border-bg-border rounded px-2 py-1 text-primary font-mono text-xs outline-none focus:border-accent/60 placeholder-muted"
+                      className="form-input tabular-nums text-xs"
                     />
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="table-cell">
                     <input
                       type="number"
                       min={1}
                       value={row.unitsPerPkg}
                       onChange={(e) => updateRow(item.itemId, "unitsPerPkg", parseInt(e.target.value) || 1)}
-                      className="w-full bg-bg border border-bg-border rounded px-2 py-1 text-primary font-mono text-xs outline-none focus:border-accent/60"
+                      className="form-input tabular-nums text-xs"
                     />
                   </td>
                 </tr>
