@@ -146,12 +146,12 @@ export default function Alerts() {
   // No data state
   if (!data) {
     return (
-      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <AlertTriangle size={64} className="text-muted" />
-        <h2 className="text-xl font-semibold text-primary">No Data Loaded</h2>
+      <div className="empty-state">
+        <AlertTriangle size={64} className="empty-state-icon" />
+        <h2 className="empty-state-title">No Data Loaded</h2>
         <button
           onClick={() => navigate("/import")}
-          className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white font-semibold px-5 py-2.5 rounded-lg transition mt-2"
+          className="btn-primary mt-2"
         >
           <Upload size={16} />
           Import Data
@@ -168,7 +168,7 @@ export default function Alerts() {
       OK: "bg-success/10 text-success",
     };
     return (
-      <span className={clsx("px-2 py-0.5 rounded-full text-xs font-medium", styles[severity])}>
+      <span className={clsx("badge", severity === "Critical" ? "badge-danger" : severity === "Low" ? "badge-warn" : severity === "Reorder" ? "badge-muted" : "badge-success")}>
         {severity}
       </span>
     );
@@ -179,22 +179,22 @@ export default function Alerts() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl md:text-3xl font-bold text-primary">Low Stock Alerts</h1>
-          <span className="bg-accent/15 text-accent text-xs font-semibold px-2.5 py-1 rounded-full">
+          <h1 className="page-title">Low Stock Alerts</h1>
+          <span className="badge badge-muted">
             {filtered.length} items
           </span>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={exportCSV}
-            className="flex items-center gap-1.5 text-xs bg-bg-card border border-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-3 py-2 rounded-lg transition"
+            className="btn-secondary btn-sm"
           >
             <Download size={14} />
             Export
           </button>
           <button
             onClick={handleAddAll}
-            className="flex items-center gap-1.5 text-xs md:text-sm bg-accent hover:bg-accent-hover text-white font-semibold px-3 md:px-4 py-2 rounded-lg transition"
+            className="btn-primary btn-sm"
           >
             <ShoppingCart size={14} />
             Add All
@@ -227,8 +227,8 @@ export default function Alerts() {
           },
         ].map(({ label, value, color }) => (
           <div key={label} className="bento-card">
-            <div className={clsx("text-lg md:text-2xl font-bold font-mono truncate", color)}>{value}</div>
-            <div className="text-muted text-[10px] md:text-xs mt-1">{label}</div>
+            <div className={clsx("metric-value truncate", color)}>{value}</div>
+            <div className="metric-label">{label}</div>
           </div>
         ))}
       </div>
@@ -238,7 +238,7 @@ export default function Alerts() {
         <select
           value={groupFilter}
           onChange={(e) => setGroupFilter(e.target.value)}
-          className="bg-bg-card border border-bg-border rounded-lg px-2 md:px-3 py-2 text-xs md:text-sm text-primary outline-none focus:border-accent/60"
+          className="form-select"
         >
           {groups.map((g) => (
             <option key={g} value={g}>
@@ -249,7 +249,7 @@ export default function Alerts() {
         <select
           value={severityFilter}
           onChange={(e) => setSeverityFilter(e.target.value as typeof severityFilter)}
-          className="bg-bg-card border border-bg-border rounded-lg px-2 md:px-3 py-2 text-xs md:text-sm text-primary outline-none focus:border-accent/60"
+          className="form-select"
         >
           <option value="All">All Severities</option>
           <option value="Critical">Critical</option>
@@ -262,7 +262,7 @@ export default function Alerts() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search items..."
-            className="w-full bg-bg-card border border-bg-border rounded-lg pl-9 pr-3 py-2 text-xs md:text-sm text-primary placeholder-muted focus:border-accent/60 outline-none"
+            className="search-input pl-9"
           />
         </div>
       </div>
@@ -287,15 +287,15 @@ export default function Alerts() {
                 <div className="grid grid-cols-3 gap-2 text-xs">
                   <div>
                     <span className="text-muted">Stock</span>
-                    <div className="font-mono font-medium text-primary">{stockDisp.formatted}</div>
+                    <div className="tabular-nums font-medium text-primary">{stockDisp.formatted}</div>
                   </div>
                   <div>
                     <span className="text-muted">Avg/mo</span>
-                    <div className="font-mono font-medium text-muted">{toDisplay(d.item, d.avgOut, unitMode).formatted}</div>
+                    <div className="tabular-nums font-medium text-muted">{toDisplay(d.item, d.avgOut, unitMode).formatted}</div>
                   </div>
                   <div>
                     <span className="text-muted">Reorder</span>
-                    <div className="font-mono font-semibold text-accent">{d.suggested > 0 ? sugDisp.formatted : "-"}</div>
+                    <div className="tabular-nums font-semibold text-accent">{d.suggested > 0 ? sugDisp.formatted : "-"}</div>
                   </div>
                 </div>
                 {d.suggested > 0 && (
@@ -303,8 +303,8 @@ export default function Alerts() {
                     onClick={() => handleAdd(d)}
                     disabled={isAdded}
                     className={clsx(
-                      "w-full flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg transition",
-                      isAdded ? "bg-success/10 text-success" : "bg-accent/10 hover:bg-accent/20 text-accent cursor-pointer"
+                      "w-full flex items-center justify-center gap-1.5 btn-sm",
+                      isAdded ? "btn-ghost text-success" : "btn-ghost text-accent cursor-pointer"
                     )}
                   >
                     {isAdded ? <><Check size={12} /> Added</> : <><ShoppingCart size={12} /> Add to Order</>}
@@ -315,9 +315,9 @@ export default function Alerts() {
           })}
         </div>
       ) : (
-        <div className="bento-card !p-0 overflow-hidden flex flex-col flex-1 min-h-0">
+        <div className="section-card overflow-hidden flex flex-col flex-1 min-h-0">
           {/* Table header */}
-          <div className="flex text-xs text-muted font-medium border-b border-bg-border bg-bg-card sticky top-0 z-10">
+          <div className="flex table-header-sticky">
             <div className="flex-1 px-4 py-2.5 min-w-0">Item</div>
             <div className="w-28 px-3 py-2.5 text-right hidden lg:block">Group</div>
             <div className="w-24 px-3 py-2.5 text-right">Stock</div>
@@ -376,16 +376,16 @@ export default function Alerts() {
                     <div className="w-28 px-3 text-xs text-muted text-right truncate hidden lg:block" title={d.item.group}>
                       {d.item.group}
                     </div>
-                    <div className="w-24 px-3 text-sm font-mono text-right text-primary">
+                    <div className="w-24 px-3 text-sm tabular-nums text-right text-primary">
                       {stockDisp.formatted}
                     </div>
-                    <div className="w-24 px-3 text-sm font-mono text-right text-muted hidden md:block">
+                    <div className="w-24 px-3 text-sm tabular-nums text-right text-muted hidden md:block">
                       {avgDisp.formatted}
                     </div>
-                    <div className={clsx("w-20 px-3 text-sm font-mono text-right hidden md:block", monthsColor)}>
+                    <div className={clsx("w-20 px-3 text-sm tabular-nums text-right hidden md:block", monthsColor)}>
                       {monthsLabel}
                     </div>
-                    <div className="w-24 px-3 text-sm font-mono text-right text-accent font-semibold">
+                    <div className="w-24 px-3 text-sm tabular-nums text-right text-accent font-semibold">
                       {d.suggested > 0 ? sugDisp.formatted : "-"}
                     </div>
                     <div className="w-20 px-3 text-center">{severityBadge(d.severity)}</div>
@@ -398,7 +398,7 @@ export default function Alerts() {
                       ) : d.suggested > 0 ? (
                         <button
                           onClick={() => handleAdd(d)}
-                          className="inline-flex items-center gap-1 text-xs bg-accent/10 hover:bg-accent/20 text-accent font-medium px-2.5 py-1 rounded-lg transition cursor-pointer"
+                          className="btn-ghost btn-sm text-accent"
                         >
                           <ShoppingCart size={12} />
                           Add

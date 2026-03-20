@@ -357,7 +357,7 @@ export default function Orders() {
         <h2 className="text-xl font-semibold text-primary">No Data Loaded</h2>
         <button
           onClick={() => navigate("/import")}
-          className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white font-semibold px-5 py-2.5 rounded-lg transition mt-2"
+          className="btn-primary mt-2"
         >
           <Upload size={16} />
           Import Data
@@ -390,11 +390,11 @@ export default function Orders() {
       <h1 className="sr-only">Purchase Orders</h1>
 
       {/* Order Groups Bar */}
-      <div className="flex items-center gap-2 px-2 md:px-3 py-2 bg-white border border-bg-border rounded-t-2xl mb-0 overflow-x-auto">
+      <div className="flex items-center gap-2 px-2 md:px-3 py-2 bento-card !rounded-b-none !mb-0 overflow-x-auto">
         <button
           onClick={() => setShowGroupPanel(!showGroupPanel)}
           className={clsx(
-            "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition",
+            "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition duration-150",
             showGroupPanel ? "bg-accent text-white" : "bg-bg-border text-muted hover:text-primary"
           )}
         >
@@ -408,7 +408,7 @@ export default function Orders() {
                 key={g.id}
                 onClick={() => handleLoadGroup(g)}
                 className={clsx(
-                  "flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition whitespace-nowrap",
+                  "flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition duration-150 whitespace-nowrap",
                   activeGroupId === g.id
                     ? "border-accent bg-accent/10 text-accent font-medium"
                     : "border-bg-border text-muted hover:text-primary hover:bg-bg-border/50"
@@ -417,45 +417,45 @@ export default function Orders() {
               >
                 <span className="w-2 h-2 rounded-full" style={{ background: g.color }} />
                 {g.name}
-                <span className="text-muted/60 font-mono">({Object.keys(g.lines).length})</span>
+                <span className="text-muted/60 tabular-nums">({Object.keys(g.lines).length})</span>
               </button>
             ))}
           </div>
         )}
         <div className="ml-auto flex items-center gap-2 text-xs text-muted">
-          <span className="font-mono">{orderLinesList.length} items in order</span>
+          <span className="tabular-nums">{orderLinesList.length} items in order</span>
         </div>
       </div>
 
       {/* Order Groups Expanded Panel */}
       {showGroupPanel && (
-        <div className="bg-bg-card border-x border-b border-bg-border p-4 space-y-3 mb-0">
+        <div className="bg-bg-card border-x border-b border-bg-border p-4 space-y-3 mb-0 page-section">
           {/* Create new group */}
           <div className="flex flex-col md:flex-row items-stretch md:items-end gap-2 md:gap-3">
             <div className="flex-1">
-              <label className="text-xs text-muted font-medium mb-1 block">Group Name</label>
+              <label className="label-text mb-1 block">Group Name</label>
               <input
                 value={newGroupName}
                 onChange={(e) => setNewGroupName(e.target.value)}
                 placeholder="e.g. Weekly Order, Premium Items, Urgent Restock…"
-                className="w-full bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none focus:border-accent/60"
+                className="form-input"
                 onKeyDown={(e) => e.key === "Enter" && handleCreateGroup()}
               />
             </div>
             <div className="flex-1">
-              <label className="text-xs text-muted font-medium mb-1 block">Description (optional)</label>
+              <label className="label-text mb-1 block">Description (optional)</label>
               <input
                 value={newGroupDesc}
                 onChange={(e) => setNewGroupDesc(e.target.value)}
                 placeholder="Notes about this order group…"
-                className="w-full bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none focus:border-accent/60"
+                className="form-input"
                 onKeyDown={(e) => e.key === "Enter" && handleCreateGroup()}
               />
             </div>
             <button
               onClick={handleCreateGroup}
               disabled={!newGroupName.trim()}
-              className="flex items-center gap-1.5 bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap"
+              className="btn-primary btn-sm whitespace-nowrap"
             >
               <FolderPlus size={14} />
               Create & Save Current Order
@@ -472,16 +472,16 @@ export default function Orders() {
                   <div
                     key={g.id}
                     className={clsx(
-                      "border rounded-lg p-3 transition",
+                      "border rounded-lg p-3 transition duration-150",
                       isActive ? "border-accent bg-accent/5" : "border-bg-border bg-bg hover:bg-bg-border/20"
                     )}
                   >
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: g.color }} />
-                        <span className="font-medium text-sm text-primary truncate">{g.name}</span>
+                        <span className="card-title truncate">{g.name}</span>
                       </div>
-                      <span className="text-xs font-mono text-muted whitespace-nowrap">{lineCount} items</span>
+                      <span className="text-xs tabular-nums text-muted whitespace-nowrap">{lineCount} items</span>
                     </div>
                     {g.description && (
                       <p className="text-xs text-muted mb-2 truncate">{g.description}</p>
@@ -492,33 +492,33 @@ export default function Orders() {
                     <div className="flex gap-1.5">
                       <button
                         onClick={() => handleLoadGroup(g)}
-                        className="flex items-center gap-1 text-xs px-2 py-1 bg-accent/15 text-accent hover:bg-accent/25 rounded transition"
+                        className="btn-accent-ghost btn-sm"
                       >
                         <FolderOpen size={11} /> Load
                       </button>
                       <button
                         onClick={() => handleAddGroupToOrder(g)}
-                        className="flex items-center gap-1 text-xs px-2 py-1 bg-bg-border text-muted hover:text-primary rounded transition"
+                        className="btn-ghost btn-sm"
                         title="Add group items to current order"
                       >
                         <Plus size={11} /> Merge
                       </button>
                       <button
                         onClick={() => handleSaveToGroup(g.id)}
-                        className="flex items-center gap-1 text-xs px-2 py-1 bg-bg-border text-muted hover:text-primary rounded transition"
+                        className="btn-ghost btn-sm"
                         title="Overwrite group with current order"
                       >
                         <Save size={11} /> Save
                       </button>
                       <button
                         onClick={() => duplicateGroup(g.id)}
-                        className="flex items-center gap-1 text-xs px-2 py-1 bg-bg-border text-muted hover:text-primary rounded transition"
+                        className="btn-ghost btn-sm"
                       >
                         <Copy size={11} />
                       </button>
                       <button
                         onClick={() => { if (confirm(`Delete "${g.name}"?`)) deleteGroup(g.id); }}
-                        className="flex items-center gap-1 text-xs px-2 py-1 bg-danger/10 text-danger hover:bg-danger/20 rounded transition ml-auto"
+                        className="flex items-center gap-1 text-xs px-2 py-1 bg-danger/10 text-danger hover:bg-danger/20 rounded transition duration-150 ml-auto"
                       >
                         <Trash2 size={11} />
                       </button>
@@ -543,7 +543,7 @@ export default function Orders() {
               key={tab}
               onClick={() => setMobileTab(tab)}
               className={clsx(
-                "flex-1 py-2 text-xs font-medium rounded-lg transition",
+                "flex-1 py-2 text-xs font-medium rounded-lg transition duration-150",
                 mobileTab === tab ? "bg-accent text-white" : "text-muted hover:text-primary"
               )}
             >
@@ -568,7 +568,7 @@ export default function Orders() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search items… (Ctrl+F)"
-                className="w-full bg-bg border border-bg-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-primary placeholder-muted focus:border-accent/60 outline-none"
+                className="search-input pl-8"
                 onKeyDown={(e) => handleKeyDown(e, filteredItems)}
               />
             </div>
@@ -577,7 +577,7 @@ export default function Orders() {
               <button
                 onClick={() => setStockFilterEnabled((v) => !v)}
                 className={clsx(
-                  "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition",
+                  "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition duration-150",
                   stockFilterEnabled
                     ? "bg-accent/15 border-accent text-accent font-medium"
                     : "bg-bg border-bg-border text-muted hover:text-primary"
@@ -592,7 +592,7 @@ export default function Orders() {
                   <select
                     value={stockFilterOp}
                     onChange={(e) => setStockFilterOp(e.target.value as "<=" | ">=" | "=")}
-                    className="bg-bg border border-bg-border rounded-lg px-1.5 py-1.5 text-xs text-primary outline-none font-mono"
+                    className="form-select text-xs py-1 px-2 min-h-0 tabular-nums"
                   >
                     <option value="<=">≤</option>
                     <option value=">=">≥</option>
@@ -602,7 +602,7 @@ export default function Orders() {
                     type="number"
                     value={stockFilterValue}
                     onChange={(e) => setStockFilterValue(e.target.value)}
-                    className="w-16 bg-bg border border-bg-border rounded-lg px-2 py-1.5 text-xs text-primary font-mono text-center outline-none focus:border-accent/60"
+                    className="w-16 form-input text-xs tabular-nums text-center py-1.5"
                   />
                 </>
               )}
@@ -637,7 +637,7 @@ export default function Orders() {
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                         className={clsx(
-                          "px-3 py-2.5 cursor-pointer border-b border-bg-border/50 transition-colors",
+                          "px-3 py-2.5 cursor-pointer border-b border-bg-border/50 transition-colors duration-150",
                           isSelected ? "bg-accent/15 border-l-2 border-l-accent" : "hover:bg-bg-border/30"
                         )}
                       >
@@ -649,7 +649,7 @@ export default function Orders() {
                         </div>
                         <div className="flex items-center justify-between mt-0.5">
                           <span className="text-muted text-sm truncate">{item.group}</span>
-                          <span className={clsx("text-sm font-mono", getStockColor(item, stock))}>
+                          <span className={clsx("text-sm tabular-nums", getStockColor(item, stock))}>
                             {stockDisp.formatted}
                           </span>
                         </div>
@@ -670,14 +670,14 @@ export default function Orders() {
           {focusedItem ? (
             <div className="p-4 flex flex-col gap-4 overflow-y-auto flex-1">
               <div>
-                <h2 className="text-base md:text-lg font-bold text-primary leading-tight">{focusedItem.name}</h2>
-                <div className="text-muted text-xs mt-0.5">{focusedItem.group} · {focusedItem.baseUnit}{focusedItem.pkgUnit ? ` · ${focusedItem.unitsPerPkg}/${focusedItem.pkgUnit}` : ""}</div>
+                <h2 className="subsection-header leading-tight">{focusedItem.name}</h2>
+                <div className="metric-label mt-0.5">{focusedItem.group} · {focusedItem.baseUnit}{focusedItem.pkgUnit ? ` · ${focusedItem.unitsPerPkg}/${focusedItem.pkgUnit}` : ""}</div>
               </div>
 
               {/* Mobile quick-add to order */}
               {isMobile && selectedItem && (
                 <div className="flex items-center gap-2 bg-bg-card border border-bg-border rounded-lg p-2">
-                  <span className="text-xs text-muted flex-shrink-0">Order Qty:</span>
+                  <span className="label-text flex-shrink-0">Order Qty:</span>
                   <input
                     ref={qtyRef}
                     type="text"
@@ -686,12 +686,12 @@ export default function Orders() {
                     onChange={(e) => setOrderQty(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && addToOrder()}
                     placeholder="0"
-                    className="flex-1 bg-bg border border-bg-border rounded px-2 py-1.5 font-mono text-sm text-center outline-none focus:border-accent/60"
+                    className="flex-1 form-input tabular-nums text-sm text-center"
                   />
                   <button
                     onClick={addToOrder}
                     disabled={!orderQty}
-                    className="bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition"
+                    className="btn-primary btn-sm"
                   >
                     <Plus size={14} />
                   </button>
@@ -715,13 +715,13 @@ export default function Orders() {
                         key={label}
                         onClick={clickable && direction ? () => setMovementModal({ direction, month: last.yearMonth }) : undefined}
                         className={clsx(
-                          "bg-bg-card border-2 border-bg-border rounded-lg p-4 text-center transition-all",
+                          "bento-card !p-4 text-center transition-all duration-150",
                           clickable && "cursor-pointer hover:border-accent hover:bg-accent/10 hover:shadow-md"
                         )}
                         title={clickable ? `Click to view ${label.toLowerCase()} transactions` : undefined}
                       >
-                        <div className={`text-lg md:text-xl font-semibold ${color}`}>{val}</div>
-                        <div className="text-text-secondary text-sm font-medium mt-1">{label} {clickable && "→"}</div>
+                        <div className={`kpi-value ${color}`}>{val}</div>
+                        <div className="metric-label mt-1">{label} {clickable && "→"}</div>
                       </div>
                     ))}
                   </div>
@@ -732,14 +732,14 @@ export default function Orders() {
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 return (
-                  <div className={clsx("bento-card !p-0 overflow-hidden flex flex-col", !showChart && "flex-1")}>
+                  <div className={clsx("section-card !p-0 overflow-hidden flex flex-col", !showChart && "flex-1")}>
                     {/* Fixed table header with scrollable body */}
-                    <div className={clsx("overflow-y-auto", !showChart ? "flex-1 min-h-[300px]" : "max-h-[400px]")}>
+                    <div className={clsx("table-scroll", !showChart ? "flex-1 min-h-[300px]" : "max-h-[400px]")}>
                       <table className="w-full text-sm">
                         <thead className="sticky top-0 z-10">
                           <tr className="bg-bg-card border-b-2 border-bg-border">
                             {["Month", "Opening", "In", "Out", "Closing"].map((h) => (
-                              <th key={h} className="text-left text-primary font-bold px-4 py-3 whitespace-nowrap">{h}</th>
+                              <th key={h} className="table-header-sticky">{h}</th>
                             ))}
                           </tr>
                         </thead>
@@ -750,26 +750,26 @@ export default function Orders() {
                             // Consistent row height for better scrolling UX
                             const dynamicPadding = clsx("py-3", monthSpan > 12 && "md:py-2.5");
                             return (
-                              <tr key={b.yearMonth} className={clsx("border-b border-bg-border/50 hover:bg-bg-hover/50 transition-colors")}>
-                                <td className={clsx("px-4 text-primary font-medium whitespace-nowrap", dynamicPadding)}>{b.label}</td>
-                                <td className={clsx("px-4 font-semibold text-primary", dynamicPadding)}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
+                              <tr key={b.yearMonth} className="responsive-table-row">
+                                <td className={clsx("table-cell-emphasis whitespace-nowrap", dynamicPadding)}>{b.label}</td>
+                                <td className={clsx("table-cell-mono", dynamicPadding)}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
                                 <td
-                                  className={clsx("px-4 font-semibold cursor-pointer hover:underline transition-colors",
-                                    inwardVal === 0 ? "text-muted-300 hover:text-muted-400" : "text-success-600 hover:text-success",
+                                  className={clsx("table-cell-mono cursor-pointer hover:underline transition-colors duration-150",
+                                    inwardVal === 0 ? "text-muted-300 hover:text-muted-400" : "num-positive hover:text-success",
                                     dynamicPadding
                                   )}
                                   onClick={() => inwardVal !== 0 && setMovementModal({ direction: "inward", month: b.yearMonth })}
                                   title={inwardVal !== 0 ? "Click to view inward transactions" : "No inward movements"}
                                 >{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
                                 <td
-                                  className={clsx("px-4 font-semibold cursor-pointer hover:underline transition-colors",
-                                    outwardVal === 0 ? "text-muted-300 hover:text-muted-400" : "text-danger-600 hover:text-danger",
+                                  className={clsx("table-cell-mono cursor-pointer hover:underline transition-colors duration-150",
+                                    outwardVal === 0 ? "text-muted-300 hover:text-muted-400" : "num-negative hover:text-danger",
                                     dynamicPadding
                                   )}
                                   onClick={() => outwardVal !== 0 && setMovementModal({ direction: "outward", month: b.yearMonth })}
                                   title={outwardVal !== 0 ? "Click to view outward transactions" : "No outward movements"}
                                 >{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
-                                <td className={clsx("px-4 font-bold text-accent", dynamicPadding)}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
+                                <td className={clsx("table-cell-mono font-bold text-accent", dynamicPadding)}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
                               </tr>
                             );
                           })}
@@ -784,21 +784,21 @@ export default function Orders() {
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 return (
-                  <div className="bento-card !p-0 overflow-hidden">
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border hover:bg-bg-card/50 transition-colors">
+                  <div className="section-card !p-0 overflow-hidden">
+                    <div className="section-card-header hover:bg-bg-card/50 transition-colors duration-150">
                       <button
                         onClick={() => setShowChart(!showChart)}
-                        className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:text-accent transition-colors"
+                        className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:text-accent transition-colors duration-150"
                       >
                         <BarChart3 size={16} />
                         {monthSpan}-Month History
                       </button>
                       <div className="flex items-center gap-2">
-                        <label className="text-xs font-medium text-text-secondary">Show:</label>
+                        <label className="label-text">Show:</label>
                         <select
                           value={monthSpan}
                           onChange={(e) => setMonthSpan(parseInt(e.target.value))}
-                          className="bg-bg-card border border-bg-border rounded px-2 py-1 text-xs font-medium text-text-primary hover:border-accent focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+                          className="form-select text-xs py-1 px-2 min-h-0"
                         >
                           {[3, 6, 8, 12, 24].map((m) => (
                             <option key={m} value={m}>{m} mo</option>
@@ -816,11 +816,11 @@ export default function Orders() {
                             out: toDisplay(item, b.outwardsBase, unitMode).value,
                             closing: toDisplay(item, b.closingQtyBase, unitMode).value,
                           }))}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                            <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} />
-                            <YAxis tick={{ fontSize: 10, fill: "#64748b" }} />
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                            <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                            <YAxis tick={{ fontSize: 10, fill: "#64748b" }} axisLine={false} tickLine={false} />
                             <Tooltip
-                              contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
+                              contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }}
                               labelStyle={{ color: "#0f172a" }}
                             />
                             <Bar dataKey="in" fill="#10b981" name="In" radius={[2, 2, 0, 0]} barSize={12} />
@@ -852,10 +852,10 @@ export default function Orders() {
                     <div className={clsx("bento-card shadow-2xl flex flex-col", isMobile ? "w-full h-full rounded-none" : "w-[700px] max-h-[80vh]")} onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
                         <div>
-                          <h3 className="text-sm font-bold text-primary">{focusedItem.name} — {dirLabel} Transactions</h3>
-                          <p className="text-xs text-muted mt-0.5">Month: {monthLabel} · {movements.length} transactions</p>
+                          <h3 className="card-title">{focusedItem.name} — {dirLabel} Transactions</h3>
+                          <p className="metric-label mt-0.5">Month: {monthLabel} · {movements.length} transactions</p>
                         </div>
-                        <button onClick={() => setMovementModal(null)} className="text-muted hover:text-primary p-1"><X size={16} /></button>
+                        <button onClick={() => setMovementModal(null)} className="btn-icon"><X size={16} /></button>
                       </div>
                       <div className="overflow-y-auto flex-1">
                         {movements.length === 0 ? (
@@ -864,34 +864,34 @@ export default function Orders() {
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-bg-card">
                               <tr className="border-b border-bg-border">
-                                <th className="text-left text-muted px-3 py-2 font-medium">Date</th>
-                                <th className="text-left text-muted px-3 py-2 font-medium">Voucher</th>
-                                <th className="text-left text-muted px-3 py-2 font-medium">Type</th>
-                                <th className="text-left text-muted px-3 py-2 font-medium">Party</th>
-                                <th className="text-right text-muted px-3 py-2 font-medium">Qty</th>
-                                <th className="text-right text-muted px-3 py-2 font-medium">Rate</th>
-                                <th className="text-right text-muted px-3 py-2 font-medium">Amount</th>
+                                <th className="table-header">Date</th>
+                                <th className="table-header">Voucher</th>
+                                <th className="table-header">Type</th>
+                                <th className="table-header">Party</th>
+                                <th className="table-header-sticky text-right">Qty</th>
+                                <th className="table-header-sticky text-right">Rate</th>
+                                <th className="table-header-sticky text-right">Amount</th>
                               </tr>
                             </thead>
                             <tbody>
                               {movements.map((m, i) => (
-                                <tr key={`${m.voucherId}-${i}`} className="border-b border-bg-border/50 hover:bg-bg-border/20">
-                                  <td className="px-3 py-1.5 text-muted">{m.date}</td>
-                                  <td className="px-3 py-1.5 font-mono text-primary">{m.voucherNumber}</td>
-                                  <td className="px-3 py-1.5 text-muted">{m.voucherType}</td>
-                                  <td className="px-3 py-1.5 text-primary truncate max-w-[160px]" title={m.partyName}>{m.partyName}</td>
-                                  <td className="px-3 py-1.5 font-mono text-right">{fmtNum(m.qty)}</td>
-                                  <td className="px-3 py-1.5 font-mono text-right text-muted">{m.rate > 0 ? fmtNum(m.rate) : "—"}</td>
-                                  <td className="px-3 py-1.5 font-mono text-right font-semibold">{fmtNum(m.amount)}</td>
+                                <tr key={`${m.voucherId}-${i}`} className="responsive-table-row">
+                                  <td className="table-cell-muted">{m.date}</td>
+                                  <td className="table-cell-mono">{m.voucherNumber}</td>
+                                  <td className="table-cell-muted">{m.voucherType}</td>
+                                  <td className="table-cell truncate max-w-[160px]" title={m.partyName}>{m.partyName}</td>
+                                  <td className="table-cell-mono table-cell-right">{fmtNum(m.qty)}</td>
+                                  <td className="table-cell-mono table-cell-right text-muted">{m.rate > 0 ? fmtNum(m.rate) : "—"}</td>
+                                  <td className="table-cell-mono table-cell-right font-semibold">{fmtNum(m.amount)}</td>
                                 </tr>
                               ))}
                             </tbody>
                             <tfoot>
                               <tr className="border-t-2 border-bg-border bg-bg-border/10">
-                                <td colSpan={4} className="px-3 py-2 font-semibold text-primary">Total</td>
-                                <td className="px-3 py-2 font-mono text-right font-bold">{fmtNum(movements.reduce((s, m) => s + m.qty, 0))}</td>
-                                <td className="px-3 py-2"></td>
-                                <td className="px-3 py-2 font-mono text-right font-bold">{fmtNum(movements.reduce((s, m) => s + m.amount, 0))}</td>
+                                <td colSpan={4} className="table-cell-emphasis">Total</td>
+                                <td className="table-cell-mono table-cell-right font-bold">{fmtNum(movements.reduce((s, m) => s + m.qty, 0))}</td>
+                                <td className="table-cell"></td>
+                                <td className="table-cell-mono table-cell-right font-bold">{fmtNum(movements.reduce((s, m) => s + m.amount, 0))}</td>
                               </tr>
                             </tfoot>
                           </table>
@@ -917,26 +917,26 @@ export default function Orders() {
         )}>
           <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
             <div className="flex items-center gap-3">
-              <span className="text-sm font-semibold text-primary">Order Entry</span>
-              <span className="text-xs text-muted font-mono">{orderLinesList.length} items</span>
+              <span className="card-title">Order Entry</span>
+              <span className="metric-label tabular-nums">{orderLinesList.length} items</span>
             </div>
             <div className="flex gap-2">
               <UnitToggle />
-              <button onClick={exportCSV} className="flex items-center gap-1.5 text-xs bg-bg-border hover:bg-bg-border/70 text-muted hover:text-primary px-2 py-1.5 rounded-lg transition cursor-pointer" aria-label="Export as CSV" title="Export CSV">
+              <button onClick={exportCSV} className="btn-ghost btn-sm" aria-label="Export as CSV" title="Export CSV">
                 <Download size={12} />
               </button>
-              <button onClick={exportXLSX} className="flex items-center gap-1.5 text-xs bg-accent hover:bg-accent-hover text-white px-2 py-1.5 rounded-lg transition cursor-pointer" aria-label="Export as Excel" title="Export Excel">
+              <button onClick={exportXLSX} className="btn-primary btn-sm" aria-label="Export as Excel" title="Export Excel">
                 <Download size={12} />
               </button>
-              <button onClick={clearAll} className="text-xs bg-danger/20 hover:bg-danger/30 text-danger px-2 py-1.5 rounded-lg transition cursor-pointer" aria-label="Clear all order items" title="Clear order">
+              <button onClick={clearAll} className="text-xs bg-danger/20 hover:bg-danger/30 text-danger px-2 py-1.5 rounded-lg transition duration-150 cursor-pointer" aria-label="Clear all order items" title="Clear order">
                 <Trash2 size={12} />
               </button>
             </div>
           </div>
           <div className="sticky top-0 bg-bg-card border-b border-bg-border z-10">
-            <div className="flex text-xs text-muted font-medium">
-              <div className="flex-1 px-3 py-2">Item</div>
-              <div className="w-24 px-3 py-2">Order Qty</div>
+            <div className="flex">
+              <div className="flex-1 table-header">Item</div>
+              <div className="w-24 table-header">Order Qty</div>
             </div>
           </div>
           {(() => {
@@ -966,7 +966,7 @@ export default function Orders() {
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                         className={clsx(
-                          "flex items-center border-b border-bg-border/50 hover:bg-bg-border/20 transition-colors",
+                          "flex items-center border-b border-bg-border/50 hover:bg-bg-border/20 transition-colors duration-150",
                           focusedItemId === item.itemId && "bg-accent/10"
                         )}
                       >
@@ -994,7 +994,7 @@ export default function Orders() {
                             onKeyDown={(e) => handleOrderInputKeyDown(e, item.itemId, filteredItems)}
                             placeholder="0"
                             className={clsx(
-                              "w-full bg-bg border border-bg-border rounded px-2 py-1 font-mono text-xs text-center outline-none focus:border-accent/60 transition-all",
+                              "w-full bg-bg border border-bg-border rounded px-2 py-1 tabular-nums text-xs text-center outline-none focus:border-accent/60 transition-all duration-150",
                               hasOrder ? "font-bold text-accent" : "text-muted"
                             )}
                           />

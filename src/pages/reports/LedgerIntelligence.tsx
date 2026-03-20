@@ -18,6 +18,9 @@ interface Props {
 
 type LeaderboardView = "income" | "expense" | "rising" | "declining" | "dormant" | "new";
 
+const TOOLTIP_STYLE = { background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 };
+const LABEL_STYLE = { color: "#0f172a", fontWeight: 600, marginBottom: 4 };
+
 export default function LedgerIntelligence({ data }: Props) {
   const [search, setSearch] = useState("");
   const [view, setView] = useState<LeaderboardView>("expense");
@@ -63,15 +66,15 @@ export default function LedgerIntelligence({ data }: Props) {
           { label: "Top Income Group", value: summary.topIncomeGroup || "-", icon: <TrendingUp size={16} />, color: "text-success", isText: true },
         ].map(({ label, value, icon, color, isText }) => (
           <div key={label} className="bento-card !p-3">
-            <div className="flex items-center gap-1.5 text-muted text-xs mb-1.5">{icon}{label}</div>
-            <div className={clsx(isText ? "text-sm font-semibold truncate" : "text-xl font-bold font-mono", color)}>{value}</div>
+            <div className="flex items-center gap-1.5 metric-label mb-1.5">{icon}{label}</div>
+            <div className={clsx(isText ? "text-sm font-semibold truncate" : "kpi-value tabular-nums text-xl", color)}>{value}</div>
           </div>
         ))}
       </div>
 
       {/* Insights */}
       {insights.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 md:gap-3">
           {insights.slice(0, 6).map((ins, i) => (
             <div key={i} className={clsx("flex items-start gap-2 p-3 rounded-xl border",
               ins.severity === "danger" ? "bg-danger/5 border-danger/20" :
@@ -86,7 +89,7 @@ export default function LedgerIntelligence({ data }: Props) {
               )} />
               <div>
                 <div className="text-sm font-medium text-primary">{ins.title}</div>
-                <div className="text-xs text-muted mt-0.5">{ins.description}</div>
+                <div className="caption-text mt-0.5">{ins.description}</div>
               </div>
             </div>
           ))}
@@ -94,12 +97,13 @@ export default function LedgerIntelligence({ data }: Props) {
       )}
 
       {/* View Selector + Search */}
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="filter-bar flex-wrap">
         <div className="flex gap-1 bg-bg-card border border-bg-border rounded-lg p-0.5">
           {(Object.keys(viewLabels) as LeaderboardView[]).map((v) => (
             <button key={v} onClick={() => { setView(v); setExpandedLedger(null); }}
-              className={clsx("px-3 py-1.5 rounded-md text-xs transition cursor-pointer whitespace-nowrap",
-                view === v ? "bg-accent text-white font-medium" : "text-muted hover:text-primary"
+              className={clsx(
+                view === v ? "btn-primary" : "btn-ghost",
+                "px-3 py-1.5 text-xs whitespace-nowrap"
               )}>
               {viewLabels[v]}
             </button>
@@ -116,74 +120,76 @@ export default function LedgerIntelligence({ data }: Props) {
       {/* Leaderboard + Trend Chart */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Leaderboard */}
-        <div className="bento-card !p-0 overflow-hidden">
-          <div className="px-4 py-3 border-b border-bg-border">
-            <h3 className="font-semibold text-primary">{viewLabels[view]} Ledgers</h3>
-            <p className="text-xs text-muted mt-0.5">{filtered.length} ledgers</p>
+        <div className="section-card">
+          <div className="section-card-header">
+            <h3 className="card-title">{viewLabels[view]} Ledgers</h3>
+            <p className="caption-text mt-0.5">{filtered.length} ledgers</p>
           </div>
-          <div className="overflow-auto max-h-[50vh]">
-            {filtered.length === 0 ? (
-              <div className="p-4 text-muted text-sm text-center">No ledgers found</div>
-            ) : (
-              <div className="divide-y divide-bg-border/50">
-                {filtered.slice(0, 25).map((l, i) => {
-                  const isExpanded = expandedLedger === l.ledgerId;
-                  return (
-                    <div key={l.ledgerId}>
-                      <div
-                        onClick={() => setExpandedLedger(isExpanded ? null : l.ledgerId)}
-                        className="flex items-center gap-3 px-4 py-2.5 hover:bg-bg-border/20 cursor-pointer transition-colors"
-                      >
-                        <span className="text-xs text-muted w-5 text-right">{i + 1}</span>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm text-primary truncate">{l.name}</div>
-                          <div className="text-xs text-muted">{l.group} · {l.txCount} tx</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-sm font-mono font-semibold text-primary">
-                            {fmtINR(Math.abs(l.netAmount))}
+          <div className="section-card-body-flush">
+            <div className="table-scroll max-h-[50vh]">
+              {filtered.length === 0 ? (
+                <div className="p-4 text-muted text-sm text-center">No ledgers found</div>
+              ) : (
+                <div className="divide-y divide-bg-border/50">
+                  {filtered.slice(0, 25).map((l, i) => {
+                    const isExpanded = expandedLedger === l.ledgerId;
+                    return (
+                      <div key={l.ledgerId}>
+                        <div
+                          onClick={() => setExpandedLedger(isExpanded ? null : l.ledgerId)}
+                          className="flex items-center gap-3 px-4 py-2.5 hover:bg-bg-border/20 cursor-pointer transition-colors duration-150"
+                        >
+                          <span className="caption-text w-5 text-right">{i + 1}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm text-primary truncate">{l.name}</div>
+                            <div className="caption-text">{l.group} · {l.txCount} tx</div>
                           </div>
-                          {l.growthRate !== 0 && (
-                            <div className={clsx("text-xs font-mono",
-                              l.growthRate > 0 ? (view === "expense" || view === "rising" ? "text-danger" : "text-success") :
-                              (view === "expense" || view === "rising" ? "text-success" : "text-danger")
-                            )}>
-                              {l.growthRate > 0 ? "+" : ""}{fmtNum(l.growthRate, 1)}%
+                          <div className="text-right">
+                            <div className="text-sm tabular-nums font-semibold text-primary">
+                              {fmtINR(Math.abs(l.netAmount))}
                             </div>
-                          )}
+                            {l.growthRate !== 0 && (
+                              <div className={clsx("caption-text tabular-nums",
+                                l.growthRate > 0 ? (view === "expense" || view === "rising" ? "text-danger" : "text-success") :
+                                (view === "expense" || view === "rising" ? "text-success" : "text-danger")
+                              )}>
+                                {l.growthRate > 0 ? "+" : ""}{fmtNum(l.growthRate, 1)}%
+                              </div>
+                            )}
+                          </div>
                         </div>
+                        {isExpanded && l.monthlyTrend.length > 0 && (
+                          <div className="px-4 pb-3 bg-bg-border/10">
+                            <ResponsiveContainer width="100%" height={120}>
+                              <LineChart data={l.monthlyTrend}>
+                                <XAxis dataKey="label" tick={{ fill: "#94a3b8", fontSize: 9 }} axisLine={false} tickLine={false} />
+                                <YAxis hide />
+                                <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={LABEL_STYLE} formatter={(v: number) => fmtINR(v)} />
+                                <Line type="monotone" dataKey="amount" stroke="#2563eb" strokeWidth={2} dot={{ fill: "#2563eb", r: 2 }} />
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )}
                       </div>
-                      {isExpanded && l.monthlyTrend.length > 0 && (
-                        <div className="px-4 pb-3 bg-bg-border/10">
-                          <ResponsiveContainer width="100%" height={120}>
-                            <LineChart data={l.monthlyTrend}>
-                              <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 9 }} />
-                              <YAxis hide />
-                              <Tooltip contentStyle={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 11 }} formatter={(v: number) => fmtINR(v)} />
-                              <Line type="monotone" dataKey="amount" stroke="#2563eb" strokeWidth={2} dot={{ fill: "#2563eb", r: 2 }} />
-                            </LineChart>
-                          </ResponsiveContainer>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Top Ledger Contribution Bar */}
         <div className="bento-card">
-          <h3 className="font-semibold text-primary mb-3">
+          <h3 className="card-title mb-3">
             {view === "income" || view === "declining" ? "Income" : "Expense"} Contribution
           </h3>
           <ResponsiveContainer width="100%" height={Math.min(filtered.slice(0, 12).length * 36 + 40, 450)}>
             <BarChart data={filtered.slice(0, 12)} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-              <XAxis type="number" tick={{ fill: "#64748b", fontSize: 11 }} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
-              <YAxis type="category" dataKey="name" width={140} tick={{ fill: "#64748b", fontSize: 10 }} />
-              <Tooltip contentStyle={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 12 }} formatter={(v: number) => fmtINR(Math.abs(v))} />
+              <XAxis type="number" tick={{ fill: "#94a3b8", fontSize: 11 }} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="name" width={140} tick={{ fill: "#94a3b8", fontSize: 10 }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={LABEL_STYLE} formatter={(v: number) => fmtINR(Math.abs(v))} />
               <Bar dataKey="netAmount" fill={view === "income" || view === "declining" ? "#059669" : "#dc2626"} radius={[0, 4, 4, 0]} name="Amount" />
             </BarChart>
           </ResponsiveContainer>
