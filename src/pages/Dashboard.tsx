@@ -17,17 +17,17 @@ import { KPICard } from "../components/KPICard";
 import { fmtINR, fmtDate } from "../utils/format";
 
 const CHART_COLORS = {
-  grid: "#e2e8f0",
-  tick: "#94a3b8",
-  blue: "#3b82f6",
-  green: "#10b981",
+  grid: "#e5e5ea",
+  tick: "#a1a1a6",
+  blue: "#2563eb",
+  green: "#16a34a",
   tooltipBg: "#ffffff",
-  tooltipBorder: "#e2e8f0",
-  tooltipLabel: "#0f172a",
+  tooltipBorder: "#e5e5ea",
+  tooltipLabel: "#1d1d1f",
 };
 
 const CHART_TOOLTIP_STYLE = {
-  contentStyle: { background: CHART_COLORS.tooltipBg, border: `1px solid ${CHART_COLORS.tooltipBorder}`, borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 },
+  contentStyle: { background: CHART_COLORS.tooltipBg, border: `1px solid ${CHART_COLORS.tooltipBorder}`, borderRadius: 12, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13, fontFamily: "Inter, -apple-system, sans-serif" },
   labelStyle: { color: CHART_COLORS.tooltipLabel, fontWeight: 600, marginBottom: 4 },
 };
 
@@ -154,7 +154,7 @@ export default function Dashboard() {
   return (
     <div className="page-section">
       {/* Page Header */}
-      <div className="page-header pb-2">
+      <div className="page-header">
         <h1 className="page-title">{data.company?.name ?? "Dashboard"}</h1>
         <p className="page-subtitle">
           {data.items.size} items · {data.vouchers.length.toLocaleString("en-IN")} vouchers · Imported {fmtDate(data.importedAt.slice(0, 10))}
@@ -187,39 +187,39 @@ export default function Dashboard() {
       </div>
 
       {/* AR / AP Summary - Apple HIG: Refined cards with subtle hover */}
-      <div className="grid grid-cols-2 gap-3 md:gap-4">
+      <div className="grid grid-cols-2 gap-4 md:gap-5">
         <div
           className="card-interactive flex items-center gap-4 cursor-pointer"
           onClick={() => navigate("/invoices")}
         >
-          <div className="w-12 h-12 rounded-lg bg-success/10 dark:bg-success/20 flex items-center justify-center flex-shrink-0">
-            <TrendingUp size={20} className="text-success-600 dark:text-success-400" />
+          <div className="w-12 h-12 rounded-lg bg-success/10 flex items-center justify-center flex-shrink-0">
+            <TrendingUp size={20} className="text-success-600" />
           </div>
           <div className="min-w-0">
-            <p className="metric-label text-neutral-600 dark:text-neutral-400">Receivable</p>
-            <p className="text-lg font-bold text-success-600 dark:text-success-400 tabular-nums">{fmtINR(kpis?.ar ?? 0)}</p>
+            <p className="metric-label">Receivable</p>
+            <p className="text-lg font-bold text-success-600 tabular-nums">{fmtINR(kpis?.ar ?? 0)}</p>
           </div>
         </div>
         <div
           className="card-interactive flex items-center gap-4 cursor-pointer"
           onClick={() => navigate("/invoices")}
         >
-          <div className="w-12 h-12 rounded-lg bg-danger/10 dark:bg-danger/20 flex items-center justify-center flex-shrink-0">
-            <DollarSign size={20} className="text-danger-600 dark:text-danger-400" />
+          <div className="w-12 h-12 rounded-lg bg-danger/10 flex items-center justify-center flex-shrink-0">
+            <DollarSign size={20} className="text-danger-600" />
           </div>
           <div className="min-w-0">
-            <p className="metric-label text-neutral-600 dark:text-neutral-400">Payable</p>
-            <p className="text-lg font-bold text-danger-600 dark:text-danger-400 tabular-nums">{fmtINR(kpis?.ap ?? 0)}</p>
+            <p className="metric-label">Payable</p>
+            <p className="text-lg font-bold text-danger-600 tabular-nums">{fmtINR(kpis?.ap ?? 0)}</p>
           </div>
         </div>
       </div>
 
       {/* Charts Row — Apple HIG: Clean, spacious layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Sales Trend Chart */}
         <div className="section-card">
           <div className="section-card-header">
-            <h3 className="card-title text-neutral-950 dark:text-neutral-100">Sales Trend</h3>
+            <h3 className="card-title">Sales Trend</h3>
             <select
               value={salesPeriod}
               onChange={(e) => setSalesPeriod(Number(e.target.value))}
@@ -247,7 +247,7 @@ export default function Dashboard() {
         {/* Top Items Chart */}
         <div className="section-card">
           <div className="section-card-header">
-            <h3 className="card-title text-neutral-950 dark:text-neutral-100">Top Items (by Qty)</h3>
+            <h3 className="card-title">Top Items (by Qty)</h3>
             <select
               value={topItemsPeriod}
               onChange={(e) => setTopItemsPeriod(e.target.value as "month" | "quarter" | "year")}
@@ -270,7 +270,7 @@ export default function Dashboard() {
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <div className="flex items-center justify-center h-[200px] text-neutral-600 dark:text-neutral-400 text-sm">
+              <div className="flex items-center justify-center h-[200px] text-neutral-600 text-sm">
                 No sales this period
               </div>
             )}
@@ -281,10 +281,10 @@ export default function Dashboard() {
       {/* Low Stock Alert Card - Apple HIG: Clean warning, clear hierarchy */}
       {lowStockItems.length > 0 && (
         <div className="section-card border-l-4 border-l-warn">
-          <div className="section-card-header bg-warn/[0.04] dark:bg-warn/[0.08]">
+          <div className="section-card-header bg-warn/[0.04]">
             <div className="flex items-center gap-3">
-              <AlertCircle size={18} className="text-warn-600 dark:text-warn-400 flex-shrink-0" />
-              <h3 className="card-title text-warn-700 dark:text-warn-400">Low Stock Items</h3>
+              <AlertCircle size={18} className="text-warn-600 flex-shrink-0" />
+              <h3 className="card-title text-warn-700">Low Stock Items</h3>
             </div>
             <button
               onClick={() => navigate("/alerts")}
@@ -293,15 +293,15 @@ export default function Dashboard() {
               View All <ArrowRight size={14} />
             </button>
           </div>
-          <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
+          <div className="divide-y divide-neutral-200">
             {lowStockItems.map((item) => (
               <div
                 key={item.name}
                 onClick={() => navigate("/alerts")}
-                className="flex items-center justify-between px-6 py-3 hover:bg-warn/[0.02] dark:hover:bg-warn/[0.08] cursor-pointer transition-colors"
+                className="flex items-center justify-between px-6 py-3 hover:bg-warn/[0.02] cursor-pointer transition-colors"
               >
                 <div className="min-w-0 flex items-center gap-4">
-                  <span className="text-sm font-medium text-neutral-950 dark:text-neutral-100 truncate">
+                  <span className="text-sm font-medium text-neutral-950 truncate">
                     {item.name.length > 32 ? item.name.slice(0, 32) + "…" : item.name}
                   </span>
                   <span className="badge badge-muted hidden sm:inline-flex text-xs">
@@ -309,10 +309,10 @@ export default function Dashboard() {
                   </span>
                 </div>
                 <div className="flex items-center gap-4 flex-shrink-0">
-                  <span className="text-xs text-neutral-600 dark:text-neutral-400 hidden md:inline tabular-nums">
+                  <span className="text-xs text-neutral-600 hidden md:inline tabular-nums">
                     Avg/mo: {item.avgOut.toFixed(0)}
                   </span>
-                  <span className="badge badge-warn text-xs font-mono tabular-nums">
+                  <span className="badge badge-warn text-xs tabular-nums">
                     Reorder: {item.reorder.toFixed(0)}
                   </span>
                 </div>

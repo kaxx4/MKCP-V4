@@ -1,7 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
-  darkMode: false,
   theme: {
     extend: {
       colors: {
@@ -125,47 +124,41 @@ module.exports = {
         },
       },
 
-      // ─── Typography System (Apple HIG inspired) ─────────────────
+      // ─── Typography System ─────────────────────────────────────
       fontFamily: {
-        // System font stack inspired by Apple (SF Pro)
         sans: [
+          '"Inter"',
           '-apple-system',
           'BlinkMacSystemFont',
           '"Segoe UI"',
-          '"DM Sans"',
           '"Helvetica Neue"',
+          'Arial',
           'sans-serif',
           '"Apple Color Emoji"',
           '"Segoe UI Emoji"',
         ],
-        // Refined monospace (replacing IBM Plex Mono)
         mono: [
           '"SF Mono"',
-          '"Monaco"',
-          '"Menlo"',
+          '"Cascadia Code"',
           '"Consolas"',
-          '"Courier New"',
+          '"Menlo"',
           'monospace',
         ],
       },
 
-      // Apple HIG Typography Scale
+      // Clean type scale — legible sizes, tighter headlines
       fontSize: {
-        // Captions & Small Text
-        "2xs": ["11px", { lineHeight: "1.2", letterSpacing: "0.3px" }],
-        xs: ["12px", { lineHeight: "1.4", letterSpacing: "0.3px" }],
-        // Body Text
-        sm: ["13px", { lineHeight: "1.5", letterSpacing: "0.3px" }],
-        base: ["14px", { lineHeight: "1.5", letterSpacing: "0" }],
-        md: ["15px", { lineHeight: "1.6", letterSpacing: "0" }],
-        lg: ["16px", { lineHeight: "1.6", letterSpacing: "0" }],
-        // Subheadings
-        xl: ["17px", { lineHeight: "1.6", letterSpacing: "0" }],
-        "2xl": ["19px", { lineHeight: "1.6", letterSpacing: "-0.5px" }],
-        // Headlines
-        "3xl": ["22px", { lineHeight: "1.5", letterSpacing: "-0.5px" }],
-        "4xl": ["28px", { lineHeight: "1.3", letterSpacing: "-1px" }],
-        "5xl": ["34px", { lineHeight: "1.2", letterSpacing: "-1px" }],
+        "2xs": ["11px", { lineHeight: "16px" }],
+        xs:    ["12px", { lineHeight: "16px" }],
+        sm:    ["13px", { lineHeight: "20px" }],
+        base:  ["14px", { lineHeight: "20px" }],
+        md:    ["15px", { lineHeight: "22px" }],
+        lg:    ["16px", { lineHeight: "24px" }],
+        xl:    ["18px", { lineHeight: "26px" }],
+        "2xl": ["20px", { lineHeight: "28px", letterSpacing: "-0.02em" }],
+        "3xl": ["24px", { lineHeight: "32px", letterSpacing: "-0.02em" }],
+        "4xl": ["30px", { lineHeight: "36px", letterSpacing: "-0.025em" }],
+        "5xl": ["36px", { lineHeight: "40px", letterSpacing: "-0.025em" }],
       },
 
       // ─── Spacing Grid (4px base) ───────────────────────────────
