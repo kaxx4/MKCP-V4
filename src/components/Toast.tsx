@@ -36,10 +36,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 const TOAST_STYLES = {
-  success: { border: "border-success/25 dark:border-success/20", bg: "bg-success/[0.04] dark:bg-success/[0.08]", icon: CheckCircle, iconColor: "text-success-600 dark:text-success-400" },
-  error: { border: "border-danger/25 dark:border-danger/20", bg: "bg-danger/[0.04] dark:bg-danger/[0.08]", icon: XCircle, iconColor: "text-danger-600 dark:text-danger-400" },
-  warn: { border: "border-warn/25 dark:border-warn/20", bg: "bg-warn/[0.04] dark:bg-warn/[0.08]", icon: AlertTriangle, iconColor: "text-warn-600 dark:text-warn-400" },
-  info: { border: "border-accent/25 dark:border-accent/20", bg: "bg-accent/[0.04] dark:bg-accent/[0.08]", icon: Info, iconColor: "text-accent dark:text-accent" },
+  success: { border: "border-success/25", bg: "bg-success/[0.04]", icon: CheckCircle, iconColor: "text-success-600" },
+  error: { border: "border-danger/25", bg: "bg-danger/[0.04]", icon: XCircle, iconColor: "text-danger-600" },
+  warn: { border: "border-warn/25", bg: "bg-warn/[0.04]", icon: AlertTriangle, iconColor: "text-warn-600" },
+  info: { border: "border-accent/25", bg: "bg-accent/[0.04]", icon: Info, iconColor: "text-accent" },
 } as const;
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
@@ -49,16 +49,16 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
   return (
     <div
       className={clsx(
-        "flex items-start gap-2.5 bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-lg px-4 py-3 shadow-lg animate-slide-in",
+        "flex items-start gap-2.5 bg-white border border-neutral-200 rounded-lg px-4 py-3 shadow-lg animate-slide-in",
         style.border
       )}
       role="alert"
     >
       <Icon size={16} className={clsx("flex-shrink-0 mt-0.5", style.iconColor)} />
-      <p className="text-neutral-950 dark:text-neutral-100 text-sm flex-1 leading-snug">{toast.message}</p>
+      <p className="text-neutral-950 text-sm flex-1 leading-snug">{toast.message}</p>
       <button
         onClick={onDismiss}
-        className="text-neutral-500 dark:text-neutral-500 hover:text-neutral-950 dark:hover:text-neutral-100 transition-colors flex-shrink-0 -mr-1"
+        className="text-neutral-500 hover:text-neutral-950 transition-colors flex-shrink-0 -mr-1"
         aria-label="Dismiss notification"
       >
         <X size={14} />

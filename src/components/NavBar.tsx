@@ -21,18 +21,17 @@ import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
 import clsx from "clsx";
 
-// Apple HIG color tokens
 const COLORS = {
-  bg: "bg-white dark:bg-neutral-950",
-  border: "border-neutral-200 dark:border-neutral-800",
+  bg: "bg-white",
+  border: "border-neutral-200/80",
   text: {
-    primary: "text-neutral-950 dark:text-neutral-50",
-    secondary: "text-neutral-600 dark:text-neutral-400",
-    tertiary: "text-neutral-700 dark:text-neutral-300",
+    primary: "text-neutral-900",
+    secondary: "text-neutral-500",
+    tertiary: "text-neutral-600",
   },
-  hover: "hover:bg-neutral-100 dark:hover:bg-neutral-900",
-  bgHover: "bg-neutral-100 dark:bg-neutral-900",
-  accentBg: "bg-accent/10 dark:bg-accent/20",
+  hover: "hover:bg-neutral-50",
+  bgHover: "bg-neutral-50",
+  accentBg: "bg-accent/8",
 };
 
 const NAV_ITEMS = [
@@ -71,7 +70,7 @@ export function NavBar() {
     return (
       <>
         <nav
-          className={clsx("fixed bottom-0 left-0 right-0 h-14 flex items-center justify-around z-30 px-1", COLORS.bg, "border-t", COLORS.border, "bg-white/95 dark:bg-neutral-950/95 backdrop-blur-md")}
+          className={clsx("fixed bottom-0 left-0 right-0 h-14 flex items-center justify-around z-30 px-1", COLORS.bg, "border-t", COLORS.border, "bg-white/95 backdrop-blur-md")}
           aria-label="Main navigation"
         >
           {MOBILE_PRIMARY.map(({ path, icon: Icon, label }) => (
@@ -81,24 +80,24 @@ export function NavBar() {
               className={({ isActive }) =>
                 clsx(
                   "flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[52px] transition-colors duration-150",
-                  isActive ? "text-accent font-medium" : clsx(COLORS.text.secondary, "hover:text-neutral-950 dark:hover:text-neutral-50")
+                  isActive ? "text-accent font-medium" : clsx(COLORS.text.secondary, "hover:text-neutral-950")
                 )
               }
               aria-label={label}
             >
               <Icon size={20} strokeWidth={1.75} aria-hidden="true" />
-              <span className="text-[10px] font-medium leading-none">{label}</span>
+              <span className="text-2xs font-medium leading-none">{label}</span>
             </NavLink>
           ))}
 
           <button
             onClick={() => setMoreOpen(true)}
-            className={clsx("flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[52px] transition-colors duration-150", COLORS.text.secondary, "hover:text-neutral-950 dark:hover:text-neutral-50")}
+            className={clsx("flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[52px] transition-colors duration-150", COLORS.text.secondary, "hover:text-neutral-950")}
             aria-label="More navigation options"
             aria-expanded={moreOpen}
           >
             <MoreHorizontal size={20} strokeWidth={1.75} aria-hidden="true" />
-            <span className="text-[10px] font-medium leading-none">More</span>
+            <span className="text-2xs font-medium leading-none">More</span>
           </button>
         </nav>
 
@@ -113,7 +112,7 @@ export function NavBar() {
             />
 
             <div className={clsx("relative rounded-t-2xl border-t p-4 pb-6 animate-slide-up shadow-xl", COLORS.bg, COLORS.border)}>
-              <div className="w-8 h-1 bg-neutral-300 dark:bg-neutral-700 rounded-full mx-auto mb-4" aria-hidden="true" />
+              <div className="w-8 h-1 bg-neutral-300 rounded-full mx-auto mb-4" aria-hidden="true" />
 
               <button
                 onClick={() => setMoreOpen(false)}
@@ -134,7 +133,7 @@ export function NavBar() {
                         "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors duration-150 text-sm",
                         isActive
                           ? clsx(COLORS.accentBg, "text-accent font-medium")
-                          : clsx(COLORS.text.secondary, "hover:text-neutral-950 dark:hover:text-neutral-50", COLORS.hover)
+                          : clsx(COLORS.text.secondary, "hover:text-neutral-950", COLORS.hover)
                       )
                     }
                   >
@@ -146,15 +145,15 @@ export function NavBar() {
 
               <div className={clsx("flex items-center gap-2.5 px-3 py-2.5 rounded-lg border", COLORS.bgHover, COLORS.border)}>
                 {isConnected ? (
-                  <Wifi size={14} className="text-success-600 dark:text-success-400 flex-shrink-0" />
+                  <Wifi size={14} className="text-success-600 flex-shrink-0" />
                 ) : (
-                  <WifiOff size={14} className="text-danger-600 dark:text-danger-400 flex-shrink-0" />
+                  <WifiOff size={14} className="text-danger-600 flex-shrink-0" />
                 )}
                 <div className="flex flex-col">
-                  <span className={clsx("text-xs font-medium", isConnected ? "text-success-600 dark:text-success-400" : "text-danger-600 dark:text-danger-400")}>
+                  <span className={clsx("text-xs font-medium", isConnected ? "text-success-600" : "text-danger-600")}>
                     {isConnected ? "Tally Connected" : "Tally Offline"}
                   </span>
-                  {lastSyncAt && <span className={clsx("text-[10px]", COLORS.text.secondary)}>Last sync: {formatLastSync()}</span>}
+                  {lastSyncAt && <span className={clsx("text-2xs", COLORS.text.secondary)}>Last sync: {formatLastSync()}</span>}
                 </div>
               </div>
             </div>
@@ -178,7 +177,7 @@ export function NavBar() {
     >
       {/* Logo */}
       <div className={clsx("flex items-center gap-3 px-3 h-14 border-b", COLORS.border)}>
-        <div className="w-8 h-8 rounded-lg bg-accent/10 dark:bg-accent/20 flex items-center justify-center flex-shrink-0">
+        <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center flex-shrink-0">
           <Bike size={18} className="text-accent" />
         </div>
         {sidebarOpen && (
@@ -197,7 +196,7 @@ export function NavBar() {
                 "flex items-center gap-3 px-2.5 py-2 rounded-lg transition-colors duration-150 text-sm",
                 isActive
                   ? clsx(COLORS.accentBg, "text-accent font-medium")
-                  : clsx(COLORS.text.secondary, "hover:text-neutral-950 dark:hover:text-neutral-50", COLORS.hover)
+                  : clsx(COLORS.text.secondary, "hover:text-neutral-950", COLORS.hover)
               )
             }
             aria-label={label}
@@ -216,16 +215,16 @@ export function NavBar() {
           title={isConnected ? `Connected - Last sync: ${formatLastSync()}` : "Not connected - Click to connect"}
         >
           {isConnected ? (
-            <Wifi size={14} className="text-success-600 dark:text-success-400 flex-shrink-0" />
+            <Wifi size={14} className="text-success-600 flex-shrink-0" />
           ) : (
-            <WifiOff size={14} className="text-danger-600 dark:text-danger-400 flex-shrink-0" />
+            <WifiOff size={14} className="text-danger-600 flex-shrink-0" />
           )}
           {sidebarOpen && (
             <div className="flex flex-col min-w-0">
-              <span className={clsx("text-xs font-medium truncate", isConnected ? "text-success-600 dark:text-success-400" : "text-danger-600 dark:text-danger-400")}>
+              <span className={clsx("text-xs font-medium truncate", isConnected ? "text-success-600" : "text-danger-600")}>
                 {isConnected ? "Connected" : "Offline"}
               </span>
-              {lastSyncAt && <span className={clsx("text-[10px] truncate", COLORS.text.secondary)}>{formatLastSync()}</span>}
+              {lastSyncAt && <span className={clsx("text-2xs truncate", COLORS.text.secondary)}>{formatLastSync()}</span>}
             </div>
           )}
         </NavLink>
