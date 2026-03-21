@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, ChevronDown, ChevronUp, Download, Upload, FileText } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, Upload, FileText } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
@@ -105,10 +105,9 @@ export default function Invoices() {
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 md:gap-3 bento-card">
-        <div className="relative flex-1 min-w-[140px] md:min-w-[200px]">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+        <div className="flex-1 min-w-[140px] md:min-w-[200px]">
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search party / voucher#"
-            className="search-input pl-8" />
+            className="search-input w-full" />
         </div>
         <div className="flex gap-1">
           {(["All", "Sales", "Purchase"] as FilterType[]).map((t) => (

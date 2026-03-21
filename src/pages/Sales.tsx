@@ -3,8 +3,9 @@
  * Create and manage pro-forma sales invoices with Tally integration
  */
 
-import { useState, useEffect, useCallback } from "react";
-import { Plus, FileText, Send, AlertTriangle, CheckCircle, Download, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Plus, FileText, Send, AlertTriangle, CheckCircle, Download, Loader2, Trash2, Search, IndianRupee, Package, Upload } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useSalesStore } from "../store/salesStore";
@@ -19,6 +20,7 @@ import type {
 } from "../types/sales";
 
 export default function SalesPage() {
+  const navigate = useNavigate();
   const { data: tallyData } = useDataStore();
   const {
     currentInvoice,
@@ -32,8 +34,10 @@ export default function SalesPage() {
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string>("");
+  const [itemSearch, setItemSearch] = useState("");
   const [isExporting, setIsExporting] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
+  const itemSelectRef = useRef<HTMLSelectElement>(null);
 
   // Initialize empty invoice if none exists
   useEffect(() => {
@@ -83,26 +87,34 @@ export default function SalesPage() {
       setIsValidating(false);
     };
 
-    const timer = setTimeout(validateAsync, 500); // Debounce
+    const timer = setTimeout(validateAsync, 500);
     return () => clearTimeout(timer);
   }, [currentInvoice?.items, tallyData, currentInvoice, setCurrentInvoice]);
 
+  // Available items filtered by search
+  const availableItems = useMemo(() => {
+    const all = Array.from(tallyData?.items.values() ?? []).filter(
+      (item) => !currentInvoice?.items.some((li) => li.itemId === item.itemId)
+    );
+    if (!itemSearch.trim()) return all;
+    const q = itemSearch.toLowerCase();
+    return all.filter((item) => item.name.toLowerCase().includes(q));
+  }, [tallyData, currentInvoice?.items, itemSearch]);
+
+  const availableParties = useMemo(() =>
+    Array.from(tallyData?.ledgers.values() ?? []).filter(
+      (ledger) => ledger.type === "Customer"
+    ),
+    [tallyData]
+  );
+
   const handlePartyChange = (partyId: string) => {
     if (!currentInvoice) return;
-
     const party = tallyData?.ledgers.get(partyId);
-    if (!party) {
-      toast.error("Party not found");
-      return;
-    }
-
+    if (!party) { toast.error("Party not found"); return; }
     setCurrentInvoice({
       ...currentInvoice,
-      header: {
-        ...currentInvoice.header,
-        partyId,
-        partyName: party.name
-      }
+      header: { ...currentInvoice.header, partyId, partyName: party.name }
     });
   };
 
@@ -111,12 +123,8 @@ export default function SalesPage() {
       toast.error("Please select an item");
       return;
     }
-
     const tallyItem = tallyData?.items.get(selectedItemId);
-    if (!tallyItem) {
-      toast.error("Item not found in Tally data");
-      return;
-    }
+    if (!tallyItem) { toast.error("Item not found in Tally data"); return; }
 
     const newItem: SalesInvoiceLineItem = {
       id: crypto.randomUUID(),
@@ -126,416 +134,415 @@ export default function SalesPage() {
       unitType: unitMode,
       baseQuantity: 1,
       packageQuantity: 1,
-      ratePerBaseUnit: tallyItem.currentRate,
-      ratePerPackageUnit: tallyItem.currentRate,
+      ratePerBaseUnit: tallyItem.currentRate ?? 0,
+      ratePerPackageUnit: tallyItem.currentRate ?? 0,
       conversionRatio: 1,
       baseUnitName: tallyItem.baseUnit,
       packageUnitName: "pkg",
-      amount: tallyItem.currentRate,
+      amount: tallyItem.currentRate ?? 0,
       validationStatus: "valid",
       validationMessages: []
     };
 
     const updatedItems = [...currentInvoice.items, newItem];
-    const newSubtotal = roundTallyStyle(
-      updatedItems.reduce((sum, item) => sum + item.amount, 0)
-    );
-
+    const newSubtotal = roundTallyStyle(updatedItems.reduce((s, i) => s + i.amount, 0));
     setCurrentInvoice({
       ...currentInvoice,
       items: updatedItems,
       subtotal: newSubtotal,
-      totalQuantity: updatedItems.reduce((sum, item) => sum + item.baseQuantity, 0)
+      totalQuantity: updatedItems.reduce((s, i) => s + i.baseQuantity, 0)
     });
-
     setSelectedItemId("");
-    toast.success(`Added ${tallyItem.name} to invoice`);
+    setItemSearch("");
+    toast.success(`Added ${tallyItem.name}`);
   }, [currentInvoice, selectedItemId, tallyData, unitMode, setCurrentInvoice, toast]);
 
   const handleQuantityChange = (itemId: string, newQuantity: number) => {
     if (!currentInvoice) return;
-
     const updatedItems = currentInvoice.items.map((item) => {
       if (item.id !== itemId) return item;
-
       const baseQty = item.unitType === "base" ? newQuantity : newQuantity * item.conversionRatio;
       const amount = roundTallyStyle(baseQty * item.ratePerBaseUnit);
-
-      return {
-        ...item,
-        quantity: newQuantity,
-        baseQuantity: baseQty,
-        packageQuantity: baseQty / item.conversionRatio,
-        amount
-      };
+      return { ...item, quantity: newQuantity, baseQuantity: baseQty, packageQuantity: baseQty / item.conversionRatio, amount };
     });
-
-    const newSubtotal = roundTallyStyle(
-      updatedItems.reduce((sum, item) => sum + item.amount, 0)
-    );
-
+    const newSubtotal = roundTallyStyle(updatedItems.reduce((s, i) => s + i.amount, 0));
     setCurrentInvoice({
       ...currentInvoice,
       items: updatedItems,
       subtotal: newSubtotal,
-      totalQuantity: updatedItems.reduce((sum, item) => sum + item.baseQuantity, 0)
+      totalQuantity: updatedItems.reduce((s, i) => s + i.baseQuantity, 0)
     });
   };
 
   const handleRemoveItem = (itemId: string) => {
     if (!currentInvoice) return;
-
     const updatedItems = currentInvoice.items.filter((item) => item.id !== itemId);
-    const newSubtotal = roundTallyStyle(
-      updatedItems.reduce((sum, item) => sum + item.amount, 0)
-    );
-
+    const newSubtotal = roundTallyStyle(updatedItems.reduce((s, i) => s + i.amount, 0));
     setCurrentInvoice({
       ...currentInvoice,
       items: updatedItems,
       subtotal: newSubtotal,
-      totalQuantity: updatedItems.reduce((sum, item) => sum + item.baseQuantity, 0)
+      totalQuantity: updatedItems.reduce((s, i) => s + i.baseQuantity, 0)
     });
-  };
-
-  const handleUnitToggle = (newMode: "base" | "package") => {
-    setUnitMode(newMode);
   };
 
   const handleExportPDF = useCallback(() => {
     if (!currentInvoice) return;
-
-    if (!validationResult?.passed) {
-      toast.error("Fix validation errors before exporting");
-      return;
-    }
-
+    if (!validationResult?.passed) { toast.error("Fix validation errors before exporting"); return; }
     try {
       setIsExporting(true);
       downloadInvoicePDF(currentInvoice);
       toast.success(`Downloaded PDF: Invoice_${currentInvoice.header.invoiceNo || "DRAFT"}`);
-    } catch (error) {
-      toast.error("Failed to export PDF");
-      console.error("PDF export error:", error);
-    } finally {
-      setIsExporting(false);
-    }
+    } catch { toast.error("Failed to export PDF"); }
+    finally { setIsExporting(false); }
   }, [currentInvoice, validationResult, toast]);
 
   const handlePushToTally = useCallback(async () => {
     if (!currentInvoice) return;
-
-    // First validate against Tally converter requirements
     const validation = validateInvoiceForTally(currentInvoice);
     if (!validation.valid) {
-      const errors = validation.errors.slice(0, 3).join("; ");
-      toast.error(`Cannot push to Tally: ${errors}`);
+      toast.error(`Cannot push: ${validation.errors.slice(0, 3).join("; ")}`);
       return;
     }
-
-    if (!validationResult?.passed) {
-      toast.error("Fix validation errors before pushing to Tally");
-      return;
-    }
-
+    if (!validationResult?.passed) { toast.error("Fix validation errors first"); return; }
     try {
       setIsPushing(true);
       const result = await pushInvoiceToTally(currentInvoice);
-
-      if (result.success) {
-        toast.success(result.message);
-        if (result.tallyId) {
-          console.log(`Invoice pushed to Tally with ID: ${result.tallyId}`);
-        }
-      } else {
-        toast.error(result.error || result.message);
-        console.error("Tally push error:", result.error);
-      }
-    } catch (error) {
-      toast.error("Failed to push invoice to Tally");
-      console.error("Tally push error:", error);
-    } finally {
-      setIsPushing(false);
-    }
+      if (result.success) { toast.success(result.message); }
+      else { toast.error(result.error || result.message); }
+    } catch { toast.error("Failed to push to Tally"); }
+    finally { setIsPushing(false); }
   }, [currentInvoice, validationResult, toast]);
 
-  if (!currentInvoice) {
-    return <div className="p-6">Loading invoice...</div>;
+  // ─── Empty state ──────────────────────────────────────────
+  if (!tallyData) {
+    return (
+      <div className="empty-state h-[60vh]">
+        <div className="w-16 h-16 rounded-2xl bg-neutral-100 flex items-center justify-center mb-5">
+          <IndianRupee size={32} className="text-neutral-400" />
+        </div>
+        <h2 className="empty-state-title">No Data Loaded</h2>
+        <p className="empty-state-description">Import your Tally data to create sales invoices</p>
+        <button onClick={() => navigate("/import")} className="btn-primary gap-2">
+          <Upload size={16} /> Go to Import
+        </button>
+      </div>
+    );
   }
 
-  const availableItems = Array.from(tallyData?.items.values() ?? []).filter(
-    (item) => !currentInvoice.items.some((li) => li.itemId === item.itemId)
-  );
+  if (!currentInvoice) {
+    return (
+      <div className="page-section">
+        <div className="card flex items-center justify-center py-16">
+          <Loader2 size={24} className="animate-spin text-neutral-400" />
+          <span className="ml-3 text-neutral-500">Initializing invoice...</span>
+        </div>
+      </div>
+    );
+  }
 
-  const availableParties = Array.from(tallyData?.ledgers.values() ?? []).filter(
-    (ledger) => ledger.type === "Customer"
-  );
+  const fmtAmount = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // ─── Main render ──────────────────────────────────────────
   return (
-    <div className="space-y-6 p-6">
-      <div>
-        <h1 className="text-3xl md:text-4xl font-bold text-primary">Sales Invoices</h1>
-        <p className="text-muted mt-2">Create pro-forma sales invoices with Tally data</p>
-      </div>
-
-      {/* Invoice Header */}
-      <div className="card-standard grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div className="page-section">
+      {/* Header */}
+      <div className="page-header">
         <div>
-          <label className="form-label">Party</label>
-          <select
-            value={currentInvoice.header.partyId}
-            onChange={(e) => handlePartyChange(e.target.value)}
-            className="form-select w-full"
-          >
-            <option value="">Select party...</option>
-            {availableParties.map((party) => (
-              <option key={party.ledgerId} value={party.ledgerId}>
-                {party.name}
-              </option>
-            ))}
-          </select>
+          <h1 className="page-title">Sales Invoice</h1>
+          <p className="page-subtitle">
+            {currentInvoice.items.length} item{currentInvoice.items.length !== 1 ? "s" : ""} · ₹{fmtAmount(currentInvoice.subtotal)}
+            {currentInvoice.header.partyName && ` · ${currentInvoice.header.partyName}`}
+          </p>
         </div>
-
-        <div>
-          <label className="form-label">Invoice Date</label>
-          <input
-            type="date"
-            value={currentInvoice.header.date}
-            onChange={(e) =>
-              setCurrentInvoice({
-                ...currentInvoice,
-                header: { ...currentInvoice.header, date: e.target.value }
-              })
-            }
-            className="form-input w-full"
-          />
-        </div>
-
-        <div>
-          <label className="form-label">Invoice No. (Optional)</label>
-          <input
-            type="text"
-            value={currentInvoice.header.invoiceNo ?? ""}
-            onChange={(e) =>
-              setCurrentInvoice({
-                ...currentInvoice,
-                header: { ...currentInvoice.header, invoiceNo: e.target.value }
-              })
-            }
-            placeholder="INV-001"
-            className="form-input w-full"
-          />
+        <div className="flex items-center gap-2">
+          <span className={clsx(
+            "status-badge",
+            validationResult?.passed ? "status-badge-active" : currentInvoice.items.length > 0 ? "status-badge-pending" : "status-badge-inactive"
+          )}>
+            {validationResult?.passed ? "Valid" : currentInvoice.items.length > 0 ? "Draft" : "Empty"}
+          </span>
         </div>
       </div>
 
-      {/* Items Section */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-primary">Items</h2>
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-muted">Unit:</label>
-            <div className="flex border border-bg-border rounded-lg">
-              <button
-                onClick={() => handleUnitToggle("base")}
-                className={clsx(
-                  "px-3 py-1 text-sm transition-all",
-                  unitMode === "base"
-                    ? "bg-accent text-white"
-                    : "bg-transparent text-primary hover:bg-bg-hover"
-                )}
+      {/* Invoice Header Card */}
+      <div className="section-card">
+        <div className="section-card-header">
+          <h3 className="card-title">Invoice Details</h3>
+          <span className="caption-text">{currentInvoice.header.date}</span>
+        </div>
+        <div className="section-card-body">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <div className="input-group">
+              <label className="form-label" htmlFor="sales-party">Party</label>
+              <select
+                id="sales-party"
+                value={currentInvoice.header.partyId}
+                onChange={(e) => handlePartyChange(e.target.value)}
+                className="form-select w-full"
               >
-                Base Units
-              </button>
-              <button
-                onClick={() => handleUnitToggle("package")}
-                className={clsx(
-                  "px-3 py-1 text-sm transition-all border-l border-bg-border",
-                  unitMode === "package"
-                    ? "bg-accent text-white"
-                    : "bg-transparent text-primary hover:bg-bg-hover"
-                )}
-              >
-                Packages
-              </button>
+                <option value="">Select party...</option>
+                {availableParties.map((party) => (
+                  <option key={party.ledgerId} value={party.ledgerId}>{party.name}</option>
+                ))}
+              </select>
+              <p className="form-helper">{availableParties.length} customers available</p>
+            </div>
+
+            <div className="input-group">
+              <label className="form-label" htmlFor="sales-date">Invoice Date</label>
+              <input
+                id="sales-date"
+                type="date"
+                value={currentInvoice.header.date}
+                onChange={(e) => setCurrentInvoice({
+                  ...currentInvoice,
+                  header: { ...currentInvoice.header, date: e.target.value }
+                })}
+                className="form-input w-full"
+              />
+            </div>
+
+            <div className="input-group">
+              <label className="form-label" htmlFor="sales-invno">Invoice No.</label>
+              <input
+                id="sales-invno"
+                type="text"
+                value={currentInvoice.header.invoiceNo ?? ""}
+                onChange={(e) => setCurrentInvoice({
+                  ...currentInvoice,
+                  header: { ...currentInvoice.header, invoiceNo: e.target.value }
+                })}
+                placeholder="Auto-generated if blank"
+                className="form-input w-full"
+              />
+              <p className="form-helper">Optional — leave blank for auto</p>
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Items Table */}
-        <div className="overflow-x-auto card-standard">
-          <table className="w-full text-sm">
-            <thead className="border-b border-bg-border bg-bg-hover">
+      {/* Items Table Card */}
+      <div className="section-card">
+        <div className="section-card-header">
+          <h3 className="card-title">Line Items</h3>
+          <div className="flex items-center gap-1 bg-neutral-100 rounded-lg p-0.5">
+            <button
+              onClick={() => setUnitMode("base")}
+              className={clsx(
+                "px-3 py-1.5 text-xs font-medium rounded-md transition-all",
+                unitMode === "base"
+                  ? "bg-white text-neutral-950 shadow-sm"
+                  : "text-neutral-500 hover:text-neutral-700"
+              )}
+            >
+              Base
+            </button>
+            <button
+              onClick={() => setUnitMode("package")}
+              className={clsx(
+                "px-3 py-1.5 text-xs font-medium rounded-md transition-all",
+                unitMode === "package"
+                  ? "bg-white text-neutral-950 shadow-sm"
+                  : "text-neutral-500 hover:text-neutral-700"
+              )}
+            >
+              Package
+            </button>
+          </div>
+        </div>
+
+        {/* Table */}
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
               <tr>
-                <th className="text-left px-4 py-3 font-semibold">Item Name</th>
-                <th className="text-right px-4 py-3 font-semibold">
-                  Qty ({unitMode === "base" ? "Base" : "Pkg"})
-                </th>
-                <th className="text-right px-4 py-3 font-semibold">Unit</th>
-                <th className="text-right px-4 py-3 font-semibold">
-                  Rate (₹/{unitMode === "base" ? "Base" : "Pkg"})
-                </th>
-                <th className="text-right px-4 py-3 font-semibold">Amount (₹)</th>
-                <th className="text-center px-4 py-3">Action</th>
+                <th className="table-header">Item Name</th>
+                <th className="table-header text-right">Qty</th>
+                <th className="table-header text-right">Unit</th>
+                <th className="table-header text-right">Rate (₹)</th>
+                <th className="table-header text-right">Amount (₹)</th>
+                <th className="table-header text-center w-12"></th>
               </tr>
             </thead>
             <tbody>
               {currentInvoice.items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-muted">
-                    No items added yet. Select an item below to get started.
+                  <td colSpan={6} className="px-4 py-12 text-center">
+                    <div className="flex flex-col items-center gap-2">
+                      <Package size={24} className="text-neutral-300" />
+                      <p className="text-sm text-neutral-500">No items yet</p>
+                      <p className="caption-text">Search and add items below</p>
+                    </div>
                   </td>
                 </tr>
               ) : (
-                currentInvoice.items.map((item) => (
-                  <tr key={item.id} className="border-b border-bg-border hover:bg-bg-hover/50">
-                    <td className="px-4 py-3 font-medium">{item.itemName}</td>
-                    <td className="px-4 py-3 text-right">
+                currentInvoice.items.map((item, idx) => (
+                  <tr key={item.id} className="responsive-table-row">
+                    <td className="table-cell-emphasis">{item.itemName}</td>
+                    <td className="table-cell text-right">
                       <input
                         type="number"
                         value={item.quantity}
-                        onChange={(e) =>
-                          handleQuantityChange(item.id, parseFloat(e.target.value) || 0)
-                        }
-                        className="form-input w-20 text-right"
+                        onChange={(e) => handleQuantityChange(item.id, parseFloat(e.target.value) || 0)}
+                        className="form-input w-20 text-right tabular-nums py-1 px-2 text-sm"
                         min="0"
                         step="0.01"
                       />
                     </td>
-                    <td className="px-4 py-3 text-right text-muted">
+                    <td className="table-cell-muted text-right">
                       {unitMode === "base" ? item.baseUnitName : item.packageUnitName}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono">
-                      {(unitMode === "base"
-                        ? item.ratePerBaseUnit
-                        : item.ratePerPackageUnit
-                      ).toFixed(2)}
+                    <td className="table-cell-right">
+                      {fmtAmount(unitMode === "base" ? item.ratePerBaseUnit : item.ratePerPackageUnit)}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono font-bold">
-                      {item.amount.toFixed(2)}
+                    <td className="table-cell-right font-semibold">
+                      {fmtAmount(item.amount)}
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="table-cell text-center">
                       <button
                         onClick={() => handleRemoveItem(item.id)}
-                        className="text-danger hover:text-danger-700 transition-colors"
+                        className="btn-icon w-7 h-7 text-neutral-400 hover:text-danger"
+                        aria-label={`Remove ${item.itemName}`}
                       >
-                        ✕
+                        <Trash2 size={14} />
                       </button>
                     </td>
                   </tr>
                 ))
+              )}
+              {/* Totals row */}
+              {currentInvoice.items.length > 0 && (
+                <tr className="table-footer-row">
+                  <td className="table-cell">
+                    <span className="font-semibold">{currentInvoice.items.length} item{currentInvoice.items.length !== 1 ? "s" : ""}</span>
+                  </td>
+                  <td className="table-cell text-right font-semibold tabular-nums">
+                    {currentInvoice.totalQuantity.toFixed(2)}
+                  </td>
+                  <td className="table-cell"></td>
+                  <td className="table-cell text-right font-semibold">Total</td>
+                  <td className="table-cell text-right font-bold tabular-nums text-accent">
+                    ₹{fmtAmount(currentInvoice.subtotal)}
+                  </td>
+                  <td className="table-cell"></td>
+                </tr>
               )}
             </tbody>
           </table>
         </div>
 
         {/* Add Item Row */}
-        <div className="flex gap-2">
-          <select
-            value={selectedItemId}
-            onChange={(e) => setSelectedItemId(e.target.value)}
-            className="form-select flex-1"
-          >
-            <option value="">Select item to add...</option>
-            {availableItems.map((item) => (
-              <option key={item.itemId} value={item.itemId}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={handleAddItem}
-            disabled={!selectedItemId}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Plus size={18} />
-            Add Item
-          </button>
-        </div>
-      </div>
-
-      {/* Summary */}
-      <div className="card-premium grid grid-cols-3 gap-4 md:gap-6">
-        <div>
-          <p className="text-sm text-muted mb-1">Total Items</p>
-          <p className="text-2xl font-bold text-primary">
-            {currentInvoice.totalQuantity.toFixed(2)}
-          </p>
-        </div>
-        <div>
-          <p className="text-sm text-muted mb-1">Item Count</p>
-          <p className="text-2xl font-bold text-primary">{currentInvoice.items.length}</p>
-        </div>
-        <div>
-          <p className="text-sm text-muted mb-1">Total Amount</p>
-          <p className="text-2xl font-bold text-accent">₹{currentInvoice.subtotal.toFixed(2)}</p>
-        </div>
-      </div>
-
-      {/* Validation Status */}
-      {validationResult && (
-        <div
-          className={clsx(
-            "rounded-lg p-4 border",
-            validationResult.passed
-              ? "bg-success/5 border-success/30"
-              : "bg-danger/5 border-danger/30"
-          )}
-        >
-          <div className="flex items-start gap-3">
-            {validationResult.passed ? (
-              <CheckCircle className="text-success flex-shrink-0 mt-0.5" size={20} />
-            ) : (
-              <AlertTriangle className="text-danger flex-shrink-0 mt-0.5" size={20} />
-            )}
-            <div className="flex-1 min-w-0">
-              <p className={clsx("font-semibold", validationResult.passed ? "text-success" : "text-danger")}>
-                {validationResult.passed
-                  ? "Invoice is valid and ready to export"
-                  : `${validationResult.errors.length} error(s) found`}
-              </p>
-              {validationResult.errors.length > 0 && (
-                <ul className="mt-2 space-y-1 text-sm text-danger">
-                  {validationResult.errors.slice(0, 3).map((error, i) => (
-                    <li key={i}>• {error}</li>
+        <div className="px-6 py-4 border-t border-neutral-200 bg-neutral-50/50">
+          <div className="flex gap-2 items-end">
+            <div className="flex-1 input-group">
+              <label className="form-label text-xs" htmlFor="add-item-select">Add Item</label>
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={itemSearch}
+                  onChange={(e) => setItemSearch(e.target.value)}
+                  placeholder={`Search ${availableItems.length} items...`}
+                  className="form-input w-full pl-9 text-sm"
+                />
+              </div>
+              {itemSearch && (
+                <div className="mt-1 max-h-40 overflow-y-auto bg-white border border-neutral-200 rounded-lg shadow-lg">
+                  {availableItems.slice(0, 20).map((item) => (
+                    <button
+                      key={item.itemId}
+                      onClick={() => {
+                        setSelectedItemId(item.itemId);
+                        setItemSearch(item.name);
+                      }}
+                      className={clsx(
+                        "w-full text-left px-3 py-2 text-sm hover:bg-neutral-50 transition-colors border-b border-neutral-100 last:border-0",
+                        selectedItemId === item.itemId && "bg-accent/5 text-accent font-medium"
+                      )}
+                    >
+                      <span className="truncate block">{item.name}</span>
+                      <span className="caption-text">{item.baseUnit} · ₹{(item.currentRate ?? 0).toFixed(2)}</span>
+                    </button>
                   ))}
-                  {validationResult.errors.length > 3 && (
-                    <li>• And {validationResult.errors.length - 3} more...</li>
+                  {availableItems.length > 20 && (
+                    <p className="px-3 py-2 caption-text text-center">
+                      {availableItems.length - 20} more — refine your search
+                    </p>
                   )}
-                </ul>
+                  {availableItems.length === 0 && (
+                    <p className="px-3 py-3 text-sm text-neutral-500 text-center">No matching items</p>
+                  )}
+                </div>
               )}
             </div>
+            <button
+              onClick={handleAddItem}
+              disabled={!selectedItemId}
+              className="btn-primary"
+            >
+              <Plus size={16} />
+              Add
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Validation Alert */}
+      {validationResult && (
+        <div className={clsx("alert", validationResult.passed ? "alert-success" : "alert-danger")}>
+          {validationResult.passed ? (
+            <CheckCircle className="text-success flex-shrink-0 mt-0.5" size={18} />
+          ) : (
+            <AlertTriangle className="text-danger flex-shrink-0 mt-0.5" size={18} />
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm">
+              {validationResult.passed
+                ? "Invoice is valid and ready to export"
+                : `${validationResult.errors.length} validation error${validationResult.errors.length !== 1 ? "s" : ""}`}
+            </p>
+            {validationResult.errors.length > 0 && (
+              <ul className="mt-1.5 space-y-0.5 text-sm text-neutral-700">
+                {validationResult.errors.slice(0, 5).map((error, i) => (
+                  <li key={i} className="flex items-start gap-1.5">
+                    <span className="text-danger mt-1 text-xs">&#9679;</span>
+                    {error}
+                  </li>
+                ))}
+                {validationResult.errors.length > 5 && (
+                  <li className="text-neutral-500">+{validationResult.errors.length - 5} more</li>
+                )}
+              </ul>
+            )}
           </div>
         </div>
       )}
 
-      {/* Action Buttons */}
+      {/* Actions */}
       <div className="flex gap-3 flex-wrap">
-        <button onClick={() => saveDraft(currentInvoice)} className="btn-secondary">
-          <FileText size={18} />
+        <button
+          onClick={() => saveDraft(currentInvoice)}
+          className="btn-secondary"
+        >
+          <FileText size={16} />
           Save Draft
         </button>
+        <div className="flex-1" />
         <button
           onClick={handleExportPDF}
           disabled={!validationResult?.passed || isExporting}
-          className="btn-primary flex items-center gap-2"
+          className="btn-secondary"
         >
-          {isExporting ? (
-            <Loader2 size={18} className="animate-spin" />
-          ) : (
-            <Download size={18} />
-          )}
+          {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
           {isExporting ? "Exporting..." : "Export PDF"}
         </button>
         <button
           onClick={handlePushToTally}
           disabled={!validationResult?.passed || isPushing}
-          className="btn-accent flex items-center gap-2"
+          className="btn-primary"
         >
-          {isPushing ? (
-            <Loader2 size={18} className="animate-spin" />
-          ) : (
-            <Send size={18} />
-          )}
+          {isPushing ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
           {isPushing ? "Pushing..." : "Push to Tally"}
         </button>
       </div>

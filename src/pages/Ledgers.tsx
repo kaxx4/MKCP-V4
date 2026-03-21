@@ -142,10 +142,9 @@ export default function Ledgers() {
         </div>
         <div className="bento-card !p-0 flex flex-col flex-1 overflow-hidden">
           <div className="p-3 border-b border-bg-border space-y-2">
-            <div className="relative">
-              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+            <div>
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search ledgers…"
-                className="search-input pl-8" />
+                className="search-input w-full" />
             </div>
             <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}
               className="form-select">

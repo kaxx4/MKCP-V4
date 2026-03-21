@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Save, RotateCcw, Upload, Package } from "lucide-react";
+import { Save, RotateCcw, Upload, Package } from "lucide-react";
 import Fuse from "fuse.js";
 import { useDataStore } from "../store/dataStore";
 import { useOverrideStore } from "../store/overrideStore";
@@ -161,13 +161,12 @@ export default function Edit() {
 
       {/* Filters */}
       <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+        <div className="flex-1">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search items…"
-            className="search-input pl-8"
+            className="search-input w-full"
           />
         </div>
         <select
