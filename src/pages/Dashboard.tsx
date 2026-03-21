@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TrendingUp, DollarSign, Package, AlertCircle, ShoppingCart, Upload, ArrowRight } from "lucide-react";
+import { TrendingUp, DollarSign, Package, AlertCircle, ShoppingCart, Upload, ArrowRight, Calendar } from "lucide-react";
 import {
   ResponsiveContainer,
   BarChart,
@@ -36,6 +36,9 @@ export default function Dashboard() {
   const { data, voucherIndex } = useDataStore();
   const [salesPeriod, setSalesPeriod] = useState(6);
   const [topItemsPeriod, setTopItemsPeriod] = useState<"month" | "quarter" | "year">("month");
+  const [periodFilter, setPeriodFilter] = useState<"all" | "month" | "quarter" | "ytd" | "custom">("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
 
   const latestDate = useMemo(() => {
     if (!data) return new Date().toISOString().slice(0, 10);
@@ -48,9 +51,49 @@ export default function Dashboard() {
 
   const latestMonth = latestDate.slice(0, 7);
 
+  const periodRange = useMemo(() => {
+    if (!data || periodFilter === "all") return null;
+    const ld = new Date(latestDate);
+    if (periodFilter === "month") {
+      return { from: latestMonth + "-01", to: latestDate };
+    }
+    if (periodFilter === "quarter") {
+      const qStart = new Date(ld);
+      qStart.setMonth(qStart.getMonth() - 2, 1);
+      return { from: qStart.toISOString().slice(0, 10), to: latestDate };
+    }
+    if (periodFilter === "ytd") {
+      // Financial year: April to March
+      const fyStart = ld.getMonth() >= 3
+        ? `${ld.getFullYear()}-04-01`
+        : `${ld.getFullYear() - 1}-04-01`;
+      return { from: fyStart, to: latestDate };
+    }
+    if (periodFilter === "custom" && customFrom && customTo) {
+      return { from: customFrom, to: customTo };
+    }
+    return null;
+  }, [data, periodFilter, latestDate, latestMonth, customFrom, customTo]);
+
+  const filteredVouchers = useMemo(() => {
+    if (!data) return [];
+    if (!periodRange) return data.vouchers;
+    return data.vouchers.filter((v) => v.date >= periodRange.from && v.date <= periodRange.to);
+  }, [data, periodRange]);
+
+  const periodLabel = useMemo(() => {
+    if (periodFilter === "all") return "All Time";
+    if (periodFilter === "month") return fmtDate(latestMonth + "-01").replace(/\d+,?\s*/, "");
+    if (periodFilter === "quarter") return "Last 3 Months";
+    if (periodFilter === "ytd") return "Financial Year";
+    if (periodFilter === "custom" && periodRange) return `${fmtDate(periodRange.from)} – ${fmtDate(periodRange.to)}`;
+    return "All Time";
+  }, [periodFilter, latestMonth, periodRange]);
+
   const kpis = useMemo(() => {
     if (!data) return null;
-    const { vouchers, ledgers, items } = data;
+    const { ledgers, items } = data;
+    const vouchers = filteredVouchers;
 
     let latestDaySales = 0;
     let monthSales = 0;
@@ -73,12 +116,12 @@ export default function Dashboard() {
     }
 
     return { latestDaySales, monthSales, ar, ap, bankBalance, stockValue, invoices };
-  }, [data, latestDate, latestMonth, voucherIndex]);
+  }, [data, filteredVouchers, latestDate, latestMonth, voucherIndex]);
 
   const salesTrend = useMemo(() => {
     if (!data) return [];
-    return monthlyTotals(data.vouchers, "Sales", salesPeriod);
-  }, [data, salesPeriod]);
+    return monthlyTotals(filteredVouchers, "Sales", salesPeriod);
+  }, [data, filteredVouchers, salesPeriod]);
 
   const topItems = useMemo(() => {
     if (!data) return [];
@@ -99,7 +142,7 @@ export default function Dashboard() {
     }
 
     const itemQty: Record<string, { name: string; qty: number }> = {};
-    for (const v of data.vouchers) {
+    for (const v of filteredVouchers) {
       if (v.voucherType !== "Sales" || v.isCancelled || v.date.slice(0, 7) < periodStart) continue;
       for (const line of v.lines) {
         if (line.type !== "inventory" || !line.itemId) continue;
@@ -113,7 +156,7 @@ export default function Dashboard() {
       .sort((a, b) => b[1].qty - a[1].qty)
       .slice(0, 5)
       .map(([, v]) => ({ name: v.name.length > 20 ? v.name.slice(0, 20) + "…" : v.name, qty: v.qty }));
-  }, [data, topItemsPeriod, latestDate, latestMonth]);
+  }, [data, filteredVouchers, topItemsPeriod, latestDate, latestMonth]);
 
   const lowStockItems = useMemo(() => {
     if (!data) return [];
@@ -155,10 +198,46 @@ export default function Dashboard() {
     <div className="page-section">
       {/* Page Header */}
       <div className="page-header">
-        <h1 className="page-title">{data.company?.name ?? "Dashboard"}</h1>
-        <p className="page-subtitle">
-          {data.items.size} items · {data.vouchers.length.toLocaleString("en-IN")} vouchers · Imported {fmtDate(data.importedAt.slice(0, 10))}
-        </p>
+        <div>
+          <h1 className="page-title">{data.company?.name ?? "Dashboard"}</h1>
+          <p className="page-subtitle">
+            {data.items.size} items · {filteredVouchers.length.toLocaleString("en-IN")} vouchers{periodFilter !== "all" ? ` · ${periodLabel}` : ""} · Imported {fmtDate(data.importedAt.slice(0, 10))}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1 bg-neutral-100 rounded-lg p-0.5">
+            {(["all", "month", "quarter", "ytd", "custom"] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriodFilter(p)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                  periodFilter === p
+                    ? "bg-white text-neutral-950 shadow-sm"
+                    : "text-neutral-500 hover:text-neutral-700"
+                }`}
+              >
+                {p === "all" ? "All" : p === "month" ? "Month" : p === "quarter" ? "Quarter" : p === "ytd" ? "FY" : "Custom"}
+              </button>
+            ))}
+          </div>
+          {periodFilter === "custom" && (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="date"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="form-input text-xs py-1 px-2"
+              />
+              <span className="text-neutral-400 text-xs">to</span>
+              <input
+                type="date"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="form-input text-xs py-1 px-2"
+              />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* KPI Grid - Apple HIG: Spacious, clear hierarchy */}

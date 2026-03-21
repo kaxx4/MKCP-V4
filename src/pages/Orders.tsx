@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, Minus, Trash2, Download, X, Upload, Package, Filter, FolderPlus, FolderOpen, Save, Copy, ChevronDown, ChevronUp, BarChart3 } from "lucide-react";
+import { Plus, Minus, Trash2, Download, X, Upload, Package, Filter, FolderPlus, FolderOpen, Save, Copy, ChevronDown, ChevronUp, BarChart3 } from "lucide-react";
 import Fuse from "fuse.js";
 import * as XLSX from "xlsx";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -66,6 +66,7 @@ export default function Orders() {
   const qtyRef = useRef<HTMLInputElement>(null);
   const orderInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
   const parentRef = useRef<HTMLDivElement>(null);
+  const orderPanelRef = useRef<HTMLDivElement>(null);
 
   // Debounce search input
   useEffect(() => {
@@ -137,6 +138,20 @@ export default function Orders() {
     }
     return result;
   }, [allItems, debouncedSearch, groupFilter, fuse, stockFilterEnabled, stockFilterOp, stockFilterValue, stockCache]);
+
+  const itemListVirtualizer = useVirtualizer({
+    count: filteredItems.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 58,
+    overscan: 15,
+  });
+
+  const orderVirtualizer = useVirtualizer({
+    count: filteredItems.length,
+    getScrollElement: () => orderPanelRef.current,
+    estimateSize: () => 40,
+    overscan: 15,
+  });
 
   const selectedItem = useMemo(
     () => (selectedItemId ? data?.items.get(selectedItemId) ?? null : null),
@@ -353,8 +368,8 @@ export default function Orders() {
   if (!data) {
     return (
       <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <Package size={64} className="text-muted" />
-        <h2 className="text-xl font-semibold text-primary">No Data Loaded</h2>
+        <Package size={64} className="text-neutral-500" />
+        <h2 className="text-xl font-semibold text-neutral-900">No Data Loaded</h2>
         <button
           onClick={() => navigate("/import")}
           className="btn-primary mt-2"
@@ -395,7 +410,7 @@ export default function Orders() {
           onClick={() => setShowGroupPanel(!showGroupPanel)}
           className={clsx(
             "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition duration-150",
-            showGroupPanel ? "bg-accent text-white" : "bg-bg-border text-muted hover:text-primary"
+            showGroupPanel ? "bg-accent text-white" : "bg-neutral-100 text-neutral-500 hover:text-neutral-900"
           )}
         >
           <FolderOpen size={13} />
@@ -411,25 +426,25 @@ export default function Orders() {
                   "flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition duration-150 whitespace-nowrap",
                   activeGroupId === g.id
                     ? "border-accent bg-accent/10 text-accent font-medium"
-                    : "border-bg-border text-muted hover:text-primary hover:bg-bg-border/50"
+                    : "border-neutral-200 text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100/50"
                 )}
                 title={`${Object.keys(g.lines).length} items — ${g.description || "No description"}`}
               >
                 <span className="w-2 h-2 rounded-full" style={{ background: g.color }} />
                 {g.name}
-                <span className="text-muted/60 tabular-nums">({Object.keys(g.lines).length})</span>
+                <span className="text-neutral-400 tabular-nums">({Object.keys(g.lines).length})</span>
               </button>
             ))}
           </div>
         )}
-        <div className="ml-auto flex items-center gap-2 text-xs text-muted">
+        <div className="ml-auto flex items-center gap-2 text-xs text-neutral-500">
           <span className="tabular-nums">{orderLinesList.length} items in order</span>
         </div>
       </div>
 
       {/* Order Groups Expanded Panel */}
       {showGroupPanel && (
-        <div className="bg-bg-card border-x border-b border-bg-border p-4 space-y-3 mb-0 page-section">
+        <div className="bg-white border-x border-b border-neutral-200 p-4 space-y-3 mb-0 page-section">
           {/* Create new group */}
           <div className="flex flex-col md:flex-row items-stretch md:items-end gap-2 md:gap-3">
             <div className="flex-1">
@@ -473,7 +488,7 @@ export default function Orders() {
                     key={g.id}
                     className={clsx(
                       "border rounded-lg p-3 transition duration-150",
-                      isActive ? "border-accent bg-accent/5" : "border-bg-border bg-bg hover:bg-bg-border/20"
+                      isActive ? "border-accent bg-accent/5" : "border-neutral-200 bg-neutral-50 hover:bg-neutral-100/20"
                     )}
                   >
                     <div className="flex items-start justify-between gap-2 mb-2">
@@ -481,12 +496,12 @@ export default function Orders() {
                         <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: g.color }} />
                         <span className="card-title truncate">{g.name}</span>
                       </div>
-                      <span className="text-xs tabular-nums text-muted whitespace-nowrap">{lineCount} items</span>
+                      <span className="text-xs tabular-nums text-neutral-500 whitespace-nowrap">{lineCount} items</span>
                     </div>
                     {g.description && (
-                      <p className="text-xs text-muted mb-2 truncate">{g.description}</p>
+                      <p className="text-xs text-neutral-500 mb-2 truncate">{g.description}</p>
                     )}
-                    <div className="text-xs text-muted mb-2">
+                    <div className="text-xs text-neutral-500 mb-2">
                       Updated: {new Date(g.updatedAt).toLocaleDateString("en-IN", { dateStyle: "medium" })}
                     </div>
                     <div className="flex gap-1.5">
@@ -528,7 +543,7 @@ export default function Orders() {
               })}
             </div>
           ) : (
-            <div className="text-center py-4 text-sm text-muted">
+            <div className="text-center py-4 text-sm text-neutral-500">
               No order groups yet. Create one to save your current order for reuse.
             </div>
           )}
@@ -544,7 +559,7 @@ export default function Orders() {
               onClick={() => setMobileTab(tab)}
               className={clsx(
                 "flex-1 py-2 text-xs font-medium rounded-lg transition duration-150",
-                mobileTab === tab ? "bg-accent text-white" : "text-muted hover:text-primary"
+                mobileTab === tab ? "bg-accent text-white" : "text-neutral-500 hover:text-neutral-900"
               )}
             >
               {label} {tab === "order" && orderLinesList.length > 0 && `(${orderLinesList.length})`}
@@ -554,21 +569,20 @@ export default function Orders() {
       )}
 
       {/* Top 3-panel area */}
-      <div className={clsx("flex gap-0 flex-1 min-h-0 overflow-hidden rounded-xl border border-bg-border", isMobile && "flex-col")}>
+      <div className={clsx("flex gap-0 flex-1 min-h-0 overflow-hidden rounded-xl border border-neutral-200", isMobile && "flex-col")}>
         {/* LEFT: Item List */}
         <div className={clsx(
-          "flex flex-col border-bg-border bg-bg-card",
+          "flex flex-col border-neutral-200 bg-white",
           isMobile ? (mobileTab === "list" ? "flex-1" : "hidden") : "w-[26%] border-r"
         )}>
-          <div className="p-3 border-b border-bg-border space-y-2">
-            <div className="relative">
-              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+          <div className="p-3 border-b border-neutral-200 space-y-2">
+            <div>
               <input
                 ref={searchRef}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search items… (Ctrl+F)"
-                className="search-input pl-8"
+                className="search-input w-full"
                 onKeyDown={(e) => handleKeyDown(e, filteredItems)}
               />
             </div>
@@ -580,7 +594,7 @@ export default function Orders() {
                   "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition duration-150",
                   stockFilterEnabled
                     ? "bg-accent/15 border-accent text-accent font-medium"
-                    : "bg-bg border-bg-border text-muted hover:text-primary"
+                    : "bg-neutral-50border-neutral-200 text-neutral-500 hover:text-neutral-900"
                 )}
                 title="Filter by closing stock"
               >
@@ -609,17 +623,8 @@ export default function Orders() {
             </div>
           </div>
           <div ref={parentRef} className="flex-1 overflow-y-auto">
-            {(() => {
-              const virtualizer = useVirtualizer({
-                count: filteredItems.length,
-                getScrollElement: () => parentRef.current,
-                estimateSize: () => 58,
-                overscan: 15,
-              });
-
-              return (
-                <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
-                  {virtualizer.getVirtualItems().map((virtualRow) => {
+                <div style={{ height: `${itemListVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
+                  {itemListVirtualizer.getVirtualItems().map((virtualRow) => {
                     const item = filteredItems[virtualRow.index];
                     const stock = stockCache.get(item.itemId) ?? 0;
                     const isSelected = item.itemId === selectedItemId;
@@ -637,18 +642,18 @@ export default function Orders() {
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                         className={clsx(
-                          "px-3 py-2.5 cursor-pointer border-b border-bg-border/50 transition-colors duration-150",
-                          isSelected ? "bg-accent/15 border-l-2 border-l-accent" : "hover:bg-bg-border/30"
+                          "px-3 py-2.5 cursor-pointer border-b border-neutral-200/50 transition-colors duration-150",
+                          isSelected ? "bg-accent/15 border-l-2 border-l-accent" : "hover:bg-neutral-100/30"
                         )}
                       >
                         <div className="flex items-center justify-between gap-1">
-                          <span className={clsx("text-sm font-sans truncate", isSelected ? "text-accent font-medium" : "text-primary")}>
+                          <span className={clsx("text-sm font-sans truncate", isSelected ? "text-accent font-medium" : "text-neutral-900")}>
                             {item.name}
                           </span>
                           {inOrder && <span className="text-accent text-xs">●</span>}
                         </div>
                         <div className="flex items-center justify-between mt-0.5">
-                          <span className="text-muted text-sm truncate">{item.group}</span>
+                          <span className="text-neutral-500 text-sm truncate">{item.group}</span>
                           <span className={clsx("text-sm tabular-nums", getStockColor(item, stock))}>
                             {stockDisp.formatted}
                           </span>
@@ -657,14 +662,12 @@ export default function Orders() {
                     );
                   })}
                 </div>
-              );
-            })()}
           </div>
         </div>
 
         {/* CENTER: Item Detail & Graph */}
         <div className={clsx(
-          "flex flex-col bg-bg min-h-0",
+          "flex flex-col bg-neutral-50 min-h-0",
           isMobile ? (mobileTab === "detail" ? "flex-1" : "hidden") : "flex-1"
         )}>
           {focusedItem ? (
@@ -676,7 +679,7 @@ export default function Orders() {
 
               {/* Mobile quick-add to order */}
               {isMobile && selectedItem && (
-                <div className="flex items-center gap-2 bg-bg-card border border-bg-border rounded-lg p-2">
+                <div className="flex items-center gap-2 bg-white border border-neutral-200 rounded-lg p-2">
                   <span className="label-text flex-shrink-0">Order Qty:</span>
                   <input
                     ref={qtyRef}
@@ -703,7 +706,7 @@ export default function Orders() {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 const last = focusedMonthlyBuckets[focusedMonthlyBuckets.length - 1]!;
                 const kpis = [
-                  { label: "Opening", val: toDisplay(item, last.openingQtyBase, unitMode).formatted, color: "text-text-primary", clickable: false },
+                  { label: "Opening", val: toDisplay(item, last.openingQtyBase, unitMode).formatted, color: "text-neutral-900", clickable: false },
                   { label: "In", val: toDisplay(item, last.inwardsBase, unitMode).formatted, color: "text-success", clickable: true, direction: "inward" as MovementDirection },
                   { label: "Out", val: toDisplay(item, last.outwardsBase, unitMode).formatted, color: "text-danger", clickable: true, direction: "outward" as MovementDirection },
                   { label: "Closing", val: toDisplay(item, focusedStock, unitMode).formatted, color: focusedStock <= 0 ? "text-danger" : "text-accent", clickable: false },
@@ -737,7 +740,7 @@ export default function Orders() {
                     <div className={clsx("table-scroll", !showChart ? "flex-1 min-h-[300px]" : "max-h-[400px]")}>
                       <table className="w-full text-sm">
                         <thead className="sticky top-0 z-10">
-                          <tr className="bg-bg-card border-b-2 border-bg-border">
+                          <tr className="bg-white border-b-2 border-neutral-200">
                             {["Month", "Opening", "In", "Out", "Closing"].map((h) => (
                               <th key={h} className="table-header-sticky">{h}</th>
                             ))}
@@ -755,7 +758,7 @@ export default function Orders() {
                                 <td className={clsx("table-cell-mono", dynamicPadding)}>{toDisplay(item, b.openingQtyBase, unitMode).formatted}</td>
                                 <td
                                   className={clsx("table-cell-mono cursor-pointer hover:underline transition-colors duration-150",
-                                    inwardVal === 0 ? "text-muted-300 hover:text-muted-400" : "num-positive hover:text-success",
+                                    inwardVal === 0 ? "text-neutral-300 hover:text-neutral-400" : "num-positive hover:text-success",
                                     dynamicPadding
                                   )}
                                   onClick={() => inwardVal !== 0 && setMovementModal({ direction: "inward", month: b.yearMonth })}
@@ -763,7 +766,7 @@ export default function Orders() {
                                 >{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
                                 <td
                                   className={clsx("table-cell-mono cursor-pointer hover:underline transition-colors duration-150",
-                                    outwardVal === 0 ? "text-muted-300 hover:text-muted-400" : "num-negative hover:text-danger",
+                                    outwardVal === 0 ? "text-neutral-300 hover:text-neutral-400" : "num-negative hover:text-danger",
                                     dynamicPadding
                                   )}
                                   onClick={() => outwardVal !== 0 && setMovementModal({ direction: "outward", month: b.yearMonth })}
@@ -785,10 +788,10 @@ export default function Orders() {
                 const item = focusedItem; // Capture in const to ensure non-null type
                 return (
                   <div className="section-card !p-0 overflow-hidden">
-                    <div className="section-card-header hover:bg-bg-card/50 transition-colors duration-150">
+                    <div className="section-card-header hover:bg-white/50 transition-colors duration-150">
                       <button
                         onClick={() => setShowChart(!showChart)}
-                        className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:text-accent transition-colors duration-150"
+                        className="flex items-center gap-1.5 text-sm font-medium text-neutral-900 hover:text-accent transition-colors duration-150"
                       >
                         <BarChart3 size={16} />
                         {monthSpan}-Month History
@@ -804,7 +807,7 @@ export default function Orders() {
                             <option key={m} value={m}>{m} mo</option>
                           ))}
                         </select>
-                        {showChart ? <ChevronUp size={16} className="text-text-secondary" /> : <ChevronDown size={16} className="text-text-secondary" />}
+                        {showChart ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}
                       </div>
                     </div>
                     {showChart && (
@@ -850,7 +853,7 @@ export default function Orders() {
                 return (
                   <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={() => setMovementModal(null)}>
                     <div className={clsx("bento-card shadow-2xl flex flex-col", isMobile ? "w-full h-full rounded-none" : "w-[700px] max-h-[80vh]")} onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
+                      <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200">
                         <div>
                           <h3 className="card-title">{focusedItem.name} — {dirLabel} Transactions</h3>
                           <p className="metric-label mt-0.5">Month: {monthLabel} · {movements.length} transactions</p>
@@ -859,11 +862,11 @@ export default function Orders() {
                       </div>
                       <div className="overflow-y-auto flex-1">
                         {movements.length === 0 ? (
-                          <div className="text-center text-muted text-sm py-8">No {dirLabel.toLowerCase()} transactions found</div>
+                          <div className="text-center text-neutral-500 text-sm py-8">No {dirLabel.toLowerCase()} transactions found</div>
                         ) : (
                           <table className="w-full text-xs">
-                            <thead className="sticky top-0 bg-bg-card">
-                              <tr className="border-b border-bg-border">
+                            <thead className="sticky top-0 bg-white">
+                              <tr className="border-b border-neutral-200">
                                 <th className="table-header">Date</th>
                                 <th className="table-header">Voucher</th>
                                 <th className="table-header">Type</th>
@@ -881,13 +884,13 @@ export default function Orders() {
                                   <td className="table-cell-muted">{m.voucherType}</td>
                                   <td className="table-cell truncate max-w-[160px]" title={m.partyName}>{m.partyName}</td>
                                   <td className="table-cell-mono table-cell-right">{fmtNum(m.qty)}</td>
-                                  <td className="table-cell-mono table-cell-right text-muted">{m.rate > 0 ? fmtNum(m.rate) : "—"}</td>
+                                  <td className="table-cell-mono table-cell-right text-neutral-500">{m.rate > 0 ? fmtNum(m.rate) : "—"}</td>
                                   <td className="table-cell-mono table-cell-right font-semibold">{fmtNum(m.amount)}</td>
                                 </tr>
                               ))}
                             </tbody>
                             <tfoot>
-                              <tr className="border-t-2 border-bg-border bg-bg-border/10">
+                              <tr className="border-t-2 border-neutral-200 bg-neutral-100/10">
                                 <td colSpan={4} className="table-cell-emphasis">Total</td>
                                 <td className="table-cell-mono table-cell-right font-bold">{fmtNum(movements.reduce((s, m) => s + m.qty, 0))}</td>
                                 <td className="table-cell"></td>
@@ -904,7 +907,7 @@ export default function Orders() {
 
             </div>
           ) : (
-            <div className="flex items-center justify-center h-full text-muted text-sm">
+            <div className="flex items-center justify-center h-full text-neutral-500 text-sm">
               Select an item from the list
             </div>
           )}
@@ -912,10 +915,10 @@ export default function Orders() {
 
         {/* RIGHT: Order Entry (All Items) — Virtualized */}
         <div className={clsx(
-          "flex flex-col border-bg-border bg-bg-card min-h-0",
+          "flex flex-col border-neutral-200 bg-white min-h-0",
           isMobile ? (mobileTab === "order" ? "flex-1" : "hidden") : "w-[28%] border-l"
         )}>
-          <div className="flex items-center justify-between px-4 py-3 border-b border-bg-border">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200">
             <div className="flex items-center gap-3">
               <span className="card-title">Order Entry</span>
               <span className="metric-label tabular-nums">{orderLinesList.length} items</span>
@@ -933,21 +936,12 @@ export default function Orders() {
               </button>
             </div>
           </div>
-          <div className="sticky top-0 bg-bg-card border-b border-bg-border z-10">
+          <div className="sticky top-0 bg-white border-b border-neutral-200 z-10">
             <div className="flex">
               <div className="flex-1 table-header">Item</div>
               <div className="w-24 table-header">Order Qty</div>
             </div>
           </div>
-          {(() => {
-            const orderPanelRef = useRef<HTMLDivElement>(null);
-            const orderVirtualizer = useVirtualizer({
-              count: filteredItems.length,
-              getScrollElement: () => orderPanelRef.current,
-              estimateSize: () => 40,
-              overscan: 15,
-            });
-            return (
               <div ref={orderPanelRef} className="flex-1 overflow-y-auto min-h-0">
                 <div style={{ height: `${orderVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
                   {orderVirtualizer.getVirtualItems().map((virtualRow) => {
@@ -966,11 +960,11 @@ export default function Orders() {
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                         className={clsx(
-                          "flex items-center border-b border-bg-border/50 hover:bg-bg-border/20 transition-colors duration-150",
+                          "flex items-center border-b border-neutral-200/50 hover:bg-neutral-100/20 transition-colors duration-150",
                           focusedItemId === item.itemId && "bg-accent/10"
                         )}
                       >
-                        <div className="flex-1 px-3 py-2 text-xs text-primary truncate" title={item.name}>
+                        <div className="flex-1 px-3 py-2 text-xs text-neutral-900 truncate" title={item.name}>
                           {item.name}
                         </div>
                         <div className="w-24 px-3 py-2">
@@ -994,8 +988,8 @@ export default function Orders() {
                             onKeyDown={(e) => handleOrderInputKeyDown(e, item.itemId, filteredItems)}
                             placeholder="0"
                             className={clsx(
-                              "w-full bg-bg border border-bg-border rounded px-2 py-1 tabular-nums text-xs text-center outline-none focus:border-accent/60 transition-all duration-150",
-                              hasOrder ? "font-bold text-accent" : "text-muted"
+                              "w-full bg-neutral-50 border border-neutral-200 rounded px-2 py-1 tabular-nums text-xs text-center outline-none focus:border-accent/60 transition-all duration-150",
+                              hasOrder ? "font-bold text-accent" : "text-neutral-500"
                             )}
                           />
                         </div>
@@ -1004,8 +998,6 @@ export default function Orders() {
                   })}
                 </div>
               </div>
-            );
-          })()}
         </div>
       </div>
     </div>

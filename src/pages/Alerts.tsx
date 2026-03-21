@@ -11,7 +11,7 @@ import {
 } from "../engine/inventory";
 import { toDisplay } from "../engine/unitEngine";
 import { fmtINR, fmtNum } from "../utils/format";
-import { AlertTriangle, Upload, Search, ShoppingCart, Check, Download } from "lucide-react";
+import { AlertTriangle, Upload, ShoppingCart, Check, Download } from "lucide-react";
 import clsx from "clsx";
 import type { CanonicalItem } from "../types/canonical";
 
@@ -256,13 +256,12 @@ export default function Alerts() {
           <option value="Low">Low</option>
           <option value="Reorder">Reorder</option>
         </select>
-        <div className="relative flex-1 min-w-[120px]">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+        <div className="flex-1 min-w-[120px]">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search items..."
-            className="search-input pl-9"
+            className="search-input w-full"
           />
         </div>
       </div>

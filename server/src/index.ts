@@ -238,7 +238,7 @@ app.post("/api/tally/sync-masters", async (req, res) => {
 
   // Abort in-flight Tally requests when client disconnects
   const ac = new AbortController();
-  req.on("close", () => { if (!res.writableEnded) { console.log("[MASTERS] Client disconnected — aborting"); ac.abort(); } });
+  res.on("close", () => { if (!res.writableEnded) { console.log("[MASTERS] Client disconnected — aborting"); ac.abort(); } });
 
   activeSyncs.set(lockKey, Promise.resolve());
   res.setTimeout(1_200_000); // 20 min — stock items XML can be very large
@@ -358,7 +358,7 @@ app.post("/api/tally/sync-daybook", async (req, res) => {
 
   // Abort in-flight Tally requests when client disconnects
   const ac = new AbortController();
-  req.on("close", () => { if (!res.writableEnded) { console.log("[DAYBOOK] Client disconnected — aborting"); ac.abort(); } });
+  res.on("close", () => { if (!res.writableEnded) { console.log("[DAYBOOK] Client disconnected — aborting"); ac.abort(); } });
 
   activeSyncs.set(lockKey, Promise.resolve());
   res.setTimeout(5_400_000); // 90 min — weekly full-FY can take 60+ min
@@ -528,7 +528,7 @@ app.post("/api/tally/sync", async (req, res) => {
 
   // Abort in-flight Tally requests when client disconnects
   const ac = new AbortController();
-  req.on("close", () => { if (!res.writableEnded) { console.log("[SYNC] Client disconnected — aborting"); ac.abort(); } });
+  res.on("close", () => { if (!res.writableEnded) { console.log("[SYNC] Client disconnected — aborting"); ac.abort(); } });
 
   activeSyncs.set(lockKey, Promise.resolve());
   // 90 min — weekly full-FY can take 60+ min
