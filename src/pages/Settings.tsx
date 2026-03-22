@@ -24,6 +24,9 @@ export default function Settings() {
   const [jsonUploads, setJsonUploads] = useState<string[]>([]);
   const [auditResults, setAuditResults] = useState<any>(null);
   const [runningAudit, setRunningAudit] = useState(false);
+  const [showDiscrepancies, setShowDiscrepancies] = useState(false);
+  const [showNegativeStock, setShowNegativeStock] = useState(false);
+  const [showNoGstItems, setShowNoGstItems] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load backups and json uploads on mount
@@ -140,6 +143,34 @@ export default function Settings() {
     a.download = `audit_log_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     toast("Audit log exported", "success");
+  }
+
+  function handleExportDiscrepancies() {
+    if (!auditResults || auditResults.failures.length === 0) {
+      toast("No discrepancies to export", "info");
+      return;
+    }
+
+    // CSV format
+    const headers = ["Item Name", "Item ID", "Opening Qty", "Inwards", "Outwards", "Expected Closing", "Computed Closing", "Discrepancy"];
+    const rows = auditResults.failures.map((f: any) => [
+      f.itemName,
+      f.itemId,
+      f.openingQtyBase.toFixed(4),
+      f.totalInwards.toFixed(4),
+      f.totalOutwards.toFixed(4),
+      f.expectedClosing.toFixed(4),
+      f.computedClosing.toFixed(4),
+      f.discrepancy.toFixed(4),
+    ]);
+
+    const csv = [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `inventory_discrepancies_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    toast("Discrepancies exported to CSV", "success");
   }
 
   function handleExportUnits() {
@@ -378,14 +409,25 @@ export default function Settings() {
             <Activity size={14} className="text-accent" />
             <span className="text-xs text-muted">Run comprehensive data integrity checks</span>
           </div>
-          <button
-            onClick={handleRunAudit}
-            disabled={!data || runningAudit}
-            className="btn-primary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Activity size={14} />
-            {runningAudit ? "Running Audit..." : "Run Audit"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={handleRunAudit}
+              disabled={!data || runningAudit}
+              className="btn-primary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Activity size={14} />
+              {runningAudit ? "Running Audit..." : "Run Audit"}
+            </button>
+            {auditResults && auditResults.failures.length > 0 && (
+              <button
+                onClick={handleExportDiscrepancies}
+                className="btn-secondary btn-sm"
+              >
+                <Download size={14} />
+                Export Discrepancies CSV
+              </button>
+            )}
+          </div>
 
           {auditResults && (
             <div className="space-y-3 bg-bg border border-bg-border rounded-lg p-3 text-sm">
@@ -439,14 +481,89 @@ export default function Settings() {
               {(auditResults.failures.length > 0 || auditResults.negativeStock.length > 0 || auditResults.noGstItems.length > 0) && (
                 <div className="border-t border-bg-border pt-2">
                   <div className="text-xs font-semibold text-danger mb-1">Issues Found</div>
+
+                  {/* Inventory Discrepancies */}
                   {auditResults.failures.length > 0 && (
-                    <div className="text-xs text-danger">• {auditResults.failures.length} item(s) with inventory discrepancies</div>
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => setShowDiscrepancies(!showDiscrepancies)}
+                        className="text-xs text-danger hover:underline cursor-pointer flex items-center gap-1"
+                      >
+                        • {auditResults.failures.length} item(s) with inventory discrepancies
+                        <span className="text-[10px]">{showDiscrepancies ? "▼" : "▶"}</span>
+                      </button>
+                      {showDiscrepancies && (
+                        <div className="ml-3 max-h-64 overflow-y-auto border border-danger/20 rounded p-2 bg-danger/5 space-y-1">
+                          <div className="text-[10px] font-semibold text-muted grid grid-cols-6 gap-1 pb-1 border-b border-danger/20">
+                            <div className="col-span-2">Item</div>
+                            <div className="text-right">Opening</div>
+                            <div className="text-right">In</div>
+                            <div className="text-right">Out</div>
+                            <div className="text-right">Discrepancy</div>
+                          </div>
+                          {auditResults.failures.map((f: any) => (
+                            <div key={f.itemId} className="text-[10px] grid grid-cols-6 gap-1 py-1 border-b border-danger/10 hover:bg-danger/10">
+                              <div className="col-span-2 truncate text-primary" title={f.itemName}>{f.itemName}</div>
+                              <div className="text-right tabular-nums text-muted">{f.openingQtyBase.toFixed(2)}</div>
+                              <div className="text-right tabular-nums text-success">{f.totalInwards.toFixed(2)}</div>
+                              <div className="text-right tabular-nums text-danger">{f.totalOutwards.toFixed(2)}</div>
+                              <div className="text-right tabular-nums text-danger font-semibold">{f.discrepancy.toFixed(4)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
+
+                  {/* Negative Stock */}
                   {auditResults.negativeStock.length > 0 && (
-                    <div className="text-xs text-warn">• {auditResults.negativeStock.length} item(s) with negative stock</div>
+                    <div className="space-y-2 mt-2">
+                      <button
+                        onClick={() => setShowNegativeStock(!showNegativeStock)}
+                        className="text-xs text-warn hover:underline cursor-pointer flex items-center gap-1"
+                      >
+                        • {auditResults.negativeStock.length} item(s) with negative stock
+                        <span className="text-[10px]">{showNegativeStock ? "▼" : "▶"}</span>
+                      </button>
+                      {showNegativeStock && (
+                        <div className="ml-3 max-h-64 overflow-y-auto border border-warn/20 rounded p-2 bg-warn/5 space-y-1">
+                          <div className="text-[10px] font-semibold text-muted grid grid-cols-2 gap-2 pb-1 border-b border-warn/20">
+                            <div>Item</div>
+                            <div className="text-right">Current Stock</div>
+                          </div>
+                          {auditResults.negativeStock.map((item: any) => (
+                            <div key={item.itemId} className="text-[10px] grid grid-cols-2 gap-2 py-1 border-b border-warn/10 hover:bg-warn/10">
+                              <div className="truncate text-primary" title={item.name}>{item.name}</div>
+                              <div className="text-right tabular-nums text-danger font-semibold">{item.currentStock.toFixed(2)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
+
+                  {/* Items Without GST */}
                   {auditResults.noGstItems.length > 0 && (
-                    <div className="text-xs text-muted">• {auditResults.noGstItems.length} item(s) without GST rates</div>
+                    <div className="space-y-2 mt-2">
+                      <button
+                        onClick={() => setShowNoGstItems(!showNoGstItems)}
+                        className="text-xs text-muted hover:underline cursor-pointer flex items-center gap-1"
+                      >
+                        • {auditResults.noGstItems.length} item(s) without GST rates
+                        <span className="text-[10px]">{showNoGstItems ? "▼" : "▶"}</span>
+                      </button>
+                      {showNoGstItems && (
+                        <div className="ml-3 max-h-64 overflow-y-auto border border-muted/20 rounded p-2 bg-muted/5 space-y-1">
+                          <div className="grid grid-cols-2 gap-2">
+                            {auditResults.noGstItems.map((item: any) => (
+                              <div key={item.itemId} className="text-[10px] truncate text-primary py-1" title={item.name}>
+                                {item.name}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
