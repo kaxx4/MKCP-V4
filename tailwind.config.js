@@ -146,19 +146,19 @@ module.exports = {
         ],
       },
 
-      // Clean type scale — legible sizes, tighter headlines
+      // BOLD type scale — larger, bolder, more impactful
       fontSize: {
-        "2xs": ["11px", { lineHeight: "16px" }],
-        xs:    ["12px", { lineHeight: "16px" }],
-        sm:    ["13px", { lineHeight: "20px" }],
-        base:  ["14px", { lineHeight: "20px" }],
-        md:    ["15px", { lineHeight: "22px" }],
-        lg:    ["16px", { lineHeight: "24px" }],
-        xl:    ["18px", { lineHeight: "26px" }],
-        "2xl": ["20px", { lineHeight: "28px", letterSpacing: "-0.02em" }],
-        "3xl": ["24px", { lineHeight: "32px", letterSpacing: "-0.02em" }],
-        "4xl": ["30px", { lineHeight: "36px", letterSpacing: "-0.025em" }],
-        "5xl": ["36px", { lineHeight: "40px", letterSpacing: "-0.025em" }],
+        "2xs": ["11px", { lineHeight: "18px", fontWeight: "600" }],
+        xs:    ["12px", { lineHeight: "18px", fontWeight: "600" }],
+        sm:    ["14px", { lineHeight: "22px", fontWeight: "600" }],
+        base:  ["15px", { lineHeight: "24px", fontWeight: "500" }],
+        md:    ["16px", { lineHeight: "26px", fontWeight: "500" }],
+        lg:    ["18px", { lineHeight: "28px", fontWeight: "600" }],
+        xl:    ["20px", { lineHeight: "30px", fontWeight: "700" }],
+        "2xl": ["24px", { lineHeight: "32px", letterSpacing: "-0.02em", fontWeight: "700" }],
+        "3xl": ["28px", { lineHeight: "36px", letterSpacing: "-0.025em", fontWeight: "700" }],
+        "4xl": ["32px", { lineHeight: "40px", letterSpacing: "-0.03em", fontWeight: "800" }],
+        "5xl": ["40px", { lineHeight: "48px", letterSpacing: "-0.03em", fontWeight: "800" }],
       },
 
       // ─── Spacing Grid (4px base) ───────────────────────────────

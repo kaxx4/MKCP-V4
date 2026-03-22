@@ -3,8 +3,8 @@
 @tailwind utilities;
 
 /* ═══════════════════════════════════════════════════════════════
-   M.K. CYCLES DASHBOARD — Clean Design System
-   Inter · Light mode · Breathing layouts · Clear hierarchy
+   M.K. CYCLES DASHBOARD — BOLD & SPACIOUS DESIGN SYSTEM
+   Inter · Strong typography · Generous spacing · Maximum impact
    ═══════════════════════════════════════════════════════════════ */
 
 /* ─── Motion Preferences ──────────────────────────────────── */
@@ -21,8 +21,8 @@
 
 /* ─── Focus Ring ──────────────────────────────────────────── */
 *:focus-visible {
-  outline: 2px solid #2563eb;
-  outline-offset: 2px;
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -44,8 +44,9 @@
     background-color: #f5f5f7;
     color: #1d1d1f;
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-    font-size: 14px;
-    line-height: 1.5;
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.6;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow-x: hidden;
@@ -53,15 +54,15 @@
 
   /* Scrollbars */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
     background: #d0d0d5;
-    border-radius: 3px;
+    border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
     background: #a1a1a6;
@@ -80,41 +81,42 @@
 @layer components {
 
   /* ═══════════════════════════════════════════════════════════
-     CARDS & SURFACES
+     CARDS & SURFACES — BOLD & SPACIOUS
      ═══════════════════════════════════════════════════════════ */
 
   .card {
-    @apply bg-white rounded-xl border border-neutral-200/80
-           p-5 md:p-6
-           transition-shadow duration-150;
+    @apply bg-white rounded-2xl border-2 border-neutral-200
+           p-7 md:p-8
+           transition-all duration-200;
   }
 
   .card-elevated {
-    @apply bg-white rounded-xl shadow-base
-           p-5 md:p-6
-           transition-shadow duration-150;
+    @apply bg-white rounded-2xl shadow-lg border border-neutral-100
+           p-7 md:p-8
+           transition-all duration-200;
   }
 
   .card-interactive {
     @apply card cursor-pointer
-           hover:shadow-md hover:border-neutral-300
-           transition-all duration-150;
+           hover:shadow-xl hover:border-neutral-400 hover:-translate-y-1
+           transition-all duration-200;
   }
 
-  /* Bento grid */
+  /* Bento grid — MORE SPACIOUS */
   .bento-grid {
     display: grid;
-    gap: 16px;
+    gap: 20px;
     grid-template-columns: repeat(2, 1fr);
   }
   @media (min-width: 640px) {
     .bento-grid {
-      gap: 20px;
+      gap: 24px;
       grid-template-columns: repeat(3, 1fr);
     }
   }
   @media (min-width: 1024px) {
     .bento-grid {
+      gap: 28px;
       grid-template-columns: repeat(4, 1fr);
     }
   }
@@ -125,97 +127,98 @@
   .bento-card-elevated { @apply card-elevated; }
 
   /* ═══════════════════════════════════════════════════════════
-     TYPOGRAPHY SYSTEM
-     Clear hierarchy: Title → Section → Subsection → Body → Caption
+     TYPOGRAPHY SYSTEM — BOLD, STRONG, IMPACTFUL
+     Increased weights, larger sizes, generous spacing
      ═══════════════════════════════════════════════════════════ */
 
-  /* Large Title — 30px/700 — page headings */
+  /* Large Title — 36px/800 BOLD — page headings */
   .page-title {
-    @apply text-4xl font-bold text-neutral-950;
+    @apply text-5xl font-extrabold text-neutral-950;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+  }
+
+  /* Page Subtitle — 16px/600 SEMIBOLD — below page title */
+  .page-subtitle {
+    @apply text-lg font-semibold text-neutral-600 mt-3;
+  }
+
+  /* Section Header — 24px/700 BOLD — card/section headings */
+  .section-header {
+    @apply text-3xl font-bold text-neutral-950;
     letter-spacing: -0.025em;
   }
 
-  /* Page Subtitle — 15px/400 — below page title */
-  .page-subtitle {
-    @apply text-md text-neutral-600 mt-1;
-  }
-
-  /* Section Header — 20px/600 — card/section headings */
-  .section-header {
-    @apply text-2xl font-semibold text-neutral-950;
-    letter-spacing: -0.02em;
-  }
-
-  /* Subsection Header — 16px/600 */
+  /* Subsection Header — 18px/700 BOLD */
   .subsection-header {
-    @apply text-lg font-semibold text-neutral-900;
+    @apply text-xl font-bold text-neutral-900;
   }
 
-  /* Card Title — 14px/600 — inside cards */
+  /* Card Title — 16px/700 BOLD — inside cards */
   .card-title {
-    @apply text-base font-semibold text-neutral-900;
+    @apply text-lg font-bold text-neutral-900;
   }
 
-  /* Card Subtitle — 13px/400 */
+  /* Card Subtitle — 14px/600 SEMIBOLD */
   .card-subtitle {
-    @apply text-sm text-neutral-600;
+    @apply text-base font-semibold text-neutral-600;
   }
 
-  /* Label — 12px/500 uppercase — form labels, column headers */
+  /* Label — 13px/700 BOLD uppercase — form labels, column headers */
   .label-text {
-    @apply text-xs font-medium uppercase tracking-wide text-neutral-500;
+    @apply text-sm font-bold uppercase tracking-wider text-neutral-600;
   }
 
-  /* Caption — 12px/400 — secondary small text */
+  /* Caption — 13px/600 SEMIBOLD — secondary small text */
   .caption-text {
-    @apply text-xs text-neutral-500;
+    @apply text-sm font-semibold text-neutral-600;
   }
 
-  /* Metric Value — 24px/700 — KPI numbers */
+  /* Metric Value — 32px/800 EXTRABOLD — KPI numbers */
   .metric-value {
-    @apply text-3xl font-bold text-neutral-950 tabular-nums;
-    letter-spacing: -0.02em;
+    @apply text-4xl md:text-5xl font-extrabold text-neutral-950 tabular-nums;
+    letter-spacing: -0.03em;
   }
 
-  /* Metric Label — 12px/500 uppercase — KPI descriptions */
+  /* Metric Label — 13px/700 BOLD uppercase — KPI descriptions */
   .metric-label {
-    @apply text-xs font-medium uppercase tracking-wide text-neutral-500;
+    @apply text-sm font-bold uppercase tracking-wider text-neutral-600;
   }
 
   /* ═══════════════════════════════════════════════════════════
-     PAGE LAYOUT — breathing whitespace
+     PAGE LAYOUT — GENEROUS BREATHING ROOM
      ═══════════════════════════════════════════════════════════ */
 
   .page-section {
-    @apply space-y-8 md:space-y-10;
+    @apply space-y-10 md:space-y-14;
   }
 
   .page-header {
-    @apply flex flex-col gap-1 mb-8 md:mb-10;
+    @apply flex flex-col gap-2 mb-10 md:mb-14;
   }
 
   .page-header-row {
-    @apply flex items-center justify-between gap-4;
+    @apply flex items-center justify-between gap-6;
   }
 
   /* ═══════════════════════════════════════════════════════════
-     TABLES
+     TABLES — BOLD HEADERS & SPACIOUS CELLS
      ═══════════════════════════════════════════════════════════ */
 
   .table-scroll {
-    @apply overflow-x-auto -mx-5 px-5 md:-mx-6 md:px-6;
+    @apply overflow-x-auto -mx-7 px-7 md:-mx-8 md:px-8;
   }
 
   .data-table {
-    @apply w-full text-sm border-collapse;
+    @apply w-full text-base border-collapse;
   }
 
   .table-header {
-    @apply text-xs font-medium uppercase tracking-wide
-           text-neutral-500
+    @apply text-sm font-bold uppercase tracking-wider
+           text-neutral-700
            bg-neutral-50
-           px-4 py-3 text-left whitespace-nowrap
-           border-b border-neutral-200;
+           px-5 py-4 text-left whitespace-nowrap
+           border-b-2 border-neutral-200;
   }
 
   .table-header-sticky {
@@ -224,24 +227,24 @@
   }
 
   .table-cell {
-    @apply text-sm px-4 py-3 text-neutral-900
+    @apply text-base font-medium px-5 py-4 text-neutral-900
            border-b border-neutral-100;
   }
 
   .table-cell-emphasis {
-    @apply table-cell font-semibold text-neutral-950;
+    @apply table-cell font-bold text-neutral-950;
   }
 
   .table-cell-muted {
-    @apply table-cell text-neutral-500;
+    @apply table-cell font-medium text-neutral-500;
   }
 
   .table-cell-mono {
-    @apply table-cell font-mono text-sm tabular-nums;
+    @apply table-cell font-mono text-base font-semibold tabular-nums;
   }
 
   .table-cell-right {
-    @apply table-cell text-right tabular-nums;
+    @apply table-cell text-right tabular-nums font-semibold;
   }
 
   .responsive-table-row {
@@ -263,156 +266,157 @@
   }
 
   .table-footer-row {
-    @apply border-t-2 border-neutral-200 bg-neutral-50 font-semibold;
+    @apply border-t-2 border-neutral-300 bg-neutral-100 font-bold;
   }
 
   .table-group-header {
-    @apply bg-neutral-100 font-medium text-xs uppercase tracking-wide
-           text-neutral-500 px-4 py-2.5;
+    @apply bg-neutral-100 font-bold text-sm uppercase tracking-wider
+           text-neutral-700 px-5 py-3;
   }
 
   /* ═══════════════════════════════════════════════════════════
-     TABS
+     TABS — BOLD & PROMINENT
      ═══════════════════════════════════════════════════════════ */
 
   .tab-list {
-    @apply flex gap-0 border-b border-neutral-200
-           overflow-x-auto -mx-5 px-5 md:mx-0 md:px-0;
+    @apply flex gap-0 border-b-2 border-neutral-200
+           overflow-x-auto -mx-7 px-7 md:mx-0 md:px-0;
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
   .tab-list::-webkit-scrollbar { display: none; }
 
   .tab-item {
-    @apply px-4 py-3 text-sm font-medium text-neutral-500
-           border-b-2 border-transparent
+    @apply px-5 py-4 text-base font-semibold text-neutral-500
+           border-b-4 border-transparent
            transition-colors duration-150 cursor-pointer
            hover:text-neutral-900
            whitespace-nowrap;
   }
 
   .tab-item-active {
-    @apply text-accent border-accent font-semibold;
+    @apply text-accent border-accent font-bold;
   }
 
   .tab-pills {
-    @apply flex gap-2 flex-wrap;
+    @apply flex gap-3 flex-wrap;
   }
 
   .tab-pill {
-    @apply px-3 py-1.5 text-xs font-medium text-neutral-600
-           rounded-full border border-neutral-200
+    @apply px-4 py-2 text-sm font-bold text-neutral-600
+           rounded-full border-2 border-neutral-200
            transition-colors duration-150 cursor-pointer
-           hover:text-neutral-900 hover:bg-neutral-50;
+           hover:text-neutral-900 hover:bg-neutral-50 hover:border-neutral-300;
   }
 
   .tab-pill-active {
-    @apply text-accent bg-accent/10 border-accent/30 font-semibold;
+    @apply text-accent bg-accent/10 border-accent font-extrabold;
   }
 
   /* ═══════════════════════════════════════════════════════════
-     BUTTONS
+     BUTTONS — BOLD, CHUNKY, HIGH IMPACT
      ═══════════════════════════════════════════════════════════ */
 
   .btn-base {
-    @apply inline-flex items-center justify-center gap-2
-           font-medium text-sm rounded-lg
-           transition-all duration-150
+    @apply inline-flex items-center justify-center gap-3
+           font-bold text-base rounded-xl
+           transition-all duration-200
            disabled:opacity-50 disabled:cursor-not-allowed
-           focus-visible:ring-2 focus-visible:ring-accent/30 focus-visible:ring-offset-1;
+           focus-visible:ring-4 focus-visible:ring-accent/40 focus-visible:ring-offset-2;
   }
 
   .btn-primary {
-    @apply btn-base min-h-9 px-4 py-2
-           bg-accent text-white font-semibold
+    @apply btn-base min-h-12 px-6 py-3
+           bg-accent text-white font-extrabold
            hover:bg-accent-700 active:bg-accent-800
-           shadow-xs hover:shadow-sm;
+           shadow-md hover:shadow-xl hover:-translate-y-0.5;
   }
 
   .btn-secondary {
-    @apply btn-base min-h-9 px-4 py-2
-           bg-white text-neutral-900 border border-neutral-200
-           hover:bg-neutral-50 active:bg-neutral-100
-           shadow-xs;
+    @apply btn-base min-h-12 px-6 py-3
+           bg-white text-neutral-900 border-2 border-neutral-300 font-bold
+           hover:bg-neutral-50 hover:border-neutral-400 active:bg-neutral-100
+           shadow-sm hover:shadow-md;
   }
 
   .btn-ghost {
-    @apply btn-base px-3 py-2 text-neutral-600
+    @apply btn-base px-4 py-3 text-neutral-700 font-bold
            hover:text-neutral-900 hover:bg-neutral-100
            active:bg-neutral-200;
   }
 
   .btn-danger {
-    @apply btn-base min-h-9 px-4 py-2
-           bg-danger text-white font-semibold
-           hover:bg-danger-600 active:bg-danger-700;
+    @apply btn-base min-h-12 px-6 py-3
+           bg-danger text-white font-extrabold
+           hover:bg-danger-600 active:bg-danger-700
+           shadow-md hover:shadow-xl;
   }
 
   .btn-accent-ghost {
-    @apply btn-base px-3 py-2 text-accent
+    @apply btn-base px-4 py-3 text-accent font-bold
            hover:text-accent-700 hover:bg-accent/10
            active:bg-accent/20;
   }
 
   .btn-icon {
-    @apply flex items-center justify-center w-9 h-9
-           rounded-lg text-neutral-500
+    @apply flex items-center justify-center w-11 h-11
+           rounded-xl text-neutral-600 font-bold
            hover:text-neutral-900 hover:bg-neutral-100
            transition-colors duration-150
            disabled:opacity-50;
   }
 
   .btn-icon-accent {
-    @apply flex items-center justify-center w-9 h-9
-           rounded-lg text-accent
+    @apply flex items-center justify-center w-11 h-11
+           rounded-xl text-accent font-bold
            hover:bg-accent/10
            transition-colors duration-150;
   }
 
-  .btn-sm { @apply text-xs min-h-7 px-2.5 py-1; }
-  .btn-lg { @apply text-base min-h-11 px-6 py-2.5; }
+  .btn-sm { @apply text-sm min-h-9 px-4 py-2 font-bold; }
+  .btn-lg { @apply text-lg min-h-14 px-8 py-4 font-extrabold; }
 
   /* ═══════════════════════════════════════════════════════════
-     FORM CONTROLS
+     FORM CONTROLS — BOLD & CHUNKY
      ═══════════════════════════════════════════════════════════ */
 
   .form-label {
-    @apply text-sm font-medium text-neutral-900;
+    @apply text-base font-bold text-neutral-900 mb-2;
   }
 
   .form-helper {
-    @apply text-xs text-neutral-500 mt-1;
+    @apply text-sm font-medium text-neutral-600 mt-2;
   }
 
   .form-input {
-    @apply min-h-10 px-3 py-2 text-sm
-           bg-white border border-neutral-200
+    @apply min-h-12 px-4 py-3 text-base font-medium
+           bg-white border-2 border-neutral-200
            text-neutral-900
-           placeholder:text-neutral-400
-           rounded-lg
-           focus:border-accent focus:ring-2 focus:ring-accent/15
+           placeholder:text-neutral-400 placeholder:font-medium
+           rounded-xl
+           focus:border-accent focus:ring-4 focus:ring-accent/20
            transition-all duration-150
            disabled:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .form-input-error {
-    @apply border-danger focus:ring-danger/15 focus:border-danger;
+    @apply border-danger focus:ring-danger/20 focus:border-danger;
   }
 
   .form-input-success {
-    @apply border-success focus:ring-success/15 focus:border-success;
+    @apply border-success focus:ring-success/20 focus:border-success;
   }
 
   .form-select {
-    @apply form-input appearance-none bg-white pr-8 cursor-pointer;
-    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%238e8e93' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
+    @apply form-input appearance-none bg-white pr-10 cursor-pointer;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%238e8e93' stroke-linecap='round' stroke-linejoin='round' stroke-width='2.5' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
     background-repeat: no-repeat;
-    background-position: right 0.5rem center;
-    background-size: 1em 1em;
+    background-position: right 0.75rem center;
+    background-size: 1.25em 1.25em;
   }
 
   .form-textarea {
-    @apply form-input resize-none min-h-24;
+    @apply form-input resize-none min-h-28;
   }
 
   .input-group {
@@ -420,115 +424,115 @@
   }
 
   .input-label {
-    @apply text-sm font-medium text-neutral-900;
+    @apply text-base font-bold text-neutral-900;
   }
 
   .search-input {
-    @apply form-input pl-10 pr-4 bg-white;
-    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a6' stroke-width='2'%3e%3ccircle cx='11' cy='11' r='8'/%3e%3cpath d='m21 21-4.35-4.35'/%3e%3c/svg%3e");
+    @apply form-input pl-12 pr-4 bg-white;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a6' stroke-width='2.5'%3e%3ccircle cx='11' cy='11' r='8'/%3e%3cpath d='m21 21-4.35-4.35'/%3e%3c/svg%3e");
     background-repeat: no-repeat;
-    background-position: left 0.75rem center;
-    background-size: 1rem;
+    background-position: left 1rem center;
+    background-size: 1.25rem;
   }
 
   /* ═══════════════════════════════════════════════════════════
-     BADGES & STATUS
+     BADGES & STATUS — BOLD & PROMINENT
      ═══════════════════════════════════════════════════════════ */
 
   .badge {
-    @apply inline-flex items-center px-2.5 py-1 text-xs font-medium
-           rounded-full bg-accent/10 text-accent;
+    @apply inline-flex items-center px-3 py-1.5 text-sm font-bold
+           rounded-full bg-accent/15 text-accent;
   }
 
-  .badge-success { @apply bg-success/10 text-success-600; }
-  .badge-danger  { @apply bg-danger/10 text-danger-600; }
-  .badge-warn    { @apply bg-warn/10 text-warn-600; }
-  .badge-muted   { @apply bg-neutral-100 text-neutral-600; }
-  .badge-info    { @apply bg-info/10 text-info-600; }
+  .badge-success { @apply bg-success/15 text-success-700; }
+  .badge-danger  { @apply bg-danger/15 text-danger-700; }
+  .badge-warn    { @apply bg-warn/15 text-warn-700; }
+  .badge-muted   { @apply bg-neutral-200 text-neutral-700; }
+  .badge-info    { @apply bg-info/15 text-info-700; }
   .badge-pill    { @apply rounded-full; }
 
   .badge-dot {
-    @apply inline-flex items-center gap-1.5;
+    @apply inline-flex items-center gap-2;
   }
   .badge-dot::before {
     content: "";
-    @apply w-1.5 h-1.5 rounded-full bg-current;
+    @apply w-2 h-2 rounded-full bg-current;
   }
 
   .status-badge {
-    @apply inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full;
+    @apply inline-flex items-center gap-2 px-3 py-1.5 text-sm font-bold rounded-full;
   }
-  .status-badge-active   { @apply bg-success/10 text-success-600; }
-  .status-badge-inactive { @apply bg-neutral-100 text-neutral-600; }
-  .status-badge-pending  { @apply bg-warn/10 text-warn-600; }
+  .status-badge-active   { @apply bg-success/15 text-success-700; }
+  .status-badge-inactive { @apply bg-neutral-200 text-neutral-700; }
+  .status-badge-pending  { @apply bg-warn/15 text-warn-700; }
 
   /* ═══════════════════════════════════════════════════════════
-     ALERTS
+     ALERTS — BOLD & ATTENTION-GRABBING
      ═══════════════════════════════════════════════════════════ */
 
   .alert {
-    @apply flex gap-3 p-4 rounded-xl border text-sm;
+    @apply flex gap-4 p-5 rounded-2xl border-2 text-base font-semibold;
   }
-  .alert-info    { @apply border-accent/20 bg-accent/[0.04] text-neutral-900; }
-  .alert-success { @apply border-success/20 bg-success/[0.04] text-neutral-900; }
-  .alert-warn    { @apply border-warn/20 bg-warn/[0.04] text-neutral-900; }
-  .alert-danger  { @apply border-danger/20 bg-danger/[0.04] text-neutral-900; }
+  .alert-info    { @apply border-accent/30 bg-accent/[0.08] text-neutral-900; }
+  .alert-success { @apply border-success/30 bg-success/[0.08] text-neutral-900; }
+  .alert-warn    { @apply border-warn/30 bg-warn/[0.08] text-neutral-900; }
+  .alert-danger  { @apply border-danger/30 bg-danger/[0.08] text-neutral-900; }
 
   /* ═══════════════════════════════════════════════════════════
-     KPI / STAT CARDS
+     KPI / STAT CARDS — LARGE & BOLD
      ═══════════════════════════════════════════════════════════ */
 
   .kpi-value {
-    @apply text-3xl font-bold text-neutral-950 tabular-nums;
-    letter-spacing: -0.02em;
+    @apply text-4xl md:text-5xl font-extrabold text-neutral-950 tabular-nums;
+    letter-spacing: -0.03em;
   }
 
   .kpi-label {
-    @apply text-xs font-medium uppercase tracking-wide text-neutral-500;
+    @apply text-sm font-bold uppercase tracking-wider text-neutral-600;
   }
 
   .stat-card {
-    @apply flex flex-col gap-2 p-5
-           bg-white border border-neutral-200/80
-           rounded-xl;
+    @apply flex flex-col gap-3 p-6
+           bg-white border-2 border-neutral-200
+           rounded-2xl;
   }
 
   .stat-label {
-    @apply text-xs font-medium uppercase tracking-wide text-neutral-500;
+    @apply text-sm font-bold uppercase tracking-wider text-neutral-600;
   }
 
   .stat-value {
-    @apply text-2xl font-bold text-neutral-950 tabular-nums;
-    letter-spacing: -0.02em;
+    @apply text-3xl font-extrabold text-neutral-950 tabular-nums;
+    letter-spacing: -0.03em;
   }
 
   .stat-sub {
-    @apply text-xs text-neutral-500;
+    @apply text-sm font-semibold text-neutral-600;
   }
 
   /* ═══════════════════════════════════════════════════════════
-     MODALS
+     MODALS — BOLD & PROMINENT
      ═══════════════════════════════════════════════════════════ */
 
   .modal-overlay {
-    @apply fixed inset-0 bg-black/40 flex items-center justify-center z-50;
+    @apply fixed inset-0 bg-black/50 flex items-center justify-center z-50;
   }
 
   .modal-content {
-    @apply bg-white rounded-2xl shadow-xl
+    @apply bg-white rounded-3xl shadow-2xl
            max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto;
   }
 
   .modal-header {
-    @apply flex items-center justify-between p-6 pb-4;
+    @apply flex items-center justify-between p-8 pb-5;
   }
 
   .modal-body {
-    @apply px-6 pb-6;
+    @apply px-8 pb-8;
   }
 
   .modal-footer {
-    @apply flex items-center justify-end gap-3 px-6 pb-6;
+    @apply flex items-center justify-end gap-4 px-8 pb-8;
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -538,13 +542,13 @@
   .tooltip { @apply relative inline-block; }
 
   .tooltip-trigger {
-    @apply cursor-help border-b border-dotted border-neutral-400 transition-colors;
+    @apply cursor-help border-b-2 border-dotted border-neutral-400 transition-colors;
   }
 
   .tooltip-text {
-    @apply hidden absolute bottom-full left-1/2 -translate-x-1/2 mb-2
-           px-3 py-1.5 bg-neutral-900 text-white
-           text-xs rounded-lg whitespace-nowrap z-50 shadow-lg;
+    @apply hidden absolute bottom-full left-1/2 -translate-x-1/2 mb-3
+           px-4 py-2 bg-neutral-900 text-white font-semibold
+           text-sm rounded-xl whitespace-nowrap z-50 shadow-xl;
   }
 
   .tooltip:hover .tooltip-text { @apply block; }
@@ -554,7 +558,7 @@
      ═══════════════════════════════════════════════════════════ */
 
   .skeleton {
-    @apply relative overflow-hidden bg-neutral-200 rounded-lg;
+    @apply relative overflow-hidden bg-neutral-200 rounded-xl;
   }
 
   .skeleton::after {
@@ -573,19 +577,19 @@
      ═══════════════════════════════════════════════════════════ */
 
   .empty-state {
-    @apply flex flex-col items-center justify-center py-20 px-8 text-center;
+    @apply flex flex-col items-center justify-center py-24 px-10 text-center;
   }
 
   .empty-state-icon {
-    @apply w-16 h-16 text-neutral-300 mb-5;
+    @apply w-20 h-20 text-neutral-300 mb-6;
   }
 
   .empty-state-title {
-    @apply text-lg font-semibold text-neutral-900 mb-2;
+    @apply text-2xl font-bold text-neutral-900 mb-3;
   }
 
   .empty-state-description {
-    @apply text-sm text-neutral-500 mb-8 max-w-sm leading-relaxed;
+    @apply text-base font-medium text-neutral-600 mb-10 max-w-sm leading-relaxed;
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -593,7 +597,7 @@
      ═══════════════════════════════════════════════════════════ */
 
   .progress-bar {
-    @apply h-1.5 bg-neutral-200 rounded-full overflow-hidden;
+    @apply h-2 bg-neutral-200 rounded-full overflow-hidden;
   }
 
   .progress-bar-fill {
@@ -604,24 +608,24 @@
      DIVIDERS
      ═══════════════════════════════════════════════════════════ */
 
-  .divider       { @apply border-t border-neutral-200; }
-  .divider-strong { @apply border-t border-neutral-300; }
+  .divider       { @apply border-t-2 border-neutral-200; }
+  .divider-strong { @apply border-t-2 border-neutral-300; }
 
   /* ═══════════════════════════════════════════════════════════
      SECTION CARDS
      ═══════════════════════════════════════════════════════════ */
 
   .section-card {
-    @apply bg-white rounded-xl border border-neutral-200/80 overflow-hidden;
+    @apply bg-white rounded-2xl border-2 border-neutral-200 overflow-hidden;
   }
 
   .section-card-header {
-    @apply flex items-center justify-between px-6 py-4
-           border-b border-neutral-200 bg-neutral-50/50;
+    @apply flex items-center justify-between px-8 py-5
+           border-b-2 border-neutral-200 bg-neutral-50/50;
   }
 
   .section-card-body {
-    @apply p-6;
+    @apply p-8;
   }
 
   .section-card-body-flush { @apply p-0; }
@@ -631,30 +635,30 @@
      ═══════════════════════════════════════════════════════════ */
 
   .filter-bar {
-    @apply flex flex-wrap items-center gap-2 p-4
-           bg-neutral-50 rounded-xl border border-neutral-200/80;
+    @apply flex flex-wrap items-center gap-3 p-5
+           bg-neutral-50 rounded-2xl border-2 border-neutral-200;
   }
 
   .filter-chip {
-    @apply inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
-           rounded-full border border-neutral-200
-           bg-white text-neutral-600
-           hover:border-accent/50 hover:text-accent hover:bg-accent/[0.04]
+    @apply inline-flex items-center gap-2 px-4 py-2 text-sm font-bold
+           rounded-full border-2 border-neutral-200
+           bg-white text-neutral-700
+           hover:border-accent/50 hover:text-accent hover:bg-accent/[0.05]
            transition-colors duration-150 cursor-pointer;
   }
 
   .filter-chip-active {
-    @apply bg-accent/10 border-accent/30 text-accent;
+    @apply bg-accent/15 border-accent text-accent font-extrabold;
   }
 
   /* ═══════════════════════════════════════════════════════════
      NUMBER HIGHLIGHTS
      ═══════════════════════════════════════════════════════════ */
 
-  .num-positive  { @apply text-success-600 font-medium; }
-  .num-negative  { @apply text-danger-600 font-medium; }
-  .num-highlight { @apply text-accent font-semibold; }
-  .num-muted     { @apply text-neutral-500 font-normal; }
+  .num-positive  { @apply text-success-600 font-bold; }
+  .num-negative  { @apply text-danger-600 font-bold; }
+  .num-highlight { @apply text-accent font-extrabold; }
+  .num-muted     { @apply text-neutral-600 font-semibold; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -680,15 +684,15 @@
 
   /* Text Utilities */
   .value-truncate     { @apply truncate max-w-full; }
-  .text-responsive-xl { @apply text-xl md:text-3xl; }
-  .text-responsive-lg { @apply text-lg md:text-2xl; }
-  .text-responsive-sm { @apply text-xs md:text-sm; }
+  .text-responsive-xl { @apply text-2xl md:text-4xl; }
+  .text-responsive-lg { @apply text-xl md:text-3xl; }
+  .text-responsive-sm { @apply text-sm md:text-base; }
 
   /* Accessibility */
   .skip-to-content {
     @apply absolute top-0 left-0 -translate-y-full
-           px-4 py-2 bg-accent text-white font-semibold
-           z-50 rounded-b text-sm;
+           px-6 py-3 bg-accent text-white font-extrabold
+           z-50 rounded-b text-base;
   }
   .skip-to-content:focus { @apply translate-y-0; }
 
