@@ -65,7 +65,8 @@ export function computeMonthlyBuckets(
       } else if (v.voucherType === "Debit Note") {
         // Debit Note = Purchase return → goods go BACK OUT
         monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
-      } else if (v.voucherType === "Stock Journal") {
+      } else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") {
+        // Stock Journal and Journal can have +ve or -ve qty
         if (qty > 0) monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
         else monthlyOut[ym] = (monthlyOut[ym] ?? 0) + Math.abs(qty);
       }
@@ -122,8 +123,9 @@ export function getCurrentStock(item: CanonicalItem, vouchers: CanonicalVoucher[
       } else if (v.voucherType === "Debit Note") {
         // Debit Note = Purchase return → goods go BACK OUT
         running -= qty;
-      } else if (v.voucherType === "Stock Journal") {
-        running += qty; // Stock Journal qty can be +ve or -ve
+      } else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") {
+        // Stock Journal and Journal qty can be +ve or -ve
+        running += qty;
       }
     }
   }
@@ -239,7 +241,8 @@ export function computeMonthlyBucketsIndexed(
       } else if (v.voucherType === "Debit Note") {
         // Debit Note = Purchase return → goods go BACK OUT
         monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
-      } else if (v.voucherType === "Stock Journal") {
+      } else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") {
+        // Stock Journal and Journal can have +ve or -ve qty
         if (qty > 0) monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
         else monthlyOut[ym] = (monthlyOut[ym] ?? 0) + Math.abs(qty);
       }
