@@ -55,7 +55,8 @@ export function calculatePeriodInventory(
         inwards += qty;
       } else if (v.voucherType === "Debit Note") {
         outwards += qty; // Purchase return = outward
-      } else if (v.voucherType === "Stock Journal") {
+      } else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") {
+        // Stock Journal and Journal can have +ve or -ve qty
         if (qty > 0) inwards += qty;
         else outwards += Math.abs(qty);
       }
@@ -79,7 +80,8 @@ export function calculatePeriodInventory(
         opening += qty;
       } else if (v.voucherType === "Debit Note") {
         opening -= qty;
-      } else if (v.voucherType === "Stock Journal") {
+      } else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") {
+        // Stock Journal and Journal can have +ve or -ve qty
         opening += qty;
       }
     }
