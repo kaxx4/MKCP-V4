@@ -158,6 +158,54 @@ export function subscribeToProgress(onLog: (msg: string) => void): () => void {
   return () => es.close();
 }
 
+// ── Voucher Push ──────────────────────────────────────────────────────────────
+
+export interface PushResult {
+  success: boolean;
+  created: number;
+  errors: number;
+  lastVoucherId: string | null;
+  lineErrors: string[];
+  rawResponse: string;
+}
+
+export async function pushVoucher(payload: { company: string; voucher: any }): Promise<PushResult> {
+  try {
+    const r = await fetch(`${BASE}/api/tally/push-voucher`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      return { success: false, created: 0, errors: 1, lastVoucherId: null, lineErrors: [`HTTP ${r.status}: ${text}`], rawResponse: text };
+    }
+    return await r.json();
+  } catch (e: any) {
+    return { success: false, created: 0, errors: 1, lastVoucherId: null, lineErrors: [e.message], rawResponse: "" };
+  }
+}
+
+export async function pushVoucherBatch(payload: { company: string; vouchers: any[] }): Promise<{
+  results: PushResult[];
+  successCount: number;
+  errorCount: number;
+}> {
+  try {
+    const r = await fetch(`${BASE}/api/tally/push-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error(`Server error: ${r.status}`);
+    return await r.json();
+  } catch (e: any) {
+    throw e;
+  }
+}
+
+// ── Company detection ─────────────────────────────────────────────────────────
+
 export async function detectCompany(): Promise<{ success: boolean; companies: { name: string }[]; current: string | null }> {
   try {
     const ctrl = new AbortController();
