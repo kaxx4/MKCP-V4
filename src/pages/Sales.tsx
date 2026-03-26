@@ -4,19 +4,20 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { Plus, FileText, Send, AlertTriangle, CheckCircle, Download, Loader2, Trash2, Search, IndianRupee, Package, Upload } from "lucide-react";
+import { Plus, FileText, Send, AlertTriangle, CheckCircle, Download, Loader2, Trash2, Search, IndianRupee, Package, Upload, Printer, ChevronDown } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useSalesStore } from "../store/salesStore";
 import { validateInvoice, roundTallyStyle } from "../services/salesValidator";
-import { downloadInvoicePDF } from "../services/salesPDFExporter";
-import { pushInvoiceToTally, validateInvoiceForTally } from "../services/salesTallyConverter";
+import { downloadInvoicePDF, exportInvoiceAsA4PDF, printInvoice } from "../services/salesPDFExporter";
+import { pushInvoiceToTally, validateInvoiceForPush, gstTypeFromGSTIN, DEFAULT_PUSH_CONFIG } from "../services/salesTallyConverter";
 import { useToast } from "../components/Toast";
 import type {
   SalesInvoice,
   SalesInvoiceLineItem,
-  ValidationResult
+  ValidationResult,
+  PushResult
 } from "../types/sales";
 
 export default function SalesPage() {
@@ -37,7 +38,21 @@ export default function SalesPage() {
   const [itemSearch, setItemSearch] = useState("");
   const [isExporting, setIsExporting] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
+  const [pushResult, setPushResult] = useState<PushResult | null>(null);
+  const [showPrintMenu, setShowPrintMenu] = useState(false);
   const itemSelectRef = useRef<HTMLSelectElement>(null);
+  const printMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close print menu on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (printMenuRef.current && !printMenuRef.current.contains(e.target as Node)) {
+        setShowPrintMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   // Initialize empty invoice if none exists
   useEffect(() => {
@@ -197,22 +212,42 @@ export default function SalesPage() {
     finally { setIsExporting(false); }
   }, [currentInvoice, validationResult, toast]);
 
+  const handlePrint = useCallback((format: "a4" | "thermal") => {
+    if (!currentInvoice) return;
+    setShowPrintMenu(false);
+    try {
+      printInvoice(currentInvoice, {}, format);
+      toast.success(`Printing ${format === "a4" ? "A4 invoice" : "thermal receipt"}...`);
+    } catch { toast.error("Failed to open print dialog"); }
+  }, [currentInvoice, toast]);
+
   const handlePushToTally = useCallback(async () => {
     if (!currentInvoice) return;
-    const validation = validateInvoiceForTally(currentInvoice);
+    const validation = validateInvoiceForPush(currentInvoice);
     if (!validation.valid) {
       toast.error(`Cannot push: ${validation.errors.slice(0, 3).join("; ")}`);
       return;
     }
     if (!validationResult?.passed) { toast.error("Fix validation errors first"); return; }
+    if (currentInvoice.header.status === "exported") {
+      toast.error("Invoice already exported to Tally");
+      return;
+    }
     try {
       setIsPushing(true);
-      const result = await pushInvoiceToTally(currentInvoice);
-      if (result.success) { toast.success(result.message); }
-      else { toast.error(result.error || result.message); }
-    } catch { toast.error("Failed to push to Tally"); }
+      setPushResult(null);
+      const partyLedger = tallyData?.ledgers?.get(currentInvoice.header.partyId.toUpperCase());
+      const result = await pushInvoiceToTally(currentInvoice, partyLedger, DEFAULT_PUSH_CONFIG);
+      setPushResult(result);
+      if (result.success) {
+        toast.success(`Created in Tally${result.lastVoucherId ? ` (ID: ${result.lastVoucherId})` : ""}`);
+        setCurrentInvoice({ ...currentInvoice, header: { ...currentInvoice.header, status: "exported" } });
+      } else {
+        toast.error(result.lineErrors.length > 0 ? result.lineErrors[0] : "Push to Tally failed");
+      }
+    } catch (e: any) { toast.error(e.message || "Failed to push to Tally"); }
     finally { setIsPushing(false); }
-  }, [currentInvoice, validationResult, toast]);
+  }, [currentInvoice, validationResult, tallyData, setCurrentInvoice, toast]);
 
   // ─── Empty state ──────────────────────────────────────────
   if (!tallyData) {
@@ -519,8 +554,40 @@ export default function SalesPage() {
         </div>
       )}
 
+      {/* GST Indicator */}
+      {currentInvoice.header.partyName && (() => {
+        const partyLedger = tallyData?.ledgers ? Array.from(tallyData.ledgers.values()).find((l: any) => l.name === currentInvoice.header.partyName) : undefined;
+        const gstType = gstTypeFromGSTIN(partyLedger?.gstin ?? currentInvoice.header.partyGST, "19");
+        return (
+          <div className={clsx("flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg w-fit",
+            gstType === "intra" ? "bg-success/10 text-success" : "bg-accent/10 text-accent"
+          )}>
+            <span className="font-semibold">
+              {gstType === "intra" ? "Intra-State (CGST + SGST)" : "Inter-State (IGST)"}
+            </span>
+            {partyLedger?.gstin && <span className="opacity-70">{partyLedger.gstin}</span>}
+          </div>
+        );
+      })()}
+
+      {/* Push result display */}
+      {pushResult && (
+        <div className={clsx("alert", pushResult.success ? "alert-success" : "alert-danger")}>
+          {pushResult.success ? (
+            <CheckCircle size={16} className="text-success flex-shrink-0" />
+          ) : (
+            <AlertTriangle size={16} className="text-danger flex-shrink-0" />
+          )}
+          <div className="flex-1 min-w-0 text-sm">
+            {pushResult.success
+              ? `Created in Tally${pushResult.lastVoucherId ? ` (Voucher ID: ${pushResult.lastVoucherId})` : ""}`
+              : pushResult.lineErrors.join(" | ")}
+          </div>
+        </div>
+      )}
+
       {/* Actions */}
-      <div className="flex gap-3 flex-wrap">
+      <div className="flex gap-3 flex-wrap items-center">
         <button
           onClick={() => saveDraft(currentInvoice)}
           className="btn-secondary"
@@ -535,15 +602,45 @@ export default function SalesPage() {
           className="btn-secondary"
         >
           {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-          {isExporting ? "Exporting..." : "Export PDF"}
+          {isExporting ? "Exporting..." : "Download PDF"}
         </button>
+
+        {/* Print dropdown */}
+        <div className="relative" ref={printMenuRef}>
+          <button
+            onClick={() => setShowPrintMenu(v => !v)}
+            disabled={!validationResult?.passed}
+            className="btn-secondary"
+          >
+            <Printer size={16} />
+            Print
+            <ChevronDown size={14} />
+          </button>
+          {showPrintMenu && (
+            <div className="absolute right-0 bottom-full mb-1 w-44 bg-white border border-neutral-200 rounded-lg shadow-lg z-50 overflow-hidden">
+              <button
+                onClick={() => handlePrint("a4")}
+                className="w-full text-left px-4 py-2.5 text-sm hover:bg-neutral-50 transition-colors"
+              >
+                A4 Invoice (GST)
+              </button>
+              <button
+                onClick={() => handlePrint("thermal")}
+                className="w-full text-left px-4 py-2.5 text-sm hover:bg-neutral-50 transition-colors border-t border-neutral-100"
+              >
+                Thermal Receipt (80mm)
+              </button>
+            </div>
+          )}
+        </div>
+
         <button
           onClick={handlePushToTally}
-          disabled={!validationResult?.passed || isPushing}
+          disabled={!validationResult?.passed || isPushing || currentInvoice.header.status === "exported"}
           className="btn-primary"
         >
           {isPushing ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-          {isPushing ? "Pushing..." : "Push to Tally"}
+          {isPushing ? "Pushing..." : currentInvoice.header.status === "exported" ? "Exported ✓" : "Push to Tally"}
         </button>
       </div>
     </div>

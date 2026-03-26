@@ -91,3 +91,24 @@ export interface TestResult {
   failedTests: number;
   testCases: TestCase[];
 }
+
+export interface PushResult {
+  success: boolean;
+  created: number;
+  errors: number;
+  lastVoucherId: string | null;
+  lineErrors: string[];
+  rawResponse: string;
+}
+
+export interface InvoicePrintConfig {
+  format: "a4" | "thermal";
+  companyName: string;
+  companyAddress: string;
+  companyGSTIN: string;
+  companyState: string;
+  companyPhone?: string;
+  companyEmail?: string;
+  showLogo: boolean;
+  footerText?: string;
+}
