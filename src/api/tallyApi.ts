@@ -122,7 +122,7 @@ export async function syncMasters(company: string): Promise<MastersSyncResult> {
   }
 }
 
-export async function syncDayBook(company: string, fromDate: string, toDate: string, chunkMode: "monthly" | "daily" | "weekly" = "monthly"): Promise<DayBookSyncResult> {
+export async function syncDayBook(company: string, fromDate: string, toDate: string, chunkMode: "smart" | "monthly" | "daily" | "weekly" = "smart"): Promise<DayBookSyncResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5_400_000); // 90 min — weekly full-FY can take 60+ min
   try {

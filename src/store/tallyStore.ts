@@ -11,7 +11,7 @@ interface TallyConnectionState {
   autoSyncMinutes: number;
   fyFromDate: string;
   fyToDate: string;
-  syncMode: "monthly" | "daily" | "weekly";
+  syncMode: "smart" | "monthly" | "daily" | "weekly";
   lastVoucherDate: string | null;
   lastMastersSyncAt: string | null;
   lastVouchersSyncAt: string | null;
@@ -24,7 +24,7 @@ interface TallyConnectionState {
   setSyncing: (v: boolean) => void;
   setAutoSync: (minutes: number) => void;
   setFyDates: (from: string, to: string) => void;
-  setSyncMode: (mode: "monthly" | "daily" | "weekly") => void;
+  setSyncMode: (mode: "smart" | "monthly" | "daily" | "weekly") => void;
   resetToCurrentFY: () => void;
   setLastVoucherDate: (d: string | null) => void;
   setLastMastersSync: (at: string) => void;
@@ -43,7 +43,7 @@ export const useTallyStore = create<TallyConnectionState>()(
       autoSyncMinutes: 0,
       fyFromDate: getDefaultFYStart(),
       fyToDate: getDefaultFYEnd(),
-      syncMode: "monthly",
+      syncMode: "smart",
       lastVoucherDate: null,
       lastMastersSyncAt: null,
       lastVouchersSyncAt: null,
@@ -76,7 +76,7 @@ export const useTallyStore = create<TallyConnectionState>()(
         if (version < 2) {
           persisted.fyFromDate = getDefaultFYStart();
           persisted.fyToDate = getDefaultFYEnd();
-          persisted.syncMode = "monthly";
+          persisted.syncMode = "smart";
         }
         if (version < 3) {
           persisted.lastVoucherDate = null;
