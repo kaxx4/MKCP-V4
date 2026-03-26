@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical, Calendar, Zap, Wifi, WifiOff, Package, RefreshCw } from "lucide-react";
 import clsx from "clsx";
@@ -11,7 +11,7 @@ import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
 import type { ParsedData, ImportWarning } from "../types/canonical";
 import { useToast } from "../components/Toast";
 import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
-import { checkTallyHealth, fullSync, syncMasters, syncDayBook, detectCompany, type TallySyncResult } from "../api/tallyApi";
+import { checkTallyHealth, fullSync, syncMasters, syncDayBook, detectCompany, subscribeToProgress, type TallySyncResult } from "../api/tallyApi";
 
 interface ImportReport {
   items: number;
@@ -91,6 +91,28 @@ export default function ImportPage() {
   const [dragOver, setDragOver] = useState<DropZone | null>(null);
   const [debugLog, setDebugLog] = useState<string[]>([]);
 
+  // Auto-scroll ref for debug log
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  // SSE: stream server logs into debugLog while syncing
+  useEffect(() => {
+    if (!isSyncing || tab !== "live") return;
+    const unsub = subscribeToProgress((msg: string) => {
+      setDebugLog((prev) => {
+        const line = typeof msg === "string" ? msg : JSON.stringify(msg);
+        // Deduplicate consecutive identical lines
+        if (prev.length > 0 && prev[prev.length - 1] === line) return prev;
+        return [...prev, line];
+      });
+    });
+    return unsub;
+  }, [isSyncing, tab]);
+
+  // Auto-scroll debug log to bottom on new entries
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [debugLog]);
+
   // Check Tally connection on mount
   useEffect(() => {
     if (tab === "live") {
@@ -139,13 +161,20 @@ export default function ImportPage() {
         addLog(`⚠ ${result.error}`);
       }
 
-      // Check if we actually got data
+      // Check if we actually got data (may be empty if AlterID indicates no changes)
       if (result.stats.stockItems === 0 && result.stats.ledgers === 0 && result.stats.vouchers === 0) {
-        addLog("ERROR: Tally returned zero data!");
-        addLog("Check: 1) Company name exact match  2) Company loaded in Tally  3) FY dates correct");
-        addLog("Test: Open a new terminal and run:");
-        addLog(`  curl -X POST http://localhost:3100/api/tally/debug -H "Content-Type: application/json" -d "{\\"company\\":\\"${companyName}\\",\\"test\\":\\"stock\\"}"`);
-        toast("Sync returned empty data — check log", "error");
+        // Check if server said "no changes" via incremental AlterID check
+        const noChanges = result.stats.elapsedSeconds === 0 && result.success;
+        if (noChanges) {
+          addLog("✓ No changes detected since last sync (AlterID match) — skipped");
+          toast("Already up to date — no changes in Tally", "success");
+        } else {
+          addLog("ERROR: Tally returned zero data!");
+          addLog("Check: 1) Company name exact match  2) Company loaded in Tally  3) FY dates correct");
+          addLog("Test: Open a new terminal and run:");
+          addLog(`  curl -X POST http://localhost:3100/api/tally/debug -H "Content-Type: application/json" -d "{\\"company\\":\\"${companyName}\\",\\"test\\":\\"stock\\"}"`);
+          toast("Sync returned empty data — check log", "error");
+        }
         setSyncing(false);
         return;
       }
@@ -459,7 +488,8 @@ export default function ImportPage() {
       addLog(`✓ ${mastersResult.stats.stockGroups} groups, ${mastersResult.stats.units} units, ${mastersResult.stats.stockItems} stock items, ${mastersResult.stats.ledgers} ledgers, ${mastersResult.stats.godowns ?? 0} godowns, ${mastersResult.stats.costCentres ?? 0} cost centres`);
 
       // Step 2: Sync Day Book (chunked)
-      addLog(`Step 2/2: Fetching vouchers [${syncMode} chunks] (this may take 2-10 minutes)...`);
+      const modeLabel = syncMode === "smart" ? "smart batching" : `${syncMode} chunks`;
+      addLog(`Step 2/2: Fetching vouchers [${modeLabel}] (this may take 2-10 minutes)...`);
       const dayBookResult = await syncDayBook(companyName, fyFromDate, fyToDate, syncMode);
       if (dayBookResult.errors?.length) dayBookResult.errors.forEach(e => addLog(`⚠ ${e}`));
       addLog(`✓ ${dayBookResult.stats.vouchers} vouchers fetched (${dayBookResult.stats.chunksSucceeded}/${dayBookResult.stats.chunksTotal} chunks)`);
@@ -1078,20 +1108,23 @@ export default function ImportPage() {
             </div>
 
             {/* Chunk mode selector */}
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <span className="label-text font-medium">Sync Mode:</span>
-              {(["monthly", "weekly", "daily"] as const).map((mode) => (
+              {(["smart", "monthly", "weekly", "daily"] as const).map((mode) => (
                 <button
                   key={mode}
                   onClick={() => setSyncMode(mode)}
                   className={clsx("btn-sm", syncMode === mode ? "btn-primary" : "btn-secondary")}
                 >
-                  {mode === "monthly" ? "Monthly (fast)" : mode === "weekly" ? "Weekly (balanced)" : "Daily (safest)"}
+                  {mode === "smart" ? "⚡ Smart (recommended)"
+                    : mode === "monthly" ? "Monthly (fast)"
+                    : mode === "weekly" ? "Weekly (balanced)"
+                    : "Daily (safest)"}
                 </button>
               ))}
             </div>
             <div className="alert alert-info text-xs">
-              💡 <strong>Tip:</strong> Use <strong>Monthly</strong> for fast syncs. If you get empty/partial data, try <strong>Weekly</strong> or <strong>Daily</strong> mode — it makes smaller requests that are less likely to timeout or fail.
+              💡 <strong>Smart mode</strong> counts vouchers per day first, then packs them into optimal batches ≤3000 — avoids both timeouts and unnecessary requests. Fall back to <strong>Monthly / Weekly / Daily</strong> only if Smart mode returns errors.
             </div>
 
             {/* Primary Import All Button */}
@@ -1120,7 +1153,7 @@ export default function ImportPage() {
                 className="btn-secondary btn-sm disabled:opacity-50 disabled:cursor-not-allowed justify-center"
               >
                 {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <FileJson size={14} />}
-                Vouchers Only (Monthly Chunks)
+                Vouchers Only ({syncMode} chunks)
               </button>
               <button
                 onClick={handleIncrementalSync}
@@ -1190,18 +1223,24 @@ export default function ImportPage() {
       {debugLog.length > 0 && (
         <div className="bento-card mt-6">
           <h3 className="section-header flex items-center gap-2">
-            <Info size={14} />
+            {isSyncing && <Loader2 size={14} className="animate-spin text-accent" />}
+            {!isSyncing && <Info size={14} />}
             {tab === "live" ? "Sync Progress Log" : "Import Progress Log"}
+            {isSyncing && <span className="ml-auto text-xs text-accent font-medium">Live ●</span>}
           </h3>
           <div className="bg-bg border border-bg-border rounded-lg p-3 max-h-72 overflow-y-auto font-mono text-xs">
             {debugLog.map((log, idx) => (
               <div key={idx} className={clsx(
                 "py-0.5",
-                log.includes("ERROR") ? "text-danger" : log.includes("✓") ? "text-success" : "text-muted"
+                log.includes("ERROR") || log.includes("❌") ? "text-danger"
+                  : log.includes("✓") || log.includes("✔") ? "text-success"
+                  : log.includes("⚠") ? "text-warn"
+                  : "text-muted"
               )}>
                 {log}
               </div>
             ))}
+            <div ref={logEndRef} />
           </div>
         </div>
       )}
