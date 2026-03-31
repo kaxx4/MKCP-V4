@@ -10,8 +10,11 @@ export function buildVoucherIndex(vouchers: CanonicalVoucher[]): VoucherIndex {
   const idx = new Map<string, CanonicalVoucher[]>();
   for (const v of vouchers) {
     if (v.isCancelled || v.isOptional) continue;
+    const seenItems = new Set<string>();
     for (const line of v.lines) {
       if (line.type !== "inventory" || !line.itemId) continue;
+      if (seenItems.has(line.itemId)) continue; // prevent duplicate voucher refs per item
+      seenItems.add(line.itemId);
       let arr = idx.get(line.itemId);
       if (!arr) { arr = []; idx.set(line.itemId, arr); }
       arr.push(v);
@@ -203,7 +206,8 @@ export function getCurrentStockIndexed(item: CanonicalItem, voucherIndex: Vouche
       } else if (v.voucherType === "Debit Note") {
         // Debit Note = Purchase return → goods go BACK OUT
         running -= qty;
-      } else if (v.voucherType === "Stock Journal") {
+      } else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") {
+        // Stock Journal and Journal qty can be +ve or -ve
         running += qty;
       }
     }
@@ -387,7 +391,8 @@ export function computeItemTurnover(
           a.inPeriodOutValue += lineVal;
           a.inPeriodNetQty -= qty;
         }
-      } else if (v.voucherType === "Stock Journal") {
+      } else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") {
+        // Stock Journal and Journal qty can be +ve or -ve
         if (isPrePeriod) a.preNetQty += qty;
         else {
           if (qty > 0) a.inPeriodInQty += qty;
