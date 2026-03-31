@@ -285,8 +285,8 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
     const dateCounts: Record<string, number> = {};
     const typeCounts: Record<string, number> = {};
     for (const v of allVouchers) {
-      const d = v.DATE || v["@_DATE"] || "unknown";
-      const t = v.VOUCHERTYPENAME || v["@_VCHTYPE"] || "unknown";
+      const d = txt(v.DATE) || txt(v["@_DATE"]) || "unknown";
+      const t = txt(v.VOUCHERTYPENAME) || txt(v["@_VCHTYPE"]) || "unknown";
       dateCounts[d] = (dateCounts[d] || 0) + 1;
       typeCounts[t] = (typeCounts[t] || 0) + 1;
     }
@@ -311,16 +311,18 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
       // Voucher-level party name — the authoritative source for party identification.
       // Individual ledger entries may BOTH have ISPARTYLEDGER=Yes (e.g. party + bank
       // in Receipt/Payment vouchers), so we use PARTYLEDGERNAME to disambiguate.
-      const voucherPartyName = (v.PARTYLEDGERNAME || "").trim().toUpperCase();
+      // Use txt() for all field reads — Collection API returns typed Tally objects
+      // (e.g. { "#text": "...", "@_TYPE": "String" }) not plain strings.
+      const voucherPartyName = txt(v.PARTYLEDGERNAME).trim().toUpperCase();
 
       // Check if voucher party name matches any ledger entry name
       const hasNameMatch = voucherPartyName && le.some((e: any) =>
-        (e.LEDGERNAME || "").trim().toUpperCase() === voucherPartyName
+        txt(e.LEDGERNAME).trim().toUpperCase() === voucherPartyName
       );
 
       const ledgerentries = le.map((e: any, idx: number) => {
-        const ledgername = e.LEDGERNAME || "";
-        const tallyIsParty = e.ISPARTYLEDGER === "Yes";
+        const ledgername = txt(e.LEDGERNAME);
+        const tallyIsParty = txt(e.ISPARTYLEDGER) === "Yes";
 
         let ispartyledger: boolean;
         if (hasNameMatch) {
@@ -328,7 +330,7 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
           ispartyledger = ledgername.trim().toUpperCase() === voucherPartyName;
         } else if (voucherPartyName) {
           // PARTYLEDGERNAME set but no exact match — use first Tally-flagged entry only
-          const firstFlaggedIdx = le.findIndex((x: any) => x.ISPARTYLEDGER === "Yes");
+          const firstFlaggedIdx = le.findIndex((x: any) => txt(x.ISPARTYLEDGER) === "Yes");
           ispartyledger = tallyIsParty && idx === firstFlaggedIdx;
         } else {
           // No voucher-level party: fall back to Tally's flag as-is
@@ -337,37 +339,37 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
 
         return {
           ledgername,
-          isdeemedpositive: e.ISDEEMEDPOSITIVE === "Yes",
+          isdeemedpositive: txt(e.ISDEEMEDPOSITIVE) === "Yes",
           ispartyledger,
-          amount: e.AMOUNT || "0",
+          amount: txt(e.AMOUNT, "0"),
           billallocations: arr(e["BILLALLOCATIONS.LIST"] ?? e.BILLALLOCATIONS).map((b: any) => ({
-            name: b.NAME || "",
-            billtype: b.BILLTYPE || "New Ref",
-            amount: b.AMOUNT || "0",
+            name: txt(b.NAME),
+            billtype: txt(b.BILLTYPE, "New Ref"),
+            amount: txt(b.AMOUNT, "0"),
           })),
         };
       });
 
       const inventoryentries = ie.map((e: any) => ({
-        stockitemname: e.STOCKITEMNAME || "",
-        actualqty: e.ACTUALQTY || e.BILLEDQTY || "0",
-        billedqty: e.BILLEDQTY || e.ACTUALQTY || "0",
-        rate: e.RATE || "0",
-        amount: e.AMOUNT || "0",
-        isdeemedpositive: e.ISDEEMEDPOSITIVE === "Yes",
+        stockitemname: txt(e.STOCKITEMNAME),
+        actualqty: txt(e.ACTUALQTY) || txt(e.BILLEDQTY, "0"),
+        billedqty: txt(e.BILLEDQTY) || txt(e.ACTUALQTY, "0"),
+        rate: txt(e.RATE, "0"),
+        amount: txt(e.AMOUNT, "0"),
+        isdeemedpositive: txt(e.ISDEEMEDPOSITIVE) === "Yes",
       }));
 
       return {
         metadata: { type: "Voucher" },
-        date: v.DATE || v["@_DATE"] || "",
-        guid: v.GUID || v["@_GUID"] || "",
-        vouchernumber: v.VOUCHERNUMBER || v.REFERENCE || "",
-        vouchertypename: v.VOUCHERTYPENAME || v["@_VCHTYPE"] || "",
-        partyledgername: v.PARTYLEDGERNAME || "",
-        narration: v.NARRATION || "",
-        iscancelled: v.ISCANCELLED === "Yes",
-        isoptional: v.ISOPTIONAL === "Yes",
-        effectivedate: v.EFFECTIVEDATE || v.DATE || "",
+        date: txt(v.DATE) || txt(v["@_DATE"]),
+        guid: txt(v.GUID) || txt(v["@_GUID"]),
+        vouchernumber: txt(v.VOUCHERNUMBER) || txt(v.REFERENCE),
+        vouchertypename: txt(v.VOUCHERTYPENAME) || txt(v["@_VCHTYPE"]),
+        partyledgername: txt(v.PARTYLEDGERNAME),
+        narration: txt(v.NARRATION),
+        iscancelled: txt(v.ISCANCELLED) === "Yes",
+        isoptional: txt(v.ISOPTIONAL) === "Yes",
+        effectivedate: txt(v.EFFECTIVEDATE) || txt(v.DATE),
         allledgerentries: ledgerentries,
         ledgerentries: ledgerentries,
         allinventoryentries: inventoryentries,

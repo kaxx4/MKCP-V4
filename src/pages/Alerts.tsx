@@ -318,12 +318,12 @@ export default function Alerts() {
           {/* Table header */}
           <div className="flex table-header-sticky">
             <div className="flex-1 px-4 py-2.5 min-w-0">Item</div>
-            <div className="w-28 px-3 py-2.5 text-right hidden lg:block">Group</div>
-            <div className="w-24 px-3 py-2.5 text-right">Stock</div>
-            <div className="w-24 px-3 py-2.5 text-right hidden md:block">Avg/Mo</div>
+            <div className="w-32 px-3 py-2.5 text-right hidden lg:block">Group</div>
+            <div className="w-28 px-3 py-2.5 text-right">Stock</div>
+            <div className="w-28 px-3 py-2.5 text-right hidden md:block">Avg/Mo</div>
             <div className="w-20 px-3 py-2.5 text-right hidden md:block">Mo Left</div>
-            <div className="w-24 px-3 py-2.5 text-right">Reorder</div>
-            <div className="w-20 px-3 py-2.5 text-center">Status</div>
+            <div className="w-28 px-3 py-2.5 text-right">Reorder</div>
+            <div className="w-24 px-3 py-2.5 text-center">Status</div>
             <div className="w-24 px-3 py-2.5 text-center">Action</div>
           </div>
 
@@ -372,22 +372,22 @@ export default function Alerts() {
                     <div className="flex-1 px-4 text-sm text-primary truncate min-w-0" title={d.item.name}>
                       {d.item.name}
                     </div>
-                    <div className="w-28 px-3 text-xs text-muted text-right truncate hidden lg:block" title={d.item.group}>
+                    <div className="w-32 px-3 text-xs text-muted text-right truncate hidden lg:block" title={d.item.group}>
                       {d.item.group}
                     </div>
-                    <div className="w-24 px-3 text-sm tabular-nums text-right text-primary">
+                    <div className="w-28 px-3 text-sm tabular-nums text-right text-primary whitespace-nowrap">
                       {stockDisp.formatted}
                     </div>
-                    <div className="w-24 px-3 text-sm tabular-nums text-right text-muted hidden md:block">
+                    <div className="w-28 px-3 text-sm tabular-nums text-right text-muted whitespace-nowrap hidden md:block">
                       {avgDisp.formatted}
                     </div>
-                    <div className={clsx("w-20 px-3 text-sm tabular-nums text-right hidden md:block", monthsColor)}>
+                    <div className={clsx("w-20 px-3 text-sm tabular-nums text-right whitespace-nowrap hidden md:block", monthsColor)}>
                       {monthsLabel}
                     </div>
-                    <div className="w-24 px-3 text-sm tabular-nums text-right text-accent font-semibold">
+                    <div className="w-28 px-3 text-sm tabular-nums text-right text-accent font-semibold whitespace-nowrap">
                       {d.suggested > 0 ? sugDisp.formatted : "-"}
                     </div>
-                    <div className="w-20 px-3 text-center">{severityBadge(d.severity)}</div>
+                    <div className="w-24 px-3 text-center">{severityBadge(d.severity)}</div>
                     <div className="w-24 px-3 text-center">
                       {isAdded ? (
                         <span className="inline-flex items-center gap-1 text-xs text-success font-medium">

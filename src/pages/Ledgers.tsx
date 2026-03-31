@@ -241,31 +241,34 @@ export default function Ledgers() {
 
             <div className="flex-1 overflow-auto">
               {ledgerTransactions.length > 0 ? (
-                <table className="w-full text-xs">
+                <table className="w-full text-xs min-w-[560px]">
                   <thead className="table-header-sticky">
                     <tr>
-                      {["Date", "Voucher#", "Type", "Debit", "Credit", "Balance"].map((h) => (
-                        <th key={h} className="table-header text-left">{h}</th>
-                      ))}
+                      <th className="table-header text-left w-[90px]">Date</th>
+                      <th className="table-header text-left w-[100px]">Voucher#</th>
+                      <th className="table-header text-left w-[80px]">Type</th>
+                      <th className="table-header text-right w-[110px] whitespace-nowrap">Debit</th>
+                      <th className="table-header text-right w-[110px] whitespace-nowrap">Credit</th>
+                      <th className="table-header text-right w-[120px] whitespace-nowrap">Balance</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr className="border-b border-bg-border/50 bg-bg-border/10">
                       <td className="table-cell text-muted" colSpan={3}>Opening Balance</td>
-                      <td className="table-cell-mono num-positive">{selectedLedger.openingBalance > 0 ? fmtINR(selectedLedger.openingBalance) : ""}</td>
-                      <td className="table-cell-mono num-negative">{selectedLedger.openingBalance < 0 ? fmtINR(Math.abs(selectedLedger.openingBalance)) : ""}</td>
-                      <td className={clsx("table-cell-mono", selectedLedger.openingBalance >= 0 ? "num-positive" : "num-negative")}>
+                      <td className="table-cell-mono num-positive text-right">{selectedLedger.openingBalance > 0 ? fmtINR(selectedLedger.openingBalance) : ""}</td>
+                      <td className="table-cell-mono num-negative text-right">{selectedLedger.openingBalance < 0 ? fmtINR(Math.abs(selectedLedger.openingBalance)) : ""}</td>
+                      <td className={clsx("table-cell-mono text-right", selectedLedger.openingBalance >= 0 ? "num-positive" : "num-negative")}>
                         {fmtINR(Math.abs(selectedLedger.openingBalance))} {selectedLedger.openingBalance >= 0 ? "Dr" : "Cr"}
                       </td>
                     </tr>
                     {ledgerTransactions.map((tx, i) => (
                       <tr key={i} className="responsive-table-row">
-                        <td className="table-cell text-muted">{fmtDate(tx.date)}</td>
+                        <td className="table-cell text-muted whitespace-nowrap">{fmtDate(tx.date)}</td>
                         <td className="table-cell-mono">{tx.voucherNumber}</td>
-                        <td className="table-cell text-muted">{tx.type}</td>
-                        <td className="table-cell-mono num-positive">{tx.debit > 0 ? fmtINR(tx.debit) : ""}</td>
-                        <td className="table-cell-mono num-negative">{tx.credit > 0 ? fmtINR(tx.credit) : ""}</td>
-                        <td className={clsx("table-cell-mono", tx.running >= 0 ? "num-positive" : "num-negative")}>
+                        <td className="table-cell text-muted whitespace-nowrap">{tx.type}</td>
+                        <td className="table-cell-mono num-positive text-right">{tx.debit > 0 ? fmtINR(tx.debit) : ""}</td>
+                        <td className="table-cell-mono num-negative text-right">{tx.credit > 0 ? fmtINR(tx.credit) : ""}</td>
+                        <td className={clsx("table-cell-mono text-right", tx.running >= 0 ? "num-positive" : "num-negative")}>
                           {fmtINR(Math.abs(tx.running))} {tx.running >= 0 ? "Dr" : "Cr"}
                         </td>
                       </tr>

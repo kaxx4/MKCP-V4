@@ -302,7 +302,7 @@ export default function Dashboard() {
             <select
               value={salesPeriod}
               onChange={(e) => setSalesPeriod(Number(e.target.value))}
-              className="form-select text-xs py-1 px-2 min-h-0"
+              className="form-select text-xs py-1 pl-2 min-h-0"
             >
               <option value={3}>3 months</option>
               <option value={6}>6 months</option>
@@ -330,7 +330,7 @@ export default function Dashboard() {
             <select
               value={topItemsPeriod}
               onChange={(e) => setTopItemsPeriod(e.target.value as "month" | "quarter" | "year")}
-              className="form-select text-xs py-1 px-2 min-h-0"
+              className="form-select text-xs py-1 pl-2 min-h-0"
             >
               <option value="month">This month</option>
               <option value="quarter">Last 3 months</option>

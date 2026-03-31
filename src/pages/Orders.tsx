@@ -142,7 +142,7 @@ export default function Orders() {
   const itemListVirtualizer = useVirtualizer({
     count: filteredItems.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 58,
+    estimateSize: () => 30,
     overscan: 15,
   });
 
@@ -575,14 +575,14 @@ export default function Orders() {
           "flex flex-col border-neutral-200 bg-white",
           isMobile ? (mobileTab === "list" ? "flex-1" : "hidden") : "w-[26%] border-r"
         )}>
-          <div className="p-3 border-b border-neutral-200 space-y-2">
+          <div className="p-2 border-b border-neutral-200 space-y-1.5">
             <div>
               <input
                 ref={searchRef}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search items… (Ctrl+F)"
-                className="search-input w-full"
+                placeholder="Search… (Ctrl+F)"
+                className="search-input w-full text-xs py-1.5"
                 onKeyDown={(e) => handleKeyDown(e, filteredItems)}
               />
             </div>
@@ -606,7 +606,7 @@ export default function Orders() {
                   <select
                     value={stockFilterOp}
                     onChange={(e) => setStockFilterOp(e.target.value as "<=" | ">=" | "=")}
-                    className="form-select text-xs py-1 px-2 min-h-0 tabular-nums"
+                    className="form-select text-xs py-1 pl-2 min-h-0 tabular-nums"
                   >
                     <option value="<=">≤</option>
                     <option value=">=">≥</option>
@@ -642,21 +642,23 @@ export default function Orders() {
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                         className={clsx(
-                          "px-3 py-2.5 cursor-pointer border-b border-neutral-200/50 transition-colors duration-150",
-                          isSelected ? "bg-accent/15 border-l-2 border-l-accent" : "hover:bg-neutral-100/30"
+                          "flex items-center gap-2 px-3 py-1.5 cursor-pointer border-b border-neutral-100 transition-colors duration-100",
+                          isSelected ? "bg-accent/10 border-l-2 border-l-accent" : "hover:bg-neutral-50"
                         )}
                       >
-                        <div className="flex items-center justify-between gap-1">
-                          <span className={clsx("text-sm font-sans truncate", isSelected ? "text-accent font-medium" : "text-neutral-900")}>
-                            {item.name}
-                          </span>
-                          {inOrder && <span className="text-accent text-xs">●</span>}
-                        </div>
-                        <div className="flex items-center justify-between mt-0.5">
-                          <span className="text-neutral-500 text-sm truncate">{item.group}</span>
-                          <span className={clsx("text-sm tabular-nums", getStockColor(item, stock))}>
+                        <span className={clsx(
+                          "text-xs truncate flex-1 min-w-0 leading-none",
+                          isSelected ? "text-accent font-semibold" : "text-neutral-800"
+                        )}>
+                          {item.name}
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <span className={clsx("text-[11px] tabular-nums", getStockColor(item, stock))}>
                             {stockDisp.formatted}
                           </span>
+                          {inOrder && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-accent flex-shrink-0" />
+                          )}
                         </div>
                       </div>
                     );
@@ -801,7 +803,7 @@ export default function Orders() {
                         <select
                           value={monthSpan}
                           onChange={(e) => setMonthSpan(parseInt(e.target.value))}
-                          className="form-select text-xs py-1 px-2 min-h-0"
+                          className="form-select text-xs py-1 pl-2 min-h-0"
                         >
                           {[3, 6, 8, 12, 24].map((m) => (
                             <option key={m} value={m}>{m} mo</option>
@@ -918,31 +920,29 @@ export default function Orders() {
           "flex flex-col border-neutral-200 bg-white min-h-0",
           isMobile ? (mobileTab === "order" ? "flex-1" : "hidden") : "w-[28%] border-l"
         )}>
-          <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200">
-            <div className="flex items-center gap-3">
-              <span className="card-title">Order Entry</span>
-              <span className="metric-label tabular-nums">{orderLinesList.length} items</span>
+          <div className="flex items-center justify-between px-3 py-2.5 border-b border-neutral-200">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm font-semibold text-neutral-900">Order</span>
+              {orderLinesList.length > 0 && (
+                <span className="text-xs font-semibold px-1.5 py-0.5 rounded-full bg-accent/10 text-accent tabular-nums leading-none">
+                  {orderLinesList.length}
+                </span>
+              )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-0.5">
               <UnitToggle />
-              <button onClick={exportCSV} className="btn-ghost btn-sm" aria-label="Export as CSV" title="Export CSV">
-                <Download size={12} />
-              </button>
-              <button onClick={exportXLSX} className="btn-primary btn-sm" aria-label="Export as Excel" title="Export Excel">
-                <Download size={12} />
-              </button>
-              <button onClick={clearAll} className="text-xs bg-danger/20 hover:bg-danger/30 text-danger px-2 py-1.5 rounded-lg transition duration-150 cursor-pointer" aria-label="Clear all order items" title="Clear order">
-                <Trash2 size={12} />
-              </button>
+              <button onClick={exportCSV} className="btn-icon" title="Export CSV"><Download size={13} /></button>
+              <button onClick={exportXLSX} className="btn-icon" title="Export Excel" aria-label="Export Excel"><Download size={13} /></button>
+              <button onClick={clearAll} className="btn-icon text-danger hover:bg-danger/10" title="Clear all" aria-label="Clear order"><Trash2 size={13} /></button>
             </div>
           </div>
           <div className="sticky top-0 bg-white border-b border-neutral-200 z-10">
-            <div className="flex">
-              <div className="flex-1 table-header">Item</div>
-              <div className="w-24 table-header">Order Qty</div>
+            <div className="flex text-[10px] font-medium uppercase tracking-wide text-neutral-400">
+              <div className="flex-1 px-3 py-1.5">Item</div>
+              <div className="w-20 px-2 py-1.5 text-right">Qty</div>
             </div>
           </div>
-              <div ref={orderPanelRef} className="flex-1 overflow-y-auto min-h-0">
+              <div ref={orderPanelRef} className="flex-1 overflow-y-auto min-h-0 overflow-x-hidden">
                 <div style={{ height: `${orderVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
                   {orderVirtualizer.getVirtualItems().map((virtualRow) => {
                     const item = filteredItems[virtualRow.index];
@@ -960,22 +960,30 @@ export default function Orders() {
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                         className={clsx(
-                          "flex items-center border-b border-neutral-200/50 hover:bg-neutral-100/20 transition-colors duration-150",
-                          focusedItemId === item.itemId && "bg-accent/10"
+                          "flex items-center border-b border-neutral-100 transition-colors duration-100",
+                          focusedItemId === item.itemId
+                            ? "bg-accent/10"
+                            : hasOrder
+                              ? "bg-accent/[0.03] hover:bg-accent/[0.06]"
+                              : "hover:bg-neutral-50"
                         )}
                       >
-                        <div className="flex-1 px-3 py-2 text-xs text-neutral-900 truncate" title={item.name}>
+                        <div
+                          className={clsx(
+                            "flex-1 px-3 py-1.5 text-xs truncate leading-none",
+                            hasOrder ? "text-neutral-800 font-medium" : "text-neutral-400"
+                          )}
+                          title={item.name}
+                        >
                           {item.name}
                         </div>
-                        <div className="w-24 px-3 py-2">
+                        <div className="w-20 px-2 py-1">
                           <input
                             ref={(el) => { orderInputRefs.current[item.itemId] = el; }}
                             type="text"
                             inputMode="decimal"
                             value={orderQtyValue || ""}
-                            onChange={(e) => {
-                              updateOrderLine(item.itemId, e.target.value);
-                            }}
+                            onChange={(e) => { updateOrderLine(item.itemId, e.target.value); }}
                             onFocus={() => {
                               setFocusedItemId(item.itemId);
                               setSelectedItemId(item.itemId);
@@ -986,10 +994,12 @@ export default function Orders() {
                               }
                             }}
                             onKeyDown={(e) => handleOrderInputKeyDown(e, item.itemId, filteredItems)}
-                            placeholder="0"
+                            placeholder="—"
                             className={clsx(
-                              "w-full bg-neutral-50 border border-neutral-200 rounded px-2 py-1 tabular-nums text-xs text-center outline-none focus:border-accent/60 transition-all duration-150",
-                              hasOrder ? "font-bold text-accent" : "text-neutral-500"
+                              "w-full rounded-md px-2 py-1 tabular-nums text-xs text-center outline-none transition-all duration-150",
+                              hasOrder
+                                ? "bg-accent/10 border border-accent/30 text-accent font-bold focus:border-accent focus:bg-accent/15"
+                                : "bg-transparent border border-transparent text-neutral-500 focus:bg-neutral-50 focus:border-neutral-200"
                             )}
                           />
                         </div>
@@ -998,6 +1008,16 @@ export default function Orders() {
                   })}
                 </div>
               </div>
+          {orderLinesList.length > 0 && (
+            <div className="flex items-center justify-between px-3 py-2 border-t border-neutral-200 bg-neutral-50 flex-shrink-0">
+              <span className="text-xs text-neutral-500 tabular-nums">
+                <span className="font-semibold text-accent">{orderLinesList.length}</span> items ordered
+              </span>
+              <button onClick={exportXLSX} className="btn-accent-ghost btn-sm text-xs gap-1">
+                <Download size={11} />Export
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
