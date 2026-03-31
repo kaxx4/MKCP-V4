@@ -1,7 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronUp, Download, Upload, FileText, FileDown } from "lucide-react";
-import { downloadPurchaseVoucherPDF, exportAllPurchaseVouchersPDF } from "../services/purchasePDFExporter";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
@@ -49,11 +48,7 @@ export default function Invoices() {
   }
 
   function exportPurchasePDFs() {
-    const purchaseVoucherIds = new Set(
-      filtered.filter(f => f.type === "payable").map(f => f.voucherId)
-    );
-    const purchaseVouchers = data!.vouchers.filter(v => purchaseVoucherIds.has(v.voucherId));
-    exportAllPurchaseVouchersPDF(purchaseVouchers, data!);
+    // TODO: Implement purchase PDF export when purchasePDFExporter is available
   }
 
   function exportCSV() {
@@ -262,12 +257,14 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-muted font-medium">Voucher Lines</span>
                           {voucher.voucherType === "Purchase" && (
+                            {/* PDF export disabled - purchasePDFExporter not available
                             <button
                               onClick={(e) => { e.stopPropagation(); downloadPurchaseVoucherPDF(voucher, data); }}
                               className="btn-secondary btn-sm text-xs flex items-center gap-1"
                             >
                               <FileDown size={12} />Download PDF
                             </button>
+                            */}
                           )}
                         </div>
                         {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => {
@@ -360,6 +357,7 @@ function MobileInvoiceCards({ filtered, expandedId, setExpandedId, agingColor, d
               <div className="border-t border-bg-border bg-bg px-3 py-2 space-y-1">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[10px] text-muted font-medium">Voucher Lines</span>
+                  {/* PDF export disabled - purchasePDFExporter not available
                   {voucher.voucherType === "Purchase" && (
                     <button
                       onClick={(e) => { e.stopPropagation(); downloadPurchaseVoucherPDF(voucher, data); }}
@@ -368,6 +366,7 @@ function MobileInvoiceCards({ filtered, expandedId, setExpandedId, agingColor, d
                       <FileDown size={11} />PDF
                     </button>
                   )}
+                  */}
                 </div>
                 {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => {
                   const ledgerName = line.type === "ledger" && line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
