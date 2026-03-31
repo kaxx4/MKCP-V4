@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronUp, Download, Upload, FileText } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, Upload, FileText, FileDown } from "lucide-react";
+import { downloadPurchaseVoucherPDF, exportAllPurchaseVouchersPDF } from "../services/purchasePDFExporter";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
@@ -47,20 +48,50 @@ export default function Invoices() {
     return "text-danger bg-danger/10";
   }
 
+  function exportPurchasePDFs() {
+    const purchaseVoucherIds = new Set(
+      filtered.filter(f => f.type === "payable").map(f => f.voucherId)
+    );
+    const purchaseVouchers = data!.vouchers.filter(v => purchaseVoucherIds.has(v.voucherId));
+    exportAllPurchaseVouchersPDF(purchaseVouchers, data!);
+  }
+
   function exportCSV() {
-    const rows = [
-      ["Date", "Voucher#", "Type", "Party", "Amount", "Paid", "Outstanding", "Due Date", "Days Overdue"],
-      ...filtered.map((i) => [
-        i.date, i.voucherNumber, i.type === "receivable" ? "Sales" : "Purchase",
-        i.partyName, i.totalAmount, i.paidAmount, i.outstanding, i.dueDate ?? "", i.daysPastDue
-      ]),
-    ];
-    const csv = rows.map((r) => r.join(",")).join("\n");
+    function escCSV(v: string | number): string {
+      const s = String(v);
+      return (s.includes(",") || s.includes('"') || s.includes("\n"))
+        ? `"${s.replace(/"/g, '""')}"` : s;
+    }
+
+    const header = ["Date", "Voucher#", "Type", "Party", "Amount", "Paid", "Outstanding", "Due Date", "Days Overdue", "Items"];
+
+    const rows = filtered.map((inv) => {
+      const voucher = data!.vouchers.find(v => v.voucherId === inv.voucherId);
+      const invLines = voucher?.lines.filter(l => l.type === "inventory") ?? [];
+      const itemsStr = invLines.map(line => {
+        const item = line.itemId ? data!.items.get(line.itemId) : null;
+        const name = item?.name ?? line.itemId ?? "Unknown";
+        const unit = item?.baseUnit ?? "";
+        const qty = line.qtyBase ?? 0;
+        const rate = line.ratePerBase ?? 0;
+        const amount = line.lineAmount ?? qty * rate;
+        return `${name} (${qty} ${unit} @ ${rate.toFixed(2)}) = ${amount.toFixed(2)}`;
+      }).join("; ");
+
+      return [
+        inv.date, inv.voucherNumber, inv.type === "receivable" ? "Sales" : "Purchase",
+        inv.partyName, inv.totalAmount, inv.paidAmount, inv.outstanding, inv.dueDate ?? "", inv.daysPastDue,
+        itemsStr,
+      ].map(escCSV).join(",");
+    });
+
+    const csv = [header.map(escCSV).join(","), ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `invoices_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   if (!data) {
@@ -82,9 +113,16 @@ export default function Invoices() {
     <div className="page-section">
       <div className="page-header">
         <h1 className="page-title">Invoices</h1>
-        <button onClick={exportCSV} className="btn-secondary btn-sm">
-          <Download size={14} />Export
-        </button>
+        <div className="flex gap-2">
+          {typeFilter !== "Sales" && (
+            <button onClick={exportPurchasePDFs} className="btn-secondary btn-sm">
+              <FileDown size={14} />Export PDFs
+            </button>
+          )}
+          <button onClick={exportCSV} className="btn-secondary btn-sm">
+            <Download size={14} />Export CSV
+          </button>
+        </div>
       </div>
 
       {/* Summary — bento grid */}
@@ -150,7 +188,7 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
   const parentRef = useRef<HTMLDivElement>(null);
 
   // Fixed column template for grid layout - ensures header and rows align
-  const COL_TEMPLATE = "90px 110px 80px 1fr 110px 40px";
+  const COL_TEMPLATE = "100px 120px 90px 1fr 120px 44px";
 
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -176,7 +214,7 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
         </div>
 
         {/* Virtualized rows */}
-        <div ref={parentRef} className="overflow-auto max-h-[60vh]">
+        <div ref={parentRef} className="overflow-auto max-h-[60vh]" style={{ minWidth: "700px" }}>
           <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const inv = filtered[virtualRow.index];
@@ -203,16 +241,16 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                     style={{ gridTemplateColumns: COL_TEMPLATE }}
                     onClick={() => setExpandedId(isExpanded ? null : inv.voucherId)}
                   >
-                    <div className="table-cell text-muted">{fmtDate(inv.date)}</div>
-                    <div className="table-cell-mono">{inv.voucherNumber}</div>
-                    <div className="table-cell">
+                    <div className="table-cell text-muted overflow-hidden whitespace-nowrap">{fmtDate(inv.date)}</div>
+                    <div className="table-cell-mono overflow-hidden truncate">{inv.voucherNumber}</div>
+                    <div className="table-cell overflow-hidden">
                       <span className={clsx("badge", inv.type === "receivable" ? "badge-success" : "badge-danger")}>
                         {inv.type === "receivable" ? "Sales" : "Purchase"}
                       </span>
                     </div>
-                    <div className="table-cell-emphasis truncate">{inv.partyName}</div>
-                    <div className="table-cell-mono">{fmtINR(inv.totalAmount)}</div>
-                    <div className="table-cell text-muted">
+                    <div className="table-cell-emphasis truncate overflow-hidden">{inv.partyName}</div>
+                    <div className="table-cell-mono overflow-hidden whitespace-nowrap">{fmtINR(inv.totalAmount)}</div>
+                    <div className="table-cell text-muted overflow-hidden">
                       {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                     </div>
                   </div>
@@ -221,7 +259,17 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                   {isExpanded && voucher && (
                     <div className="bg-bg border-b border-bg-border px-6 py-4">
                       <div className="text-xs space-y-2">
-                        <div className="text-muted font-medium mb-2">Voucher Lines</div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-muted font-medium">Voucher Lines</span>
+                          {voucher.voucherType === "Purchase" && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); downloadPurchaseVoucherPDF(voucher, data); }}
+                              className="btn-secondary btn-sm text-xs flex items-center gap-1"
+                            >
+                              <FileDown size={12} />Download PDF
+                            </button>
+                          )}
+                        </div>
                         {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => {
                           const ledgerName = line.type === "ledger" && line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
                           const itemName = line.type === "inventory" && line.itemId ? (data.items.get(line.itemId)?.name ?? line.itemId) : "";
@@ -310,7 +358,17 @@ function MobileInvoiceCards({ filtered, expandedId, setExpandedId, agingColor, d
 
             {isExpanded && voucher && (
               <div className="border-t border-bg-border bg-bg px-3 py-2 space-y-1">
-                <div className="text-[10px] text-muted font-medium mb-1">Voucher Lines</div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] text-muted font-medium">Voucher Lines</span>
+                  {voucher.voucherType === "Purchase" && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); downloadPurchaseVoucherPDF(voucher, data); }}
+                      className="btn-secondary btn-sm text-[10px] flex items-center gap-1"
+                    >
+                      <FileDown size={11} />PDF
+                    </button>
+                  )}
+                </div>
                 {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => {
                   const ledgerName = line.type === "ledger" && line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
                   const itemName = line.type === "inventory" && line.itemId ? (data.items.get(line.itemId)?.name ?? line.itemId) : "";

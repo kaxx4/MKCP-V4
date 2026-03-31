@@ -3,7 +3,7 @@ import { buildVoucherCountXml } from "./xmlBuilder.js";
 import { tallyPost } from "../tally.js";
 import { getMonthlyChunks } from "../tally.js";
 
-const DEFAULT_MAX_BATCH_SIZE = 3000;
+const DEFAULT_MAX_BATCH_SIZE = 400; // ~1 month worth of vouchers; keeps Tally XML responses manageable
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /**
@@ -59,7 +59,9 @@ function extractDateCounts(parsed: any): Map<string, number> {
     : [];
 
   for (const v of vouchers) {
-    const rawDate: string = v.DATE ?? v["@_DATE"] ?? "";
+    // DATE may be a typed Tally object { "#text": "...", "@_TYPE": "Date" } in Collection responses
+    const rawDateRaw = v.DATE ?? v["@_DATE"] ?? "";
+    const rawDate: string = typeof rawDateRaw === "object" ? (rawDateRaw?.["#text"] ?? "") : String(rawDateRaw ?? "");
     if (!rawDate) continue;
     // Normalize to YYYYMMDD
     const date = rawDate.replace(/-/g, "").replace(/\//g, "");

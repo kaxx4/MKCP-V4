@@ -837,7 +837,7 @@ export default function Reports() {
             <div className="flex items-center gap-4">
               <h3 className="card-title">Order Predictions</h3>
               <select value={predictionType} onChange={(e) => setPredictionType(e.target.value as "Sales" | "Purchase")}
-                className="form-select text-xs py-1 px-2 min-h-0">
+                className="form-select text-xs py-1 pl-2 min-h-0">
                 <option value="Sales">Sales Orders</option>
                 <option value="Purchase">Purchase Orders</option>
               </select>
@@ -859,7 +859,7 @@ export default function Reports() {
               <div>
                 <label className="text-xs text-muted mb-1 block">Date Range</label>
                 <select value={predictionDateFilter} onChange={(e) => setPredictionDateFilter(e.target.value as typeof predictionDateFilter)}
-                  className="form-select text-xs py-1 px-2 min-h-0 w-full">
+                  className="form-select text-xs py-1 pl-2 min-h-0 w-full">
                   <option value="all">All Dates</option>
                   <option value="overdue">Overdue Only</option>
                   <option value="week">Next 7 Days</option>
@@ -877,12 +877,12 @@ export default function Reports() {
                   <div>
                     <label className="text-xs text-muted mb-1 block flex items-center gap-1"><Calendar size={12} />Start</label>
                     <input type="date" value={predictionCustomStartDate} onChange={(e) => setPredictionCustomStartDate(e.target.value)}
-                      className="form-select text-xs py-1 px-2 min-h-0 w-full" />
+                      className="form-select text-xs py-1 pl-2 min-h-0 w-full" />
                   </div>
                   <div>
                     <label className="text-xs text-muted mb-1 block flex items-center gap-1"><Calendar size={12} />End</label>
                     <input type="date" value={predictionCustomEndDate} onChange={(e) => setPredictionCustomEndDate(e.target.value)}
-                      className="form-select text-xs py-1 px-2 min-h-0 w-full" />
+                      className="form-select text-xs py-1 pl-2 min-h-0 w-full" />
                   </div>
                 </>
               )}
@@ -1208,13 +1208,13 @@ export default function Reports() {
             <div className="section-card-header flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-3">
                 <h3 className="card-title">All Items ({abcxyzFiltered.length})</h3>
-                <select value={abcxyzAbcFilter} onChange={e => setAbcxyzAbcFilter(e.target.value as any)} className="form-select text-xs py-1 px-2 min-h-0">
+                <select value={abcxyzAbcFilter} onChange={e => setAbcxyzAbcFilter(e.target.value as any)} className="form-select text-xs py-1 pl-2 min-h-0">
                   <option value="ALL">All ABC</option>
                   <option value="A">A</option>
                   <option value="B">B</option>
                   <option value="C">C</option>
                 </select>
-                <select value={abcxyzXyzFilter} onChange={e => setAbcxyzXyzFilter(e.target.value as any)} className="form-select text-xs py-1 px-2 min-h-0">
+                <select value={abcxyzXyzFilter} onChange={e => setAbcxyzXyzFilter(e.target.value as any)} className="form-select text-xs py-1 pl-2 min-h-0">
                   <option value="ALL">All XYZ</option>
                   <option value="X">X</option>
                   <option value="Y">Y</option>
@@ -1272,14 +1272,14 @@ export default function Reports() {
           <div className="flex items-center gap-4 bento-card">
             <div>
               <label className="text-xs text-muted mb-1 block">Period A</label>
-              <select value={periodMonthA} onChange={e => setPeriodMonthA(e.target.value)} className="form-select text-xs py-1 px-2 min-h-0">
+              <select value={periodMonthA} onChange={e => setPeriodMonthA(e.target.value)} className="form-select text-xs py-1 pl-2 min-h-0">
                 {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
             <span className="text-muted text-lg mt-4">vs</span>
             <div>
               <label className="text-xs text-muted mb-1 block">Period B</label>
-              <select value={periodMonthB} onChange={e => setPeriodMonthB(e.target.value)} className="form-select text-xs py-1 px-2 min-h-0">
+              <select value={periodMonthB} onChange={e => setPeriodMonthB(e.target.value)} className="form-select text-xs py-1 pl-2 min-h-0">
                 {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
@@ -1366,7 +1366,7 @@ export default function Reports() {
               <button key={p.l} onClick={() => setMarginPeriod(p.v)} className={clsx("px-3 py-1.5 rounded-lg text-sm transition", marginPeriod === p.v ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>{p.l}</button>
             ))}
             <div className="ml-auto flex items-center gap-2">
-              <select value={marginGroupFilter} onChange={e => setMarginGroupFilter(e.target.value)} className="form-select text-xs py-1 px-2 min-h-0">
+              <select value={marginGroupFilter} onChange={e => setMarginGroupFilter(e.target.value)} className="form-select text-xs py-1 pl-2 min-h-0">
                 {marginGroups.map(g => <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>)}
               </select>
               <input type="text" placeholder="Search..." value={marginSearch} onChange={e => setMarginSearch(e.target.value)} className="search-input w-40" />
@@ -1483,7 +1483,7 @@ export default function Reports() {
           {/* Controls */}
           <div className="flex items-center gap-4 bento-card">
             <h3 className="card-title">GST Summary</h3>
-            <select value={gstMonth} onChange={e => setGstMonth(e.target.value)} className="form-select text-xs py-1 px-2 min-h-0">
+            <select value={gstMonth} onChange={e => setGstMonth(e.target.value)} className="form-select text-xs py-1 pl-2 min-h-0">
               {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
             <div className="flex gap-1">
@@ -1968,7 +1968,7 @@ export default function Reports() {
             <div className="flex items-center gap-3">
               <span className="text-sm text-muted">Tax Regime:</span>
               <select
-                className="form-select text-xs py-1 px-2 min-h-0"
+                className="form-select text-xs py-1 pl-2 min-h-0"
                 value={taxRegime}
                 onChange={e => setTaxRegime(e.target.value)}
               >
@@ -2237,17 +2237,17 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
           <RefreshCw size={16} className="text-accent" />
           <h3 className="card-title">Inventory Turnover Analysis</h3>
           <select value={turnoverPeriod} onChange={(e) => setTurnoverPeriod(Number(e.target.value))}
-            className="form-select text-xs py-1 px-2 min-h-0">
+            className="form-select text-xs py-1 pl-2 min-h-0">
             <option value={3}>Last 3 Months</option>
             <option value={6}>Last 6 Months</option>
             <option value={12}>Last 12 Months</option>
           </select>
           <select value={turnoverGroupFilter} onChange={(e) => setTurnoverGroupFilter(e.target.value)}
-            className="form-select text-xs py-1 px-2 min-h-0">
+            className="form-select text-xs py-1 pl-2 min-h-0">
             {turnoverGroups.map(g => <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>)}
           </select>
           <select value={turnoverClassFilter} onChange={(e) => setTurnoverClassFilter(e.target.value as typeof turnoverClassFilter)}
-            className="form-select text-xs py-1 px-2 min-h-0">
+            className="form-select text-xs py-1 pl-2 min-h-0">
             <option value="ALL">All Classifications</option>
             <option value="fast">Fast Moving</option>
             <option value="moderate">Moderate</option>
@@ -2322,7 +2322,7 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
         <div className="section-card-header flex items-center justify-between">
           <h3 className="card-title">All Items ({filteredTurnover.length})</h3>
           <select value={turnoverSort} onChange={(e) => setTurnoverSort(e.target.value as any)}
-            className="form-select text-xs py-1 px-2 min-h-0">
+            className="form-select text-xs py-1 pl-2 min-h-0">
             <option value="ratio-desc">Turnover (Fastest)</option>
             <option value="ratio-asc">Turnover (Slowest)</option>
             <option value="doi-asc">DOI (Shortest)</option>
