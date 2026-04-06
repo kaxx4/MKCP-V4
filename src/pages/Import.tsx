@@ -48,6 +48,13 @@ function formatFYRange(from: string, to: string): string {
   return `FY ${fromYear}-${toYear.slice(2)}`;
 }
 
+/** Cap a YYYYMMDD date at today — prevents syncing future dates from Tally */
+function capToday(yyyymmdd: string): string {
+  const now = new Date();
+  const today = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  return yyyymmdd > today ? today : yyyymmdd;
+}
+
 export default function ImportPage() {
   const navigate = useNavigate();
   const { mergeData, data: existingData } = useDataStore();
@@ -149,7 +156,7 @@ export default function ImportPage() {
       const t0 = Date.now();
 
       // Call full sync
-      const result: TallySyncResult = await fullSync(companyName, fyFromDate, fyToDate);
+      const result: TallySyncResult = await fullSync(companyName, fyFromDate, capToday(fyToDate));
 
       // Show partial errors
       if (result.errors) {
@@ -317,7 +324,7 @@ export default function ImportPage() {
     try {
       addLog(`Syncing Day Book for "${companyName}" (${fyFromDate} → ${fyToDate}) [${syncMode} chunks]...`);
       addLog("Fetching vouchers chunk-by-chunk for reliability.");
-      const result = await syncDayBook(companyName, fyFromDate, fyToDate, syncMode);
+      const result = await syncDayBook(companyName, fyFromDate, capToday(fyToDate), syncMode);
 
       if (result.errors?.length) {
         for (const err of result.errors) addLog(`⚠ ${err}`);
@@ -401,20 +408,20 @@ export default function ImportPage() {
         const mm = String(d.getMonth() + 1).padStart(2, "0");
         const dd = String(d.getDate()).padStart(2, "0");
         incrementalFrom = `${yyyy}${mm}${dd}`;
-        addLog(`Incremental sync: fetching from ${lastVoucherDate} + 1 day (${incrementalFrom}) to ${fyToDate}`);
+        addLog(`Incremental sync: fetching from ${lastVoucherDate} + 1 day (${incrementalFrom}) to ${capToday(fyToDate)}`);
       } else {
         addLog(`No previous voucher date found — falling back to full FY range (${fyFromDate} → ${fyToDate})`);
       }
 
       // If incremental start is after the end date, nothing to sync
-      if (incrementalFrom > fyToDate) {
+      if (incrementalFrom > capToday(fyToDate)) {
         addLog("Already up to date — no new vouchers to fetch.");
         toast("Already up to date", "success");
         setSyncing(false);
         return;
       }
 
-      const result = await syncDayBook(companyName, incrementalFrom, fyToDate, syncMode);
+      const result = await syncDayBook(companyName, incrementalFrom, capToday(fyToDate), syncMode);
 
       if (result.errors?.length) {
         for (const err of result.errors) addLog(`⚠ ${err}`);
@@ -490,7 +497,7 @@ export default function ImportPage() {
       // Step 2: Sync Day Book (chunked)
       const modeLabel = syncMode === "smart" ? "smart batching" : `${syncMode} chunks`;
       addLog(`Step 2/2: Fetching vouchers [${modeLabel}] (this may take 2-10 minutes)...`);
-      const dayBookResult = await syncDayBook(companyName, fyFromDate, fyToDate, syncMode);
+      const dayBookResult = await syncDayBook(companyName, fyFromDate, capToday(fyToDate), syncMode);
       if (dayBookResult.errors?.length) dayBookResult.errors.forEach(e => addLog(`⚠ ${e}`));
       addLog(`✓ ${dayBookResult.stats.vouchers} vouchers fetched (${dayBookResult.stats.chunksSucceeded}/${dayBookResult.stats.chunksTotal} chunks)`);
       if (dayBookResult.stats.chunkDetails) {

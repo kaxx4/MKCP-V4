@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { NavLink } from "react-router-dom";
 import {
   Upload,
@@ -17,9 +17,16 @@ import {
   MoreHorizontal,
   X,
   IndianRupee,
+  RefreshCw,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
+import { useDataStore } from "../store/dataStore";
+import { syncDayBook } from "../api/tallyApi";
+import { parseTransactions } from "../parser/transactionParser";
+import { saveData, loadData, createBackup } from "../db/idb";
+import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
+import { useToast } from "./Toast";
 import clsx from "clsx";
 
 const COLORS = {
@@ -52,8 +59,47 @@ const MOBILE_OVERFLOW = NAV_ITEMS.slice(5);
 
 export function NavBar() {
   const { sidebarOpen, setSidebarOpen, isMobile } = useUIStore();
-  const { isConnected, lastSyncAt } = useTallyStore();
+  const { isConnected, lastSyncAt, companyName, isSyncing, setSyncing, setLastSync, setLastVoucherDate, setLastVouchersSync } = useTallyStore();
+  const { mergeData } = useDataStore();
+  const { toast } = useToast();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [daybookSyncing, setDaybookSyncing] = useState(false);
+
+  const handleTodaySync = useCallback(async () => {
+    if (daybookSyncing || isSyncing) return;
+    const today = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const todayStr = `${today.getFullYear()}${pad(today.getMonth() + 1)}${pad(today.getDate())}`;
+    setDaybookSyncing(true);
+    setSyncing(true);
+    try {
+      const result = await syncDayBook(companyName, todayStr, todayStr, "daily");
+      if (!result.data || result.data.length === 0) {
+        toast("No vouchers found for today.", "info");
+        return;
+      }
+      const parsed = parseTransactions(result.data);
+      const existingRaw = await loadData<unknown>("parsedData");
+      const existing = existingRaw ? deserializeParsedData(existingRaw) : null;
+      if (existing) await createBackup(existingRaw, "pre-today-sync");
+      mergeData(parsed);
+      const merged = useDataStore.getState().data!;
+      await saveData("parsedData", serializeParsedData(merged));
+      const now = new Date().toISOString();
+      setLastSync(now);
+      setLastVouchersSync(now);
+      if (parsed.vouchers.length > 0) {
+        const dates = parsed.vouchers.map(v => v.date).filter(Boolean).sort();
+        if (dates.length) setLastVoucherDate(dates[dates.length - 1]);
+      }
+      toast(`Today's daybook synced: ${parsed.vouchers.length} voucher(s) added.`, "success");
+    } catch (e: any) {
+      toast(`Sync failed: ${e.message}`, "error");
+    } finally {
+      setDaybookSyncing(false);
+      setSyncing(false);
+    }
+  }, [daybookSyncing, isSyncing, companyName, mergeData, toast, setLastSync, setLastVoucherDate, setLastVouchersSync, setSyncing]);
 
   const formatLastSync = () => {
     if (!lastSyncAt) return "Never";
@@ -207,6 +253,35 @@ export function NavBar() {
             {sidebarOpen && <span className="truncate">{label}</span>}
           </NavLink>
         ))}
+      </div>
+
+      {/* Quick Sync Today */}
+      <div className="px-2 pb-1">
+        <button
+          onClick={handleTodaySync}
+          disabled={daybookSyncing || isSyncing || !isConnected}
+          title={isConnected ? "Sync today's daybook from Tally" : "Tally not connected"}
+          className={clsx(
+            "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors duration-150 text-sm border",
+            daybookSyncing || isSyncing
+              ? "opacity-60 cursor-not-allowed border-neutral-200/80 text-neutral-400"
+              : isConnected
+              ? "border-accent/30 text-accent hover:bg-accent/8 cursor-pointer"
+              : "opacity-40 cursor-not-allowed border-neutral-200/80 text-neutral-400"
+          )}
+          aria-label="Sync today's daybook"
+        >
+          <RefreshCw
+            size={14}
+            className={clsx("flex-shrink-0", daybookSyncing && "animate-spin")}
+            aria-hidden="true"
+          />
+          {sidebarOpen && (
+            <span className="truncate text-xs font-medium">
+              {daybookSyncing ? "Syncing..." : "Sync Today"}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* Tally Connection Status */}
