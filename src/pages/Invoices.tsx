@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useUIStore } from "../store/uiStore";
+import { useDiscountStore } from "../store/discountStore";
 import { computeOutstandingInvoices, type InvoiceRecord } from "../engine/financial";
 import { fmtINR, fmtDate } from "../utils/format";
 
@@ -172,6 +173,75 @@ export default function Invoices() {
   );
 }
 
+/** Discount-aware expanded detail for a voucher */
+function VoucherDetail({ voucher, data }: {
+  voucher: import("../types/canonical").CanonicalVoucher;
+  data: import("../types/canonical").ParsedData;
+}) {
+  const { getDiscount, itemAssignments } = useDiscountStore();
+
+  const invLines = voucher.lines.filter(l => l.type === "inventory" && l.itemId);
+  const ledgerLines = voucher.lines.filter(l => l.type === "ledger");
+
+  let totalSubtotal = 0;
+  let totalDiscount = 0;
+
+  const invRows = invLines.map((line, i) => {
+    const item = line.itemId ? data.items.get(line.itemId) : null;
+    const name = item?.name ?? line.itemId ?? "";
+    const qtyBase = line.qtyBase ?? 0;
+    const unitsPerPkg = item?.unitsPerPkg ?? 1;
+    const qtyPkg = unitsPerPkg > 0 ? qtyBase / unitsPerPkg : qtyBase;
+    const qtyPkgRounded = Math.round(qtyPkg);
+    const subtotal = line.lineAmount ?? (qtyBase * (line.ratePerBase ?? 0));
+    const catName = line.itemId ? itemAssignments[line.itemId.toUpperCase()] : undefined;
+    const discPct = line.itemId ? getDiscount(line.itemId, qtyPkgRounded) : 0;
+    const discAmt = subtotal * (discPct / 100);
+    const net = subtotal - discAmt;
+    totalSubtotal += subtotal;
+    totalDiscount += discAmt;
+    return (
+      <div key={i} className="flex gap-2 items-baseline text-xs tabular-nums">
+        <span className="text-muted w-8 flex-shrink-0">Inv</span>
+        <span className="truncate flex-1 min-w-0" title={name}>{name}</span>
+        <span className="text-muted flex-shrink-0">{qtyPkgRounded} pkg</span>
+        <span className="flex-shrink-0">{fmtINR(subtotal)}</span>
+        {discPct > 0 ? (
+          <>
+            <span className="text-warn-700 flex-shrink-0">−{discPct}%</span>
+            <span className="font-semibold text-success-700 flex-shrink-0">{fmtINR(net)}</span>
+          </>
+        ) : (
+          <span className="text-muted flex-shrink-0 text-[10px]">{catName ? "0%" : "no cat."}</span>
+        )}
+      </div>
+    );
+  });
+
+  return (
+    <div className="text-xs space-y-1.5">
+      {invRows}
+      {invLines.length > 0 && totalDiscount > 0 && (
+        <div className="flex justify-between pt-1 border-t border-neutral-200 font-medium">
+          <span className="text-muted">Total discount</span>
+          <span className="text-warn-700">−{fmtINR(totalDiscount)}</span>
+          <span className="text-success-700">{fmtINR(totalSubtotal - totalDiscount)}</span>
+        </div>
+      )}
+      {ledgerLines.map((line, i) => {
+        const ledgerName = line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
+        return (
+          <div key={`l${i}`} className="flex gap-4 tabular-nums text-xs text-muted">
+            <span className="w-8 flex-shrink-0">{line.isDebit ? "Dr" : "Cr"}</span>
+            <span className="truncate flex-1" title={ledgerName}>{ledgerName}</span>
+            <span className="ml-auto">{fmtINR(line.amount ?? 0)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Virtualized invoice table component */
 function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }: {
   filtered: InvoiceRecord[];
@@ -250,37 +320,11 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                     </div>
                   </div>
 
-                  {/* Expanded voucher detail - full width, no grid */}
+                  {/* Expanded voucher detail */}
                   {isExpanded && voucher && (
                     <div className="bg-bg border-b border-bg-border px-6 py-4">
-                      <div className="text-xs space-y-2">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-muted font-medium">Voucher Lines</span>
-                          {/* PDF export disabled - purchasePDFExporter not available */}
-                        </div>
-                        {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => {
-                          const ledgerName = line.type === "ledger" && line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
-                          const itemName = line.type === "inventory" && line.itemId ? (data.items.get(line.itemId)?.name ?? line.itemId) : "";
-                          return (
-                          <div key={i} className="flex gap-4 tabular-nums text-primary">
-                            {line.type === "ledger" ? (
-                              <>
-                                <span className="text-muted w-16">{line.isDebit ? "Dr" : "Cr"}</span>
-                                <span className="truncate flex-1" title={ledgerName}>{ledgerName}</span>
-                                <span className="ml-auto">{fmtINR(line.amount ?? 0)}</span>
-                              </>
-                            ) : (
-                              <>
-                                <span className="text-muted w-16">Inv</span>
-                                <span className="truncate" title={itemName}>{itemName}</span>
-                                <span className="text-muted">{line.qtyBase} {" × "} {fmtINR(line.ratePerBase ?? 0)}</span>
-                                <span className="ml-auto">{fmtINR(line.lineAmount ?? 0)}</span>
-                              </>
-                            )}
-                          </div>
-                          );
-                        })}
-                      </div>
+                      <p className="text-xs font-medium text-muted mb-2">Voucher Lines</p>
+                      <VoucherDetail voucher={voucher} data={data} />
                     </div>
                   )}
                 </div>
@@ -345,32 +389,9 @@ function MobileInvoiceCards({ filtered, expandedId, setExpandedId, agingColor, d
             </div>
 
             {isExpanded && voucher && (
-              <div className="border-t border-bg-border bg-bg px-3 py-2 space-y-1">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-muted font-medium">Voucher Lines</span>
-                  {/* PDF export disabled - purchasePDFExporter not available
-                  {voucher.voucherType === "Purchase" && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); downloadPurchaseVoucherPDF(voucher, data); }}
-                      className="btn-secondary btn-sm text-[10px] flex items-center gap-1"
-                    >
-                      <FileDown size={11} />PDF
-                    </button>
-                  )}
-                  */}
-                </div>
-                {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => {
-                  const ledgerName = line.type === "ledger" && line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
-                  const itemName = line.type === "inventory" && line.itemId ? (data.items.get(line.itemId)?.name ?? line.itemId) : "";
-                  return (
-                    <div key={i} className="flex justify-between text-xs tabular-nums gap-2">
-                      <span className="truncate text-primary">
-                        {line.type === "ledger" ? `${line.isDebit ? "Dr" : "Cr"} ${ledgerName}` : `${itemName}`}
-                      </span>
-                      <span className="flex-shrink-0">{fmtINR(line.amount ?? line.lineAmount ?? 0)}</span>
-                    </div>
-                  );
-                })}
+              <div className="border-t border-bg-border bg-bg px-3 py-2">
+                <p className="text-[10px] text-muted font-medium mb-1.5">Voucher Lines</p>
+                <VoucherDetail voucher={voucher} data={data} />
               </div>
             )}
           </div>
