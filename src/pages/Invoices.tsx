@@ -256,16 +256,7 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                       <div className="text-xs space-y-2">
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-muted font-medium">Voucher Lines</span>
-                          {voucher.voucherType === "Purchase" && (
-                            {/* PDF export disabled - purchasePDFExporter not available
-                            <button
-                              onClick={(e) => { e.stopPropagation(); downloadPurchaseVoucherPDF(voucher, data); }}
-                              className="btn-secondary btn-sm text-xs flex items-center gap-1"
-                            >
-                              <FileDown size={12} />Download PDF
-                            </button>
-                            */}
-                          )}
+                          {/* PDF export disabled - purchasePDFExporter not available */}
                         </div>
                         {voucher.lines.map((line: import("../types/canonical").CanonicalVoucherLine, i: number) => {
                           const ledgerName = line.type === "ledger" && line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
