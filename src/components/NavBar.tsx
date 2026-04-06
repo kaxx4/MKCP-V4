@@ -18,6 +18,7 @@ import {
   X,
   IndianRupee,
   RefreshCw,
+  Tag,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
@@ -47,6 +48,7 @@ const NAV_ITEMS = [
   { path: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { path: "/orders", icon: ShoppingCart, label: "Orders" },
   { path: "/sales", icon: IndianRupee, label: "Sales" },
+  { path: "/discounts", icon: Tag, label: "Discounts" },
   { path: "/alerts", icon: AlertTriangle, label: "Alerts" },
   { path: "/invoices", icon: FileText, label: "Invoices" },
   { path: "/reports", icon: BarChart2, label: "Reports" },
@@ -74,7 +76,7 @@ export function NavBar() {
     setSyncing(true);
     try {
       const result = await syncDayBook(companyName, todayStr, todayStr, "daily");
-      if (!result.data || result.data.length === 0) {
+      if (!result.data || !result.data.tallymessage || result.data.tallymessage.length === 0) {
         toast("No vouchers found for today.", "info");
         return;
       }
@@ -82,7 +84,16 @@ export function NavBar() {
       const existingRaw = await loadData<unknown>("parsedData");
       const existing = existingRaw ? deserializeParsedData(existingRaw) : null;
       if (existing) await createBackup(existingRaw, "pre-today-sync");
-      mergeData(parsed);
+      const dataToMerge = {
+        company: existing?.company ?? { name: companyName, fyStartMonth: 4 },
+        items: existing?.items ?? new Map(),
+        ledgers: existing?.ledgers ?? new Map(),
+        vouchers: parsed.vouchers,
+        importedAt: new Date().toISOString(),
+        sourceFiles: ["tally-today-sync"],
+        warnings: parsed.warnings,
+      };
+      mergeData(dataToMerge);
       const merged = useDataStore.getState().data!;
       await saveData("parsedData", serializeParsedData(merged));
       const now = new Date().toISOString();
