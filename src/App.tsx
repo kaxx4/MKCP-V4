@@ -23,6 +23,7 @@ const Settings = lazy(() => import("./pages/Settings"));
 const Edit = lazy(() => import("./pages/Edit"));
 const Alerts = lazy(() => import("./pages/Alerts"));
 const Sales = lazy(() => import("./pages/Sales"));
+const Discounts = lazy(() => import("./pages/Discounts"));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -92,6 +93,7 @@ function AppRoutes() {
           <Route path="/orders" element={<Orders />} />
           <Route path="/invoices" element={<Invoices />} />
           <Route path="/sales" element={<Sales />} />
+          <Route path="/discounts" element={<Discounts />} />
           <Route path="/ledgers" element={<Ledgers />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/edit" element={<Edit />} />
