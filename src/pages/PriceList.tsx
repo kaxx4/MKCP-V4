@@ -14,7 +14,7 @@ interface PriceRow {
   name: string;
   group: string;
   displayRate: number;
-  source: "sales" | "closing" | "opening" | "none";
+  source: "sales" | "closing" | "opening" | "tally-pricelist" | "none";
   dealerPrices?: Array<{ priceListName: string; dealerRate: number; dealerDiscount?: number }>;
 }
 
@@ -35,9 +35,9 @@ export default function PriceList() {
     return Array.from(data.items.values()).map((item) => {
       const m = marginMap.get(item.itemId);
 
-      // Priority: sales rate (from actual transactions) > closing rate > opening rate > none
+      // Priority: sales rate > closing rate > opening rate > first Tally price list > none
       let displayRate = 0;
-      let source: "sales" | "closing" | "opening" | "none" = "none";
+      let source: "sales" | "closing" | "opening" | "tally-pricelist" | "none" = "none";
 
       if (m && m.avgSalesRate > 0) {
         displayRate = m.avgSalesRate;
@@ -48,6 +48,10 @@ export default function PriceList() {
       } else if (item.openingRate && item.openingRate > 0) {
         displayRate = item.openingRate;
         source = "opening";
+      } else if (item.dealerPrices && item.dealerPrices.length > 0) {
+        // Use first Tally price list rate as fallback
+        displayRate = item.dealerPrices[0].dealerRate;
+        source = "tally-pricelist";
       }
 
       return {
@@ -89,6 +93,19 @@ export default function PriceList() {
     });
   }, [filtered, sortKey, sortDir]);
 
+  // Calculate price source stats
+  const stats = useMemo(() => {
+    const counts = {
+      total: rows.length,
+      fromSales: rows.filter(r => r.source === "sales").length,
+      fromClosing: rows.filter(r => r.source === "closing").length,
+      fromOpening: rows.filter(r => r.source === "opening").length,
+      fromTallyPriceLists: rows.filter(r => r.source === "tally-pricelist").length,
+      withDealerPrices: rows.filter(r => (r.dealerPrices?.length ?? 0) > 0).length,
+    };
+    return counts;
+  }, [rows]);
+
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(key); setSortDir("asc"); }
@@ -129,6 +146,36 @@ export default function PriceList() {
         <h1 className="text-4xl font-bold text-slate-900 mb-1">Dealer Price List</h1>
         <p className="text-slate-600">Manage and view all item pricing across dealer price lists</p>
       </div>
+
+      {/* Stats Section */}
+      {stats.total > 0 && (
+        <div className="mb-8 grid grid-cols-2 md:grid-cols-6 gap-3">
+          <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
+            <div className="text-2xs font-bold text-slate-600 uppercase mb-1">Total</div>
+            <div className="text-2xl font-bold text-slate-900">{stats.total}</div>
+          </div>
+          <div className="bg-green-50 rounded-lg p-4 border border-green-200 shadow-sm">
+            <div className="text-2xs font-bold text-green-600 uppercase mb-1">Sales</div>
+            <div className="text-2xl font-bold text-green-700">{stats.fromSales}</div>
+          </div>
+          <div className="bg-amber-50 rounded-lg p-4 border border-amber-200 shadow-sm">
+            <div className="text-2xs font-bold text-amber-600 uppercase mb-1">Closing</div>
+            <div className="text-2xl font-bold text-amber-700">{stats.fromClosing}</div>
+          </div>
+          <div className="bg-red-50 rounded-lg p-4 border border-red-200 shadow-sm">
+            <div className="text-2xs font-bold text-red-600 uppercase mb-1">Opening</div>
+            <div className="text-2xl font-bold text-red-700">{stats.fromOpening}</div>
+          </div>
+          <div className="bg-purple-50 rounded-lg p-4 border border-purple-200 shadow-sm">
+            <div className="text-2xs font-bold text-purple-600 uppercase mb-1">Tally Price</div>
+            <div className="text-2xl font-bold text-purple-700">{stats.fromTallyPriceLists}</div>
+          </div>
+          <div className="bg-blue-50 rounded-lg p-4 border border-blue-200 shadow-sm">
+            <div className="text-2xs font-bold text-blue-600 uppercase mb-1">w/ Dealer</div>
+            <div className="text-2xl font-bold text-blue-700">{stats.withDealerPrices}</div>
+          </div>
+        </div>
+      )}
 
       {/* Filters Section */}
       <div className="mb-8 p-6 bg-white rounded-xl border border-slate-200 shadow-sm">
@@ -296,11 +343,13 @@ export default function PriceList() {
                           "text-xs font-semibold mt-1.5",
                           row.source === "sales" && "text-green-600 bg-green-50 px-2 py-1 rounded inline-block",
                           row.source === "closing" && "text-amber-600 bg-amber-50 px-2 py-1 rounded inline-block",
-                          row.source === "opening" && "text-red-600 bg-red-50 px-2 py-1 rounded inline-block"
+                          row.source === "opening" && "text-red-600 bg-red-50 px-2 py-1 rounded inline-block",
+                          row.source === "tally-pricelist" && "text-purple-600 bg-purple-50 px-2 py-1 rounded inline-block"
                         )}>
                           {row.source === "sales" && "✓ From Sales"}
                           {row.source === "closing" && "• Closing Stock"}
                           {row.source === "opening" && "⚠ Opening Rate"}
+                          {row.source === "tally-pricelist" && "📋 Tally Price List"}
                         </div>
                       )}
                     </div>
