@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TrendingUp, TrendingDown, DollarSign, Package, AlertCircle, ShoppingCart, Upload } from "lucide-react";
+import { TrendingUp, DollarSign, Package, AlertCircle, ShoppingCart, Upload, ArrowRight, Calendar } from "lucide-react";
 import {
   ResponsiveContainer,
   BarChart,
@@ -9,8 +9,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  LineChart,
-  Line,
 } from "recharts";
 import { useDataStore } from "../store/dataStore";
 import { computeOutstandingInvoices, computeBankBalance, monthlyTotals } from "../engine/financial";
@@ -18,13 +16,30 @@ import { getCurrentStockIndexed, avgMonthlyOutwardIndexed, suggestedReorderIndex
 import { KPICard } from "../components/KPICard";
 import { fmtINR, fmtDate } from "../utils/format";
 
+const CHART_COLORS = {
+  grid: "#e5e5ea",
+  tick: "#a1a1a6",
+  blue: "#2563eb",
+  green: "#16a34a",
+  tooltipBg: "#ffffff",
+  tooltipBorder: "#e5e5ea",
+  tooltipLabel: "#1d1d1f",
+};
+
+const CHART_TOOLTIP_STYLE = {
+  contentStyle: { background: CHART_COLORS.tooltipBg, border: `1px solid ${CHART_COLORS.tooltipBorder}`, borderRadius: 12, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13, fontFamily: "Inter, -apple-system, sans-serif" },
+  labelStyle: { color: CHART_COLORS.tooltipLabel, fontWeight: 600, marginBottom: 4 },
+};
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const { data, voucherIndex } = useDataStore();
   const [salesPeriod, setSalesPeriod] = useState(6);
   const [topItemsPeriod, setTopItemsPeriod] = useState<"month" | "quarter" | "year">("month");
+  const [periodFilter, setPeriodFilter] = useState<"all" | "month" | "quarter" | "ytd" | "custom">("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
 
-  // Find the latest date in the data to use instead of "today"
   const latestDate = useMemo(() => {
     if (!data) return new Date().toISOString().slice(0, 10);
     let latest = "";
@@ -36,11 +51,50 @@ export default function Dashboard() {
 
   const latestMonth = latestDate.slice(0, 7);
 
+  const periodRange = useMemo(() => {
+    if (!data || periodFilter === "all") return null;
+    const ld = new Date(latestDate);
+    if (periodFilter === "month") {
+      return { from: latestMonth + "-01", to: latestDate };
+    }
+    if (periodFilter === "quarter") {
+      const qStart = new Date(ld);
+      qStart.setMonth(qStart.getMonth() - 2, 1);
+      return { from: qStart.toISOString().slice(0, 10), to: latestDate };
+    }
+    if (periodFilter === "ytd") {
+      // Financial year: April to March
+      const fyStart = ld.getMonth() >= 3
+        ? `${ld.getFullYear()}-04-01`
+        : `${ld.getFullYear() - 1}-04-01`;
+      return { from: fyStart, to: latestDate };
+    }
+    if (periodFilter === "custom" && customFrom && customTo) {
+      return { from: customFrom, to: customTo };
+    }
+    return null;
+  }, [data, periodFilter, latestDate, latestMonth, customFrom, customTo]);
+
+  const filteredVouchers = useMemo(() => {
+    if (!data) return [];
+    if (!periodRange) return data.vouchers;
+    return data.vouchers.filter((v) => v.date >= periodRange.from && v.date <= periodRange.to);
+  }, [data, periodRange]);
+
+  const periodLabel = useMemo(() => {
+    if (periodFilter === "all") return "All Time";
+    if (periodFilter === "month") return fmtDate(latestMonth + "-01").replace(/\d+,?\s*/, "");
+    if (periodFilter === "quarter") return "Last 3 Months";
+    if (periodFilter === "ytd") return "Financial Year";
+    if (periodFilter === "custom" && periodRange) return `${fmtDate(periodRange.from)} – ${fmtDate(periodRange.to)}`;
+    return "All Time";
+  }, [periodFilter, latestMonth, periodRange]);
+
   const kpis = useMemo(() => {
     if (!data) return null;
-    const { vouchers, ledgers, items } = data;
+    const { ledgers, items } = data;
+    const vouchers = filteredVouchers;
 
-    // Single pass over vouchers to compute latestDaySales and monthSales
     let latestDaySales = 0;
     let monthSales = 0;
     for (const v of vouchers) {
@@ -62,36 +116,33 @@ export default function Dashboard() {
     }
 
     return { latestDaySales, monthSales, ar, ap, bankBalance, stockValue, invoices };
-  }, [data, latestDate, latestMonth, voucherIndex]);
+  }, [data, filteredVouchers, latestDate, latestMonth, voucherIndex]);
 
   const salesTrend = useMemo(() => {
     if (!data) return [];
-    return monthlyTotals(data.vouchers, "Sales", salesPeriod);
-  }, [data, salesPeriod]);
+    return monthlyTotals(filteredVouchers, "Sales", salesPeriod);
+  }, [data, filteredVouchers, salesPeriod]);
 
   const topItems = useMemo(() => {
     if (!data) return [];
 
-    // Calculate period start date based on selection
     const latestDateObj = new Date(latestDate);
     let periodStart = "";
 
     if (topItemsPeriod === "month") {
       periodStart = latestMonth;
     } else if (topItemsPeriod === "quarter") {
-      // Last 3 months
       const threeMonthsAgo = new Date(latestDateObj);
       threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 2);
       periodStart = threeMonthsAgo.toISOString().slice(0, 7);
     } else {
-      // Last 12 months
       const yearAgo = new Date(latestDateObj);
       yearAgo.setMonth(yearAgo.getMonth() - 11);
       periodStart = yearAgo.toISOString().slice(0, 7);
     }
 
     const itemQty: Record<string, { name: string; qty: number }> = {};
-    for (const v of data.vouchers) {
+    for (const v of filteredVouchers) {
       if (v.voucherType !== "Sales" || v.isCancelled || v.date.slice(0, 7) < periodStart) continue;
       for (const line of v.lines) {
         if (line.type !== "inventory" || !line.itemId) continue;
@@ -104,8 +155,8 @@ export default function Dashboard() {
     return Object.entries(itemQty)
       .sort((a, b) => b[1].qty - a[1].qty)
       .slice(0, 5)
-      .map(([, v]) => ({ name: v.name.length > 18 ? v.name.slice(0, 18) + "…" : v.name, qty: v.qty }));
-  }, [data, topItemsPeriod, latestDate, latestMonth]);
+      .map(([, v]) => ({ name: v.name.length > 20 ? v.name.slice(0, 20) + "…" : v.name, qty: v.qty }));
+  }, [data, filteredVouchers, topItemsPeriod, latestDate, latestMonth]);
 
   const lowStockItems = useMemo(() => {
     if (!data) return [];
@@ -129,14 +180,13 @@ export default function Dashboard() {
 
   if (!data) {
     return (
-      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
-        <Package size={64} className="text-muted" />
-        <h2 className="text-xl font-semibold text-primary">No Data Loaded</h2>
-        <p className="text-muted text-sm">Import your Tally JSON files to get started</p>
-        <button
-          onClick={() => navigate("/import")}
-          className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white font-semibold px-5 py-2.5 rounded-lg transition mt-2"
-        >
+      <div className="empty-state h-[60vh]">
+        <div className="w-16 h-16 rounded-2xl bg-muted-100 flex items-center justify-center mb-5">
+          <Package size={32} className="text-muted-400" />
+        </div>
+        <h2 className="empty-state-title">No Data Loaded</h2>
+        <p className="empty-state-description">Import your Tally data to see your dashboard</p>
+        <button onClick={() => navigate("/import")} className="btn-primary gap-2">
           <Upload size={16} />
           Go to Import
         </button>
@@ -145,19 +195,53 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="page-section">
+      {/* Page Header */}
+      <div className="page-header">
         <div>
-          <h1 className="text-2xl font-bold text-primary">{data.company?.name ?? "Dashboard"}</h1>
-          <p className="text-muted text-sm mt-0.5">
-            {data.items.size} items · {data.vouchers.length.toLocaleString("en-IN")} vouchers ·
-            Imported {fmtDate(data.importedAt.slice(0, 10))}
+          <h1 className="page-title">{data.company?.name ?? "Dashboard"}</h1>
+          <p className="page-subtitle">
+            {data.items.size} items · {filteredVouchers.length.toLocaleString("en-IN")} vouchers{periodFilter !== "all" ? ` · ${periodLabel}` : ""} · Imported {fmtDate(data.importedAt.slice(0, 10))}
           </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1 bg-neutral-100 rounded-lg p-0.5">
+            {(["all", "month", "quarter", "ytd", "custom"] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriodFilter(p)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                  periodFilter === p
+                    ? "bg-white text-neutral-950 shadow-sm"
+                    : "text-neutral-500 hover:text-neutral-700"
+                }`}
+              >
+                {p === "all" ? "All" : p === "month" ? "Month" : p === "quarter" ? "Quarter" : p === "ytd" ? "FY" : "Custom"}
+              </button>
+            ))}
+          </div>
+          {periodFilter === "custom" && (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="date"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="form-input text-xs py-1 px-2"
+              />
+              <span className="text-neutral-400 text-xs">to</span>
+              <input
+                type="date"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="form-input text-xs py-1 px-2"
+              />
+            </div>
+          )}
         </div>
       </div>
 
-      {/* KPI Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* KPI Grid - Apple HIG: Spacious, clear hierarchy */}
+      <div className="bento-grid">
         <KPICard
           title={`Sales (${fmtDate(latestDate)})`}
           value={fmtINR(kpis?.latestDaySales ?? 0)}
@@ -181,16 +265,44 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* Charts row */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {/* Sales Trend */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-primary">Sales Trend</h3>
+      {/* AR / AP Summary - Apple HIG: Refined cards with subtle hover */}
+      <div className="grid grid-cols-2 gap-4 md:gap-5">
+        <div
+          className="card-interactive flex items-center gap-4 cursor-pointer"
+          onClick={() => navigate("/invoices")}
+        >
+          <div className="w-12 h-12 rounded-lg bg-success/10 flex items-center justify-center flex-shrink-0">
+            <TrendingUp size={20} className="text-success-600" />
+          </div>
+          <div className="min-w-0">
+            <p className="metric-label">Receivable</p>
+            <p className="text-lg font-bold text-success-600 tabular-nums">{fmtINR(kpis?.ar ?? 0)}</p>
+          </div>
+        </div>
+        <div
+          className="card-interactive flex items-center gap-4 cursor-pointer"
+          onClick={() => navigate("/invoices")}
+        >
+          <div className="w-12 h-12 rounded-lg bg-danger/10 flex items-center justify-center flex-shrink-0">
+            <DollarSign size={20} className="text-danger-600" />
+          </div>
+          <div className="min-w-0">
+            <p className="metric-label">Payable</p>
+            <p className="text-lg font-bold text-danger-600 tabular-nums">{fmtINR(kpis?.ap ?? 0)}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Charts Row — Apple HIG: Clean, spacious layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Sales Trend Chart */}
+        <div className="section-card">
+          <div className="section-card-header">
+            <h3 className="card-title">Sales Trend</h3>
             <select
               value={salesPeriod}
               onChange={(e) => setSalesPeriod(Number(e.target.value))}
-              className="text-xs border border-bg-border rounded px-2 py-1 bg-bg text-primary font-medium"
+              className="form-select text-xs py-1 pl-2 min-h-0"
             >
               <option value={3}>3 months</option>
               <option value={6}>6 months</option>
@@ -198,73 +310,90 @@ export default function Dashboard() {
               <option value={24}>24 months</option>
             </select>
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={salesTrend} barSize={32}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#64748b" }} />
-              <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
-              <Tooltip
-                contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
-                labelStyle={{ color: "#0f172a" }}
-                formatter={(v: number) => [fmtINR(v), "Sales"]}
-              />
-              <Bar dataKey="amount" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <div className="p-6">
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={salesTrend} barSize={28}>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 11, fill: CHART_COLORS.tick }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: CHART_COLORS.tick }} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} axisLine={false} tickLine={false} />
+                <Tooltip {...CHART_TOOLTIP_STYLE} formatter={(v: number) => [fmtINR(v), "Sales"]} />
+                <Bar dataKey="amount" fill={CHART_COLORS.blue} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
 
-        {/* Top Items */}
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-primary">Top Items (by Qty)</h3>
+        {/* Top Items Chart */}
+        <div className="section-card">
+          <div className="section-card-header">
+            <h3 className="card-title">Top Items (by Qty)</h3>
             <select
               value={topItemsPeriod}
               onChange={(e) => setTopItemsPeriod(e.target.value as "month" | "quarter" | "year")}
-              className="text-xs border border-bg-border rounded px-2 py-1 bg-bg text-primary font-medium"
+              className="form-select text-xs py-1 pl-2 min-h-0"
             >
               <option value="month">This month</option>
               <option value="quarter">Last 3 months</option>
               <option value="year">Last 12 months</option>
             </select>
           </div>
-          {topItems.length > 0 ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={topItems} layout="vertical" barSize={18}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 11, fill: "#64748b" }} />
-                <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fill: "#64748b" }} />
-                <Tooltip
-                  contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
-                  labelStyle={{ color: "#0f172a" }}
-                />
-                <Bar dataKey="qty" fill="#10b981" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex items-center justify-center h-[220px] text-muted text-sm">
-              No sales this month
-            </div>
-          )}
+          <div className="p-6">
+            {topItems.length > 0 ? (
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={topItems} layout="vertical" barSize={16}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 11, fill: CHART_COLORS.tick }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 10, fill: CHART_COLORS.tick }} axisLine={false} tickLine={false} />
+                  <Tooltip {...CHART_TOOLTIP_STYLE} />
+                  <Bar dataKey="qty" fill={CHART_COLORS.green} radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-[200px] text-neutral-600 text-sm">
+                No sales this period
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Low Stock Alerts */}
+      {/* Low Stock Alert Card - Apple HIG: Clean warning, clear hierarchy */}
       {lowStockItems.length > 0 && (
-        <div className="bg-bg-card border border-warn/30 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <AlertCircle size={16} className="text-warn" />
-            <h3 className="text-sm font-semibold text-warn">Low Stock Items</h3>
+        <div className="section-card border-l-4 border-l-warn">
+          <div className="section-card-header bg-warn/[0.04]">
+            <div className="flex items-center gap-3">
+              <AlertCircle size={18} className="text-warn-600 flex-shrink-0" />
+              <h3 className="card-title text-warn-700">Low Stock Items</h3>
+            </div>
+            <button
+              onClick={() => navigate("/alerts")}
+              className="btn-accent-ghost btn-sm gap-1 text-accent hover:text-accent-700"
+            >
+              View All <ArrowRight size={14} />
+            </button>
           </div>
-          <div className="space-y-2">
+          <div className="divide-y divide-neutral-200">
             {lowStockItems.map((item) => (
-              <div key={item.name} className="flex items-center justify-between text-sm">
-                <div>
-                  <span className="text-primary font-medium">{item.name.length > 40 ? item.name.slice(0, 40) + "…" : item.name}</span>
-                  <span className="text-muted ml-2 text-xs">Stock: {item.stock.toFixed(0)}</span>
+              <div
+                key={item.name}
+                onClick={() => navigate("/alerts")}
+                className="flex items-center justify-between px-6 py-3 hover:bg-warn/[0.02] cursor-pointer transition-colors"
+              >
+                <div className="min-w-0 flex items-center gap-4">
+                  <span className="text-sm font-medium text-neutral-950 truncate">
+                    {item.name.length > 32 ? item.name.slice(0, 32) + "…" : item.name}
+                  </span>
+                  <span className="badge badge-muted hidden sm:inline-flex text-xs">
+                    Stock: {item.stock.toFixed(0)}
+                  </span>
                 </div>
-                <div className="flex items-center gap-4">
-                  <span className="text-muted text-xs">Avg/mo: {item.avgOut.toFixed(0)}</span>
-                  <span className="text-warn text-xs font-mono font-semibold">Reorder: {item.reorder.toFixed(0)}</span>
+                <div className="flex items-center gap-4 flex-shrink-0">
+                  <span className="text-xs text-neutral-600 hidden md:inline tabular-nums">
+                    Avg/mo: {item.avgOut.toFixed(0)}
+                  </span>
+                  <span className="badge badge-warn text-xs tabular-nums">
+                    Reorder: {item.reorder.toFixed(0)}
+                  </span>
                 </div>
               </div>
             ))}

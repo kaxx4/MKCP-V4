@@ -5,7 +5,7 @@ export type UnitMode = "BASE" | "PKG";
 export type VoucherType =
   | "Sales" | "Purchase" | "Receipt" | "Payment"
   | "Journal" | "Contra" | "Debit Note" | "Credit Note"
-  | "Stock Journal" | "Other";
+  | "Stock Journal" | "Delivery Note" | "Other";
 
 export interface CompanyInfo {
   name: string;
@@ -16,13 +16,17 @@ export interface CompanyInfo {
 export interface CanonicalItem {
   itemId: string;          // normalized uppercase name used as key
   name: string;            // display name (original case from JSON)
-  group: string;           // stock group
+  group: string;           // stock group (immediate parent)
+  category?: string;       // stock category
   baseUnit: string;        // e.g. "PCS", "KG"
   pkgUnit: string | null;  // e.g. "BOX", null if not configured
   unitsPerPkg: number;     // 1 if no package unit
   openingQtyBase: number;  // opening stock in base units for active FY
   openingRate: number;     // rate per base unit at opening
   openingValue: number;    // total opening value
+  closingQtyBase?: number; // closing stock in base units for active FY
+  closingRate?: number;    // rate per base unit at closing
+  closingValue?: number;   // total closing value
   hsn?: string;
   gstRate?: number;
 }
@@ -72,6 +76,19 @@ export interface CanonicalVoucher {
   lines: CanonicalVoucherLine[];
 }
 
+/** Tally's authoritative P&L report — fetched directly from Tally during sync */
+export interface TallyPLSnapshot {
+  sales: number; costOfSales: number; openingStock: number; purchases: number;
+  closingStock: number; directExpenses: number; indirectIncome: number;
+  indirectExpenses: number; netProfit: number;
+}
+
+/** Tally's authoritative Balance Sheet — fetched directly from Tally during sync */
+export interface TallyBSSnapshot {
+  capitalAccount: number; loans: number; currentLiabilities: number;
+  profitAndLoss: number; fixedAssets: number; investments: number; currentAssets: number;
+}
+
 export interface ParsedData {
   company: CompanyInfo | null;
   items: Map<string, CanonicalItem>;      // key = itemId
@@ -80,6 +97,8 @@ export interface ParsedData {
   importedAt: string;
   sourceFiles: string[];
   warnings: ImportWarning[];
+  tallyPL?: TallyPLSnapshot;   // authoritative P&L from Tally (if fetched)
+  tallyBS?: TallyBSSnapshot;   // authoritative BS from Tally (if fetched)
 }
 
 export interface ImportWarning {

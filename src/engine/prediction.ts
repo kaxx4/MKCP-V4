@@ -1,41 +1,96 @@
 import type { CanonicalVoucher, CanonicalItem } from "../types/canonical";
 
+// ─────────────────────────────────────────────────────────────────────
+// Types — Party-level predictions
+// ─────────────────────────────────────────────────────────────────────
+
 export interface PartyOrderPattern {
   partyLedgerId: string;
   partyName: string;
-  orderDates: string[];              // ISO dates of past orders
-  avgIntervalDays: number;           // average days between orders
-  stdDevDays: number;                // standard deviation
-  lastOrderDate: string;             // most recent order
-  predictedNextDate: string;         // predicted next order date
-  confidence: number;                // 0-1 confidence score
-  daysUntilPredicted: number;        // days from today to predicted
-  isOverdue: boolean;                // past predicted date?
-  topItems: PartyItemPrediction[];   // predicted items
-  upsellItems: UpsellSuggestion[];   // cross-sell / upsell suggestions
+  orderDates: string[];
+  avgIntervalDays: number;
+  stdDevDays: number;
+  lastOrderDate: string;
+  predictedNextDate: string;
+  confidence: number;
+  daysUntilPredicted: number;
+  isOverdue: boolean;
+  topItems: PartyItemPrediction[];
+  upsellItems: UpsellSuggestion[];
+  partyRevenue: number;
+  partyTier: "platinum" | "gold" | "silver" | "bronze";
+  seasonalityScore: number;
+  orderConsistency: number;
 }
 
 export interface PartyItemPrediction {
   itemId: string;
   itemName: string;
-  frequency: number;       // how many times ordered by this party
-  avgQtyBase: number;      // average quantity per order
-  lastQtyBase: number;     // quantity in last order
-  predictedQtyBase: number;// predicted quantity (rounded to package)
-  trend: "up" | "down" | "stable"; // qty trend
+  frequency: number;
+  avgQtyBase: number;
+  lastQtyBase: number;
+  predictedQtyBase: number;
+  trend: "up" | "down" | "stable";
+  currentStock: number;
+  daysOfStock: number;
+  needsRestock: boolean;
+  seasonalMultiplier: number;
+  velocityClass: "fast" | "medium" | "slow" | "dead";
 }
 
 export interface UpsellSuggestion {
   itemId: string;
   itemName: string;
-  reason: string;           // "Frequently bought by similar parties" | "Trending item in category" | "Seasonal peak"
-  suggestedQtyBase: number; // rounded to nearest unitsPerPkg
-  confidence: number;       // 0-1
+  reason: string;
+  suggestedQtyBase: number;
+  confidence: number;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Types — Item-level forecasts & inventory alerts
+// ─────────────────────────────────────────────────────────────────────
+
+export interface ItemForecast {
+  itemId: string;
+  itemName: string;
+  group: string;
+  currentStock: number;
+  avgMonthlyDemand: number;
+  avgMonthlySupply: number;
+  demandTrend: "rising" | "falling" | "stable";
+  seasonalFactors: number[];
+  nextMonthForecast: number;
+  next3MonthForecast: number;
+  daysOfStockRemaining: number;
+  reorderPoint: number;
+  safetyStock: number;
+  suggestedPurchaseQty: number;
+  velocityClass: "fast" | "medium" | "slow" | "dead";
+  abcClass: "A" | "B" | "C";
+  stockHealthStatus: "critical" | "low" | "adequate" | "excess" | "dead";
+  leadTimeDays: number;
+}
+
+export interface InventoryAlert {
+  itemId: string;
+  itemName: string;
+  alertType: "stockout_imminent" | "reorder_now" | "excess_stock" | "dead_stock" | "demand_spike" | "demand_drop";
+  severity: "critical" | "warning" | "info";
+  message: string;
+  currentStock: number;
+  suggestedAction: string;
+  metric: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Types — Snapshots & Accuracy
+// ─────────────────────────────────────────────────────────────────────
 
 export interface PredictionSnapshot {
   generatedAt: string;
   predictions: PartyOrderPattern[];
+  itemForecasts?: ItemForecast[];
+  inventoryAlerts?: InventoryAlert[];
 }
 
 export interface PredictionAccuracy {
@@ -45,20 +100,38 @@ export interface PredictionAccuracy {
   actualDate: string | null;
   dateDiffDays: number | null;
   predictedItems: { itemId: string; predictedQty: number; actualQty: number }[];
-  dateAccuracyScore: number;   // 0-1
-  itemAccuracyScore: number;   // 0-1
+  dateAccuracyScore: number;
+  itemAccuracyScore: number;
 }
 
-/** Round qty UP to nearest whole package */
+// ─────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────
+
 function roundToPackage(qty: number, unitsPerPkg: number): number {
   if (unitsPerPkg <= 1) return Math.ceil(qty);
   return Math.ceil(qty / unitsPerPkg) * unitsPerPkg;
 }
 
-/**
- * Build order predictions for all parties based on historical purchase/sales patterns.
- * Enhanced with EWMA intervals, aggressive multipliers, upsell generation, and package rounding.
- */
+function daysBetween(a: string, b: string): number {
+  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86400000);
+}
+
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function getMonthIndex(dateStr: string): number {
+  const d = new Date(dateStr);
+  return d.getMonth();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// FEATURE 2A: Enhanced Party Predictions (generatePredictions)
+// ─────────────────────────────────────────────────────────────────────
+
 export function generatePredictions(
   vouchers: CanonicalVoucher[],
   items: Map<string, CanonicalItem>,
@@ -66,6 +139,7 @@ export function generatePredictions(
 ): PartyOrderPattern[] {
   // Group vouchers by party
   const partyOrders = new Map<string, CanonicalVoucher[]>();
+  const partyRevenues = new Map<string, number>();
 
   for (const v of vouchers) {
     if (v.voucherType !== voucherType || v.isCancelled || v.isOptional) continue;
@@ -74,19 +148,33 @@ export function generatePredictions(
     let arr = partyOrders.get(v.partyLedgerId);
     if (!arr) { arr = []; partyOrders.set(v.partyLedgerId, arr); }
     arr.push(v);
+
+    // Accumulate revenue for tier calculation
+    const voucherTotal = v.lines
+      .filter(l => l.type === "ledger" && l.isDebit)
+      .reduce((s, l) => s + (l.amount ?? 0), 0);
+    partyRevenues.set(v.partyLedgerId, (partyRevenues.get(v.partyLedgerId) ?? 0) + voucherTotal);
+  }
+
+  // Compute revenue percentiles for tier assignment
+  const allRevenues = Array.from(partyRevenues.values()).sort((a, b) => b - a);
+  const p90 = allRevenues[Math.floor(allRevenues.length * 0.1)] ?? 0;
+  const p75 = allRevenues[Math.floor(allRevenues.length * 0.25)] ?? 0;
+  const p50 = allRevenues[Math.floor(allRevenues.length * 0.5)] ?? 0;
+
+  function getPartyTier(revenue: number): "platinum" | "gold" | "silver" | "bronze" {
+    if (revenue >= p90) return "platinum";
+    if (revenue >= p75) return "gold";
+    if (revenue >= p50) return "silver";
+    return "bronze";
   }
 
   // Pre-compute data needed for upsell analysis
-  // partyItemSets: partyId -> Set<itemId>
   const partyItemSets = new Map<string, Set<string>>();
-  // itemTotalQty: itemId -> total qty sold across ALL parties (for trending)
   const itemTotalQty = new Map<string, number>();
-  // itemGroupQty: group -> Map<itemId, totalQty> (for category fill)
   const itemGroupQty = new Map<string, Map<string, number>>();
-  // itemPartyAvgQty: itemId -> average qty per party order (for upsell suggested qty)
   const itemPartyQtys = new Map<string, number[]>();
 
-  // Compute monthly totals for trending analysis
   const now = new Date();
   const threeMonthsAgo = new Date(now);
   threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
@@ -94,34 +182,53 @@ export function generatePredictions(
   twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
   const threeMonthsAgoStr = threeMonthsAgo.toISOString().slice(0, 10);
   const twelveMonthsAgoStr = twelveMonthsAgo.toISOString().slice(0, 10);
-  const nineMonthsAgo = new Date(now);
-  nineMonthsAgo.setMonth(nineMonthsAgo.getMonth() - 12); // start of "prior 9 months" is 12 months ago
 
-  // itemRecent3moQty and itemPrior9moQty for trending
   const itemRecent3moQty = new Map<string, number>();
   const itemPrior9moQty = new Map<string, number>();
 
-  for (const v of vouchers) {
-    if (v.voucherType !== voucherType || v.isCancelled || v.isOptional) continue;
-    if (!v.partyLedgerId) continue;
+  // Monthly demand per item for seasonal decomposition
+  const itemMonthlyDemand = new Map<string, number[]>(); // itemId -> [12 months]
 
-    let partyItems = partyItemSets.get(v.partyLedgerId);
-    if (!partyItems) { partyItems = new Set(); partyItemSets.set(v.partyLedgerId, partyItems); }
+  // Item stock calculation (opening + purchases - sales)
+  const itemStockMap = new Map<string, number>();
+
+  for (const v of vouchers) {
+    if (v.isCancelled || v.isOptional) continue;
 
     for (const line of v.lines) {
       if (line.type !== "inventory" || !line.itemId) continue;
-      partyItems.add(line.itemId);
       const qty = line.qtyBase ?? 0;
 
-      // Total qty for all time
+      // Stock tracking (all voucher types that affect inventory)
+      if (v.voucherType === "Purchase") {
+        itemStockMap.set(line.itemId, (itemStockMap.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Sales") {
+        itemStockMap.set(line.itemId, (itemStockMap.get(line.itemId) ?? 0) - qty);
+      } else if (v.voucherType === "Credit Note") {
+        // Sales return → goods come back in
+        itemStockMap.set(line.itemId, (itemStockMap.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Debit Note") {
+        // Purchase return → goods go back out
+        itemStockMap.set(line.itemId, (itemStockMap.get(line.itemId) ?? 0) - qty);
+      } else if (v.voucherType === "Stock Journal") {
+        // Stock Journal qty can be +ve (in) or -ve (out)
+        itemStockMap.set(line.itemId, (itemStockMap.get(line.itemId) ?? 0) + qty);
+      }
+
+      // Only process target voucher type for predictions
+      if (v.voucherType !== voucherType) continue;
+      if (!v.partyLedgerId) continue;
+
+      let partyItems = partyItemSets.get(v.partyLedgerId);
+      if (!partyItems) { partyItems = new Set(); partyItemSets.set(v.partyLedgerId, partyItems); }
+      partyItems.add(line.itemId);
+
       itemTotalQty.set(line.itemId, (itemTotalQty.get(line.itemId) ?? 0) + qty);
 
-      // Party qty tracking for avg
       let pqArr = itemPartyQtys.get(line.itemId);
       if (!pqArr) { pqArr = []; itemPartyQtys.set(line.itemId, pqArr); }
       pqArr.push(qty);
 
-      // Group-level tracking
       const item = items.get(line.itemId);
       if (item) {
         let gm = itemGroupQty.get(item.group);
@@ -129,16 +236,54 @@ export function generatePredictions(
         gm.set(line.itemId, (gm.get(line.itemId) ?? 0) + qty);
       }
 
-      // Trending: recent 3 months vs prior 9 months
       if (v.date >= threeMonthsAgoStr) {
         itemRecent3moQty.set(line.itemId, (itemRecent3moQty.get(line.itemId) ?? 0) + qty);
       } else if (v.date >= twelveMonthsAgoStr && v.date < threeMonthsAgoStr) {
         itemPrior9moQty.set(line.itemId, (itemPrior9moQty.get(line.itemId) ?? 0) + qty);
       }
+
+      // Monthly demand accumulation
+      const monthIdx = getMonthIndex(v.date);
+      let monthly = itemMonthlyDemand.get(line.itemId);
+      if (!monthly) { monthly = new Array(12).fill(0); itemMonthlyDemand.set(line.itemId, monthly); }
+      monthly[monthIdx] += qty;
     }
   }
 
-  // Identify trending items: last 3 months qty > 1.5x avg monthly of prior 9 months
+  // Add opening balances to stock
+  for (const [, item] of items) {
+    const opening = item.openingQtyBase ?? 0;
+    if (opening > 0) {
+      itemStockMap.set(item.itemId, (itemStockMap.get(item.itemId) ?? 0) + opening);
+    }
+  }
+
+  // Compute seasonal multipliers per item (next month's factor)
+  const nextMonth = (now.getMonth() + 1) % 12;
+  function getSeasonalMultiplier(itemId: string): number {
+    const monthly = itemMonthlyDemand.get(itemId);
+    if (!monthly) return 1;
+    const total = monthly.reduce((s, v) => s + v, 0);
+    if (total === 0) return 1;
+    const avg = total / 12;
+    const nextMonthDemand = monthly[nextMonth];
+    return avg > 0 ? nextMonthDemand / avg : 1;
+  }
+
+  // Velocity classification
+  function getVelocityClass(itemId: string): "fast" | "medium" | "slow" | "dead" {
+    const recent = itemRecent3moQty.get(itemId) ?? 0;
+    const prior = itemPrior9moQty.get(itemId) ?? 0;
+    const recentMonthly = recent / 3;
+    const priorMonthly = prior / 9;
+    if (recent === 0 && prior === 0) return "dead";
+    if (recent === 0) return "slow";
+    if (priorMonthly > 0 && recentMonthly > 1.5 * priorMonthly) return "fast";
+    if (priorMonthly > 0 && recentMonthly < 0.5 * priorMonthly) return "slow";
+    return "medium";
+  }
+
+  // Identify trending items
   const trendingItems = new Set<string>();
   for (const [itemId, recent3] of itemRecent3moQty) {
     const prior9 = itemPrior9moQty.get(itemId) ?? 0;
@@ -149,17 +294,26 @@ export function generatePredictions(
     }
   }
 
+  // Build monthly order counts per party for seasonality scoring
+  const partyMonthlyOrders = new Map<string, number[]>(); // partyId -> [12 months]
+
+  for (const [partyId, orders] of partyOrders) {
+    const monthlyCounts = new Array(12).fill(0);
+    for (const v of orders) {
+      monthlyCounts[getMonthIndex(v.date)]++;
+    }
+    partyMonthlyOrders.set(partyId, monthlyCounts);
+  }
+
   const predictions: PartyOrderPattern[] = [];
   const today = new Date();
 
   for (const [partyId, orders] of partyOrders) {
-    if (orders.length < 2) continue; // need at least 2 orders to predict
+    if (orders.length < 2) continue;
 
-    // Sort by date
     const sorted = [...orders].sort((a, b) => a.date.localeCompare(b.date));
     const dates = sorted.map(v => v.date);
 
-    // Calculate intervals
     const intervals: number[] = [];
     for (let i = 1; i < dates.length; i++) {
       const diff = daysBetween(dates[i - 1], dates[i]);
@@ -168,31 +322,58 @@ export function generatePredictions(
 
     if (intervals.length === 0) continue;
 
-    // EWMA interval calculation (Task 3A)
-    const alpha = 0.3;
+    // EWMA interval calculation — adaptive alpha based on data volume
+    // More data → higher alpha (more responsive to recent changes)
+    const alpha = Math.min(0.5, 0.2 + intervals.length * 0.02);
     let ewma = intervals[0];
     for (let i = 1; i < intervals.length; i++) {
       ewma = alpha * intervals[i] + (1 - alpha) * ewma;
     }
-    // Apply aggression factor: reduce by 15% to encourage faster reorders
-    const aggressiveInterval = Math.max(1, Math.round(ewma * 0.85));
 
     const simpleAvg = intervals.reduce((s, d) => s + d, 0) / intervals.length;
     const stdDev = Math.sqrt(
       intervals.reduce((s, d) => s + (d - simpleAvg) ** 2, 0) / intervals.length
     );
 
+    // Order consistency (inverse CV)
+    const cv = simpleAvg > 0 ? stdDev / simpleAvg : 1;
+    const orderConsistency = Math.max(0, Math.min(1, 1 - cv));
+
+    // Seasonal interval adjustment
+    const seasonalMultiplierForParty = getPartySeasonalFactor(partyId, partyMonthlyOrders, nextMonth);
+    const seasonAdjustedInterval = seasonalMultiplierForParty > 0
+      ? ewma / seasonalMultiplierForParty
+      : ewma;
+
+    // Apply aggression factor — scale by order consistency
+    // High consistency (regular orders) → tighter window (0.95), low consistency → wider (0.80)
+    const aggressionFactor = 0.80 + orderConsistency * 0.15; // range: 0.80 to 0.95
+    const aggressiveInterval = Math.max(1, Math.round(seasonAdjustedInterval * aggressionFactor));
+
+    // Seasonality score for this party
+    const monthlyCounts = partyMonthlyOrders.get(partyId) ?? new Array(12).fill(0);
+    const monthlyTotal = monthlyCounts.reduce((s: number, v: number) => s + v, 0);
+    const monthlyAvg = monthlyTotal / 12;
+    const monthlyStd = monthlyAvg > 0
+      ? Math.sqrt(monthlyCounts.reduce((s: number, v: number) => s + (v - monthlyAvg) ** 2, 0) / 12)
+      : 0;
+    const seasonalityScore = monthlyAvg > 0 ? Math.min(1, monthlyStd / monthlyAvg) : 0;
+
     const lastDate = dates[dates.length - 1];
     const predictedNext = addDays(lastDate, aggressiveInterval);
     const daysUntil = daysBetween(today.toISOString().slice(0, 10), predictedNext);
 
-    // Enhanced confidence (Task 3F)
-    const dataConfidence = Math.min(orders.length / 8, 1);      // was /10
-    const consistencyConfidence = simpleAvg > 0 ? Math.max(0, 1 - (stdDev / simpleAvg) * 0.7) : 0; // less harsh penalty
-    const recencyBonus = daysUntil <= 7 ? 0.1 : daysUntil <= 30 ? 0.05 : 0;
-    const confidence = Math.min(1, Math.round((dataConfidence * 0.35 + consistencyConfidence * 0.55 + recencyBonus + 0.05) * 100) / 100); // 5% floor boost
+    // Revenue and tier
+    const revenue = partyRevenues.get(partyId) ?? 0;
+    const tier = getPartyTier(revenue);
 
-    // Top items for this party (Task 3B: increase from 10 to 15)
+    // Enhanced confidence
+    const dataConfidence = Math.min(orders.length / 8, 1);
+    const consistencyConfidence = simpleAvg > 0 ? Math.max(0, 1 - (stdDev / simpleAvg) * 0.7) : 0;
+    const recencyBonus = daysUntil <= 7 ? 0.1 : daysUntil <= 30 ? 0.05 : 0;
+    const confidence = Math.min(1, Math.round((dataConfidence * 0.35 + consistencyConfidence * 0.55 + recencyBonus + 0.05) * 100) / 100);
+
+    // Top items (increased to 20)
     const itemAgg = new Map<string, { qty: number[]; count: number; name: string }>();
     for (const v of sorted) {
       for (const line of v.lines) {
@@ -212,7 +393,7 @@ export function generatePredictions(
       .map(([itemId, agg]) => {
         const avgQty = agg.qty.reduce((s, q) => s + q, 0) / agg.qty.length;
         const lastQty = agg.qty[agg.qty.length - 1] ?? 0;
-        // Simple trend: compare last half avg vs first half avg
+
         const mid = Math.floor(agg.qty.length / 2);
         const firstHalf = agg.qty.slice(0, mid);
         const secondHalf = agg.qty.slice(mid);
@@ -221,15 +402,21 @@ export function generatePredictions(
         const trendRatio = firstAvg > 0 ? secondAvg / firstAvg : 1;
         const trend: "up" | "down" | "stable" = trendRatio > 1.15 ? "up" : trendRatio < 0.85 ? "down" : "stable";
 
-        // Aggressive multipliers (Task 3B/6)
         const trendMultiplier = trend === "up" ? 1.2 : trend === "down" ? 0.95 : 1.05;
-        let predictedQty = Math.round(avgQty * trendMultiplier);
+        const seasonalMult = getSeasonalMultiplier(itemId);
+        let predictedQty = Math.round(avgQty * trendMultiplier * Math.max(0.5, Math.min(2, seasonalMult)));
 
-        // Round to package units (Task 3D)
         const item = items.get(itemId);
         if (item) {
           predictedQty = roundToPackage(predictedQty, item.unitsPerPkg);
         }
+
+        // Stock-aware fields
+        const stock = itemStockMap.get(itemId) ?? 0;
+        const recent3 = itemRecent3moQty.get(itemId) ?? 0;
+        const avgMonthlyDemand = recent3 / 3;
+        const daysOfStock = avgMonthlyDemand > 0 ? Math.round((stock / avgMonthlyDemand) * 30) : stock > 0 ? 999 : 0;
+        const velocityClass = getVelocityClass(itemId);
 
         return {
           itemId,
@@ -239,12 +426,17 @@ export function generatePredictions(
           lastQtyBase: lastQty,
           predictedQtyBase: predictedQty,
           trend,
+          currentStock: Math.round(stock),
+          daysOfStock,
+          needsRestock: daysOfStock < 30 && avgMonthlyDemand > 0,
+          seasonalMultiplier: Math.round(seasonalMult * 100) / 100,
+          velocityClass,
         };
       })
       .sort((a, b) => b.frequency - a.frequency)
-      .slice(0, 15); // was 10
+      .slice(0, 20);
 
-    // Upsell suggestions (Task 3C)
+    // Upsell suggestions
     const upsellItems = generateUpsellSuggestions(
       partyId, partyItemSets, itemGroupQty, trendingItems,
       itemPartyQtys, items
@@ -263,15 +455,38 @@ export function generatePredictions(
       isOverdue: daysUntil < 0,
       topItems,
       upsellItems,
+      partyRevenue: Math.round(revenue),
+      partyTier: tier,
+      seasonalityScore: Math.round(seasonalityScore * 100) / 100,
+      orderConsistency: Math.round(orderConsistency * 100) / 100,
     });
   }
 
   return predictions.sort((a, b) => a.daysUntilPredicted - b.daysUntilPredicted);
 }
 
-/**
- * Generate upsell/cross-sell suggestions for a party (Task 3C).
- */
+// ─────────────────────────────────────────────────────────────────────
+// Party seasonal factor helper
+// ─────────────────────────────────────────────────────────────────────
+
+function getPartySeasonalFactor(
+  partyId: string,
+  partyMonthlyOrders: Map<string, number[]>,
+  targetMonth: number
+): number {
+  const counts = partyMonthlyOrders.get(partyId);
+  if (!counts) return 1;
+  const total = counts.reduce((s, v) => s + v, 0);
+  if (total === 0) return 1;
+  const avg = total / 12;
+  const targetCount = counts[targetMonth];
+  return avg > 0 ? targetCount / avg : 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Upsell Suggestions
+// ─────────────────────────────────────────────────────────────────────
+
 function generateUpsellSuggestions(
   partyId: string,
   partyItemSets: Map<string, Set<string>>,
@@ -281,27 +496,22 @@ function generateUpsellSuggestions(
   items: Map<string, CanonicalItem>,
 ): UpsellSuggestion[] {
   const partyItems = partyItemSets.get(partyId) ?? new Set<string>();
-  // Allow suggestions even for parties with no history
-
   const suggestions: UpsellSuggestion[] = [];
   const suggestedIds = new Set<string>();
 
-  // 1. Co-purchase analysis: find parties with >= 30% overlap (lowered from 50%)
-  const coPartyItems = new Map<string, number>(); // itemId -> count of co-purchasing parties that buy it
+  // 1. Co-purchase analysis
+  const coPartyItems = new Map<string, number>();
   let coPurchaserCount = 0;
 
   for (const [otherPartyId, otherItems] of partyItemSets) {
     if (otherPartyId === partyId) continue;
-    // Check overlap
     let overlap = 0;
     for (const itemId of partyItems) {
       if (otherItems.has(itemId)) overlap++;
     }
-    // For new parties (no items), consider all other parties as potential matches
     const overlapRatio = partyItems.size > 0 ? overlap / partyItems.size : 0.3;
     if (overlapRatio >= 0.3) {
       coPurchaserCount++;
-      // Find items they buy that this party doesn't
       for (const itemId of otherItems) {
         if (!partyItems.has(itemId)) {
           coPartyItems.set(itemId, (coPartyItems.get(itemId) ?? 0) + 1);
@@ -310,7 +520,6 @@ function generateUpsellSuggestions(
     }
   }
 
-  // Top 3 co-purchase items
   if (coPurchaserCount > 0) {
     const coSorted = Array.from(coPartyItems.entries())
       .sort((a, b) => b[1] - a[1])
@@ -331,7 +540,7 @@ function generateUpsellSuggestions(
     }
   }
 
-  // 2. Category fill: if party buys from a group but not the top item in that group
+  // 2. Category fill
   const partyGroups = new Set<string>();
   for (const itemId of partyItems) {
     const item = items.get(itemId);
@@ -340,7 +549,6 @@ function generateUpsellSuggestions(
   for (const group of partyGroups) {
     const groupItems = itemGroupQty.get(group);
     if (!groupItems) continue;
-    // Find top item in this group by qty
     let topItemId = "";
     let topQty = 0;
     for (const [itemId, qty] of groupItems) {
@@ -361,7 +569,7 @@ function generateUpsellSuggestions(
     }
   }
 
-  // 3. Trending items the party doesn't buy (top 2)
+  // 3. Trending items
   let trendingAdded = 0;
   for (const itemId of trendingItems) {
     if (trendingAdded >= 2) break;
@@ -380,20 +588,330 @@ function generateUpsellSuggestions(
     trendingAdded++;
   }
 
-  // Cap at 5 upsell items
   return suggestions.slice(0, 5);
 }
 
-/** Get average quantity that parties order for an item */
 function getAvgPartyQty(itemId: string, itemPartyQtys: Map<string, number[]>): number {
   const qtys = itemPartyQtys.get(itemId);
   if (!qtys || qtys.length === 0) return 1;
   return qtys.reduce((s, q) => s + q, 0) / qtys.length;
 }
 
-/**
- * Score predictions against actual new data
- */
+// ─────────────────────────────────────────────────────────────────────
+// FEATURE 2B: Item-Level Demand Forecasting (generateItemForecasts)
+// ─────────────────────────────────────────────────────────────────────
+
+export function generateItemForecasts(
+  vouchers: CanonicalVoucher[],
+  items: Map<string, CanonicalItem>,
+): { forecasts: ItemForecast[]; alerts: InventoryAlert[] } {
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const DEFAULT_LEAD_TIME = 7; // days
+
+  // Build monthly demand/supply arrays per item (last 12 months)
+  const itemMonthlyDemand = new Map<string, number[]>(); // [0..11] indexed by calendar month
+  const itemMonthlySales = new Map<string, number[]>(); // recent 12 months for WMA
+  const itemMonthlyPurchases = new Map<string, number[]>();
+  const itemTotalRevenue = new Map<string, number>();
+
+  // Track which months have data
+  const twelveMonthsAgo = new Date(now);
+  twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+  const twelveMonthsAgoStr = twelveMonthsAgo.toISOString().slice(0, 10);
+
+  // Monthly buckets for recent 12 months (index 0 = 12 months ago, 11 = current month)
+  function getRecentMonthIndex(dateStr: string): number {
+    const d = new Date(dateStr);
+    const monthsDiff = (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+    return 11 - monthsDiff; // 0 = oldest, 11 = current
+  }
+
+  // Initialize data structures for all items
+  for (const [itemId, item] of items) {
+    itemMonthlyDemand.set(itemId, new Array(12).fill(0));
+    itemMonthlySales.set(itemId, new Array(12).fill(0));
+    itemMonthlyPurchases.set(itemId, new Array(12).fill(0));
+  }
+
+  // Track ALL voucher movements for accurate stock (not limited to 12 months)
+  const itemAllTimePurchases = new Map<string, number>();
+  const itemAllTimeSales = new Map<string, number>();
+  const itemAllTimeCreditNotes = new Map<string, number>();
+  const itemAllTimeDebitNotes = new Map<string, number>();
+  const itemAllTimeStockJournals = new Map<string, number>();
+
+  // Accumulate voucher data
+  for (const v of vouchers) {
+    if (v.isCancelled || v.isOptional) continue;
+
+    for (const line of v.lines) {
+      if (line.type !== "inventory" || !line.itemId) continue;
+      if (!items.has(line.itemId)) continue;
+
+      const qty = line.qtyBase ?? 0;
+      const rate = line.ratePerBase ?? 0;
+
+      // All-time stock tracking (every voucher regardless of date)
+      if (v.voucherType === "Purchase") {
+        itemAllTimePurchases.set(line.itemId, (itemAllTimePurchases.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Sales") {
+        itemAllTimeSales.set(line.itemId, (itemAllTimeSales.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Credit Note") {
+        itemAllTimeCreditNotes.set(line.itemId, (itemAllTimeCreditNotes.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Debit Note") {
+        itemAllTimeDebitNotes.set(line.itemId, (itemAllTimeDebitNotes.get(line.itemId) ?? 0) + qty);
+      } else if (v.voucherType === "Stock Journal") {
+        itemAllTimeStockJournals.set(line.itemId, (itemAllTimeStockJournals.get(line.itemId) ?? 0) + qty);
+      }
+
+      // Recent 12-month analysis for forecasting
+      if (v.date < twelveMonthsAgoStr) continue;
+
+      const calendarMonth = getMonthIndex(v.date);
+      const recentIdx = getRecentMonthIndex(v.date);
+      if (recentIdx < 0 || recentIdx > 11) continue;
+
+      if (v.voucherType === "Sales") {
+        const monthly = itemMonthlyDemand.get(line.itemId)!;
+        monthly[calendarMonth] += qty;
+        const recent = itemMonthlySales.get(line.itemId)!;
+        recent[recentIdx] += qty;
+        itemTotalRevenue.set(line.itemId, (itemTotalRevenue.get(line.itemId) ?? 0) + qty * rate);
+      } else if (v.voucherType === "Purchase") {
+        const recent = itemMonthlyPurchases.get(line.itemId)!;
+        recent[recentIdx] += qty;
+      }
+    }
+  }
+
+  // ABC classification by revenue
+  const revenueEntries = Array.from(itemTotalRevenue.entries()).sort((a, b) => b[1] - a[1]);
+  const totalRevenue = revenueEntries.reduce((s, [, r]) => s + r, 0);
+  const abcMap = new Map<string, "A" | "B" | "C">();
+  let cumRevenue = 0;
+  for (const [itemId, rev] of revenueEntries) {
+    cumRevenue += rev;
+    const pct = totalRevenue > 0 ? cumRevenue / totalRevenue : 1;
+    if (pct <= 0.8) abcMap.set(itemId, "A");
+    else if (pct <= 0.95) abcMap.set(itemId, "B");
+    else abcMap.set(itemId, "C");
+  }
+
+  const forecasts: ItemForecast[] = [];
+  const alerts: InventoryAlert[] = [];
+
+  for (const [itemId, item] of items) {
+    const monthlySales = itemMonthlySales.get(itemId) ?? new Array(12).fill(0);
+    const monthlyPurchases = itemMonthlyPurchases.get(itemId) ?? new Array(12).fill(0);
+    const calendarDemand = itemMonthlyDemand.get(itemId) ?? new Array(12).fill(0);
+
+    // Weighted moving average — exponentially increasing recency bias
+    // Oldest months contribute minimally, most recent months dominate
+    // This captures recent demand shifts faster for seasonal businesses
+    const weights = [1, 1, 1, 2, 2, 2, 3, 3, 4, 5, 6, 8];
+    let weightedSum = 0;
+    let weightTotal = 0;
+    let activeMonths = 0;
+    for (let i = 0; i < 12; i++) {
+      if (monthlySales[i] > 0) activeMonths++;
+      weightedSum += monthlySales[i] * weights[i];
+      weightTotal += weights[i];
+    }
+    const avgMonthlyDemand = weightTotal > 0 ? weightedSum / weightTotal : 0;
+
+    // Average monthly supply
+    const totalSupply = monthlyPurchases.reduce((s, v) => s + v, 0);
+    const avgMonthlySupply = totalSupply / 12;
+
+    // Demand trend (compare last 3 months vs prior 3 months)
+    const recent3 = monthlySales.slice(9, 12).reduce((s, v) => s + v, 0) / 3;
+    const prior3 = monthlySales.slice(6, 9).reduce((s, v) => s + v, 0) / 3;
+    let demandTrend: "rising" | "falling" | "stable" = "stable";
+    if (prior3 > 0) {
+      const ratio = recent3 / prior3;
+      if (ratio > 1.2) demandTrend = "rising";
+      else if (ratio < 0.8) demandTrend = "falling";
+    }
+
+    // 12-month seasonal decomposition
+    const totalCalendarDemand = calendarDemand.reduce((s, v) => s + v, 0);
+    const avgCalendarDemand = totalCalendarDemand / 12;
+    const seasonalFactors = calendarDemand.map(d =>
+      avgCalendarDemand > 0 ? Math.round((d / avgCalendarDemand) * 100) / 100 : 1
+    );
+
+    // Forecasts
+    const nextMonthIdx = (currentMonth + 1) % 12;
+    const nextMonthFactor = seasonalFactors[nextMonthIdx] || 1;
+    const nextMonthForecast = Math.round(avgMonthlyDemand * Math.max(0.5, Math.min(2, nextMonthFactor)));
+
+    let next3MonthForecast = 0;
+    for (let i = 1; i <= 3; i++) {
+      const mIdx = (currentMonth + i) % 12;
+      const factor = seasonalFactors[mIdx] || 1;
+      next3MonthForecast += avgMonthlyDemand * Math.max(0.5, Math.min(2, factor));
+    }
+    next3MonthForecast = Math.round(next3MonthForecast);
+
+    // Current stock: opening + all purchases + credit notes + stock journals - all sales - debit notes
+    const opening = item.openingQtyBase ?? 0;
+    const currentStock = Math.round(
+      opening
+      + (itemAllTimePurchases.get(itemId) ?? 0)
+      - (itemAllTimeSales.get(itemId) ?? 0)
+      + (itemAllTimeCreditNotes.get(itemId) ?? 0)  // sales returns come back
+      - (itemAllTimeDebitNotes.get(itemId) ?? 0)    // purchase returns go out
+      + (itemAllTimeStockJournals.get(itemId) ?? 0) // stock journal net effect
+    );
+
+    // Days of stock remaining
+    const dailyDemand = avgMonthlyDemand / 30;
+    const daysOfStockRemaining = dailyDemand > 0 ? Math.round(currentStock / dailyDemand) : currentStock > 0 ? 999 : 0;
+
+    // Safety stock (1.5x lead time demand)
+    const safetyStock = Math.round(dailyDemand * DEFAULT_LEAD_TIME * 1.5);
+
+    // Reorder point (lead time demand + safety stock)
+    const reorderPoint = Math.round(dailyDemand * DEFAULT_LEAD_TIME + safetyStock);
+
+    // Suggested purchase qty (cover next 2 months + safety, minus current stock)
+    const coverDemand = nextMonthForecast * 2 + safetyStock;
+    const suggestedPurchaseQty = Math.max(0, roundToPackage(coverDemand - currentStock, item.unitsPerPkg));
+
+    // Velocity classification
+    let velocityClass: "fast" | "medium" | "slow" | "dead" = "medium";
+    if (activeMonths === 0) velocityClass = "dead";
+    else if (recent3 === 0 && prior3 === 0) velocityClass = "dead";
+    else if (recent3 === 0) velocityClass = "slow";
+    else if (prior3 > 0 && recent3 / prior3 > 1.5) velocityClass = "fast";
+    else if (prior3 > 0 && recent3 / prior3 < 0.5) velocityClass = "slow";
+
+    // ABC class
+    const abcClass = abcMap.get(itemId) ?? "C";
+
+    // Stock health status
+    let stockHealthStatus: "critical" | "low" | "adequate" | "excess" | "dead" = "adequate";
+    if (velocityClass === "dead") {
+      stockHealthStatus = currentStock > 0 ? "dead" : "dead";
+    } else if (daysOfStockRemaining <= 0) {
+      stockHealthStatus = "critical";
+    } else if (daysOfStockRemaining < DEFAULT_LEAD_TIME + 7) {
+      stockHealthStatus = "low";
+    } else if (avgMonthlyDemand > 0 && currentStock > avgMonthlyDemand * 6) {
+      stockHealthStatus = "excess";
+    }
+
+    forecasts.push({
+      itemId,
+      itemName: item.name,
+      group: item.group,
+      currentStock,
+      avgMonthlyDemand: Math.round(avgMonthlyDemand * 100) / 100,
+      avgMonthlySupply: Math.round(avgMonthlySupply * 100) / 100,
+      demandTrend,
+      seasonalFactors,
+      nextMonthForecast,
+      next3MonthForecast,
+      daysOfStockRemaining,
+      reorderPoint,
+      safetyStock,
+      suggestedPurchaseQty,
+      velocityClass,
+      abcClass,
+      stockHealthStatus,
+      leadTimeDays: DEFAULT_LEAD_TIME,
+    });
+
+    // Generate alerts
+    if (stockHealthStatus === "critical" && avgMonthlyDemand > 0) {
+      alerts.push({
+        itemId,
+        itemName: item.name,
+        alertType: "stockout_imminent",
+        severity: "critical",
+        message: `${item.name} has ${currentStock} units remaining (${daysOfStockRemaining} days). Stockout imminent!`,
+        currentStock,
+        suggestedAction: `Purchase ${suggestedPurchaseQty} ${item.baseUnit} immediately`,
+        metric: daysOfStockRemaining,
+      });
+    } else if (stockHealthStatus === "low") {
+      alerts.push({
+        itemId,
+        itemName: item.name,
+        alertType: "reorder_now",
+        severity: "warning",
+        message: `${item.name} is below reorder point (${currentStock} units, ${daysOfStockRemaining} days of stock)`,
+        currentStock,
+        suggestedAction: `Purchase ${suggestedPurchaseQty} ${item.baseUnit}`,
+        metric: daysOfStockRemaining,
+      });
+    }
+
+    if (stockHealthStatus === "excess" && currentStock > 0) {
+      alerts.push({
+        itemId,
+        itemName: item.name,
+        alertType: "excess_stock",
+        severity: "info",
+        message: `${item.name} has ${daysOfStockRemaining} days of stock (${currentStock} units). Consider reducing purchases.`,
+        currentStock,
+        suggestedAction: "Reduce purchase orders or run promotions",
+        metric: daysOfStockRemaining,
+      });
+    }
+
+    if (velocityClass === "dead" && currentStock > 0) {
+      alerts.push({
+        itemId,
+        itemName: item.name,
+        alertType: "dead_stock",
+        severity: "warning",
+        message: `${item.name} has no demand in the last 3 months but ${currentStock} units in stock`,
+        currentStock,
+        suggestedAction: "Consider clearance sale or return to supplier",
+        metric: currentStock,
+      });
+    }
+
+    if (demandTrend === "rising" && prior3 > 0 && recent3 / prior3 > 2) {
+      alerts.push({
+        itemId,
+        itemName: item.name,
+        alertType: "demand_spike",
+        severity: "info",
+        message: `${item.name} demand spiked ${Math.round((recent3 / prior3) * 100)}% vs prior period`,
+        currentStock,
+        suggestedAction: "Increase purchase quantities to match rising demand",
+        metric: Math.round((recent3 / prior3) * 100),
+      });
+    }
+
+    if (demandTrend === "falling" && prior3 > 0 && recent3 / prior3 < 0.4) {
+      alerts.push({
+        itemId,
+        itemName: item.name,
+        alertType: "demand_drop",
+        severity: "info",
+        message: `${item.name} demand dropped ${Math.round((1 - recent3 / prior3) * 100)}% vs prior period`,
+        currentStock,
+        suggestedAction: "Review purchasing — demand may be seasonal or declining",
+        metric: Math.round((1 - recent3 / prior3) * 100),
+      });
+    }
+  }
+
+  // Sort alerts by severity
+  const severityOrder = { critical: 0, warning: 1, info: 2 };
+  alerts.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+
+  return { forecasts, alerts };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Prediction Accuracy Scoring (unchanged interface)
+// ─────────────────────────────────────────────────────────────────────
+
 export function scorePredictions(
   previousPredictions: PartyOrderPattern[],
   newVouchers: CanonicalVoucher[],
@@ -401,7 +919,6 @@ export function scorePredictions(
 ): PredictionAccuracy[] {
   const results: PredictionAccuracy[] = [];
 
-  // Group new vouchers by party
   const newByParty = new Map<string, CanonicalVoucher[]>();
   for (const v of newVouchers) {
     if (v.voucherType !== voucherType || v.isCancelled) continue;
@@ -421,18 +938,15 @@ export function scorePredictions(
     const predictedItemMap: { itemId: string; predictedQty: number; actualQty: number }[] = [];
 
     if (actuals && actuals.length > 0) {
-      // Find the first actual order after the last known order
       const sorted = [...actuals].sort((a, b) => a.date.localeCompare(b.date));
       const firstNew = sorted.find(v => v.date > pred.lastOrderDate);
 
       if (firstNew) {
         actualDate = firstNew.date;
         dateDiff = daysBetween(pred.predictedNextDate, actualDate);
-        // Date accuracy: 1.0 if exact, decays with distance
         dateScore = Math.max(0, 1 - Math.abs(dateDiff) / (pred.avgIntervalDays || 30));
       }
 
-      // Item accuracy
       const actualItemQty = new Map<string, number>();
       for (const v of actuals) {
         for (const line of v.lines) {
@@ -465,14 +979,4 @@ export function scorePredictions(
   }
 
   return results;
-}
-
-function daysBetween(a: string, b: string): number {
-  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86400000);
-}
-
-function addDays(dateStr: string, days: number): string {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
 }

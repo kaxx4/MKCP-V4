@@ -10,10 +10,26 @@ export function serializeParsedData(data: ParsedData): unknown {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function deserializeParsedData(raw: any): ParsedData {
+  if (!raw || typeof raw !== "object") {
+    return {
+      company: null,
+      items: new Map(),
+      ledgers: new Map(),
+      vouchers: [],
+      importedAt: new Date().toISOString(),
+      sourceFiles: [],
+      warnings: [{ severity: "warn", context: "deserialize", message: "Empty or invalid stored data" }],
+    };
+  }
   return {
-    ...raw,
-    items: new Map(raw.items),
-    ledgers: new Map(raw.ledgers),
-    importedAt: raw.importedAt,
+    company: raw.company ?? null,
+    items: new Map(Array.isArray(raw.items) ? raw.items : []),
+    ledgers: new Map(Array.isArray(raw.ledgers) ? raw.ledgers : []),
+    vouchers: Array.isArray(raw.vouchers) ? raw.vouchers : [],
+    importedAt: raw.importedAt ?? new Date().toISOString(),
+    sourceFiles: Array.isArray(raw.sourceFiles) ? raw.sourceFiles : [],
+    warnings: Array.isArray(raw.warnings) ? raw.warnings : [],
+    tallyPL: raw.tallyPL ?? undefined,
+    tallyBS: raw.tallyBS ?? undefined,
   };
 }
