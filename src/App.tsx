@@ -25,6 +25,8 @@ const Alerts = lazy(() => import("./pages/Alerts"));
 const PendingOrders = lazy(() => import("./pages/PendingOrders"));
 const PriceList = lazy(() => import("./pages/PriceList"));
 const RoutesPage = lazy(() => import("./pages/Routes"));
+const Discounts = lazy(() => import("./pages/Discounts"));
+const PriceListCorrection = lazy(() => import("./pages/PriceListCorrection"));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -100,6 +102,8 @@ function AppRoutes() {
           <Route path="/pending-orders" element={<PendingOrders />} />
           <Route path="/price-list" element={<PriceList />} />
           <Route path="/routes" element={<RoutesPage />} />
+          <Route path="/discounts" element={<Discounts />} />
+          <Route path="/price-correction" element={<PriceListCorrection />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
