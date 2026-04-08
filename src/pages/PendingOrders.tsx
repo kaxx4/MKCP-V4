@@ -52,6 +52,40 @@ function computeReadiness(voucher: CanonicalVoucher, data: ParsedData, voucherIn
   return { allInStock, allPricesMatch, ready: allInStock && allPricesMatch };
 }
 
+/** Click-to-toggle tooltip for price verification icons */
+function PriceTooltip({ ok, billedRate, refRate }: { ok: boolean; billedRate: number; refRate: number }) {
+  const [open, setOpen] = useState(false);
+  const diff = billedRate - refRate;
+  const pct = ((diff / refRate) * 100).toFixed(1);
+  const sign = diff > 0 ? "+" : "";
+
+  const label = ok
+    ? `Price verified — matches price list (${fmtRate(refRate)})`
+    : `Price mismatch — billed ${fmtRate(billedRate)}, price list ${fmtRate(refRate)} (${sign}${pct}%)`;
+
+  return (
+    <span className="relative inline-flex items-center">
+      <span
+        title={label}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+        className="cursor-pointer"
+      >
+        {ok
+          ? <CheckCircle2 size={14} className="text-blue-500 inline" />
+          : <XCircle size={14} className="text-yellow-500 inline" />}
+      </span>
+      {open && (
+        <span
+          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-50 w-max max-w-[220px] rounded-md bg-neutral-900 text-white text-[11px] leading-tight px-2 py-1.5 shadow-lg pointer-events-none whitespace-normal text-center"
+        >
+          {label}
+          <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-neutral-900" />
+        </span>
+      )}
+    </span>
+  );
+}
+
 export default function PendingOrders() {
   const navigate = useNavigate();
   const { data, voucherIndex } = useDataStore();
@@ -228,14 +262,7 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                         </td>
                         <td className="py-2 px-1 text-center">
                           {hasRef ? (
-                            priceOk
-                              ? <span title={`Price verified — matches price list (${fmtRate(refRate)})`}><CheckCircle2 size={14} className="text-blue-500 inline" /></span>
-                              : (() => {
-                                  const diff = rate - refRate;
-                                  const pct = ((diff / refRate) * 100).toFixed(1);
-                                  const sign = diff > 0 ? "+" : "";
-                                  return <span title={`Price mismatch — billed ${fmtRate(rate)}, price list ${fmtRate(refRate)} (${sign}${pct}%)`}><XCircle size={14} className="text-yellow-500 inline" /></span>;
-                                })()
+                            <PriceTooltip ok={priceOk} billedRate={rate} refRate={refRate} />
                           ) : null}
                         </td>
                         <td className="py-2 text-right tabular-nums font-medium text-neutral-900 whitespace-nowrap">
