@@ -5,6 +5,14 @@ const _inrFormatter = new Intl.NumberFormat("en-IN", {
   maximumFractionDigits: 0,
 });
 
+// Rate formatter: preserves paise when present (e.g. ₹125.50), drops trailing zeros
+const _inrRateFormatter = new Intl.NumberFormat("en-IN", {
+  style: "currency",
+  currency: "INR",
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
 const _numFormatters = new Map<number, Intl.NumberFormat>();
 
 function _numFormatter(decimals: number): Intl.NumberFormat {
@@ -18,6 +26,11 @@ function _numFormatter(decimals: number): Intl.NumberFormat {
 
 export function fmtINR(n: number): string {
   return _inrFormatter.format(n);
+}
+
+/** Format a unit rate/price — preserves paise, no forced rounding */
+export function fmtRate(n: number): string {
+  return _inrRateFormatter.format(n);
 }
 
 export function fmtNum(n: number, decimals = 2): string {
