@@ -4,22 +4,24 @@ import { Upload, Truck, X, CheckCircle2, XCircle, PackageCheck } from "lucide-re
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useUIStore } from "../store/uiStore";
-import { fmtINR, fmtDate } from "../utils/format";
+import { fmtINR, fmtRate, fmtDate } from "../utils/format";
 import { getCurrentStockIndexed } from "../engine/inventory";
 import { computeItemMargins } from "../engine/financial";
 import type { CanonicalVoucher, ParsedData } from "../types/canonical";
 import type { VoucherIndex } from "../engine/inventory";
 
-// Price tolerance: exact match (within ₹0.01 rounding from Tally)
-const PRICE_TOLERANCE = 0.005;
+// Price tolerance: ±1% to absorb Tally rounding and minor rate variations
+const PRICE_TOLERANCE = 0.01;
 
 function getPriceList(data: ParsedData): Map<string, number> {
   const margins = computeItemMargins(data.items, data.vouchers);
   const map = new Map<string, number>();
   for (const m of margins) {
+    // Prefer avgSalesRate (actual billed history); fall back to Tally item rates
+    const item = data.items.get(m.itemId);
     const rate = m.avgSalesRate > 0
       ? m.avgSalesRate
-      : (data.items.get(m.itemId)?.closingRate ?? data.items.get(m.itemId)?.openingRate ?? 0);
+      : (item?.closingRate ?? item?.openingRate ?? 0);
     if (rate > 0) map.set(m.itemId, rate);
   }
   return map;
@@ -27,7 +29,10 @@ function getPriceList(data: ParsedData): Map<string, number> {
 
 function priceMatches(rate: number, ref: number): boolean {
   if (ref <= 0) return true; // no reference — can't verify
-  return Math.abs(rate - ref) / ref <= PRICE_TOLERANCE;
+  // Absolute ₹1 floor: avoids false mismatch on tiny rounding differences
+  const absDiff = Math.abs(rate - ref);
+  if (absDiff <= 1) return true;
+  return absDiff / ref <= PRICE_TOLERANCE;
 }
 
 /** Compute delivery-readiness for a voucher */
@@ -219,17 +224,17 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                           {qty} {item?.baseUnit ?? ""}
                         </td>
                         <td className="py-2 pr-1 text-right tabular-nums text-neutral-600 whitespace-nowrap">
-                          {fmtINR(rate)}
+                          {fmtRate(rate)}
                         </td>
                         <td className="py-2 px-1 text-center">
                           {hasRef ? (
                             priceOk
-                              ? <span title={`Price verified — matches price list (${fmtINR(refRate)})`}><CheckCircle2 size={14} className="text-blue-500 inline" /></span>
+                              ? <span title={`Price verified — matches price list (${fmtRate(refRate)})`}><CheckCircle2 size={14} className="text-blue-500 inline" /></span>
                               : (() => {
                                   const diff = rate - refRate;
                                   const pct = ((diff / refRate) * 100).toFixed(1);
                                   const sign = diff > 0 ? "+" : "";
-                                  return <span title={`Price mismatch — billed ${fmtINR(rate)}, price list ${fmtINR(refRate)} (${sign}${pct}%)`}><XCircle size={14} className="text-yellow-500 inline" /></span>;
+                                  return <span title={`Price mismatch — billed ${fmtRate(rate)}, price list ${fmtRate(refRate)} (${sign}${pct}%)`}><XCircle size={14} className="text-yellow-500 inline" /></span>;
                                 })()
                           ) : null}
                         </td>

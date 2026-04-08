@@ -1,10 +1,10 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, Tag, Download } from "lucide-react";
+import { Upload, Tag } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { computeItemMargins } from "../engine/financial";
-import { fmtINR } from "../utils/format";
+import { fmtRate } from "../utils/format";
 
 type SortKey = "name" | "group" | "baseRate";
 type SortDir = "asc" | "desc";
@@ -161,7 +161,7 @@ export default function PriceList() {
                   "px-3 py-2 text-sm tabular-nums font-medium text-right",
                   row.baseRate > 0 ? "text-primary" : "text-muted"
                 )}>
-                  {row.baseRate > 0 ? fmtINR(row.baseRate) : "—"}
+                  {row.baseRate > 0 ? fmtRate(row.baseRate) : "—"}
                 </div>
               </div>
             ))
