@@ -30,8 +30,18 @@ export interface LineDiscountResult {
   tierLabel: string;   // e.g. "1-9 pkgs -> 2%" or "No discount"
 }
 
+export interface GroupDiscountSummary {
+  categoryId: string;
+  categoryName: string;
+  totalPackages: number;
+  appliedDiscountPct: number;
+  totalAmount: number;
+  totalDiscount: number;
+}
+
 export interface VoucherDiscountResult {
   lines: LineDiscountResult[];
+  groupSummaries: GroupDiscountSummary[]; // group-wise totals
   totalLineAmount: number;
   totalDiscountAmount: number;
   effectivePct: number; // totalDiscountAmount / totalLineAmount * 100
@@ -796,27 +806,52 @@ export function calculateVoucherDiscount(
   runtimeOverrides: Record<string, string>
 ): VoucherDiscountResult {
   const lines: LineDiscountResult[] = [];
+  const groupMap = new Map<string, { categoryId: string; categoryName: string; packages: number; totalAmount: number; totalDiscount: number }>();
 
   for (const line of voucher.lines) {
     if (line.type !== "inventory" || !line.itemId || (line.qtyBase ?? 0) === 0) continue;
 
     const item = items.get(line.itemId);
-    lines.push(
-      calculateLineDiscount({
-        itemId: line.itemId,
-        itemName: item?.name ?? line.itemId,
-        qtyBase: line.qtyBase ?? 0,
-        unitsPerPkg: item?.unitsPerPkg ?? 1,
-        lineAmount: line.lineAmount ?? 0,
-        runtimeOverrides,
-        categories,
-      })
-    );
+    const lineResult = calculateLineDiscount({
+      itemId: line.itemId,
+      itemName: item?.name ?? line.itemId,
+      qtyBase: line.qtyBase ?? 0,
+      unitsPerPkg: item?.unitsPerPkg ?? 1,
+      lineAmount: line.lineAmount ?? 0,
+      runtimeOverrides,
+      categories,
+    });
+    lines.push(lineResult);
+
+    // Aggregate by category for group summaries
+    const key = lineResult.categoryId;
+    if (!groupMap.has(key)) {
+      groupMap.set(key, {
+        categoryId: lineResult.categoryId,
+        categoryName: lineResult.categoryName,
+        packages: 0,
+        totalAmount: 0,
+        totalDiscount: 0,
+      });
+    }
+    const group = groupMap.get(key)!;
+    group.packages += lineResult.packages;
+    group.totalAmount += lineResult.lineAmount;
+    group.totalDiscount += lineResult.discountAmount;
   }
+
+  const groupSummaries: GroupDiscountSummary[] = Array.from(groupMap.values()).map((g) => ({
+    categoryId: g.categoryId,
+    categoryName: g.categoryName,
+    totalPackages: g.packages,
+    appliedDiscountPct: g.totalAmount > 0 ? (g.totalDiscount / g.totalAmount) * 100 : 0,
+    totalAmount: g.totalAmount,
+    totalDiscount: g.totalDiscount,
+  }));
 
   const totalLineAmount = lines.reduce((s, l) => s + l.lineAmount, 0);
   const totalDiscountAmount = lines.reduce((s, l) => s + l.discountAmount, 0);
   const effectivePct = totalLineAmount > 0 ? (totalDiscountAmount / totalLineAmount) * 100 : 0;
 
-  return { lines, totalLineAmount, totalDiscountAmount, effectivePct };
+  return { lines, groupSummaries, totalLineAmount, totalDiscountAmount, effectivePct };
 }
