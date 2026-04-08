@@ -245,6 +245,30 @@ function DiscountBreakdown({
         </div>
       ) : (
         <>
+          {/* Group-wise Summary */}
+          {result.groupSummaries && result.groupSummaries.length > 0 && (
+            <div className="mb-4 space-y-2">
+              <div className="text-xs font-medium text-muted uppercase tracking-wide">Group Discount Summary</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                {result.groupSummaries.map((g) => (
+                  <div key={g.categoryId} className="px-3 py-2 rounded-lg border border-bg-border bg-bg/50">
+                    <div className="text-xs font-semibold text-primary truncate mb-1">{g.categoryName}</div>
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-muted">{g.totalPackages} pkg{g.totalPackages !== 1 ? 's' : ''}</span>
+                      <span className={g.appliedDiscountPct > 0 ? "text-success font-medium" : "text-muted"}>
+                        {g.appliedDiscountPct > 0 ? `${g.appliedDiscountPct.toFixed(1)}%` : "—"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-2xs text-muted mt-1 pt-1 border-t border-bg-border">
+                      <span>{fmtINR(g.totalAmount)}</span>
+                      {g.totalDiscount > 0 && <span className="text-success">−{fmtINR(g.totalDiscount)}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {allNoDiscount && (
             <div className="mb-4 px-4 py-3 bg-warn/10 text-warn text-sm rounded-lg border border-warn/20 font-medium">
               No discounts applicable to this invoice
