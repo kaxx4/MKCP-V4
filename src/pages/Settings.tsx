@@ -164,7 +164,7 @@ export default function Settings() {
       f.discrepancy.toFixed(4),
     ]);
 
-    const csv = [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
+    const csv = [headers, ...rows].map(row => row.map((cell: string) => `"${cell}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);

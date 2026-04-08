@@ -499,18 +499,10 @@ export function vouchersCollectionXml(company: string, from: string, to: string)
     "*",
     "AllLedgerEntries", "AllLedgerEntries.*",
     "AllLedgerEntries.BillAllocations", "AllLedgerEntries.BillAllocations.*",
-    "AllLedgerEntries.BankAllocations", "AllLedgerEntries.BankAllocations.*",
-    "AllLedgerEntries.CostCentreAllocations", "AllLedgerEntries.CostCentreAllocations.*",
     "LedgerEntries", "LedgerEntries.*",
     "LedgerEntries.BillAllocations", "LedgerEntries.BillAllocations.*",
-    "LedgerEntries.BankAllocations", "LedgerEntries.BankAllocations.*",
-    "LedgerEntries.CostCentreAllocations", "LedgerEntries.CostCentreAllocations.*",
     "AllInventoryEntries", "AllInventoryEntries.*",
-    "AllInventoryEntries.BatchAllocations", "AllInventoryEntries.BatchAllocations.*",
-    "AllInventoryEntries.AccountingAllocations", "AllInventoryEntries.AccountingAllocations.*",
     "InventoryEntries", "InventoryEntries.*",
-    "InventoryEntries.BatchAllocations", "InventoryEntries.BatchAllocations.*",
-    "InventoryEntries.AccountingAllocations", "InventoryEntries.AccountingAllocations.*",
   ].join(", ");
   return `<ENVELOPE>
 <HEADER>

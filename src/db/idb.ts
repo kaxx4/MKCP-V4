@@ -139,6 +139,71 @@ export async function clearJsonUploads(): Promise<void> {
 }
 
 /**
+ * Prune old backups — keep only the most recent `keepCount` entries.
+ * Older backups are deleted silently. Call on app start or after each backup.
+ */
+export async function pruneBackups(keepCount: number = 10): Promise<number> {
+  const all = await listBackups(); // already sorted newest-first
+  const toDelete = all.slice(keepCount);
+  const db = await getDB();
+  for (const b of toDelete) {
+    await db.delete("backups", b.key);
+  }
+  return toDelete.length;
+}
+
+/**
+ * Prune old prediction snapshots — keep only the most recent `keepCount` keys.
+ */
+export async function prunePredictions(keepCount: number = 5): Promise<number> {
+  const db = await getDB();
+  const keys = await db.getAllKeys("predictions");
+  // Keys are stored with ISO timestamps — sort ascending, delete oldest
+  const sorted = keys.map(String).sort();
+  const toDelete = sorted.slice(0, Math.max(0, sorted.length - keepCount));
+  for (const k of toDelete) {
+    await db.delete("predictions", k);
+  }
+  return toDelete.length;
+}
+
+/**
+ * Prune old JSON uploads — keep only the most recent `keepCount` entries.
+ */
+export async function pruneJsonUploads(keepCount: number = 5): Promise<number> {
+  const db = await getDB();
+  const allKeys = await db.getAllKeys("jsonUploads");
+  const all: { key: string; uploadedAt: string }[] = [];
+  for (const k of allKeys) {
+    const val = await db.get("jsonUploads", k);
+    if (val) all.push({ key: String(k), uploadedAt: val.uploadedAt ?? "" });
+  }
+  all.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)); // newest first
+  const toDelete = all.slice(keepCount);
+  for (const entry of toDelete) {
+    await db.delete("jsonUploads", entry.key);
+  }
+  return toDelete.length;
+}
+
+/**
+ * Run all pruning in one call. Safe to call on app start.
+ * Returns counts of deleted entries per store.
+ */
+export async function pruneAllStores(opts?: {
+  keepBackups?: number;
+  keepPredictions?: number;
+  keepJsonUploads?: number;
+}): Promise<{ backups: number; predictions: number; jsonUploads: number }> {
+  const [backups, predictions, jsonUploads] = await Promise.all([
+    pruneBackups(opts?.keepBackups ?? 10),
+    prunePredictions(opts?.keepPredictions ?? 5),
+    pruneJsonUploads(opts?.keepJsonUploads ?? 5),
+  ]);
+  return { backups, predictions, jsonUploads };
+}
+
+/**
  * Export ALL data (parsedData, overrides, predictions, json uploads) as a single JSON backup.
  * Used by the "Erase Data" flow to create a full backup before clearing.
  */

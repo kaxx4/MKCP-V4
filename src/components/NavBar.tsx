@@ -16,9 +16,7 @@ import {
   WifiOff,
   MoreHorizontal,
   X,
-  IndianRupee,
   RefreshCw,
-  Tag,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
@@ -47,8 +45,6 @@ const NAV_ITEMS = [
   { path: "/import", icon: Upload, label: "Import" },
   { path: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { path: "/orders", icon: ShoppingCart, label: "Orders" },
-  { path: "/sales", icon: IndianRupee, label: "Sales" },
-  { path: "/discounts", icon: Tag, label: "Discounts" },
   { path: "/alerts", icon: AlertTriangle, label: "Alerts" },
   { path: "/invoices", icon: FileText, label: "Invoices" },
   { path: "/reports", icon: BarChart2, label: "Reports" },

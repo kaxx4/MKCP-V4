@@ -74,15 +74,14 @@ export const TRANSACTION_COLLECTIONS: CollectionDef[] = [
     fetch: [
       "Guid", "Date", "VoucherTypeName", "VoucherNumber", "Reference", "Narration",
       "PartyLedgerName", "IsCancelled", "IsOptional", "EffectiveDate",
+      // Ledger entries: fetch both AllLedgerEntries (Receipt/Payment/Journal) and LedgerEntries (Sales/Purchase)
       "AllLedgerEntries", "AllLedgerEntries.*",
       "AllLedgerEntries.BillAllocations", "AllLedgerEntries.BillAllocations.*",
       "LedgerEntries", "LedgerEntries.*",
       "LedgerEntries.BillAllocations", "LedgerEntries.BillAllocations.*",
+      // Inventory entries: fetch both variants; BatchAllocations not used in convert.ts
       "AllInventoryEntries", "AllInventoryEntries.*",
-      "AllInventoryEntries.BatchAllocations", "AllInventoryEntries.BatchAllocations.*",
-      "AllInventoryEntries.AccountingAllocations", "AllInventoryEntries.AccountingAllocations.*",
       "InventoryEntries", "InventoryEntries.*",
-      "InventoryEntries.AccountingAllocations", "InventoryEntries.AccountingAllocations.*",
     ],
     filters: [
       { name: "fltrNotCancelled", expression: "NOT $IsCancelled" },
