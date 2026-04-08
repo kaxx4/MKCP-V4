@@ -13,7 +13,8 @@ interface PriceRow {
   itemId: string;
   name: string;
   group: string;
-  baseRate: number;
+  displayRate: number;
+  source: "sales" | "closing" | "opening" | "none";
 }
 
 export default function PriceList() {
@@ -31,10 +32,23 @@ export default function PriceList() {
 
     return Array.from(data.items.values()).map((item) => {
       const m = marginMap.get(item.itemId);
-      const baseRate = (m && m.avgSalesRate > 0)
-        ? m.avgSalesRate
-        : (item.closingRate ?? item.openingRate ?? 0);
-      return { itemId: item.itemId, name: item.name, group: item.group, baseRate };
+
+      // Priority: sales rate (from actual transactions) > closing rate > opening rate > none
+      let displayRate = 0;
+      let source: "sales" | "closing" | "opening" | "none" = "none";
+
+      if (m && m.avgSalesRate > 0) {
+        displayRate = m.avgSalesRate;
+        source = "sales";
+      } else if (item.closingRate && item.closingRate > 0) {
+        displayRate = item.closingRate;
+        source = "closing";
+      } else if (item.openingRate && item.openingRate > 0) {
+        displayRate = item.openingRate;
+        source = "opening";
+      }
+
+      return { itemId: item.itemId, name: item.name, group: item.group, displayRate, source };
     });
   }, [data]);
 
@@ -57,7 +71,7 @@ export default function PriceList() {
       let cmp = 0;
       if (sortKey === "name") cmp = a.name.localeCompare(b.name);
       else if (sortKey === "group") cmp = a.group.localeCompare(b.group) || a.name.localeCompare(b.name);
-      else if (sortKey === "baseRate") cmp = a.baseRate - b.baseRate;
+      else if (sortKey === "baseRate") cmp = a.displayRate - b.displayRate;
       return sortDir === "asc" ? cmp : -cmp;
     });
   }, [filtered, sortKey, sortDir]);
@@ -157,11 +171,25 @@ export default function PriceList() {
                 <div className="px-3 py-2 text-xs text-muted truncate" title={row.group}>
                   {row.group}
                 </div>
-                <div className={clsx(
-                  "px-3 py-2 text-sm tabular-nums font-medium text-right",
-                  row.baseRate > 0 ? "text-primary" : "text-muted"
-                )}>
-                  {row.baseRate > 0 ? fmtRate(row.baseRate) : "—"}
+                <div className="px-3 py-2 text-right">
+                  <div className={clsx(
+                    "text-sm tabular-nums font-medium",
+                    row.displayRate > 0 ? "text-primary" : "text-muted"
+                  )}>
+                    {row.displayRate > 0 ? fmtRate(row.displayRate) : "—"}
+                  </div>
+                  {row.displayRate > 0 && (
+                    <div className={clsx(
+                      "text-2xs mt-1",
+                      row.source === "sales" && "text-success",
+                      row.source === "closing" && "text-warn",
+                      row.source === "opening" && "text-danger"
+                    )}>
+                      {row.source === "sales" && "from sales"}
+                      {row.source === "closing" && "closing stock"}
+                      {row.source === "opening" && "opening rate"}
+                    </div>
+                  )}
                 </div>
               </div>
             ))
