@@ -1222,14 +1222,6 @@ export default function Reports() {
                 </select>
                 <input type="text" placeholder="Search..." value={abcxyzSearch} onChange={e => setAbcxyzSearch(e.target.value)} className="search-input w-40" />
               </div>
-              <button onClick={() => {
-                const rows = [["Item", "Group", "Revenue", "Revenue %", "Cumulative %", "ABC", "Monthly Avg Demand", "CV", "XYZ", "Combined"], ...abcxyzFiltered.map(d => [d.name, d.group, d.totalRevenue.toFixed(0), d.revenueShare.toFixed(2), d.cumulativeShare.toFixed(2), d.abcClass, d.avgMonthlyDemand.toFixed(2), isFinite(d.coefficientOfVariation) ? d.coefficientOfVariation.toFixed(2) : "Inf", d.xyzClass, d.combined])];
-                const csv = rows.map(r => r.join(",")).join("\n");
-                const blob = new Blob([csv], { type: "text/csv" });
-                const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `abcxyz_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
-              }} className="btn-ghost btn-sm flex items-center gap-2">
-                <Download size={14} />CSV
-              </button>
             </div>
             <div className="overflow-auto max-h-[60vh]">
               <table className="w-full text-sm">
@@ -1312,13 +1304,6 @@ export default function Reports() {
           <div className="section-card">
             <div className="section-card-header flex justify-between items-center">
               <h3 className="card-title">Comparison ({periodFiltered.length} items)</h3>
-              <button onClick={() => {
-                const rows = [["Item", "Group", "Open A", "In A", "Out A", "Close A", "Open B", "In B", "Out B", "Close B", "Δ Closing", "Δ Out %"], ...periodFiltered.map(d => [d.name, d.group, d.openingA, d.inwardsA, d.outwardsA, d.closingA, d.openingB, d.inwardsB, d.outwardsB, d.closingB, d.closingDelta, d.outwardsDeltaPct.toFixed(1)])];
-                const csv = rows.map(r => r.join(",")).join("\n");
-                const blob = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `period_compare_${periodMonthA}_vs_${periodMonthB}.csv`; a.click();
-              }} className="btn-ghost btn-sm flex items-center gap-2">
-                <Download size={14} />CSV
-              </button>
             </div>
             <div className="overflow-auto max-h-[60vh]">
               <table className="w-full text-xs">
@@ -1436,13 +1421,6 @@ export default function Reports() {
           <div className="section-card">
             <div className="section-card-header flex justify-between items-center">
               <h3 className="card-title">All Items ({marginFiltered.length})</h3>
-              <button onClick={() => {
-                const rows = [["Item", "Group", "Avg Buy Rate", "Avg Sell Rate", "Margin/Unit", "Margin %", "Sales Qty", "Purchase Qty", "Total Profit"], ...marginFiltered.map(d => [d.name, d.group, d.avgPurchaseRate.toFixed(2), d.avgSalesRate.toFixed(2), d.marginPerUnit.toFixed(2), d.marginPct.toFixed(2), d.totalSalesQty, d.totalPurchaseQty, d.totalProfit.toFixed(0)])];
-                const csv = rows.map(r => r.join(",")).join("\n");
-                const blob = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `margins_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
-              }} className="btn-ghost btn-sm flex items-center gap-2">
-                <Download size={14} />CSV
-              </button>
             </div>
             <div className="overflow-auto max-h-[60vh]">
               <table className="w-full text-sm">
@@ -1579,13 +1557,6 @@ export default function Reports() {
                 <div className="section-card">
                   <div className="section-card-header flex justify-between items-center">
                     <h3 className="card-title">HSN Summary</h3>
-                    <button onClick={() => {
-                      const rows = [["HSN", "Description", "UQC", "Qty", "Taxable Value", "IGST", "CGST", "SGST", "Total Tax"], ...gstr1Data.hsnSummary.map(h => [h.hsn, h.description, h.uqc, h.totalQty, h.taxableValue.toFixed(2), h.igstAmount.toFixed(2), h.cgstAmount.toFixed(2), h.sgstAmount.toFixed(2), h.totalTax.toFixed(2)])];
-                      const csv = rows.map(r => r.join(",")).join("\n");
-                      const blob = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `hsn_summary_${gstMonth}.csv`; a.click();
-                    }} className="btn-ghost btn-sm flex items-center gap-2">
-                      <Download size={14} />HSN CSV
-                    </button>
                   </div>
                   <div className="overflow-auto max-h-[40vh]">
                     <table className="w-full text-xs">
@@ -2255,20 +2226,6 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
             <option value="dead">Dead Stock</option>
           </select>
         </div>
-        <button onClick={() => {
-          const rows = [
-            ["Item", "Group", "Unit", "Turnover Ratio", "Days of Inventory", "COGS Value", "Avg Inventory Value", "Outward Qty", "Inward Qty", "Opening Qty", "Closing Qty", "Classification"],
-            ...filteredTurnover.map(t => [t.name, t.group, t.baseUnit, t.turnoverRatio, isFinite(t.daysOfInventory) ? t.daysOfInventory : "Inf", t.cogsValue.toFixed(0), t.avgInventoryValue.toFixed(0), t.totalOutwardQty.toFixed(0), t.totalInwardQty.toFixed(0), t.openingQty.toFixed(0), t.closingQty.toFixed(0), t.classification])
-          ];
-          const csv = rows.map(r => r.join(",")).join("\n");
-          const blob = new Blob([csv], { type: "text/csv" });
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blob);
-          a.download = `turnover_${turnoverPeriod}mo_${new Date().toISOString().slice(0, 10)}.csv`;
-          a.click();
-        }} className="btn-ghost flex items-center gap-2">
-          <Download size={14} />Export CSV
-        </button>
       </div>
 
       {/* Summary KPIs */}

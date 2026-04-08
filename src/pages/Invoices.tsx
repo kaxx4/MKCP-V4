@@ -47,44 +47,6 @@ export default function Invoices() {
     return "text-danger bg-danger/10";
   }
 
-  function exportCSV() {
-    function escCSV(v: string | number): string {
-      const s = String(v);
-      return (s.includes(",") || s.includes('"') || s.includes("\n"))
-        ? `"${s.replace(/"/g, '""')}"` : s;
-    }
-
-    const header = ["Date", "Voucher#", "Type", "Party", "Amount", "Paid", "Outstanding", "Due Date", "Days Overdue", "Items"];
-
-    const rows = filtered.map((inv) => {
-      const voucher = data!.vouchers.find(v => v.voucherId === inv.voucherId);
-      const invLines = voucher?.lines.filter(l => l.type === "inventory") ?? [];
-      const itemsStr = invLines.map(line => {
-        const item = line.itemId ? data!.items.get(line.itemId) : null;
-        const name = item?.name ?? line.itemId ?? "Unknown";
-        const unit = item?.baseUnit ?? "";
-        const qty = line.qtyBase ?? 0;
-        const rate = line.ratePerBase ?? 0;
-        const amount = line.lineAmount ?? qty * rate;
-        return `${name} (${qty} ${unit} @ ${rate.toFixed(2)}) = ${amount.toFixed(2)}`;
-      }).join("; ");
-
-      return [
-        inv.date, inv.voucherNumber, inv.type === "receivable" ? "Sales" : "Purchase",
-        inv.partyName, inv.totalAmount, inv.paidAmount, inv.outstanding, inv.dueDate ?? "", inv.daysPastDue,
-        itemsStr,
-      ].map(escCSV).join(",");
-    });
-
-    const csv = [header.map(escCSV).join(","), ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `invoices_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
-
   if (!data) {
     return (
       <div className="empty-state">
@@ -104,11 +66,6 @@ export default function Invoices() {
     <div className="page-section">
       <div className="page-header">
         <h1 className="page-title">Invoices</h1>
-        <div className="flex gap-2">
-          <button onClick={exportCSV} className="btn-secondary btn-sm">
-            <Download size={14} />Export CSV
-          </button>
-        </div>
       </div>
 
       {/* Summary — bento grid */}

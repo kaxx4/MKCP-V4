@@ -286,24 +286,6 @@ export default function Orders() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedItemId, orderLines, unitMode, coverMonths, data]);
 
-  function exportCSV() {
-    const lines = getAllLines();
-    const rows = [
-      ["Item", "Qty", "Unit"],
-      ...lines.map((l) => {
-        const item = data?.items.get(l.itemId);
-        const disp = toDisplay(item ?? null, l.qtyBase, unitMode);
-        return [l.itemName, disp.value, disp.label];
-      }),
-    ];
-    const csv = rows.map((r) => r.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `order_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-  }
-
   // ── Order Group Helpers ──
   const orderGroups = getAllGroups();
 
@@ -931,7 +913,6 @@ export default function Orders() {
             </div>
             <div className="flex items-center gap-0.5">
               <UnitToggle />
-              <button onClick={exportCSV} className="btn-icon" title="Export CSV"><Download size={13} /></button>
               <button onClick={exportXLSX} className="btn-icon" title="Export Excel" aria-label="Export Excel"><Download size={13} /></button>
               <button onClick={clearAll} className="btn-icon text-danger hover:bg-danger/10" title="Clear all" aria-label="Clear order"><Trash2 size={13} /></button>
             </div>
