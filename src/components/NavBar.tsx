@@ -20,6 +20,7 @@ import {
   X,
   RefreshCw,
   Map,
+  Percent,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
@@ -54,6 +55,7 @@ const NAV_ITEMS = [
   { path: "/price-list", icon: Tag, label: "Price List" },
   { path: "/routes", icon: Map, label: "Routes" },
   { path: "/reports", icon: BarChart2, label: "Reports" },
+  { path: "/discounts", icon: Percent, label: "Discounts" },
   { path: "/edit", icon: Pencil, label: "Edit Units" },
   { path: "/settings", icon: Settings, label: "Settings" },
 ];
