@@ -52,32 +52,48 @@ function computeReadiness(voucher: CanonicalVoucher, data: ParsedData, voucherIn
   return { allInStock, allPricesMatch, ready: allInStock && allPricesMatch };
 }
 
-/** Click-to-toggle tooltip for price verification icons */
-function PriceTooltip({ ok, billedRate, refRate }: { ok: boolean; billedRate: number; refRate: number }) {
+/** Three-part rate pill: [billed rate | icon + price list rate] — click toggles tooltip */
+function RatePill({ rate, refRate }: { rate: number; refRate: number }) {
   const [open, setOpen] = useState(false);
-  const diff = billedRate - refRate;
-  const pct = ((diff / refRate) * 100).toFixed(1);
+  const hasRef = refRate > 0;
+  const ok = priceMatches(rate, refRate);
+  const diff = hasRef ? rate - refRate : 0;
+  const pct = hasRef ? ((diff / refRate) * 100).toFixed(1) : "0";
   const sign = diff > 0 ? "+" : "";
 
-  const label = ok
-    ? `Price verified — matches price list (${fmtRate(refRate)})`
-    : `Price mismatch — billed ${fmtRate(billedRate)}, price list ${fmtRate(refRate)} (${sign}${pct}%)`;
+  const label = !hasRef
+    ? `Billed ${fmtRate(rate)} — no price list reference`
+    : ok
+      ? `Price verified — matches price list (${fmtRate(refRate)})`
+      : `Price mismatch — billed ${fmtRate(rate)}, price list ${fmtRate(refRate)} (${sign}${pct}%)`;
 
   return (
-    <span className="relative inline-flex items-center">
+    <span className="relative inline-flex items-stretch rounded overflow-hidden border border-neutral-200 text-[11px] tabular-nums leading-none whitespace-nowrap">
+      {/* Left: billed rate */}
+      <span className="px-1.5 py-1 bg-white text-neutral-700 font-medium">{fmtRate(rate)}</span>
+      {/* Divider */}
+      <span className="w-px bg-neutral-200 flex-shrink-0" />
+      {/* Right: icon + price list rate — coloured by match status */}
       <span
         title={label}
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-        className="cursor-pointer"
+        className={clsx(
+          "flex items-center gap-0.5 px-1.5 py-1 cursor-pointer font-medium",
+          !hasRef ? "bg-neutral-50 text-neutral-400" :
+          ok ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"
+        )}
       >
-        {ok
-          ? <CheckCircle2 size={14} className="text-blue-500 inline" />
-          : <XCircle size={14} className="text-yellow-500 inline" />}
+        {!hasRef ? (
+          <span className="text-[10px] text-neutral-400">—</span>
+        ) : ok ? (
+          <><CheckCircle2 size={11} className="flex-shrink-0" />{fmtRate(refRate)}</>
+        ) : (
+          <><XCircle size={11} className="flex-shrink-0" />{fmtRate(refRate)}</>
+        )}
       </span>
+      {/* Tooltip bubble */}
       {open && (
-        <span
-          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-50 w-max max-w-[220px] rounded-md bg-neutral-900 text-white text-[11px] leading-tight px-2 py-1.5 shadow-lg pointer-events-none whitespace-normal text-center"
-        >
+        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 w-max max-w-[230px] rounded-md bg-neutral-900 text-white text-[11px] leading-snug px-2.5 py-2 shadow-lg pointer-events-none whitespace-normal text-center">
           {label}
           <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-neutral-900" />
         </span>
@@ -216,8 +232,9 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                   <tr className="border-b border-neutral-200 text-xs text-neutral-500">
                     <th className="pb-2 text-left font-medium pr-4">Item</th>
                     <th className="pb-2 text-right font-medium pr-4 w-24 whitespace-nowrap">Qty</th>
-                    <th className="pb-2 text-right font-medium pr-4 w-28 whitespace-nowrap">Rate</th>
-                    <th className="pb-2 text-center font-medium w-6" title="Price verified against price list" />
+                    <th className="pb-2 text-right font-medium pr-4 whitespace-nowrap">
+                      Rate <span className="font-normal text-neutral-400">/ list</span>
+                    </th>
                     <th className="pb-2 text-right font-medium w-24 whitespace-nowrap">Amount</th>
                   </tr>
                 </thead>
@@ -236,8 +253,6 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                       : stock === 0 ? "out of stock"
                       : `${stock} (short by ${Math.abs(stock)})`;
                     const refRate = line.itemId ? (priceList.get(line.itemId) ?? 0) : 0;
-                    const priceOk = priceMatches(rate, refRate);
-                    const hasRef = refRate > 0;
                     return (
                       <tr key={i} className="border-b border-neutral-100 last:border-0">
                         <td className="py-2 pr-4 text-neutral-900 max-w-0" style={{ width: "100%" }}>
@@ -256,13 +271,8 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                         <td className="py-2 pr-4 text-right tabular-nums text-neutral-600 whitespace-nowrap">
                           {qty} {item?.baseUnit ?? ""}
                         </td>
-                        <td className="py-2 pr-1 text-right tabular-nums text-neutral-600 whitespace-nowrap">
-                          {fmtRate(rate)}
-                        </td>
-                        <td className="py-2 px-1 text-center">
-                          {hasRef ? (
-                            <PriceTooltip ok={priceOk} billedRate={rate} refRate={refRate} />
-                          ) : null}
+                        <td className="py-2 pr-4 text-right whitespace-nowrap">
+                          <RatePill rate={rate} refRate={refRate} />
                         </td>
                         <td className="py-2 text-right tabular-nums font-medium text-neutral-900 whitespace-nowrap">
                           {fmtINR(amt)}
