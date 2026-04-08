@@ -53,40 +53,50 @@ function _applyVoucherToBuckets(
   monthlyOut: Record<string, number>
 ): void {
   const ym = v.date.slice(0, 7);
+  let totalQty = 0;
+  // Accumulate qty for this itemId (only count item once per voucher)
   for (const line of v.lines) {
     if (line.type !== "inventory" || line.itemId !== itemId) continue;
-    const qty = line.qtyBase ?? 0;
-    if (v.voucherType === "Sales") {
-      monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
-    } else if (v.voucherType === "Credit Note") {
-      // Sales return → goods come back in
-      monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
-    } else if (v.voucherType === "Purchase") {
-      monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
-    } else if (v.voucherType === "Debit Note") {
-      // Purchase return → goods go back out
-      monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
-    } else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") {
-      if (qty > 0) monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
-      else monthlyOut[ym] = (monthlyOut[ym] ?? 0) + Math.abs(qty);
-    } else if (v.voucherType === "Delivery Note") {
-      monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
-    }
+    totalQty += line.qtyBase ?? 0;
+  }
+
+  if (totalQty === 0) return;
+
+  if (v.voucherType === "Sales") {
+    monthlyOut[ym] = (monthlyOut[ym] ?? 0) + totalQty;
+  } else if (v.voucherType === "Credit Note") {
+    // Sales return → goods come back in
+    monthlyIn[ym] = (monthlyIn[ym] ?? 0) + totalQty;
+  } else if (v.voucherType === "Purchase") {
+    monthlyIn[ym] = (monthlyIn[ym] ?? 0) + totalQty;
+  } else if (v.voucherType === "Debit Note") {
+    // Purchase return → goods go back out
+    monthlyOut[ym] = (monthlyOut[ym] ?? 0) + totalQty;
+  } else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") {
+    if (totalQty > 0) monthlyIn[ym] = (monthlyIn[ym] ?? 0) + totalQty;
+    else monthlyOut[ym] = (monthlyOut[ym] ?? 0) + Math.abs(totalQty);
+  } else if (v.voucherType === "Delivery Note") {
+    monthlyOut[ym] = (monthlyOut[ym] ?? 0) + totalQty;
   }
 }
 
 /** Apply a voucher's stock movement for one item to a running total. */
 function _applyVoucherToStock(v: CanonicalVoucher, itemId: string, running: number): number {
+  let totalQty = 0;
+  // Accumulate qty for this itemId (only count item once per voucher)
   for (const line of v.lines) {
     if (line.type !== "inventory" || line.itemId !== itemId) continue;
-    const qty = line.qtyBase ?? 0;
-    if (v.voucherType === "Sales") running -= qty;
-    else if (v.voucherType === "Credit Note") running += qty;
-    else if (v.voucherType === "Purchase") running += qty;
-    else if (v.voucherType === "Debit Note") running -= qty;
-    else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") running += qty;
-    else if (v.voucherType === "Delivery Note") running -= qty;
+    totalQty += line.qtyBase ?? 0;
   }
+
+  if (totalQty === 0) return running;
+
+  if (v.voucherType === "Sales") running -= totalQty;
+  else if (v.voucherType === "Credit Note") running += totalQty;
+  else if (v.voucherType === "Purchase") running += totalQty;
+  else if (v.voucherType === "Debit Note") running -= totalQty;
+  else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") running += totalQty;
+  else if (v.voucherType === "Delivery Note") running -= totalQty;
   return running;
 }
 
