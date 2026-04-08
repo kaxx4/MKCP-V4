@@ -102,6 +102,56 @@ function RatePill({ rate, refRate }: { rate: number; refRate: number }) {
   );
 }
 
+/** Amount pill: [billed amount | icon + price list amount] */
+function AmountPill({ billedAmt, listAmt }: { billedAmt: number; listAmt: number }) {
+  const [open, setOpen] = useState(false);
+  const hasRef = listAmt > 0;
+  const ok = !hasRef || Math.abs(billedAmt - listAmt) / listAmt <= 0.01; // ±1% tolerance
+  const diff = hasRef ? billedAmt - listAmt : 0;
+  const pct = hasRef ? ((diff / listAmt) * 100).toFixed(1) : "0";
+  const sign = diff > 0 ? "+" : "";
+
+  const label = !hasRef
+    ? `Billed ${fmtINR(billedAmt)} — no price list reference`
+    : ok
+      ? `Amount verified — matches price list (${fmtINR(listAmt)})`
+      : `Amount variance — billed ${fmtINR(billedAmt)}, price list ${fmtINR(listAmt)} (${sign}${pct}%)`;
+
+  return (
+    <span className="relative inline-flex items-stretch rounded overflow-hidden border border-neutral-200 text-[11px] tabular-nums leading-none whitespace-nowrap">
+      {/* Left: billed amount */}
+      <span className="px-2 py-1 bg-white text-neutral-700 font-medium">{fmtINR(billedAmt)}</span>
+      {/* Divider */}
+      <span className="w-px bg-neutral-200 flex-shrink-0" />
+      {/* Right: icon + price list amount */}
+      <span
+        title={label}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+        className={clsx(
+          "flex items-center gap-0.5 px-2 py-1 cursor-pointer font-medium",
+          !hasRef ? "bg-neutral-50 text-neutral-400" :
+          ok ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"
+        )}
+      >
+        {!hasRef ? (
+          <span className="text-[10px] text-neutral-400">—</span>
+        ) : ok ? (
+          <><CheckCircle2 size={11} className="flex-shrink-0" />{fmtINR(listAmt)}</>
+        ) : (
+          <><XCircle size={11} className="flex-shrink-0" />{fmtINR(listAmt)}</>
+        )}
+      </span>
+      {/* Tooltip bubble */}
+      {open && (
+        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 w-max max-w-[240px] rounded-md bg-neutral-900 text-white text-[11px] leading-snug px-2.5 py-2 shadow-lg pointer-events-none whitespace-normal text-center">
+          {label}
+          <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-neutral-900" />
+        </span>
+      )}
+    </span>
+  );
+}
+
 export default function PendingOrders() {
   const navigate = useNavigate();
   const { data, voucherIndex } = useDataStore();
@@ -183,7 +233,7 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
       />
 
       {/* Panel */}
-      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-start justify-between px-5 py-4 border-b border-neutral-200">
           <div>
@@ -235,7 +285,9 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                     <th className="pb-2 text-right font-medium pr-4 whitespace-nowrap">
                       Rate <span className="font-normal text-neutral-400">/ list</span>
                     </th>
-                    <th className="pb-2 text-right font-medium w-24 whitespace-nowrap">Amount</th>
+                    <th className="pb-2 text-right font-medium whitespace-nowrap">
+                      Amount <span className="font-normal text-neutral-400">/ list</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -253,6 +305,7 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                       : stock === 0 ? "out of stock"
                       : `${stock} (short by ${Math.abs(stock)})`;
                     const refRate = line.itemId ? (priceList.get(line.itemId) ?? 0) : 0;
+                    const refAmt = qty * refRate;
                     return (
                       <tr key={i} className="border-b border-neutral-100 last:border-0">
                         <td className="py-2 pr-4 text-neutral-900 max-w-0" style={{ width: "100%" }}>
@@ -274,8 +327,8 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                         <td className="py-2 pr-4 text-right whitespace-nowrap">
                           <RatePill rate={rate} refRate={refRate} />
                         </td>
-                        <td className="py-2 text-right tabular-nums font-medium text-neutral-900 whitespace-nowrap">
-                          {fmtINR(amt)}
+                        <td className="py-2 text-right whitespace-nowrap">
+                          <AmountPill billedAmt={amt} listAmt={refAmt} />
                         </td>
                       </tr>
                     );
@@ -284,8 +337,15 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                 <tfoot>
                   <tr className="border-t border-neutral-200">
                     <td colSpan={3} className="pt-2 text-right text-neutral-500 pr-4 text-xs">Total</td>
-                    <td className="pt-2 text-right tabular-nums font-semibold text-neutral-900 whitespace-nowrap">
-                      {fmtINR(inv.reduce((s, l) => s + (l.lineAmount ?? 0), 0))}
+                    <td className="pt-2 text-right whitespace-nowrap">
+                      <AmountPill
+                        billedAmt={inv.reduce((s, l) => s + (l.lineAmount ?? 0), 0)}
+                        listAmt={inv.reduce((s, l) => {
+                          const refRate = l.itemId ? (priceList.get(l.itemId) ?? 0) : 0;
+                          const qty = l.qtyBase ?? 0;
+                          return s + (qty * refRate);
+                        }, 0)}
+                      />
                     </td>
                   </tr>
                 </tfoot>
