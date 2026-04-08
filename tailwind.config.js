@@ -124,10 +124,10 @@ module.exports = {
         },
       },
 
-      // ─── Typography System ─────────────────────────────────────
+      // ─── Typography System (IBM Plex - Bold Financial Dashboard) ──
       fontFamily: {
         sans: [
-          '"Inter"',
+          '"IBM Plex Sans"',
           '-apple-system',
           'BlinkMacSystemFont',
           '"Segoe UI"',
@@ -138,6 +138,7 @@ module.exports = {
           '"Segoe UI Emoji"',
         ],
         mono: [
+          '"IBM Plex Mono"',
           '"SF Mono"',
           '"Cascadia Code"',
           '"Consolas"',
