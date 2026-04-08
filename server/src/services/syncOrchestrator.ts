@@ -8,7 +8,7 @@ import { buildSmartBatches } from "./voucherBatcher.js";
 import { getMonthlyChunks, getWeeklyChunks, getDailyChunks } from "../tally.js";
 import {
   convertStockGroups, convertUnits, convertGodowns, convertCostCentres,
-  convertStockItems, convertLedgers, convertVouchers, convertCompanies,
+  convertStockItems, convertLedgers, convertDealerPriceLists, convertVouchers, convertCompanies,
   convertCollection
 } from "../converters/convert.js";
 import { PARALLEL_MASTERS, SEQUENTIAL_MASTERS, TRANSACTION_COLLECTIONS } from "../config/collections.js";
@@ -66,14 +66,17 @@ export class SyncOrchestrator {
     if (bsReport) console.log(`[MASTERS] ✓ BS: Capital=${(bsReport.capitalAccount / 100000).toFixed(1)}L`);
     console.log(`[MASTERS] ✓ Parallel: ${groups.tallymessage.length} groups, ${units.tallymessage.length} units, ${godowns.tallymessage.length} godowns, ${costCentres.tallymessage.length} cost centres`);
 
-    // Stock Items + Ledgers — fetch in parallel (independent requests)
+    // Stock Items + Ledgers + Dealer Price Lists — fetch in parallel (independent requests)
     let stocks = { tallymessage: [] as any[] };
     let ledgers = { tallymessage: [] as any[] };
+    let dealerPriceLists = { tallymessage: [] as any[] };
     if (!signal?.aborted) {
-      emit("masters", 2, 8, "Fetching stock items + ledgers in parallel (large)...");
+      emit("masters", 2, 8, "Fetching stock items + ledgers + dealer price lists...");
       const stocksDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "StockItem")!;
       const ledgersDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "Ledger")!;
-      const [stocksRes, ledgersRes] = await Promise.allSettled([
+      const plDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "PriceList");
+
+      const requests = [
         (async () => {
           const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(stocksDef, company), stocksDef.timeout, false, 1, signal);
           return convertStockItems(xml);
@@ -82,7 +85,17 @@ export class SyncOrchestrator {
           const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(ledgersDef, company), ledgersDef.timeout, false, 1, signal);
           return convertLedgers(xml);
         })(),
-      ]);
+      ];
+
+      if (plDef) {
+        requests.push((async () => {
+          const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(plDef, company), plDef.timeout, false, 1, signal);
+          return convertDealerPriceLists(xml);
+        })());
+      }
+
+      const [stocksRes, ledgersRes, ...plRes] = await Promise.allSettled(requests);
+
       if (stocksRes.status === "fulfilled") {
         stocks = stocksRes.value;
         console.log(`[MASTERS] ✓ ${stocks.tallymessage.length} stock items`);
@@ -94,6 +107,15 @@ export class SyncOrchestrator {
         console.log(`[MASTERS] ✓ ${ledgers.tallymessage.length} ledgers`);
       } else if (!ledgersRes.reason?.message?.includes("Aborted")) {
         errors.push(`Ledgers: ${ledgersRes.reason?.message}`);
+      }
+      if (plDef && plRes.length > 0 && plRes[0].status === "fulfilled") {
+        dealerPriceLists = plRes[0].value;
+        console.log(`[MASTERS] ✓ ${dealerPriceLists.tallymessage.length} dealer price lists`);
+      } else if (plDef && plRes.length > 0 && plRes[0].status === "rejected") {
+        const rejected = plRes[0] as PromiseRejectedResult;
+        if (!rejected.reason?.message?.includes("Aborted")) {
+          errors.push(`Dealer price lists: ${rejected.reason?.message}`);
+        }
       }
     }
 
@@ -112,6 +134,7 @@ export class SyncOrchestrator {
           ...ledgers.tallymessage,
           ...godowns.tallymessage,
           ...costCentres.tallymessage,
+          ...dealerPriceLists.tallymessage,
         ],
       },
       tallyFinancials: plReport || bsReport ? { pl: plReport, bs: bsReport } : undefined,
@@ -122,6 +145,7 @@ export class SyncOrchestrator {
         ledgers: ledgers.tallymessage.length,
         godowns: godowns.tallymessage.length,
         costCentres: costCentres.tallymessage.length,
+        dealerPriceLists: dealerPriceLists.tallymessage.length,
         elapsedSeconds: parseFloat(elapsed),
       },
     };

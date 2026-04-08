@@ -74,6 +74,7 @@ export interface MastersSyncResult {
     ledgers: number;
     godowns: number;
     costCentres: number;
+    dealerPriceLists: number;
     elapsedSeconds: number;
   };
 }

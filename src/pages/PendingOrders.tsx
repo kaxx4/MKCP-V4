@@ -53,7 +53,7 @@ function computeReadiness(voucher: CanonicalVoucher, data: ParsedData, voucherIn
 }
 
 /** Three-part rate pill: [billed rate | icon + price list rate] — click toggles tooltip */
-function RatePill({ rate, refRate }: { rate: number; refRate: number }) {
+function RatePill({ rate, refRate, isTotal = false }: { rate: number; refRate: number; isTotal?: boolean }) {
   const [open, setOpen] = useState(false);
   const hasRef = refRate > 0;
   const ok = priceMatches(rate, refRate);
@@ -67,10 +67,14 @@ function RatePill({ rate, refRate }: { rate: number; refRate: number }) {
       ? `Price verified — matches price list (${fmtRate(refRate)})`
       : `Price mismatch — billed ${fmtRate(rate)}, price list ${fmtRate(refRate)} (${sign}${pct}%)`;
 
+  const textSize = isTotal ? "text-[13px]" : "text-[11px]";
+  const padding = isTotal ? "px-2 py-1.5" : "px-1.5 py-1";
+  const iconSize = isTotal ? 13 : 11;
+
   return (
-    <span className="relative inline-flex items-stretch rounded overflow-hidden border border-neutral-200 text-[11px] tabular-nums leading-none whitespace-nowrap">
+    <span className={clsx("relative inline-flex items-stretch rounded overflow-hidden border border-neutral-200 tabular-nums leading-none whitespace-nowrap", textSize)}>
       {/* Left: billed rate */}
-      <span className="px-1.5 py-1 bg-white text-neutral-700 font-medium">{fmtRate(rate)}</span>
+      <span className={clsx("bg-white text-neutral-700 font-medium", padding)}>{fmtRate(rate)}</span>
       {/* Divider */}
       <span className="w-px bg-neutral-200 flex-shrink-0" />
       {/* Right: icon + price list rate — coloured by match status */}
@@ -78,17 +82,18 @@ function RatePill({ rate, refRate }: { rate: number; refRate: number }) {
         title={label}
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
         className={clsx(
-          "flex items-center gap-0.5 px-1.5 py-1 cursor-pointer font-medium",
+          "flex items-center gap-0.5 cursor-pointer font-medium",
+          padding,
           !hasRef ? "bg-neutral-50 text-neutral-400" :
           ok ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"
         )}
       >
         {!hasRef ? (
-          <span className="text-[10px] text-neutral-400">—</span>
+          <span className="text-neutral-400">—</span>
         ) : ok ? (
-          <><CheckCircle2 size={11} className="flex-shrink-0" />{fmtRate(refRate)}</>
+          <><CheckCircle2 size={iconSize} className="flex-shrink-0" />{fmtRate(refRate)}</>
         ) : (
-          <><XCircle size={11} className="flex-shrink-0" />{fmtRate(refRate)}</>
+          <><XCircle size={iconSize} className="flex-shrink-0" />{fmtRate(refRate)}</>
         )}
       </span>
       {/* Tooltip bubble */}
@@ -103,7 +108,7 @@ function RatePill({ rate, refRate }: { rate: number; refRate: number }) {
 }
 
 /** Amount pill: [billed amount | icon + price list amount] */
-function AmountPill({ billedAmt, listAmt }: { billedAmt: number; listAmt: number }) {
+function AmountPill({ billedAmt, listAmt, isTotal = false }: { billedAmt: number; listAmt: number; isTotal?: boolean }) {
   const [open, setOpen] = useState(false);
   const hasRef = listAmt > 0;
   const ok = !hasRef || Math.abs(billedAmt - listAmt) / listAmt <= 0.01; // ±1% tolerance
@@ -117,10 +122,14 @@ function AmountPill({ billedAmt, listAmt }: { billedAmt: number; listAmt: number
       ? `Amount verified — matches price list (${fmtINR(listAmt)})`
       : `Amount variance — billed ${fmtINR(billedAmt)}, price list ${fmtINR(listAmt)} (${sign}${pct}%)`;
 
+  const textSize = isTotal ? "text-[13px]" : "text-[11px]";
+  const padding = isTotal ? "px-3 py-1.5" : "px-2 py-1";
+  const iconSize = isTotal ? 13 : 11;
+
   return (
-    <span className="relative inline-flex items-stretch rounded overflow-hidden border border-neutral-200 text-[11px] tabular-nums leading-none whitespace-nowrap">
+    <span className={clsx("relative inline-flex items-stretch rounded overflow-hidden border border-neutral-200 tabular-nums leading-none whitespace-nowrap", textSize)}>
       {/* Left: billed amount */}
-      <span className="px-2 py-1 bg-white text-neutral-700 font-medium">{fmtINR(billedAmt)}</span>
+      <span className={clsx("bg-white text-neutral-700 font-medium", padding)}>{fmtINR(billedAmt)}</span>
       {/* Divider */}
       <span className="w-px bg-neutral-200 flex-shrink-0" />
       {/* Right: icon + price list amount */}
@@ -128,17 +137,18 @@ function AmountPill({ billedAmt, listAmt }: { billedAmt: number; listAmt: number
         title={label}
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
         className={clsx(
-          "flex items-center gap-0.5 px-2 py-1 cursor-pointer font-medium",
+          "flex items-center gap-0.5 cursor-pointer font-medium",
+          padding,
           !hasRef ? "bg-neutral-50 text-neutral-400" :
           ok ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"
         )}
       >
         {!hasRef ? (
-          <span className="text-[10px] text-neutral-400">—</span>
+          <span className="text-neutral-400">—</span>
         ) : ok ? (
-          <><CheckCircle2 size={11} className="flex-shrink-0" />{fmtINR(listAmt)}</>
+          <><CheckCircle2 size={iconSize} className="flex-shrink-0" />{fmtINR(listAmt)}</>
         ) : (
-          <><XCircle size={11} className="flex-shrink-0" />{fmtINR(listAmt)}</>
+          <><XCircle size={iconSize} className="flex-shrink-0" />{fmtINR(listAmt)}</>
         )}
       </span>
       {/* Tooltip bubble */}
@@ -218,154 +228,176 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
   const inv = voucher.lines.filter((l) => l.type === "inventory");
   const led = voucher.lines.filter((l) => l.type === "ledger");
   const { allInStock, allPricesMatch, ready } = computeReadiness(voucher, data, voucherIndex, priceList);
+  const totalBilled = inv.reduce((s, l) => s + (l.lineAmount ?? 0), 0);
+  const totalList = inv.reduce((s, l) => {
+    const refRate = l.itemId ? (priceList.get(l.itemId) ?? 0) : 0;
+    const qty = l.qtyBase ?? 0;
+    return s + (qty * refRate);
+  }, 0);
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label={`Delivery Note ${voucher.voucherNumber}`}
+      onClick={onClose}
     >
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-        onClick={onClose}
-      />
-
       {/* Panel */}
-      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden">
+      <div
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="flex items-start justify-between px-5 py-4 border-b border-neutral-200">
-          <div>
-            <div className="flex items-baseline gap-2">
-              <h2 className="text-base font-semibold text-neutral-900">
-                {voucher.partyName ?? voucher.voucherNumber}
+        <div className="flex items-start justify-between px-6 py-5 border-b border-neutral-200 bg-gradient-to-r from-neutral-50 to-white">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-3 flex-wrap mb-2">
+              <h2 className="text-lg font-bold text-neutral-950">
+                {voucher.partyName ?? "Delivery Note"}
               </h2>
-              <span className="text-xs font-mono text-neutral-500">{voucher.voucherNumber}</span>
+              <span className="text-xs font-mono text-neutral-500 bg-neutral-100 px-2.5 py-1 rounded-md">
+                {voucher.voucherNumber}
+              </span>
             </div>
-            <div className="text-xs text-neutral-500 mt-0.5">
-              {fmtDate(voucher.date)}
-              {voucher.narration && <> · <span className="italic">{voucher.narration}</span></>}
+            <div className="text-sm text-neutral-600">
+              <span className="font-medium">{fmtDate(voucher.date)}</span>
+              {voucher.narration && (
+                <>
+                  <span className="mx-2 text-neutral-300">·</span>
+                  <span className="italic text-neutral-500">{voucher.narration}</span>
+                </>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+          <div className="flex items-center gap-3 ml-6 flex-shrink-0">
             {ready ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-green-100 text-green-700 text-xs font-semibold">
-                <PackageCheck size={13} />
-                Ready to Deliver
-              </span>
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-success/10 text-success-600 text-xs font-semibold border border-success/20">
+                <PackageCheck size={14} className="flex-shrink-0" />
+                <span>Ready to Deliver</span>
+              </div>
             ) : (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-100 text-neutral-500 text-xs font-medium">
-                {!allInStock && "Stock issues"}
-                {!allInStock && !allPricesMatch && " · "}
-                {!allPricesMatch && "Price mismatch"}
-              </span>
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-100 text-neutral-700 text-xs font-medium border border-neutral-200">
+                <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-warn-500" />
+                <span>
+                  {!allInStock && "Stock issues"}
+                  {!allInStock && !allPricesMatch && " · "}
+                  {!allPricesMatch && "Price mismatch"}
+                </span>
+              </div>
             )}
             <button
               onClick={onClose}
-              className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 transition-colors cursor-pointer"
-              aria-label="Close"
+              className="p-2 rounded-lg text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 active:bg-neutral-200 transition-colors duration-150 cursor-pointer"
+              aria-label="Close delivery note"
             >
-              <X size={16} />
+              <X size={18} className="flex-shrink-0" />
             </button>
           </div>
         </div>
 
         {/* Body */}
-        <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
+        <div className="overflow-y-auto flex-1 px-6 py-5 space-y-6">
           {/* Items table */}
           {inv.length > 0 && (
             <div>
-              <div className="text-xs font-medium text-neutral-500 mb-2 uppercase tracking-wide">Items</div>
-              <table className="w-full border-collapse text-sm">
-                <thead>
-                  <tr className="border-b border-neutral-200 text-xs text-neutral-500">
-                    <th className="pb-2 text-left font-medium pr-4">Item</th>
-                    <th className="pb-2 text-right font-medium pr-4 w-24 whitespace-nowrap">Qty</th>
-                    <th className="pb-2 text-right font-medium pr-4 whitespace-nowrap">
-                      Rate <span className="font-normal text-neutral-400">/ list</span>
-                    </th>
-                    <th className="pb-2 text-right font-medium whitespace-nowrap">
-                      Amount <span className="font-normal text-neutral-400">/ list</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inv.map((line, i) => {
-                    const item = line.itemId ? data.items.get(line.itemId) : null;
-                    const name = item?.name ?? line.itemId ?? "Unknown";
-                    const qty = line.qtyBase ?? 0;
-                    const rate = line.ratePerBase ?? 0;
-                    const amt = line.lineAmount ?? qty * rate;
-                    const stock = item ? getCurrentStockIndexed(item, voucherIndex) : null;
-                    const inStock = stock !== null && stock >= qty;
-                    const stockLabel = stock === null ? null
-                      : stock >= qty ? `${stock} in stock`
-                      : stock > 0 ? `only ${stock} in stock`
-                      : stock === 0 ? "out of stock"
-                      : `${stock} (short by ${Math.abs(stock)})`;
-                    const refRate = line.itemId ? (priceList.get(line.itemId) ?? 0) : 0;
-                    const refAmt = qty * refRate;
-                    return (
-                      <tr key={i} className="border-b border-neutral-100 last:border-0">
-                        <td className="py-2 pr-4 text-neutral-900 max-w-0" style={{ width: "100%" }}>
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="block truncate" title={name}>{name}</span>
+              <h3 className="text-sm font-semibold text-neutral-900 mb-4 flex items-center gap-2">
+                <Truck size={16} className="text-neutral-500 flex-shrink-0" />
+                Items for Delivery
+              </h3>
+              <div className="overflow-x-auto border border-neutral-200 rounded-xl">
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-neutral-50 border-b border-neutral-200">
+                      <th className="px-4 py-3 text-left font-semibold text-neutral-700 text-xs uppercase tracking-wide">Item Name</th>
+                      <th className="px-4 py-3 text-right font-semibold text-neutral-700 text-xs uppercase tracking-wide whitespace-nowrap w-20">Qty</th>
+                      <th className="px-4 py-3 text-right font-semibold text-neutral-700 text-xs uppercase tracking-wide whitespace-nowrap">Rate</th>
+                      <th className="px-4 py-3 text-right font-semibold text-neutral-700 text-xs uppercase tracking-wide whitespace-nowrap">Amount</th>
+                      <th className="px-4 py-3 text-center font-semibold text-neutral-700 text-xs uppercase tracking-wide whitespace-nowrap">Stock Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inv.map((line, i) => {
+                      const item = line.itemId ? data.items.get(line.itemId) : null;
+                      const name = item?.name ?? line.itemId ?? "Unknown";
+                      const qty = line.qtyBase ?? 0;
+                      const rate = line.ratePerBase ?? 0;
+                      const amt = line.lineAmount ?? qty * rate;
+                      const stock = item ? getCurrentStockIndexed(item, voucherIndex) : null;
+                      const inStock = stock !== null && stock >= qty;
+                      const stockLabel = stock === null ? null
+                        : stock >= qty ? `${stock} in stock`
+                        : stock > 0 ? `only ${stock} in stock`
+                        : stock === 0 ? "out of stock"
+                        : `${stock} (short by ${Math.abs(stock)})`;
+                      const refRate = line.itemId ? (priceList.get(line.itemId) ?? 0) : 0;
+                      const refAmt = qty * refRate;
+                      return (
+                        <tr key={i} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50/50 transition-colors duration-75">
+                          <td className="px-4 py-3 text-neutral-900 font-medium max-w-xs">
+                            <span title={name} className="block truncate">{name}</span>
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums text-neutral-700 whitespace-nowrap">
+                            {qty} {item?.baseUnit ? <span className="text-2xs text-neutral-500">{item.baseUnit}</span> : ""}
+                          </td>
+                          <td className="px-4 py-3 text-right whitespace-nowrap">
+                            <RatePill rate={rate} refRate={refRate} />
+                          </td>
+                          <td className="px-4 py-3 text-right whitespace-nowrap">
+                            <AmountPill billedAmt={amt} listAmt={refAmt} />
+                          </td>
+                          <td className="px-4 py-3 text-center">
                             {stockLabel && (
                               <span className={clsx(
-                                "text-2xs flex-shrink-0 px-1.5 py-0.5 rounded font-medium whitespace-nowrap",
-                                inStock ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"
+                                "text-2xs inline-flex items-center gap-1 px-2 py-1 rounded-full font-medium whitespace-nowrap",
+                                inStock ? "bg-success/10 text-success-600 border border-success/20" : "bg-danger/10 text-danger-600 border border-danger/20"
                               )}>
+                                <span className="flex-shrink-0 w-1 h-1 rounded-full bg-current" />
                                 {stockLabel}
                               </span>
                             )}
-                          </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  {inv.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-neutral-50 border-t border-neutral-200 font-semibold">
+                        <td colSpan={3} className="px-4 py-3 text-right text-neutral-900 text-lg">Total Amount</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">
+                          <AmountPill billedAmt={totalBilled} listAmt={totalList} isTotal={true} />
                         </td>
-                        <td className="py-2 pr-4 text-right tabular-nums text-neutral-600 whitespace-nowrap">
-                          {qty} {item?.baseUnit ?? ""}
-                        </td>
-                        <td className="py-2 pr-4 text-right whitespace-nowrap">
-                          <RatePill rate={rate} refRate={refRate} />
-                        </td>
-                        <td className="py-2 text-right whitespace-nowrap">
-                          <AmountPill billedAmt={amt} listAmt={refAmt} />
-                        </td>
+                        <td />
                       </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t border-neutral-200">
-                    <td colSpan={3} className="pt-2 text-right text-neutral-500 pr-4 text-xs">Total</td>
-                    <td className="pt-2 text-right whitespace-nowrap">
-                      <AmountPill
-                        billedAmt={inv.reduce((s, l) => s + (l.lineAmount ?? 0), 0)}
-                        listAmt={inv.reduce((s, l) => {
-                          const refRate = l.itemId ? (priceList.get(l.itemId) ?? 0) : 0;
-                          const qty = l.qtyBase ?? 0;
-                          return s + (qty * refRate);
-                        }, 0)}
-                      />
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
             </div>
           )}
 
           {/* Ledger entries */}
           {led.length > 0 && (
             <div>
-              <div className="text-xs font-medium text-neutral-500 mb-2 uppercase tracking-wide">Ledger Entries</div>
-              <div className="space-y-1">
+              <h3 className="text-sm font-semibold text-neutral-900 mb-3">Ledger Entries</h3>
+              <div className="space-y-2 bg-neutral-50 rounded-xl p-4 border border-neutral-200">
                 {led.map((line, i) => {
                   const name = line.ledgerId
                     ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
                   return (
-                    <div key={i} className="flex gap-3 text-sm tabular-nums">
-                      <span className="text-neutral-400 w-5 flex-shrink-0">{line.isDebit ? "Dr" : "Cr"}</span>
-                      <span className="flex-1 truncate text-neutral-700">{name}</span>
-                      <span className="text-neutral-900">{fmtINR(line.amount ?? 0)}</span>
+                    <div key={i} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <span className={clsx(
+                          "text-xs font-semibold flex-shrink-0 px-2 py-0.5 rounded-md",
+                          line.isDebit ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700"
+                        )}>
+                          {line.isDebit ? "Dr" : "Cr"}
+                        </span>
+                        <span className="text-neutral-700 truncate">{name}</span>
+                      </div>
+                      <span className="text-neutral-900 font-semibold tabular-nums flex-shrink-0 ml-3">
+                        {fmtINR(line.amount ?? 0)}
+                      </span>
                     </div>
                   );
                 })}
@@ -374,8 +406,24 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
           )}
 
           {!inv.length && !led.length && (
-            <p className="text-neutral-500 text-sm">No line details available.</p>
+            <div className="text-center py-8">
+              <Truck size={32} className="text-neutral-300 mx-auto mb-3" />
+              <p className="text-neutral-500 text-sm">No line details available.</p>
+            </div>
           )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-neutral-200 bg-neutral-50 flex items-center justify-between">
+          <div className="text-xs text-neutral-600">
+            {inv.length} item{inv.length !== 1 ? "s" : ""} · {led.length} ledger entr{led.length !== 1 ? "ies" : "y"}
+          </div>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg bg-neutral-200 hover:bg-neutral-300 active:bg-neutral-400 text-neutral-900 font-medium text-sm transition-colors duration-150 cursor-pointer"
+          >
+            Close
+          </button>
         </div>
       </div>
     </div>
