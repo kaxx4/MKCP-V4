@@ -63,6 +63,20 @@ export const MASTER_COLLECTIONS: CollectionDef[] = [
     timeout: 900_000,
     parallel: false,
   },
+  {
+    name: "dealerPriceLists",
+    tallyCollection: "PriceList",
+    metadataType: "Price List",
+    category: "master",
+    fetch: [
+      "Name", "Parent", "GUID",
+      "PriceListItem", "PriceListItem.*",
+      "PriceListItem.StockItemName", "PriceListItem.StockItemGUID",
+      "PriceListItem.Rate", "PriceListItem.UnitRate", "PriceListItem.DealerDiscount", "PriceListItem.BarCode",
+    ],
+    timeout: 300_000,
+    parallel: false,
+  },
 ];
 
 export const TRANSACTION_COLLECTIONS: CollectionDef[] = [
