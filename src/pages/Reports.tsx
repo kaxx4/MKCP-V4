@@ -9,16 +9,23 @@ import { useDataStore } from "../store/dataStore";
 import { getCurrentStockIndexed, computeItemTurnover, computeABCXYZ, computePeriodComparison, type ABCXYZItem, type PeriodComparisonItem } from "../engine/inventory";
 import { monthlyTotals, computeItemMargins, type ItemMarginData } from "../engine/financial";
 import { computeGSTR1, computeGSTR3B, type GSTR1Summary, type GSTR3BSummary } from "../engine/gst";
+import { computeBalanceSheet, computeProfitAndLoss, computeTrialBalance, type BSGroupTotal, type TrialBalanceEntry } from "../engine/balanceSheet";
+import { computeAdvanceTax, COMPANY_TAX_REGIMES } from "../engine/advanceTax";
 import { toDisplay } from "../engine/unitEngine";
 import { useUIStore } from "../store/uiStore";
 import { fmtINR, fmtNum, fmtDate, fmtDateShort } from "../utils/format";
-import { Upload, BarChart2, TrendingUp, ChevronDown, ChevronRight, Download, RefreshCw, Calendar, Filter, ChevronLeft, ShoppingBag, Zap } from "lucide-react";
+import { Upload, BarChart2, TrendingUp, ChevronDown, ChevronRight, Download, RefreshCw, Calendar, Filter, ChevronLeft, ShoppingBag, Zap, DollarSign, FileText } from "lucide-react";
 import clsx from "clsx";
 import { loadFromStore } from "../db/idb";
 import { generatePredictions, type PartyOrderPattern, type PredictionSnapshot, type PredictionAccuracy, type UpsellSuggestion } from "../engine/prediction";
 import type { CanonicalVoucher, CanonicalItem } from "../types/canonical";
+import FinancialCommandCenter from "./reports/FinancialCommandCenter";
+import CashflowIntelligence from "./reports/CashflowIntelligence";
+import LedgerIntelligence from "./reports/LedgerIntelligence";
+import TaxRadar from "./reports/TaxRadar";
+import BusinessIntelligence from "./reports/BusinessIntelligence";
 
-const TABS = ["Inventory", "Sales Trend", "Top Items", "Turnover", "Predictions", "Purchase Orders", "Calendar", "ABC-XYZ", "Period Compare", "Margins", "GST Summary"] as const;
+const TABS = ["Inventory", "Sales Trend", "Top Items", "Turnover", "Predictions", "Purchase Orders", "Calendar", "ABC-XYZ", "Period Compare", "Margins", "GST Summary", "Balance Sheet", "Advance Tax", "Financial HQ", "Cashflow Intel", "Ledger Intel", "Tax Radar", "Business Intel"] as const;
 type Tab = typeof TABS[number];
 
 // ─── Daily Purchase Order types ─────────────────────────────
@@ -57,7 +64,7 @@ interface DayActivity {
 export default function Reports() {
   const navigate = useNavigate();
   const { data, voucherIndex } = useDataStore();
-  const { unitMode } = useUIStore();
+  const { unitMode, isMobile } = useUIStore();
   const [tab, setTab] = useState<Tab>("Inventory");
   const [predictionType, setPredictionType] = useState<"Sales" | "Purchase">("Sales");
   const [predictions, setPredictions] = useState<PartyOrderPattern[]>([]);
@@ -103,16 +110,41 @@ export default function Reports() {
   const [gstView, setGstView] = useState<"GSTR1" | "GSTR3B">("GSTR1");
   const [gstExpandedParty, setGstExpandedParty] = useState<string | null>(null);
 
+  // Balance Sheet state
+  const [bsView, setBsView] = useState<"bs" | "pl" | "tb">("bs");
+  const [bsExpandedGroup, setBsExpandedGroup] = useState<string | null>(null);
+
+  // Advance Tax state
+  const [taxRegime, setTaxRegime] = useState("Section 115BAA (New Regime)");
+
+  // Build party→dominant voucher type map for prediction filtering
+  const partyDominantType = useMemo(() => {
+    if (!data) return new Map<string, "Sales" | "Purchase">();
+    const counts = new Map<string, { sales: number; purchase: number }>();
+    for (const v of data.vouchers) {
+      if (v.isCancelled || !v.partyLedgerId) continue;
+      if (v.voucherType !== "Sales" && v.voucherType !== "Purchase") continue;
+      let c = counts.get(v.partyLedgerId);
+      if (!c) { c = { sales: 0, purchase: 0 }; counts.set(v.partyLedgerId, c); }
+      if (v.voucherType === "Sales") c.sales++;
+      else c.purchase++;
+    }
+    const result = new Map<string, "Sales" | "Purchase">();
+    for (const [partyId, c] of counts) {
+      result.set(partyId, c.sales >= c.purchase ? "Sales" : "Purchase");
+    }
+    return result;
+  }, [data]);
+
   // Load predictions when tab changes to Predictions
   useEffect(() => {
     if (tab === "Predictions" && data) {
       (async () => {
         const snapshot = await loadFromStore<PredictionSnapshot>("predictions", "latest");
         if (snapshot) {
-          const filtered = snapshot.predictions.filter(p => {
-            const firstVoucher = data.vouchers.find(v => v.partyLedgerId === p.partyLedgerId);
-            return firstVoucher?.voucherType === predictionType;
-          });
+          const filtered = snapshot.predictions.filter(p =>
+            partyDominantType.get(p.partyLedgerId) === predictionType
+          );
           setPredictions(filtered);
         } else {
           const fresh = generatePredictions(data.vouchers, data.items, predictionType);
@@ -123,7 +155,7 @@ export default function Reports() {
         setAccuracyData(accuracy ?? null);
       })();
     }
-  }, [tab, predictionType, data]);
+  }, [tab, predictionType, data, partyDominantType]);
 
   // Initialize calendar month from latest voucher date
   useEffect(() => {
@@ -136,26 +168,27 @@ export default function Reports() {
     }
   }, [data, calendarMonth]);
 
-  // ─── Deduplicated prediction filter (Task 1D) ───────────
+  // ─── Deduplicated prediction filter ─────────────
   const filteredPredictions = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayMs = today.getTime();
+    const weekFromNow = todayMs + 7 * 86400000;
+    const monthFromNow = todayMs + 30 * 86400000;
+    const customStart = predictionCustomStartDate ? new Date(predictionCustomStartDate).getTime() : 0;
+    const customEnd = predictionCustomEndDate ? new Date(predictionCustomEndDate).getTime() : Infinity;
+
     return predictions.filter(pred => {
       if (pred.confidence * 100 < predictionConfidenceFilter) return false;
-      const predDate = new Date(pred.predictedNextDate);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const predMs = new Date(pred.predictedNextDate).getTime();
       if (predictionDateFilter === "overdue") {
         if (!pred.isOverdue) return false;
       } else if (predictionDateFilter === "week") {
-        const weekFromNow = new Date(today);
-        weekFromNow.setDate(weekFromNow.getDate() + 7);
-        if (predDate < today || predDate > weekFromNow) return false;
+        if (predMs < todayMs || predMs > weekFromNow) return false;
       } else if (predictionDateFilter === "month") {
-        const monthFromNow = new Date(today);
-        monthFromNow.setDate(monthFromNow.getDate() + 30);
-        if (predDate < today || predDate > monthFromNow) return false;
+        if (predMs < todayMs || predMs > monthFromNow) return false;
       } else if (predictionDateFilter === "custom") {
-        if (predictionCustomStartDate && predDate < new Date(predictionCustomStartDate)) return false;
-        if (predictionCustomEndDate && predDate > new Date(predictionCustomEndDate)) return false;
+        if (predMs < customStart || predMs > customEnd) return false;
       }
       return true;
     });
@@ -198,9 +231,9 @@ export default function Reports() {
   }, [data]);
 
   const turnoverData = useMemo(() => {
-    if (!data) return [];
+    if (!data || tab !== "Turnover") return [];
     return computeItemTurnover(data.items, data.vouchers, turnoverPeriod);
-  }, [data, turnoverPeriod]);
+  }, [data, turnoverPeriod, tab]);
 
   const turnoverGroups = useMemo(() => {
     const gs = new Set(turnoverData.map(t => t.group));
@@ -224,14 +257,17 @@ export default function Reports() {
 
   const turnoverSummary = useMemo(() => {
     if (!turnoverData.length) return { fast: 0, moderate: 0, slow: 0, dead: 0, avgRatio: 0, totalCOGS: 0, totalAvgInv: 0 };
-    const fast = turnoverData.filter(t => t.classification === "fast").length;
-    const moderate = turnoverData.filter(t => t.classification === "moderate").length;
-    const slow = turnoverData.filter(t => t.classification === "slow").length;
-    const dead = turnoverData.filter(t => t.classification === "dead").length;
-    const totalCOGS = turnoverData.reduce((s, t) => s + t.cogsValue, 0);
-    const totalAvgInv = turnoverData.reduce((s, t) => s + t.avgInventoryValue, 0);
-    const avgRatio = totalAvgInv > 0 ? totalCOGS / totalAvgInv : 0;
-    return { fast, moderate, slow, dead, avgRatio: Math.round(avgRatio * 100) / 100, totalCOGS, totalAvgInv };
+    let fast = 0, moderate = 0, slow = 0, dead = 0, totalCOGS = 0, totalAvgInv = 0;
+    for (const t of turnoverData) {
+      if (t.classification === "fast") fast++;
+      else if (t.classification === "moderate") moderate++;
+      else if (t.classification === "slow") slow++;
+      else if (t.classification === "dead") dead++;
+      totalCOGS += t.cogsValue;
+      totalAvgInv += t.avgInventoryValue;
+    }
+    const avgRatio = totalAvgInv > 0 ? Math.round((totalCOGS / totalAvgInv) * 100) / 100 : 0;
+    return { fast, moderate, slow, dead, avgRatio, totalCOGS, totalAvgInv };
   }, [turnoverData]);
 
   // ─── Financial Year Info ───────────────────────
@@ -299,6 +335,8 @@ export default function Reports() {
         };
       });
 
+      // Pre-sort items by value descending (avoids re-sorting on every render)
+      items.sort((a, b) => b.totalValue - a.totalValue);
       const totalValue = items.reduce((s, i) => s + i.totalValue, 0);
       return { date, voucherIds, partyNames, items, totalValue } as DailyPurchaseOrder;
     });
@@ -474,11 +512,11 @@ export default function Reports() {
     return map;
   }, [data, calendarMonth, predictions]);
 
-  // ─── ABC-XYZ data ───────────────────────────────
+  // ─── ABC-XYZ data (tab-gated) ───────────────────
   const abcxyzData = useMemo(() => {
-    if (!data) return [];
+    if (!data || tab !== "ABC-XYZ") return [];
     return computeABCXYZ(data.items, data.vouchers, 12);
-  }, [data]);
+  }, [data, tab]);
 
   const abcxyzFiltered = useMemo(() => {
     let result = abcxyzData;
@@ -540,11 +578,11 @@ export default function Reports() {
     }
   }, [availableMonths, gstMonth]);
 
-  // ─── Period comparison data ────────────────────
+  // ─── Period comparison data (tab-gated) ─────────
   const periodData = useMemo(() => {
-    if (!data || !periodMonthA || !periodMonthB) return [];
+    if (!data || !periodMonthA || !periodMonthB || tab !== "Period Compare") return [];
     return computePeriodComparison(data.items, voucherIndex, periodMonthA, periodMonthB);
-  }, [data, voucherIndex, periodMonthA, periodMonthB]);
+  }, [data, voucherIndex, periodMonthA, periodMonthB, tab]);
 
   const periodFiltered = useMemo(() => {
     let result = periodData;
@@ -563,6 +601,22 @@ export default function Reports() {
     }
     return result;
   }, [periodData, periodSearch, periodSort, periodSortDir]);
+
+  // ─── Balance Sheet / P&L / Trial Balance (tab-gated) ───
+  const bsData = useMemo(() => {
+    if (!data || tab !== "Balance Sheet") return null;
+    return {
+      bs: computeBalanceSheet(data.ledgers, data.vouchers, data.items, data.tallyPL, data.tallyBS),
+      pl: computeProfitAndLoss(data.ledgers, data.vouchers, data.items, data.tallyPL),
+      tb: computeTrialBalance(data.ledgers, data.vouchers),
+    };
+  }, [data, tab]);
+
+  // ─── Advance Tax (tab-gated) ──────────────────────────
+  const atData = useMemo(() => {
+    if (!data || tab !== "Advance Tax") return null;
+    return computeAdvanceTax(data.ledgers, data.vouchers, taxRegime, 4, data.tallyPL);
+  }, [data, tab, taxRegime]);
 
   // ─── Margins data ─────────────────────────────
   const marginData = useMemo(() => {
@@ -601,6 +655,29 @@ export default function Reports() {
     return { avgMargin, totalProfit, thinMargin, negativeMargin };
   }, [marginData]);
 
+  // Memoized chart data for Margins tab (was inline in JSX, causing re-computation on every render)
+  const marginChartTop20 = useMemo(() => {
+    return [...marginData]
+      .filter(d => !d.hasNoSales && !d.hasNoPurchases)
+      .sort((a, b) => b.totalProfit - a.totalProfit)
+      .slice(0, 20)
+      .map(d => ({ name: d.name.slice(0, 18), profit: d.totalProfit, pct: d.marginPct }));
+  }, [marginData]);
+
+  const marginChartTop20Colors = useMemo(() => {
+    return [...marginData]
+      .filter(d => !d.hasNoSales && !d.hasNoPurchases)
+      .sort((a, b) => b.totalProfit - a.totalProfit)
+      .slice(0, 20)
+      .map(d => d.marginPct > 20 ? "#10b981" : d.marginPct > 10 ? "#f59e0b" : "#ef4444");
+  }, [marginData]);
+
+  const marginScatterData = useMemo(() => {
+    return marginData
+      .filter(d => !d.hasNoSales && !d.hasNoPurchases && d.totalSalesValue > 0)
+      .map(d => ({ x: d.totalSalesValue, y: d.marginPct, name: d.name, color: d.marginPct > 20 ? "#10b981" : d.marginPct > 10 ? "#f59e0b" : "#ef4444" }));
+  }, [marginData]);
+
   // ─── GST data ──────────────────────────────────
   const gstr1Data = useMemo(() => {
     if (!data || !gstMonth) return null;
@@ -616,8 +693,8 @@ export default function Reports() {
     return (
       <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
         <BarChart2 size={64} className="text-muted" />
-        <h2 className="text-xl font-semibold text-primary">No Data Loaded</h2>
-        <button onClick={() => navigate("/import")} className="flex items-center gap-2 bg-accent hover:bg-accent-hover text-white font-semibold px-5 py-2.5 rounded-lg transition mt-2">
+        <h2 className="subsection-header">No Data Loaded</h2>
+        <button onClick={() => navigate("/import")} className="btn-primary mt-2">
           <Upload size={16} />Import Data
         </button>
       </div>
@@ -625,34 +702,36 @@ export default function Reports() {
   }
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-primary">Reports</h1>
+    <div className="page-section">
+      <h1 className="text-2xl md:text-3xl font-bold text-primary">Reports</h1>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-bg-card border border-bg-border rounded-xl p-1 w-fit flex-wrap">
-        {TABS.map((t) => (
-          <button key={t} onClick={() => setTab(t)}
-            className={clsx("px-4 py-2 rounded-lg text-sm transition", tab === t ? "bg-accent text-white font-medium" : "text-muted hover:text-primary")}>
-            {t}
-          </button>
-        ))}
+      {/* Tabs — horizontally scrollable, no scrollbar on mobile */}
+      <div className="overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0 scrollbar-thin" role="tablist">
+        <div className="flex gap-1 bento-card !p-1 w-max md:w-full md:flex-wrap">
+          {TABS.map((t) => (
+            <button key={t} onClick={() => setTab(t)} role="tab" aria-selected={tab === t}
+              className={clsx("px-2.5 md:px-3 py-1.5 rounded-lg text-[11px] md:text-xs transition whitespace-nowrap cursor-pointer", tab === t ? "bg-accent text-white font-medium" : "text-muted hover:text-primary hover:bg-bg-border/50")}>
+              {t}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ═══ Inventory Valuation ═══ */}
       {tab === "Inventory" && (
-        <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-bg-border flex justify-between">
-            <h3 className="font-semibold text-primary">Inventory Valuation</h3>
-            <span className="text-muted text-sm font-mono">
+        <div className="section-card">
+          <div className="section-card-header flex justify-between">
+            <h3 className="card-title">Inventory Valuation</h3>
+            <span className="caption-text tabular-nums">
               Total: {fmtINR(inventoryRows.reduce((s, r) => s + r.value, 0))}
             </span>
           </div>
-          <div className="overflow-auto max-h-[60vh]">
+          <div className="section-card-body-flush overflow-auto max-h-[60vh]">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+              <thead className="table-header-sticky">
                 <tr>
                   {["Item", "Group", "Stock (Base)", "Stock (Pkg)", "Rate", "Value"].map((h) => (
-                    <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>
+                    <th key={h} className="table-header">{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -660,13 +739,13 @@ export default function Reports() {
                 {inventoryRows.map(({ item, stock, value }) => {
                   const pkgDisp = item.pkgUnit ? toDisplay(item, stock, "PKG") : null;
                   return (
-                    <tr key={item.itemId} className="border-b border-bg-border/50 hover:bg-bg-border/20">
-                      <td className="px-4 py-2 text-primary max-w-[220px] truncate">{item.name}</td>
-                      <td className="px-4 py-2 text-muted text-xs">{item.group}</td>
-                      <td className="px-4 py-2 font-mono text-primary">{fmtNum(stock, 0)} {item.baseUnit}</td>
-                      <td className="px-4 py-2 font-mono text-muted text-xs">{pkgDisp ? pkgDisp.formatted : "-"}</td>
-                      <td className="px-4 py-2 font-mono text-primary">{fmtINR(item.openingRate)}</td>
-                      <td className={clsx("px-4 py-2 font-mono font-semibold", value >= 0 ? "text-accent" : "text-danger")}>{fmtINR(value)}</td>
+                    <tr key={item.itemId} className="responsive-table-row">
+                      <td className="table-cell text-primary max-w-[220px] truncate">{item.name}</td>
+                      <td className="table-cell caption-text">{item.group}</td>
+                      <td className="table-cell tabular-nums text-primary">{fmtNum(stock, 0)} {item.baseUnit}</td>
+                      <td className="table-cell tabular-nums caption-text">{pkgDisp ? pkgDisp.formatted : "-"}</td>
+                      <td className="table-cell tabular-nums text-primary">{fmtINR(item.openingRate)}</td>
+                      <td className={clsx("table-cell-emphasis tabular-nums", value >= 0 ? "num-positive" : "num-negative")}>{fmtINR(value)}</td>
                     </tr>
                   );
                 })}
@@ -678,14 +757,14 @@ export default function Reports() {
 
       {/* ═══ Sales Trend ═══ */}
       {tab === "Sales Trend" && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-          <h3 className="font-semibold text-primary mb-4">12-Month Sales Trend</h3>
+        <div className="bento-card">
+          <h3 className="card-title mb-4">12-Month Sales Trend</h3>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={salesTrend}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#64748b" }} />
-              <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
-              <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }}
                 labelStyle={{ color: "#0f172a" }} formatter={(v: number) => [fmtINR(v), "Sales"]} />
               <Line type="monotone" dataKey="amount" stroke="#3b82f6" strokeWidth={2} dot={{ fill: "#3b82f6", r: 3 }} />
             </LineChart>
@@ -695,39 +774,41 @@ export default function Reports() {
 
       {/* ═══ Top Items ═══ */}
       {tab === "Top Items" && (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-            <h3 className="font-semibold text-primary mb-4">Top 10 by Qty (last 30 days)</h3>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
+          <div className="bento-card">
+            <h3 className="card-title mb-4">Top 10 by Qty (last 30 days)</h3>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={topItems.map((i) => ({ name: i.name.slice(0, 18), qty: i.qty }))} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} />
-                <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fill: "#64748b" }} />
-                <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }} />
                 <Bar dataKey="qty" fill="#10b981" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-bg-border">
-              <h3 className="font-semibold text-primary">Top Items by Value</h3>
+          <div className="section-card">
+            <div className="section-card-header">
+              <h3 className="card-title">Top Items by Value</h3>
             </div>
-            <table className="w-full text-sm">
-              <thead className="border-b border-bg-border">
-                <tr>
-                  {["Item", "Qty", "Value"].map((h) => <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {[...topItems].sort((a, b) => b.value - a.value).map((item, i) => (
-                  <tr key={i} className="border-b border-bg-border/50">
-                    <td className="px-4 py-2 text-primary text-xs">{item.name}</td>
-                    <td className="px-4 py-2 font-mono text-muted text-xs">{fmtNum(item.qty, 0)}</td>
-                    <td className="px-4 py-2 font-mono text-accent text-xs">{fmtINR(item.value)}</td>
+            <div className="section-card-body-flush">
+              <table className="w-full text-sm">
+                <thead className="border-b border-bg-border">
+                  <tr>
+                    {["Item", "Qty", "Value"].map((h) => <th key={h} className="table-header">{h}</th>)}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {[...topItems].sort((a, b) => b.value - a.value).map((item, i) => (
+                    <tr key={i} className="responsive-table-row">
+                      <td className="table-cell text-primary">{item.name}</td>
+                      <td className="table-cell tabular-nums caption-text">{fmtNum(item.qty, 0)}</td>
+                      <td className="table-cell tabular-nums num-highlight">{fmtINR(item.value)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
@@ -752,33 +833,33 @@ export default function Reports() {
       {tab === "Predictions" && (
         <div className="space-y-4">
           {/* Type toggle and summary */}
-          <div className="flex items-center justify-between bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="flex items-center justify-between bento-card">
             <div className="flex items-center gap-4">
-              <h3 className="font-semibold text-primary">Order Predictions</h3>
+              <h3 className="card-title">Order Predictions</h3>
               <select value={predictionType} onChange={(e) => setPredictionType(e.target.value as "Sales" | "Purchase")}
-                className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+                className="form-select text-xs py-1 pl-2 min-h-0">
                 <option value="Sales">Sales Orders</option>
                 <option value="Purchase">Purchase Orders</option>
               </select>
             </div>
             <div className="flex gap-6 text-sm">
-              <div className="text-muted"><span className="font-semibold text-primary">{predictions.length}</span> parties</div>
-              <div className="text-muted"><span className="font-semibold text-success">{predictions.filter(p => p.daysUntilPredicted >= 0 && p.daysUntilPredicted <= 30).length}</span> upcoming (30d)</div>
-              <div className="text-muted"><span className="font-semibold text-danger">{predictions.filter(p => p.isOverdue).length}</span> overdue</div>
+              <div className="caption-text"><span className="font-semibold text-primary">{predictions.length}</span> parties</div>
+              <div className="caption-text"><span className="font-semibold text-success">{predictions.filter(p => p.daysUntilPredicted >= 0 && p.daysUntilPredicted <= 30).length}</span> upcoming (30d)</div>
+              <div className="caption-text"><span className="font-semibold text-danger">{predictions.filter(p => p.isOverdue).length}</span> overdue</div>
             </div>
           </div>
 
           {/* Advanced Filters */}
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="bento-card">
             <div className="flex items-center gap-2 mb-3">
               <Filter size={16} className="text-accent" />
-              <h3 className="font-semibold text-primary">Advanced Filters</h3>
+              <h3 className="card-title">Advanced Filters</h3>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div className="filter-bar grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
               <div>
                 <label className="text-xs text-muted mb-1 block">Date Range</label>
                 <select value={predictionDateFilter} onChange={(e) => setPredictionDateFilter(e.target.value as typeof predictionDateFilter)}
-                  className="w-full bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+                  className="form-select text-xs py-1 pl-2 min-h-0 w-full">
                   <option value="all">All Dates</option>
                   <option value="overdue">Overdue Only</option>
                   <option value="week">Next 7 Days</option>
@@ -796,12 +877,12 @@ export default function Reports() {
                   <div>
                     <label className="text-xs text-muted mb-1 block flex items-center gap-1"><Calendar size={12} />Start</label>
                     <input type="date" value={predictionCustomStartDate} onChange={(e) => setPredictionCustomStartDate(e.target.value)}
-                      className="w-full bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none" />
+                      className="form-select text-xs py-1 pl-2 min-h-0 w-full" />
                   </div>
                   <div>
                     <label className="text-xs text-muted mb-1 block flex items-center gap-1"><Calendar size={12} />End</label>
                     <input type="date" value={predictionCustomEndDate} onChange={(e) => setPredictionCustomEndDate(e.target.value)}
-                      className="w-full bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none" />
+                      className="form-select text-xs py-1 pl-2 min-h-0 w-full" />
                   </div>
                 </>
               )}
@@ -810,18 +891,18 @@ export default function Reports() {
 
           {/* Accuracy */}
           {accuracyData && accuracyData.length > 0 && (
-            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-              <h3 className="font-semibold text-primary mb-2 flex items-center gap-2"><TrendingUp size={16} />Prediction Accuracy</h3>
-              <div className="grid grid-cols-3 gap-4 mt-3">
-                <div className="bg-bg border border-bg-border rounded-lg p-3 text-center">
+            <div className="bento-card">
+              <h3 className="card-title mb-2 flex items-center gap-2"><TrendingUp size={16} />Prediction Accuracy</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-3">
+                <div className="bento-card !p-3 text-center">
                   <div className="text-2xl font-bold text-accent">{(accuracyData.reduce((s, a) => s + a.dateAccuracyScore, 0) / accuracyData.length * 100).toFixed(0)}%</div>
                   <div className="text-muted text-xs mt-1">Date Accuracy</div>
                 </div>
-                <div className="bg-bg border border-bg-border rounded-lg p-3 text-center">
+                <div className="bento-card !p-3 text-center">
                   <div className="text-2xl font-bold text-success">{(accuracyData.reduce((s, a) => s + a.itemAccuracyScore, 0) / accuracyData.length * 100).toFixed(0)}%</div>
                   <div className="text-muted text-xs mt-1">Item Accuracy</div>
                 </div>
-                <div className="bg-bg border border-bg-border rounded-lg p-3 text-center">
+                <div className="bento-card !p-3 text-center">
                   <div className="text-2xl font-bold text-primary">{accuracyData.length}</div>
                   <div className="text-muted text-xs mt-1">Parties Scored</div>
                 </div>
@@ -830,17 +911,17 @@ export default function Reports() {
           )}
 
           {/* Predictions table — uses filteredPredictions (deduplicated) */}
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between">
-              <h3 className="font-semibold text-primary">Party Predictions (sorted by urgency)</h3>
-              <div className="text-muted text-xs">Showing <span className="font-semibold text-primary">{filteredPredictions.length}</span> of {predictions.length}</div>
+          <div className="section-card">
+            <div className="section-card-header flex items-center justify-between">
+              <h3 className="card-title">Party Predictions (sorted by urgency)</h3>
+              <div className="caption-text">Showing <span className="font-semibold text-primary">{filteredPredictions.length}</span> of {predictions.length}</div>
             </div>
-            <div className="overflow-auto max-h-[60vh]">
+            <div className="section-card-body-flush overflow-auto max-h-[60vh]">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                <thead className="table-header-sticky">
                   <tr>
                     {["", "Party", "Last Order", "Avg Interval", "Predicted Next", "Confidence", "Items"].map((h) => (
-                      <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>
+                      <th key={h} className="table-header">{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -865,12 +946,12 @@ export default function Reports() {
       {tab === "Purchase Orders" && (
         <div className="space-y-4">
           {/* Header */}
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="bento-card">
             <div className="flex items-center gap-3 mb-2">
               <ShoppingBag size={16} className="text-purple-500" />
-              <h3 className="font-semibold text-primary">Purchase Orders - {fyInfo.fyLabel}</h3>
+              <h3 className="card-title">Purchase Orders - {fyInfo.fyLabel}</h3>
             </div>
-            <span className="text-muted text-sm">
+            <span className="caption-text">
               {fmtDate(fyInfo.fyStart)} to {fmtDate(fyInfo.fyEnd)} · {dailyPOs.length} purchase days
             </span>
           </div>
@@ -878,24 +959,24 @@ export default function Reports() {
           {/* KPI Summary */}
           {dailyPOs.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-                <div className="text-2xl font-bold font-mono text-purple-600">{fmtINR(poKPIs.totalSpend)}</div>
+              <div className="bento-card !p-3 text-center">
+                <div className="text-2xl font-bold tabular-nums text-purple-600">{fmtINR(poKPIs.totalSpend)}</div>
                 <div className="text-muted text-xs mt-1">Total Spend</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-                <div className="text-2xl font-bold font-mono text-primary">{fmtINR(poKPIs.avgPOValue)}</div>
+              <div className="bento-card !p-3 text-center">
+                <div className="text-2xl font-bold tabular-nums text-primary">{fmtINR(poKPIs.avgPOValue)}</div>
                 <div className="text-muted text-xs mt-1">Avg PO Value</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
+              <div className="bento-card !p-3 text-center">
                 <div className="text-lg font-bold text-accent truncate" title={poKPIs.topSupplier}>{poKPIs.topSupplier}</div>
                 <div className="text-muted text-xs mt-1">Top Supplier</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-                <div className="text-2xl font-bold font-mono text-success">{poKPIs.poFrequency.toFixed(1)}/week</div>
+              <div className="bento-card !p-3 text-center">
+                <div className="text-2xl font-bold tabular-nums text-success">{poKPIs.poFrequency.toFixed(1)}/week</div>
                 <div className="text-muted text-xs mt-1">PO Frequency</div>
               </div>
-              <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-                <div className="text-2xl font-bold font-mono text-primary">{poKPIs.uniqueItems}</div>
+              <div className="bento-card !p-3 text-center">
+                <div className="text-2xl font-bold tabular-nums text-primary">{poKPIs.uniqueItems}</div>
                 <div className="text-muted text-xs mt-1">Unique Items</div>
               </div>
             </div>
@@ -903,17 +984,17 @@ export default function Reports() {
 
           {/* Aggregate Charts */}
           {dailyPOs.length > 0 && (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
               {/* Monthly Purchase Value Trend */}
-              <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-                <h3 className="font-semibold text-primary mb-3 text-sm">Monthly Purchase Value Trend</h3>
+              <div className="bento-card">
+                <h3 className="card-title mb-3">Monthly Purchase Value Trend</h3>
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={monthlyPurchaseData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} />
-                    <YAxis tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} axisLine={false} tickLine={false} />
                     <Tooltip
-                      contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
+                      contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }}
                       formatter={(v: number, name: string, props: any) => [fmtINR(v), `Value (${props.payload.count} orders)`]}
                     />
                     <Bar dataKey="value" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
@@ -922,14 +1003,14 @@ export default function Reports() {
               </div>
 
               {/* Top 10 Purchased Items */}
-              <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-                <h3 className="font-semibold text-primary mb-3 text-sm">Top 10 Purchased Items (by Qty)</h3>
+              <div className="bento-card">
+                <h3 className="card-title mb-3">Top 10 Purchased Items (by Qty)</h3>
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={poTopItems} layout="vertical" barSize={14}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                     <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} />
                     <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fill: "#64748b" }} />
-                    <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
+                    <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }}
                       formatter={(v: number, name: string, props: any) => [`${v} ${props.payload.unit}`, "Qty"]} />
                     <Bar dataKey="qty" fill="#a855f7" radius={[0, 4, 4, 0]} />
                   </BarChart>
@@ -940,14 +1021,14 @@ export default function Reports() {
 
           {/* Supplier Breakdown */}
           {poSupplierData.length > 0 && (
-            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-              <h3 className="font-semibold text-primary mb-3 text-sm">Purchase by Supplier (Top 5)</h3>
+            <div className="bento-card">
+              <h3 className="card-title mb-3">Purchase by Supplier (Top 5)</h3>
               <ResponsiveContainer width="100%" height={140}>
                 <BarChart data={poSupplierData} layout="vertical" barSize={18}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                   <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v) => fmtINR(v)} />
                   <YAxis type="category" dataKey="name" width={180} tick={{ fontSize: 10, fill: "#64748b" }} />
-                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }}
+                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }}
                     formatter={(v: number, name: string, props: any) => [fmtINR(v), `${props.payload.orders} orders`]} />
                   <Bar dataKey="value" fill="#7c3aed" radius={[0, 4, 4, 0]} />
                 </BarChart>
@@ -959,24 +1040,24 @@ export default function Reports() {
           <div className="space-y-2">
             {dailyPOs.map((po) => {
               const isExpanded = expandedPO === po.date;
-              const sortedItems = [...po.items].sort((a, b) => b.totalValue - a.totalValue);
+              const sortedItems = po.items; // pre-sorted in dailyPOs memo
               return (
-                <div key={po.date} className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-                  <div className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-bg-border/20"
+                <div key={po.date} className="section-card">
+                  <div className="flex items-center justify-between px-4 py-3 cursor-pointer table-row-hover"
                     onClick={() => setExpandedPO(isExpanded ? null : po.date)}>
                     <div className="flex items-center gap-3 flex-1">
                       {isExpanded ? <ChevronDown size={14} className="text-muted" /> : <ChevronRight size={14} className="text-muted" />}
                       <div className="flex flex-col">
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-primary">{fmtDate(po.date)}</span>
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 font-medium">{po.items.length} items</span>
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-bg-border text-muted">{po.voucherIds.length} voucher{po.voucherIds.length > 1 ? "s" : ""}</span>
+                          <span className="badge bg-purple-500/10 text-purple-600">{po.items.length} items</span>
+                          <span className="badge bg-bg-border text-muted">{po.voucherIds.length} voucher{po.voucherIds.length > 1 ? "s" : ""}</span>
                         </div>
                         <span className="text-muted text-xs mt-0.5">{po.partyNames.join(" · ")}</span>
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="font-mono font-bold text-purple-600 text-sm">{fmtINR(po.totalValue)}</div>
+                      <div className="tabular-nums font-bold text-purple-600 text-sm">{fmtINR(po.totalValue)}</div>
                       {/* Relative value bar */}
                       <div className="w-24 h-1 bg-bg-border rounded-full mt-1 overflow-hidden">
                         <div className="h-full bg-purple-500 rounded-full" style={{ width: `${(po.totalValue / maxPOValue) * 100}%` }} />
@@ -989,7 +1070,7 @@ export default function Reports() {
                         <thead className="border-b border-bg-border">
                           <tr>
                             {["Item", "Qty (Base)", "Qty (Pkg)", "Unit Rate", "Value"].map(h => (
-                              <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>
+                              <th key={h} className="table-header">{h}</th>
                             ))}
                           </tr>
                         </thead>
@@ -997,18 +1078,18 @@ export default function Reports() {
                           {sortedItems.map(item => {
                             const rate = item.totalQtyBase > 0 ? item.totalValue / item.totalQtyBase : 0;
                             return (
-                              <tr key={item.itemId} className="border-b border-bg-border/50">
+                              <tr key={item.itemId} className="responsive-table-row">
                                 <td className="px-3 py-2 text-primary">{item.itemName}</td>
-                                <td className="px-3 py-2 font-mono text-primary">{item.displayQtyBase}</td>
-                                <td className="px-3 py-2 font-mono text-muted">{item.displayQtyPkg ?? "-"}</td>
-                                <td className="px-3 py-2 font-mono text-muted">{fmtINR(rate)}</td>
-                                <td className="px-3 py-2 font-mono text-purple-600">{fmtINR(item.totalValue)}</td>
+                                <td className="px-3 py-2 tabular-nums text-primary">{item.displayQtyBase}</td>
+                                <td className="px-3 py-2 tabular-nums text-muted">{item.displayQtyPkg ?? "-"}</td>
+                                <td className="px-3 py-2 tabular-nums text-muted">{fmtINR(rate)}</td>
+                                <td className="px-3 py-2 tabular-nums text-purple-600">{fmtINR(item.totalValue)}</td>
                               </tr>
                             );
                           })}
                           <tr className="border-t-2 border-bg-border">
                             <td colSpan={4} className="px-3 py-2 text-right font-semibold text-muted text-xs">Total:</td>
-                            <td className="px-3 py-2 font-mono font-bold text-purple-600">{fmtINR(po.totalValue)}</td>
+                            <td className="px-3 py-2 tabular-nums font-bold text-purple-600">{fmtINR(po.totalValue)}</td>
                           </tr>
                         </tbody>
                       </table>
@@ -1025,17 +1106,17 @@ export default function Reports() {
           {/* Item trend graphs */}
           {poItemChartData.length > 0 && (
             <div>
-              <h3 className="font-semibold text-primary mb-3">Item Quantity Trends (Purchase)</h3>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <h3 className="card-title mb-3">Item Quantity Trends (Purchase)</h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
                 {poItemChartData.map(item => (
-                  <div key={item.itemId} className="bg-bg-card border border-bg-border rounded-xl p-4">
-                    <div className="text-sm font-semibold text-primary mb-2">{item.name}</div>
+                  <div key={item.itemId} className="bento-card">
+                    <div className="card-title mb-2">{item.name}</div>
                     <ResponsiveContainer width="100%" height={160}>
                       <BarChart data={item.data} barSize={24}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#64748b" }} />
-                        <YAxis tick={{ fontSize: 10, fill: "#64748b" }} label={{ value: item.unit, angle: -90, position: "insideLeft", fontSize: 10, fill: "#64748b" }} />
-                        <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number) => [`${v} ${item.unit}`, "Qty"]} />
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                        <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fontSize: 10, fill: "#64748b" }} axisLine={false} tickLine={false} label={{ value: item.unit, angle: -90, position: "insideLeft", fontSize: 10, fill: "#64748b" }} />
+                        <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }} formatter={(v: number) => [`${v} ${item.unit}`, "Qty"]} />
                         <Bar dataKey="qty" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
@@ -1059,27 +1140,27 @@ export default function Reports() {
         <div className="space-y-4">
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-success">{abcxyzData.filter(d => d.abcClass === "A").length}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-success">{abcxyzData.filter(d => d.abcClass === "A").length}</div>
               <div className="text-muted text-xs mt-1">A Items</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-accent">{abcxyzData.filter(d => d.abcClass === "B").length}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-accent">{abcxyzData.filter(d => d.abcClass === "B").length}</div>
               <div className="text-muted text-xs mt-1">B Items</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-muted">{abcxyzData.filter(d => d.abcClass === "C").length}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-muted">{abcxyzData.filter(d => d.abcClass === "C").length}</div>
               <div className="text-muted text-xs mt-1">C Items</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-primary">{abcxyzData.length > 0 ? `${Math.round(abcxyzData.filter(d => d.abcClass === "A").reduce((s, d) => s + d.revenueShare, 0))}%` : "0%"}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-primary">{abcxyzData.length > 0 ? `${Math.round(abcxyzData.filter(d => d.abcClass === "A").reduce((s, d) => s + d.revenueShare, 0))}%` : "0%"}</div>
               <div className="text-muted text-xs mt-1">A Revenue Share</div>
             </div>
           </div>
 
           {/* 3x3 Matrix */}
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-            <h3 className="font-semibold text-primary mb-3">ABC-XYZ Matrix</h3>
+          <div className="bento-card">
+            <h3 className="card-title mb-3">ABC-XYZ Matrix</h3>
             <div className="grid grid-cols-4 gap-1 text-sm">
               <div />
               {["X (Steady)", "Y (Variable)", "Z (Erratic)"].map(h => (
@@ -1105,15 +1186,15 @@ export default function Reports() {
           </div>
 
           {/* Pareto chart */}
-          <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-            <h3 className="font-semibold text-primary mb-3">Pareto Chart (Revenue Distribution)</h3>
+          <div className="bento-card">
+            <h3 className="card-title mb-3">Pareto Chart (Revenue Distribution)</h3>
             <ResponsiveContainer width="100%" height={300}>
               <ComposedChart data={abcxyzData.slice(0, 50).map((d, i) => ({ name: d.name.slice(0, 15), revenue: d.totalRevenue, cumPct: d.cumulativeShare }))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                 <XAxis dataKey="name" tick={{ fontSize: 8, fill: "#64748b" }} angle={-45} textAnchor="end" height={60} />
                 <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => fmtINR(v)} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "#64748b" }} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
-                <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} />
+                <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }} />
                 <Bar yAxisId="left" dataKey="revenue" fill="#3b82f6" radius={[2, 2, 0, 0]} />
                 <Line yAxisId="right" type="monotone" dataKey="cumPct" stroke="#ef4444" strokeWidth={2} dot={false} />
                 <ReferenceLine yAxisId="right" y={80} stroke="#ef4444" strokeDasharray="5 5" label={{ value: "80%", position: "right", fontSize: 10, fill: "#ef4444" }} />
@@ -1123,39 +1204,39 @@ export default function Reports() {
           </div>
 
           {/* Filters + Table */}
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between flex-wrap gap-3">
+          <div className="section-card">
+            <div className="section-card-header flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-3">
-                <h3 className="font-semibold text-primary">All Items ({abcxyzFiltered.length})</h3>
-                <select value={abcxyzAbcFilter} onChange={e => setAbcxyzAbcFilter(e.target.value as any)} className="bg-bg border border-bg-border rounded-lg px-2 py-1 text-xs text-primary outline-none">
+                <h3 className="card-title">All Items ({abcxyzFiltered.length})</h3>
+                <select value={abcxyzAbcFilter} onChange={e => setAbcxyzAbcFilter(e.target.value as any)} className="form-select text-xs py-1 pl-2 min-h-0">
                   <option value="ALL">All ABC</option>
                   <option value="A">A</option>
                   <option value="B">B</option>
                   <option value="C">C</option>
                 </select>
-                <select value={abcxyzXyzFilter} onChange={e => setAbcxyzXyzFilter(e.target.value as any)} className="bg-bg border border-bg-border rounded-lg px-2 py-1 text-xs text-primary outline-none">
+                <select value={abcxyzXyzFilter} onChange={e => setAbcxyzXyzFilter(e.target.value as any)} className="form-select text-xs py-1 pl-2 min-h-0">
                   <option value="ALL">All XYZ</option>
                   <option value="X">X</option>
                   <option value="Y">Y</option>
                   <option value="Z">Z</option>
                 </select>
-                <input type="text" placeholder="Search..." value={abcxyzSearch} onChange={e => setAbcxyzSearch(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1 text-xs text-primary outline-none w-40" />
+                <input type="text" placeholder="Search..." value={abcxyzSearch} onChange={e => setAbcxyzSearch(e.target.value)} className="search-input w-40" />
               </div>
               <button onClick={() => {
                 const rows = [["Item", "Group", "Revenue", "Revenue %", "Cumulative %", "ABC", "Monthly Avg Demand", "CV", "XYZ", "Combined"], ...abcxyzFiltered.map(d => [d.name, d.group, d.totalRevenue.toFixed(0), d.revenueShare.toFixed(2), d.cumulativeShare.toFixed(2), d.abcClass, d.avgMonthlyDemand.toFixed(2), isFinite(d.coefficientOfVariation) ? d.coefficientOfVariation.toFixed(2) : "Inf", d.xyzClass, d.combined])];
                 const csv = rows.map(r => r.join(",")).join("\n");
                 const blob = new Blob([csv], { type: "text/csv" });
                 const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `abcxyz_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
-              }} className="flex items-center gap-2 bg-bg border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg transition text-xs">
+              }} className="btn-ghost btn-sm flex items-center gap-2">
                 <Download size={14} />CSV
               </button>
             </div>
             <div className="overflow-auto max-h-[60vh]">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                <thead className="table-header-sticky">
                   <tr>
                     {[{k:"name",l:"Item"},{k:"",l:"Group"},{k:"revenue",l:"Revenue"},{k:"share",l:"Rev %"},{k:"",l:"ABC"},{k:"demand",l:"Avg Demand"},{k:"cv",l:"CV"},{k:"",l:"XYZ"},{k:"",l:"Combined"}].map(h => (
-                      <th key={h.l} className="text-left text-muted px-4 py-2 font-medium text-xs cursor-pointer hover:text-primary" onClick={() => h.k && (abcxyzSort === h.k ? setAbcxyzSortDir(d => d === "desc" ? "asc" : "desc") : (setAbcxyzSort(h.k), setAbcxyzSortDir("desc")))}>{h.l}{abcxyzSort === h.k ? (abcxyzSortDir === "desc" ? " ↓" : " ↑") : ""}</th>
+                      <th key={h.l} className="table-header cursor-pointer hover:text-primary" onClick={() => h.k && (abcxyzSort === h.k ? setAbcxyzSortDir(d => d === "desc" ? "asc" : "desc") : (setAbcxyzSort(h.k), setAbcxyzSortDir("desc")))}>{h.l}{abcxyzSort === h.k ? (abcxyzSortDir === "desc" ? " ↓" : " ↑") : ""}</th>
                     ))}
                   </tr>
                 </thead>
@@ -1164,16 +1245,16 @@ export default function Reports() {
                     const abcColor = { A: "bg-success/10 text-success", B: "bg-accent/10 text-accent", C: "bg-muted/10 text-muted" }[d.abcClass];
                     const xyzColor = { X: "bg-success/10 text-success", Y: "bg-warn/10 text-warn", Z: "bg-danger/10 text-danger" }[d.xyzClass];
                     return (
-                      <tr key={d.itemId} className="border-b border-bg-border/50 hover:bg-bg-border/20">
+                      <tr key={d.itemId} className="responsive-table-row">
                         <td className="px-4 py-2 text-primary max-w-[200px] truncate">{d.name}</td>
                         <td className="px-4 py-2 text-muted text-xs">{d.group}</td>
-                        <td className="px-4 py-2 font-mono text-primary text-xs">{fmtINR(d.totalRevenue)}</td>
-                        <td className="px-4 py-2 font-mono text-muted text-xs">{d.revenueShare.toFixed(2)}%</td>
-                        <td className="px-4 py-2"><span className={clsx("text-xs px-2 py-0.5 rounded-full font-medium", abcColor)}>{d.abcClass}</span></td>
-                        <td className="px-4 py-2 font-mono text-primary text-xs">{fmtNum(d.avgMonthlyDemand, 1)}</td>
-                        <td className="px-4 py-2 font-mono text-muted text-xs">{isFinite(d.coefficientOfVariation) ? d.coefficientOfVariation.toFixed(2) : "∞"}</td>
-                        <td className="px-4 py-2"><span className={clsx("text-xs px-2 py-0.5 rounded-full font-medium", xyzColor)}>{d.xyzClass}</span></td>
-                        <td className="px-4 py-2 font-mono font-semibold text-primary text-xs">{d.combined}</td>
+                        <td className="px-4 py-2 tabular-nums text-primary text-xs">{fmtINR(d.totalRevenue)}</td>
+                        <td className="px-4 py-2 tabular-nums text-muted text-xs">{d.revenueShare.toFixed(2)}%</td>
+                        <td className="px-4 py-2"><span className={clsx("badge", abcColor)}>{d.abcClass}</span></td>
+                        <td className="px-4 py-2 tabular-nums text-primary text-xs">{fmtNum(d.avgMonthlyDemand, 1)}</td>
+                        <td className="px-4 py-2 tabular-nums text-muted text-xs">{isFinite(d.coefficientOfVariation) ? d.coefficientOfVariation.toFixed(2) : "∞"}</td>
+                        <td className="px-4 py-2"><span className={clsx("badge", xyzColor)}>{d.xyzClass}</span></td>
+                        <td className="px-4 py-2 tabular-nums font-semibold text-primary text-xs">{d.combined}</td>
                       </tr>
                     );
                   })}
@@ -1188,63 +1269,63 @@ export default function Reports() {
       {tab === "Period Compare" && (
         <div className="space-y-4">
           {/* Month selectors */}
-          <div className="flex items-center gap-4 bg-bg-card border border-bg-border rounded-xl p-4">
+          <div className="flex items-center gap-4 bento-card">
             <div>
               <label className="text-xs text-muted mb-1 block">Period A</label>
-              <select value={periodMonthA} onChange={e => setPeriodMonthA(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+              <select value={periodMonthA} onChange={e => setPeriodMonthA(e.target.value)} className="form-select text-xs py-1 pl-2 min-h-0">
                 {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
             <span className="text-muted text-lg mt-4">vs</span>
             <div>
               <label className="text-xs text-muted mb-1 block">Period B</label>
-              <select value={periodMonthB} onChange={e => setPeriodMonthB(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+              <select value={periodMonthB} onChange={e => setPeriodMonthB(e.target.value)} className="form-select text-xs py-1 pl-2 min-h-0">
                 {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
             <div className="ml-auto">
-              <input type="text" placeholder="Search items..." value={periodSearch} onChange={e => setPeriodSearch(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none w-48" />
+              <input type="text" placeholder="Search items..." value={periodSearch} onChange={e => setPeriodSearch(e.target.value)} className="search-input w-48" />
             </div>
           </div>
 
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-success">{periodData.filter(d => d.outwardsDelta > 0).length}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-success">{periodData.filter(d => d.outwardsDelta > 0).length}</div>
               <div className="text-muted text-xs mt-1">Increased Outwards</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-danger">{periodData.filter(d => d.outwardsDelta < 0).length}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-danger">{periodData.filter(d => d.outwardsDelta < 0).length}</div>
               <div className="text-muted text-xs mt-1">Decreased Outwards</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-success">{periodData.filter(d => d.closingDelta > 0).length}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-success">{periodData.filter(d => d.closingDelta > 0).length}</div>
               <div className="text-muted text-xs mt-1">Stock Increase</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-primary">{fmtNum(periodData.reduce((s, d) => s + d.closingDelta, 0), 0)}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-primary">{fmtNum(periodData.reduce((s, d) => s + d.closingDelta, 0), 0)}</div>
               <div className="text-muted text-xs mt-1">Net Stock Change</div>
             </div>
           </div>
 
           {/* Comparison table */}
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-bg-border flex justify-between items-center">
-              <h3 className="font-semibold text-primary">Comparison ({periodFiltered.length} items)</h3>
+          <div className="section-card">
+            <div className="section-card-header flex justify-between items-center">
+              <h3 className="card-title">Comparison ({periodFiltered.length} items)</h3>
               <button onClick={() => {
                 const rows = [["Item", "Group", "Open A", "In A", "Out A", "Close A", "Open B", "In B", "Out B", "Close B", "Δ Closing", "Δ Out %"], ...periodFiltered.map(d => [d.name, d.group, d.openingA, d.inwardsA, d.outwardsA, d.closingA, d.openingB, d.inwardsB, d.outwardsB, d.closingB, d.closingDelta, d.outwardsDeltaPct.toFixed(1)])];
                 const csv = rows.map(r => r.join(",")).join("\n");
                 const blob = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `period_compare_${periodMonthA}_vs_${periodMonthB}.csv`; a.click();
-              }} className="flex items-center gap-2 bg-bg border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg transition text-xs">
+              }} className="btn-ghost btn-sm flex items-center gap-2">
                 <Download size={14} />CSV
               </button>
             </div>
             <div className="overflow-auto max-h-[60vh]">
               <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                <thead className="table-header-sticky">
                   <tr>
                     {[{k:"name",l:"Item"},{k:"",l:"Group"},{k:"",l:"Open A"},{k:"",l:"In A"},{k:"outA",l:"Out A"},{k:"",l:"Close A"},{k:"",l:"Open B"},{k:"",l:"In B"},{k:"outB",l:"Out B"},{k:"",l:"Close B"},{k:"closingDelta",l:"Δ Close"},{k:"outDeltaPct",l:"Δ Out %"}].map(h => (
-                      <th key={h.l} className="text-left text-muted px-3 py-2 font-medium cursor-pointer hover:text-primary" onClick={() => h.k && (periodSort === h.k ? setPeriodSortDir(d => d === "desc" ? "asc" : "desc") : (setPeriodSort(h.k), setPeriodSortDir("desc")))}>{h.l}{periodSort === h.k ? (periodSortDir === "desc" ? " ↓" : " ↑") : ""}</th>
+                      <th key={h.l} className="table-header cursor-pointer hover:text-primary" onClick={() => h.k && (periodSort === h.k ? setPeriodSortDir(d => d === "desc" ? "asc" : "desc") : (setPeriodSort(h.k), setPeriodSortDir("desc")))}>{h.l}{periodSort === h.k ? (periodSortDir === "desc" ? " ↓" : " ↑") : ""}</th>
                     ))}
                   </tr>
                 </thead>
@@ -1252,19 +1333,19 @@ export default function Reports() {
                   {periodFiltered.map(d => {
                     const negClose = d.closingA < 0 || d.closingB < 0;
                     return (
-                      <tr key={d.itemId} className={clsx("border-b border-bg-border/50 hover:bg-bg-border/20", negClose && "bg-red-500/5")}>
+                      <tr key={d.itemId} className={clsx("responsive-table-row", negClose && "bg-red-500/5")}>
                         <td className="px-3 py-2 text-primary max-w-[180px] truncate">{d.name}</td>
                         <td className="px-3 py-2 text-muted">{d.group}</td>
-                        <td className="px-3 py-2 font-mono text-muted">{fmtNum(d.openingA, 0)}</td>
-                        <td className="px-3 py-2 font-mono text-success">{fmtNum(d.inwardsA, 0)}</td>
-                        <td className="px-3 py-2 font-mono text-danger">{fmtNum(d.outwardsA, 0)}</td>
-                        <td className="px-3 py-2 font-mono text-primary">{fmtNum(d.closingA, 0)}</td>
-                        <td className="px-3 py-2 font-mono text-muted">{fmtNum(d.openingB, 0)}</td>
-                        <td className="px-3 py-2 font-mono text-success">{fmtNum(d.inwardsB, 0)}</td>
-                        <td className="px-3 py-2 font-mono text-danger">{fmtNum(d.outwardsB, 0)}</td>
-                        <td className="px-3 py-2 font-mono text-primary">{fmtNum(d.closingB, 0)}</td>
-                        <td className={clsx("px-3 py-2 font-mono font-semibold", d.closingDelta > 0 ? "text-success" : d.closingDelta < 0 ? "text-danger" : "text-muted")}>{d.closingDelta > 0 ? "+" : ""}{fmtNum(d.closingDelta, 0)}</td>
-                        <td className={clsx("px-3 py-2 font-mono font-semibold", d.outwardsDeltaPct > 0 ? "text-success" : d.outwardsDeltaPct < 0 ? "text-danger" : "text-muted")}>{d.outwardsDeltaPct > 0 ? "+" : ""}{d.outwardsDeltaPct.toFixed(1)}%</td>
+                        <td className="px-3 py-2 tabular-nums text-muted">{fmtNum(d.openingA, 0)}</td>
+                        <td className="px-3 py-2 tabular-nums text-success">{fmtNum(d.inwardsA, 0)}</td>
+                        <td className="px-3 py-2 tabular-nums text-danger">{fmtNum(d.outwardsA, 0)}</td>
+                        <td className="px-3 py-2 tabular-nums text-primary">{fmtNum(d.closingA, 0)}</td>
+                        <td className="px-3 py-2 tabular-nums text-muted">{fmtNum(d.openingB, 0)}</td>
+                        <td className="px-3 py-2 tabular-nums text-success">{fmtNum(d.inwardsB, 0)}</td>
+                        <td className="px-3 py-2 tabular-nums text-danger">{fmtNum(d.outwardsB, 0)}</td>
+                        <td className="px-3 py-2 tabular-nums text-primary">{fmtNum(d.closingB, 0)}</td>
+                        <td className={clsx("px-3 py-2 tabular-nums font-semibold", d.closingDelta > 0 ? "text-success" : d.closingDelta < 0 ? "text-danger" : "text-muted")}>{d.closingDelta > 0 ? "+" : ""}{fmtNum(d.closingDelta, 0)}</td>
+                        <td className={clsx("px-3 py-2 tabular-nums font-semibold", d.outwardsDeltaPct > 0 ? "text-success" : d.outwardsDeltaPct < 0 ? "text-danger" : "text-muted")}>{d.outwardsDeltaPct > 0 ? "+" : ""}{d.outwardsDeltaPct.toFixed(1)}%</td>
                       </tr>
                     );
                   })}
@@ -1279,53 +1360,53 @@ export default function Reports() {
       {tab === "Margins" && (
         <div className="space-y-4">
           {/* Period selector */}
-          <div className="flex items-center gap-2 bg-bg-card border border-bg-border rounded-xl p-4">
-            <h3 className="font-semibold text-primary mr-3">Profit Margins</h3>
+          <div className="flex items-center gap-2 bento-card">
+            <h3 className="card-title mr-3">Profit Margins</h3>
             {[{l:"All Time",v:undefined},{l:"Last 12M",v:12},{l:"Last 6M",v:6},{l:"Last 3M",v:3}].map(p => (
               <button key={p.l} onClick={() => setMarginPeriod(p.v)} className={clsx("px-3 py-1.5 rounded-lg text-sm transition", marginPeriod === p.v ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>{p.l}</button>
             ))}
             <div className="ml-auto flex items-center gap-2">
-              <select value={marginGroupFilter} onChange={e => setMarginGroupFilter(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-2 py-1 text-xs text-primary outline-none">
+              <select value={marginGroupFilter} onChange={e => setMarginGroupFilter(e.target.value)} className="form-select text-xs py-1 pl-2 min-h-0">
                 {marginGroups.map(g => <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>)}
               </select>
-              <input type="text" placeholder="Search..." value={marginSearch} onChange={e => setMarginSearch(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1 text-xs text-primary outline-none w-40" />
+              <input type="text" placeholder="Search..." value={marginSearch} onChange={e => setMarginSearch(e.target.value)} className="search-input w-40" />
             </div>
           </div>
 
           {/* KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-accent">{marginKPIs.avgMargin.toFixed(1)}%</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-accent">{marginKPIs.avgMargin.toFixed(1)}%</div>
               <div className="text-muted text-xs mt-1">Avg Margin</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-success">{fmtINR(marginKPIs.totalProfit)}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-success">{fmtINR(marginKPIs.totalProfit)}</div>
               <div className="text-muted text-xs mt-1">Total Profit</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-warn">{marginKPIs.thinMargin}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-warn">{marginKPIs.thinMargin}</div>
               <div className="text-muted text-xs mt-1">Thin Margin (&lt;10%)</div>
             </div>
-            <div className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold font-mono text-danger">{marginKPIs.negativeMargin}</div>
+            <div className="bento-card !p-3 text-center">
+              <div className="text-2xl font-bold tabular-nums text-danger">{marginKPIs.negativeMargin}</div>
               <div className="text-muted text-xs mt-1">Negative Margin</div>
             </div>
           </div>
 
           {/* Charts */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
             {/* Top 20 by profit */}
-            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-              <h3 className="font-semibold text-primary mb-3 text-sm">Top 20 by Profit</h3>
+            <div className="bento-card">
+              <h3 className="card-title mb-3">Top 20 by Profit</h3>
               <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={[...marginData].filter(d => !d.hasNoSales && !d.hasNoPurchases).sort((a, b) => b.totalProfit - a.totalProfit).slice(0, 20).map(d => ({ name: d.name.slice(0, 18), profit: d.totalProfit, pct: d.marginPct }))} layout="vertical" barSize={14}>
+                <BarChart data={marginChartTop20} layout="vertical" barSize={14}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                   <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => fmtINR(v)} />
                   <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fill: "#64748b" }} />
-                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number, name: string) => [name === "profit" ? fmtINR(v) : `${v.toFixed(1)}%`, name === "profit" ? "Profit" : "Margin"]} />
+                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }} formatter={(v: number, name: string) => [name === "profit" ? fmtINR(v) : `${v.toFixed(1)}%`, name === "profit" ? "Profit" : "Margin"]} />
                   <Bar dataKey="profit" radius={[0, 4, 4, 0]}>
-                    {[...marginData].filter(d => !d.hasNoSales && !d.hasNoPurchases).sort((a, b) => b.totalProfit - a.totalProfit).slice(0, 20).map((d, i) => (
-                      <Cell key={i} fill={d.marginPct > 20 ? "#10b981" : d.marginPct > 10 ? "#f59e0b" : "#ef4444"} />
+                    {marginChartTop20Colors.map((color, i) => (
+                      <Cell key={i} fill={color} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -1333,17 +1414,17 @@ export default function Reports() {
             </div>
 
             {/* Scatter: Revenue vs Margin */}
-            <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-              <h3 className="font-semibold text-primary mb-3 text-sm">Revenue vs Margin %</h3>
+            <div className="bento-card">
+              <h3 className="card-title mb-3">Revenue vs Margin %</h3>
               <ResponsiveContainer width="100%" height={350}>
                 <ScatterChart>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                   <XAxis type="number" dataKey="x" name="Sales Value" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}K`} />
                   <YAxis type="number" dataKey="y" name="Margin %" tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(v: number) => `${v}%`} />
-                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number, name: string) => [name === "Sales Value" ? fmtINR(v) : `${v.toFixed(1)}%`, name]} />
-                  <Scatter data={marginData.filter(d => !d.hasNoSales && !d.hasNoPurchases && d.totalSalesValue > 0).map(d => ({ x: d.totalSalesValue, y: d.marginPct, name: d.name }))} fill="#3b82f6">
-                    {marginData.filter(d => !d.hasNoSales && !d.hasNoPurchases && d.totalSalesValue > 0).map((d, i) => (
-                      <Cell key={i} fill={d.marginPct > 20 ? "#10b981" : d.marginPct > 10 ? "#f59e0b" : "#ef4444"} />
+                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }} formatter={(v: number, name: string) => [name === "Sales Value" ? fmtINR(v) : `${v.toFixed(1)}%`, name]} />
+                  <Scatter data={marginScatterData} fill="#3b82f6">
+                    {marginScatterData.map((d, i) => (
+                      <Cell key={i} fill={d.color} />
                     ))}
                   </Scatter>
                 </ScatterChart>
@@ -1352,23 +1433,23 @@ export default function Reports() {
           </div>
 
           {/* Table */}
-          <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-bg-border flex justify-between items-center">
-              <h3 className="font-semibold text-primary">All Items ({marginFiltered.length})</h3>
+          <div className="section-card">
+            <div className="section-card-header flex justify-between items-center">
+              <h3 className="card-title">All Items ({marginFiltered.length})</h3>
               <button onClick={() => {
                 const rows = [["Item", "Group", "Avg Buy Rate", "Avg Sell Rate", "Margin/Unit", "Margin %", "Sales Qty", "Purchase Qty", "Total Profit"], ...marginFiltered.map(d => [d.name, d.group, d.avgPurchaseRate.toFixed(2), d.avgSalesRate.toFixed(2), d.marginPerUnit.toFixed(2), d.marginPct.toFixed(2), d.totalSalesQty, d.totalPurchaseQty, d.totalProfit.toFixed(0)])];
                 const csv = rows.map(r => r.join(",")).join("\n");
                 const blob = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `margins_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
-              }} className="flex items-center gap-2 bg-bg border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg transition text-xs">
+              }} className="btn-ghost btn-sm flex items-center gap-2">
                 <Download size={14} />CSV
               </button>
             </div>
             <div className="overflow-auto max-h-[60vh]">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                <thead className="table-header-sticky">
                   <tr>
                     {[{k:"name",l:"Item"},{k:"",l:"Group"},{k:"",l:"Avg Buy"},{k:"",l:"Avg Sell"},{k:"",l:"Margin/Unit"},{k:"marginPct",l:"Margin %"},{k:"",l:"Sales Qty"},{k:"",l:"Buy Qty"},{k:"totalProfit",l:"Total Profit"}].map(h => (
-                      <th key={h.l} className="text-left text-muted px-4 py-2 font-medium text-xs cursor-pointer hover:text-primary" onClick={() => h.k && (marginSort === h.k ? setMarginSortDir(d => d === "desc" ? "asc" : "desc") : (setMarginSort(h.k), setMarginSortDir("desc")))}>{h.l}{marginSort === h.k ? (marginSortDir === "desc" ? " ↓" : " ↑") : ""}</th>
+                      <th key={h.l} className="table-header cursor-pointer hover:text-primary" onClick={() => h.k && (marginSort === h.k ? setMarginSortDir(d => d === "desc" ? "asc" : "desc") : (setMarginSort(h.k), setMarginSortDir("desc")))}>{h.l}{marginSort === h.k ? (marginSortDir === "desc" ? " ↓" : " ↑") : ""}</th>
                     ))}
                   </tr>
                 </thead>
@@ -1376,16 +1457,16 @@ export default function Reports() {
                   {marginFiltered.map(d => {
                     const mColor = d.hasNoSales ? "text-muted" : d.marginPct > 20 ? "text-success" : d.marginPct > 10 ? "text-warn" : d.marginPct < 0 ? "text-danger font-bold" : "text-danger";
                     return (
-                      <tr key={d.itemId} className="border-b border-bg-border/50 hover:bg-bg-border/20">
-                        <td className="px-4 py-2 text-primary max-w-[200px] truncate">{d.name}{d.hasNoSales && <span className="ml-1 text-xs px-1.5 py-0.5 rounded bg-muted/10 text-muted">No Sales</span>}</td>
+                      <tr key={d.itemId} className="responsive-table-row">
+                        <td className="px-4 py-2 text-primary max-w-[200px] truncate">{d.name}{d.hasNoSales && <span className="ml-1 badge bg-muted/10 text-muted">No Sales</span>}</td>
                         <td className="px-4 py-2 text-muted text-xs">{d.group}</td>
-                        <td className="px-4 py-2 font-mono text-muted text-xs">{fmtINR(d.avgPurchaseRate)}</td>
-                        <td className="px-4 py-2 font-mono text-primary text-xs">{fmtINR(d.avgSalesRate)}</td>
-                        <td className="px-4 py-2 font-mono text-primary text-xs">{fmtINR(d.marginPerUnit)}</td>
-                        <td className={clsx("px-4 py-2 font-mono text-xs font-semibold", mColor)}>{d.hasNoSales ? "-" : `${d.marginPct.toFixed(1)}%`}</td>
-                        <td className="px-4 py-2 font-mono text-muted text-xs">{fmtNum(d.totalSalesQty, 0)}</td>
-                        <td className="px-4 py-2 font-mono text-muted text-xs">{fmtNum(d.totalPurchaseQty, 0)}</td>
-                        <td className={clsx("px-4 py-2 font-mono font-semibold text-xs", d.totalProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(d.totalProfit)}</td>
+                        <td className="px-4 py-2 tabular-nums text-muted text-xs">{fmtINR(d.avgPurchaseRate)}</td>
+                        <td className="px-4 py-2 tabular-nums text-primary text-xs">{fmtINR(d.avgSalesRate)}</td>
+                        <td className="px-4 py-2 tabular-nums text-primary text-xs">{fmtINR(d.marginPerUnit)}</td>
+                        <td className={clsx("px-4 py-2 tabular-nums text-xs font-semibold", mColor)}>{d.hasNoSales ? "-" : `${d.marginPct.toFixed(1)}%`}</td>
+                        <td className="px-4 py-2 tabular-nums text-muted text-xs">{fmtNum(d.totalSalesQty, 0)}</td>
+                        <td className="px-4 py-2 tabular-nums text-muted text-xs">{fmtNum(d.totalPurchaseQty, 0)}</td>
+                        <td className={clsx("px-4 py-2 tabular-nums font-semibold text-xs", d.totalProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(d.totalProfit)}</td>
                       </tr>
                     );
                   })}
@@ -1400,9 +1481,9 @@ export default function Reports() {
       {tab === "GST Summary" && (
         <div className="space-y-4">
           {/* Controls */}
-          <div className="flex items-center gap-4 bg-bg-card border border-bg-border rounded-xl p-4">
-            <h3 className="font-semibold text-primary">GST Summary</h3>
-            <select value={gstMonth} onChange={e => setGstMonth(e.target.value)} className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+          <div className="flex items-center gap-4 bento-card">
+            <h3 className="card-title">GST Summary</h3>
+            <select value={gstMonth} onChange={e => setGstMonth(e.target.value)} className="form-select text-xs py-1 pl-2 min-h-0">
               {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
             <div className="flex gap-1">
@@ -1424,8 +1505,8 @@ export default function Reports() {
                   { v: fmtINR(gstr1Data.totalTax), l: "Total Tax", c: "text-success" },
                   { v: String(gstr1Data.totalInvoices), l: "Invoices", c: "text-primary" },
                 ].map(({ v, l, c }) => (
-                  <div key={l} className="bg-bg-card border border-bg-border rounded-xl p-3 text-center">
-                    <div className={`text-xl font-bold font-mono ${c}`}>{v}</div>
+                  <div key={l} className="bento-card !p-3 text-center">
+                    <div className={`text-xl font-bold tabular-nums ${c}`}>{v}</div>
                     <div className="text-muted text-xs mt-1">{l}</div>
                   </div>
                 ))}
@@ -1433,42 +1514,42 @@ export default function Reports() {
 
               {/* B2B Section */}
               {gstr1Data.b2b.length > 0 && (
-                <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-bg-border">
-                    <h3 className="font-semibold text-primary">B2B Supplies ({gstr1Data.b2b.length} parties)</h3>
+                <div className="section-card">
+                  <div className="section-card-header">
+                    <h3 className="card-title">B2B Supplies ({gstr1Data.b2b.length} parties)</h3>
                   </div>
                   <div className="overflow-auto max-h-[40vh]">
                     {gstr1Data.b2b.map(party => (
-                      <div key={party.gstin} className="border-b border-bg-border/50">
-                        <div className="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-bg-border/20" onClick={() => setGstExpandedParty(gstExpandedParty === party.gstin ? null : party.gstin)}>
+                      <div key={party.gstin} className="responsive-table-row">
+                        <div className="flex items-center justify-between px-4 py-2 cursor-pointer table-row-hover" onClick={() => setGstExpandedParty(gstExpandedParty === party.gstin ? null : party.gstin)}>
                           <div className="flex items-center gap-3">
                             {gstExpandedParty === party.gstin ? <ChevronDown size={14} className="text-muted" /> : <ChevronRight size={14} className="text-muted" />}
                             <div>
                               <span className="text-primary text-sm font-medium">{party.partyName}</span>
-                              <span className="ml-2 text-muted text-xs font-mono">{party.gstin}</span>
+                              <span className="ml-2 text-muted text-xs tabular-nums">{party.gstin}</span>
                             </div>
                           </div>
                           <div className="flex items-center gap-4 text-xs">
                             <span className="text-muted">{party.invoiceCount} inv</span>
-                            <span className="font-mono text-primary">{fmtINR(party.taxableValue)}</span>
-                            <span className="font-mono text-accent">{fmtINR(party.totalTax)}</span>
+                            <span className="tabular-nums text-primary">{fmtINR(party.taxableValue)}</span>
+                            <span className="tabular-nums text-accent">{fmtINR(party.totalTax)}</span>
                           </div>
                         </div>
                         {gstExpandedParty === party.gstin && (
                           <div className="px-8 pb-3">
                             <table className="w-full text-xs">
                               <thead><tr>
-                                {["Invoice#", "Date", "Taxable", "IGST", "CGST", "SGST"].map(h => <th key={h} className="text-left text-muted px-2 py-1 font-medium">{h}</th>)}
+                                {["Invoice#", "Date", "Taxable", "IGST", "CGST", "SGST"].map(h => <th key={h} className="table-header">{h}</th>)}
                               </tr></thead>
                               <tbody>
                                 {party.invoices.map((inv, i) => (
-                                  <tr key={i} className="border-t border-bg-border/30">
-                                    <td className="px-2 py-1 font-mono text-primary">{inv.invoiceNumber}</td>
+                                  <tr key={i} className="responsive-table-row">
+                                    <td className="px-2 py-1 tabular-nums text-primary">{inv.invoiceNumber}</td>
                                     <td className="px-2 py-1 text-muted">{inv.date}</td>
-                                    <td className="px-2 py-1 font-mono text-primary">{fmtINR(inv.taxableValue)}</td>
-                                    <td className="px-2 py-1 font-mono text-muted">{fmtINR(inv.igst)}</td>
-                                    <td className="px-2 py-1 font-mono text-muted">{fmtINR(inv.cgst)}</td>
-                                    <td className="px-2 py-1 font-mono text-muted">{fmtINR(inv.sgst)}</td>
+                                    <td className="px-2 py-1 tabular-nums text-primary">{fmtINR(inv.taxableValue)}</td>
+                                    <td className="px-2 py-1 tabular-nums text-muted">{fmtINR(inv.igst)}</td>
+                                    <td className="px-2 py-1 tabular-nums text-muted">{fmtINR(inv.cgst)}</td>
+                                    <td className="px-2 py-1 tabular-nums text-muted">{fmtINR(inv.sgst)}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -1483,48 +1564,48 @@ export default function Reports() {
 
               {/* B2C Section */}
               {gstr1Data.b2cCount > 0 && (
-                <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-                  <h3 className="font-semibold text-primary mb-2">B2C Supplies</h3>
+                <div className="bento-card">
+                  <h3 className="card-title mb-2">B2C Supplies</h3>
                   <div className="flex gap-6 text-sm">
-                    <span className="text-muted">Invoices: <span className="font-mono text-primary">{gstr1Data.b2cCount}</span></span>
-                    <span className="text-muted">Taxable: <span className="font-mono text-primary">{fmtINR(gstr1Data.b2cTaxableValue)}</span></span>
-                    <span className="text-muted">Tax: <span className="font-mono text-accent">{fmtINR(gstr1Data.b2cTax)}</span></span>
+                    <span className="text-muted">Invoices: <span className="tabular-nums text-primary">{gstr1Data.b2cCount}</span></span>
+                    <span className="text-muted">Taxable: <span className="tabular-nums text-primary">{fmtINR(gstr1Data.b2cTaxableValue)}</span></span>
+                    <span className="text-muted">Tax: <span className="tabular-nums text-accent">{fmtINR(gstr1Data.b2cTax)}</span></span>
                   </div>
                 </div>
               )}
 
               {/* HSN Summary */}
               {gstr1Data.hsnSummary.length > 0 && (
-                <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-bg-border flex justify-between items-center">
-                    <h3 className="font-semibold text-primary">HSN Summary</h3>
+                <div className="section-card">
+                  <div className="section-card-header flex justify-between items-center">
+                    <h3 className="card-title">HSN Summary</h3>
                     <button onClick={() => {
                       const rows = [["HSN", "Description", "UQC", "Qty", "Taxable Value", "IGST", "CGST", "SGST", "Total Tax"], ...gstr1Data.hsnSummary.map(h => [h.hsn, h.description, h.uqc, h.totalQty, h.taxableValue.toFixed(2), h.igstAmount.toFixed(2), h.cgstAmount.toFixed(2), h.sgstAmount.toFixed(2), h.totalTax.toFixed(2)])];
                       const csv = rows.map(r => r.join(",")).join("\n");
                       const blob = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `hsn_summary_${gstMonth}.csv`; a.click();
-                    }} className="flex items-center gap-2 bg-bg border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg transition text-xs">
+                    }} className="btn-ghost btn-sm flex items-center gap-2">
                       <Download size={14} />HSN CSV
                     </button>
                   </div>
                   <div className="overflow-auto max-h-[40vh]">
                     <table className="w-full text-xs">
-                      <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+                      <thead className="table-header-sticky">
                         <tr>
-                          {["HSN", "Description", "UQC", "Qty", "Taxable", "IGST", "CGST", "SGST", "Total Tax"].map(h => <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>)}
+                          {["HSN", "Description", "UQC", "Qty", "Taxable", "IGST", "CGST", "SGST", "Total Tax"].map(h => <th key={h} className="table-header">{h}</th>)}
                         </tr>
                       </thead>
                       <tbody>
                         {gstr1Data.hsnSummary.map(h => (
-                          <tr key={h.hsn} className="border-b border-bg-border/50">
-                            <td className="px-3 py-2 font-mono text-primary">{h.hsn}</td>
+                          <tr key={h.hsn} className="responsive-table-row">
+                            <td className="px-3 py-2 tabular-nums text-primary">{h.hsn}</td>
                             <td className="px-3 py-2 text-primary truncate max-w-[200px]">{h.description}</td>
                             <td className="px-3 py-2 text-muted">{h.uqc}</td>
-                            <td className="px-3 py-2 font-mono text-primary">{fmtNum(h.totalQty, 0)}</td>
-                            <td className="px-3 py-2 font-mono text-primary">{fmtINR(h.taxableValue)}</td>
-                            <td className="px-3 py-2 font-mono text-muted">{fmtINR(h.igstAmount)}</td>
-                            <td className="px-3 py-2 font-mono text-muted">{fmtINR(h.cgstAmount)}</td>
-                            <td className="px-3 py-2 font-mono text-muted">{fmtINR(h.sgstAmount)}</td>
-                            <td className="px-3 py-2 font-mono text-accent font-semibold">{fmtINR(h.totalTax)}</td>
+                            <td className="px-3 py-2 tabular-nums text-primary">{fmtNum(h.totalQty, 0)}</td>
+                            <td className="px-3 py-2 tabular-nums text-primary">{fmtINR(h.taxableValue)}</td>
+                            <td className="px-3 py-2 tabular-nums text-muted">{fmtINR(h.igstAmount)}</td>
+                            <td className="px-3 py-2 tabular-nums text-muted">{fmtINR(h.cgstAmount)}</td>
+                            <td className="px-3 py-2 tabular-nums text-muted">{fmtINR(h.sgstAmount)}</td>
+                            <td className="px-3 py-2 tabular-nums text-accent font-semibold">{fmtINR(h.totalTax)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1538,7 +1619,7 @@ export default function Reports() {
                 <button onClick={() => {
                   const blob = new Blob([JSON.stringify(gstr1Data, null, 2)], { type: "application/json" });
                   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `gstr1_${gstMonth}.json`; a.click();
-                }} className="flex items-center gap-2 bg-accent hover:bg-accent/90 text-white px-4 py-2 rounded-lg transition text-sm">
+                }} className="btn-primary flex items-center gap-2">
                   <Download size={14} />Export GSTR-1 JSON
                 </button>
               </div>
@@ -1548,69 +1629,69 @@ export default function Reports() {
           {gstView === "GSTR3B" && gstr3bData && (
             <div className="space-y-4">
               {/* Table 3.1 - Outward */}
-              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b border-bg-border">
-                  <h3 className="font-semibold text-primary">3.1 Outward Supplies (Sales)</h3>
+              <div className="section-card">
+                <div className="section-card-header">
+                  <h3 className="card-title">3.1 Outward Supplies (Sales)</h3>
                 </div>
                 <table className="w-full text-sm">
                   <thead className="border-b border-bg-border">
                     <tr>
-                      {["", "Taxable Value", "IGST", "CGST", "SGST"].map(h => <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>)}
+                      {["", "Taxable Value", "IGST", "CGST", "SGST"].map(h => <th key={h} className="table-header">{h}</th>)}
                     </tr>
                   </thead>
                   <tbody>
-                    <tr className="border-b border-bg-border/50">
+                    <tr className="responsive-table-row">
                       <td className="px-4 py-2 text-primary text-sm">Taxable outward supplies</td>
-                      <td className="px-4 py-2 font-mono text-primary">{fmtINR(gstr3bData.outwardTaxable)}</td>
-                      <td className="px-4 py-2 font-mono text-accent">{fmtINR(gstr3bData.outwardIGST)}</td>
-                      <td className="px-4 py-2 font-mono text-accent">{fmtINR(gstr3bData.outwardCGST)}</td>
-                      <td className="px-4 py-2 font-mono text-accent">{fmtINR(gstr3bData.outwardSGST)}</td>
+                      <td className="px-4 py-2 tabular-nums text-primary">{fmtINR(gstr3bData.outwardTaxable)}</td>
+                      <td className="px-4 py-2 tabular-nums text-accent">{fmtINR(gstr3bData.outwardIGST)}</td>
+                      <td className="px-4 py-2 tabular-nums text-accent">{fmtINR(gstr3bData.outwardCGST)}</td>
+                      <td className="px-4 py-2 tabular-nums text-accent">{fmtINR(gstr3bData.outwardSGST)}</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
 
               {/* Table 4 - ITC */}
-              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b border-bg-border">
-                  <h3 className="font-semibold text-primary">4. Eligible ITC (Purchases)</h3>
+              <div className="section-card">
+                <div className="section-card-header">
+                  <h3 className="card-title">4. Eligible ITC (Purchases)</h3>
                 </div>
                 <table className="w-full text-sm">
                   <thead className="border-b border-bg-border">
                     <tr>
-                      {["", "Taxable Value", "IGST", "CGST", "SGST"].map(h => <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>)}
+                      {["", "Taxable Value", "IGST", "CGST", "SGST"].map(h => <th key={h} className="table-header">{h}</th>)}
                     </tr>
                   </thead>
                   <tbody>
-                    <tr className="border-b border-bg-border/50">
+                    <tr className="responsive-table-row">
                       <td className="px-4 py-2 text-primary text-sm">All other ITC</td>
-                      <td className="px-4 py-2 font-mono text-primary">{fmtINR(gstr3bData.inwardTaxable)}</td>
-                      <td className="px-4 py-2 font-mono text-success">{fmtINR(gstr3bData.inwardIGST)}</td>
-                      <td className="px-4 py-2 font-mono text-success">{fmtINR(gstr3bData.inwardCGST)}</td>
-                      <td className="px-4 py-2 font-mono text-success">{fmtINR(gstr3bData.inwardSGST)}</td>
+                      <td className="px-4 py-2 tabular-nums text-primary">{fmtINR(gstr3bData.inwardTaxable)}</td>
+                      <td className="px-4 py-2 tabular-nums text-success">{fmtINR(gstr3bData.inwardIGST)}</td>
+                      <td className="px-4 py-2 tabular-nums text-success">{fmtINR(gstr3bData.inwardCGST)}</td>
+                      <td className="px-4 py-2 tabular-nums text-success">{fmtINR(gstr3bData.inwardSGST)}</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
 
               {/* Table 6 - Net */}
-              <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b border-bg-border">
-                  <h3 className="font-semibold text-primary">6. Net Tax Payable</h3>
+              <div className="section-card">
+                <div className="section-card-header">
+                  <h3 className="card-title">6. Net Tax Payable</h3>
                 </div>
                 <table className="w-full text-sm">
                   <thead className="border-b border-bg-border">
                     <tr>
-                      {["", "IGST", "CGST", "SGST", "Total"].map(h => <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>)}
+                      {["", "IGST", "CGST", "SGST", "Total"].map(h => <th key={h} className="table-header">{h}</th>)}
                     </tr>
                   </thead>
                   <tbody>
-                    <tr className="border-b border-bg-border/50 bg-bg-border/10">
+                    <tr className="responsive-table-row bg-bg-border/10">
                       <td className="px-4 py-2 text-primary text-sm font-semibold">Net Payable</td>
-                      <td className={clsx("px-4 py-2 font-mono font-bold", gstr3bData.netIGST >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netIGST)}</td>
-                      <td className={clsx("px-4 py-2 font-mono font-bold", gstr3bData.netCGST >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netCGST)}</td>
-                      <td className={clsx("px-4 py-2 font-mono font-bold", gstr3bData.netSGST >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netSGST)}</td>
-                      <td className={clsx("px-4 py-2 font-mono font-bold text-lg", gstr3bData.netPayable >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netPayable)}</td>
+                      <td className={clsx("px-4 py-2 tabular-nums font-bold", gstr3bData.netIGST >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netIGST)}</td>
+                      <td className={clsx("px-4 py-2 tabular-nums font-bold", gstr3bData.netCGST >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netCGST)}</td>
+                      <td className={clsx("px-4 py-2 tabular-nums font-bold", gstr3bData.netSGST >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netSGST)}</td>
+                      <td className={clsx("px-4 py-2 tabular-nums font-bold text-lg", gstr3bData.netPayable >= 0 ? "text-danger" : "text-success")}>{fmtINR(gstr3bData.netPayable)}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -1619,6 +1700,393 @@ export default function Reports() {
           )}
         </div>
       )}
+
+      {/* ═══════════ Balance Sheet / P&L / Trial Balance ═══════════ */}
+      {tab === "Balance Sheet" && bsData && (() => {
+        const { bs, pl, tb } = bsData;
+
+        const renderGroupTable = (groups: BSGroupTotal[], label: string, color: string) => (
+          <div className="section-card">
+            <div className="section-card-header flex justify-between items-center">
+              <h3 className={`card-title ${color}`}>{label}</h3>
+              <span className={`tabular-nums font-bold ${color}`}>
+                {fmtINR(groups.reduce((s, g) => s + Math.abs(g.total), 0))}
+              </span>
+            </div>
+            <div className="divide-y divide-bg-border/50">
+              {groups.map(g => (
+                <div key={g.group}>
+                  <button
+                    className="w-full flex justify-between items-center px-4 py-2 table-row-hover"
+                    onClick={() => setBsExpandedGroup(bsExpandedGroup === g.group ? null : g.group)}
+                  >
+                    <span className="text-primary text-sm flex items-center gap-2">
+                      {bsExpandedGroup === g.group ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      {g.group}
+                    </span>
+                    <span className="tabular-nums text-sm">{fmtINR(Math.abs(g.total))}</span>
+                  </button>
+                  {bsExpandedGroup === g.group && (
+                    <div className="bg-bg-border/10 px-6 py-1">
+                      {g.ledgers.sort((a, b) => Math.abs(b.closingBalance) - Math.abs(a.closingBalance)).map(l => (
+                        <div key={l.ledgerId} className="flex justify-between py-1 text-xs">
+                          <span className="text-muted">{l.name}</span>
+                          <span className="tabular-nums">{fmtINR(Math.abs(l.closingBalance))}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+
+        return (
+          <div className="space-y-4">
+            {/* Sub-tabs */}
+            <div className="flex gap-2">
+              {(["bs", "pl", "tb"] as const).map(v => (
+                <button
+                  key={v}
+                  className={clsx("px-4 py-2 rounded-lg text-sm font-medium transition-colors",
+                    bsView === v ? "bg-accent text-white" : "bg-bg-card text-muted hover:text-primary")}
+                  onClick={() => setBsView(v)}
+                >
+                  {v === "bs" ? "Balance Sheet" : v === "pl" ? "Profit & Loss" : "Trial Balance"}
+                </button>
+              ))}
+            </div>
+
+            {bsView === "bs" && (
+              <div className="space-y-4">
+                {/* Summary cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bento-card text-center">
+                    <div className="text-xs text-muted mb-1">Total Assets</div>
+                    <div className="tabular-nums font-bold text-success text-lg">{fmtINR(bs.totalAssets)}</div>
+                  </div>
+                  <div className="bento-card text-center">
+                    <div className="text-xs text-muted mb-1">Total Liabilities</div>
+                    <div className="tabular-nums font-bold text-danger text-lg">{fmtINR(bs.totalLiabilities)}</div>
+                  </div>
+                  <div className="bento-card text-center">
+                    <div className="text-xs text-muted mb-1">Capital</div>
+                    <div className="tabular-nums font-bold text-accent text-lg">{fmtINR(bs.totalCapital)}</div>
+                  </div>
+                  <div className="bento-card text-center">
+                    <div className="text-xs text-muted mb-1">Net Profit</div>
+                    <div className={clsx("tabular-nums font-bold text-lg", bs.netProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(bs.netProfit)}</div>
+                  </div>
+                </div>
+
+                {bs.stockValue > 0 && (
+                  <div className="text-xs text-muted bento-card !p-2">
+                    Stock-in-Hand (from inventory): <span className="tabular-nums text-success">{fmtINR(bs.stockValue)}</span> included in Assets
+                  </div>
+                )}
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  {renderGroupTable(bs.assets, "Assets", "text-success")}
+                  <div className="space-y-4">
+                    {renderGroupTable(bs.liabilities, "Liabilities", "text-danger")}
+                    {renderGroupTable(bs.capital, "Capital & Reserves", "text-accent")}
+                  </div>
+                </div>
+
+                {/* Balance check */}
+                <div className={clsx("rounded-xl p-4 text-center tabular-nums text-sm border",
+                  Math.abs(bs.totalAssets - bs.totalLiabilitiesAndCapital) < 1
+                    ? "bg-success/10 border-success/30 text-success"
+                    : "bg-warning/10 border-warning/30 text-warning"
+                )}>
+                  Assets ({fmtINR(bs.totalAssets)}) {Math.abs(bs.totalAssets - bs.totalLiabilitiesAndCapital) < 1 ? "=" : "≠"} Liabilities + Capital + Profit ({fmtINR(bs.totalLiabilitiesAndCapital)})
+                  {Math.abs(bs.totalAssets - bs.totalLiabilitiesAndCapital) >= 1 && (
+                    <span className="ml-2 text-xs">(Diff: {fmtINR(Math.abs(bs.totalAssets - bs.totalLiabilitiesAndCapital))})</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {bsView === "pl" && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="bento-card text-center">
+                    <div className="text-xs text-muted mb-1">Total Income</div>
+                    <div className="tabular-nums font-bold text-success text-lg">{fmtINR(pl.totalIncome)}</div>
+                  </div>
+                  <div className="bento-card text-center">
+                    <div className="text-xs text-muted mb-1">Total Expenses</div>
+                    <div className="tabular-nums font-bold text-danger text-lg">{fmtINR(pl.totalExpenses)}</div>
+                  </div>
+                  <div className="bento-card text-center">
+                    <div className="text-xs text-muted mb-1">Gross Profit</div>
+                    <div className={clsx("tabular-nums font-bold text-lg", pl.grossProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(pl.grossProfit)}</div>
+                  </div>
+                  <div className="bento-card text-center">
+                    <div className="text-xs text-muted mb-1">Net Profit</div>
+                    <div className={clsx("tabular-nums font-bold text-lg", pl.netProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(pl.netProfit)}</div>
+                  </div>
+                  <div className="bento-card text-center">
+                    <div className="text-xs text-muted mb-1">Net Profit %</div>
+                    <div className={clsx("tabular-nums font-bold text-lg", pl.netProfit >= 0 ? "text-success" : "text-danger")}>
+                      {pl.directIncome > 0 ? ((pl.netProfit / pl.directIncome) * 100).toFixed(2) : "0"}%
+                    </div>
+                  </div>
+                </div>
+
+                {pl.openingStock > 0 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bento-card !p-2 text-center">
+                      <div className="text-xs text-muted">Opening Stock</div>
+                      <div className="tabular-nums text-sm font-semibold">{fmtINR(pl.openingStock)}</div>
+                    </div>
+                    <div className="bento-card !p-2 text-center">
+                      <div className="text-xs text-muted">Closing Stock</div>
+                      <div className="tabular-nums text-sm font-semibold">{fmtINR(pl.closingStock)}</div>
+                    </div>
+                    <div className="bento-card !p-2 text-center">
+                      <div className="text-xs text-muted">Stock Adjustment</div>
+                      <div className={clsx("tabular-nums text-sm font-semibold", pl.stockAdjustment > 0 ? "text-danger" : "text-success")}>
+                        {pl.stockAdjustment > 0 ? "+" : ""}{fmtINR(pl.stockAdjustment)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  {/* Income */}
+                  <div className="section-card">
+                    <div className="section-card-header">
+                      <h3 className="card-title text-success">Income</h3>
+                    </div>
+                    <div className="divide-y divide-bg-border/50">
+                      {pl.income.map(g => (
+                        <div key={g.group}>
+                          <button className="w-full flex justify-between items-center px-4 py-2 table-row-hover"
+                            onClick={() => setBsExpandedGroup(bsExpandedGroup === `pl-${g.group}` ? null : `pl-${g.group}`)}>
+                            <span className="text-primary text-sm flex items-center gap-2">
+                              {bsExpandedGroup === `pl-${g.group}` ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                              {g.group}
+                            </span>
+                            <span className="tabular-nums text-sm text-success">{fmtINR(g.total)}</span>
+                          </button>
+                          {bsExpandedGroup === `pl-${g.group}` && (
+                            <div className="bg-bg-border/10 px-6 py-1">
+                              {g.ledgers.sort((a, b) => b.amount - a.amount).map((l, i) => (
+                                <div key={i} className="flex justify-between py-1 text-xs">
+                                  <span className="text-muted">{l.name}</span>
+                                  <span className="tabular-nums">{fmtINR(l.amount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Expenses */}
+                  <div className="section-card">
+                    <div className="section-card-header">
+                      <h3 className="card-title text-danger">Expenses</h3>
+                    </div>
+                    <div className="divide-y divide-bg-border/50">
+                      {pl.expenses.map(g => (
+                        <div key={g.group}>
+                          <button className="w-full flex justify-between items-center px-4 py-2 table-row-hover"
+                            onClick={() => setBsExpandedGroup(bsExpandedGroup === `pl-${g.group}` ? null : `pl-${g.group}`)}>
+                            <span className="text-primary text-sm flex items-center gap-2">
+                              {bsExpandedGroup === `pl-${g.group}` ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                              {g.group}
+                            </span>
+                            <span className="tabular-nums text-sm text-danger">{fmtINR(g.total)}</span>
+                          </button>
+                          {bsExpandedGroup === `pl-${g.group}` && (
+                            <div className="bg-bg-border/10 px-6 py-1">
+                              {g.ledgers.sort((a, b) => b.amount - a.amount).map((l, i) => (
+                                <div key={i} className="flex justify-between py-1 text-xs">
+                                  <span className="text-muted">{l.name}</span>
+                                  <span className="tabular-nums">{fmtINR(l.amount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {bsView === "tb" && (
+              <div className="section-card">
+                <table className="w-full text-sm">
+                  <thead className="table-header-sticky">
+                    <tr>
+                      {["Ledger", "Group", "Opening", "Debit", "Credit", "Closing"].map(h => (
+                        <th key={h} className="table-header">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tb.filter(e => Math.abs(e.closingBalance) > 0.5 || e.totalDebit > 0 || e.totalCredit > 0)
+                      .sort((a, b) => Math.abs(b.closingBalance) - Math.abs(a.closingBalance))
+                      .slice(0, 200)
+                      .map(e => (
+                        <tr key={e.ledgerId} className="responsive-table-row">
+                          <td className="px-3 py-1.5 text-primary text-xs">{e.name}</td>
+                          <td className="px-3 py-1.5 text-muted text-xs">{e.group}</td>
+                          <td className="px-3 py-1.5 tabular-nums text-xs">{fmtINR(e.openingBalance)}</td>
+                          <td className="px-3 py-1.5 tabular-nums text-xs text-success">{e.totalDebit > 0 ? fmtINR(e.totalDebit) : "-"}</td>
+                          <td className="px-3 py-1.5 tabular-nums text-xs text-danger">{e.totalCredit > 0 ? fmtINR(e.totalCredit) : "-"}</td>
+                          <td className={clsx("px-3 py-1.5 tabular-nums text-xs font-semibold", e.closingBalance >= 0 ? "text-success" : "text-danger")}>{fmtINR(e.closingBalance)}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                  <tfoot className="border-t-2 border-bg-border bg-bg-border/20">
+                    <tr>
+                      <td colSpan={3} className="px-3 py-2 font-semibold text-primary text-sm">Total</td>
+                      <td className="px-3 py-2 tabular-nums font-bold text-success text-sm">{fmtINR(tb.reduce((s, e) => s + e.totalDebit, 0))}</td>
+                      <td className="px-3 py-2 tabular-nums font-bold text-danger text-sm">{fmtINR(tb.reduce((s, e) => s + e.totalCredit, 0))}</td>
+                      <td className="px-3 py-2 tabular-nums font-bold text-sm">{fmtINR(tb.reduce((s, e) => s + e.closingBalance, 0))}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ═══════════ Advance Tax ═══════════ */}
+      {tab === "Advance Tax" && atData && (() => {
+        return (
+          <div className="space-y-4">
+            {/* Regime selector */}
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-muted">Tax Regime:</span>
+              <select
+                className="form-select text-xs py-1 pl-2 min-h-0"
+                value={taxRegime}
+                onChange={e => setTaxRegime(e.target.value)}
+              >
+                {Object.keys(COMPANY_TAX_REGIMES).map(k => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </div>
+
+            {/* Summary */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bento-card text-center">
+                <div className="text-xs text-muted mb-1">Estimated Profit (FY {atData.fyYear})</div>
+                <div className={clsx("tabular-nums font-bold text-lg", atData.annualProfit >= 0 ? "text-success" : "text-danger")}>{fmtINR(atData.annualProfit)}</div>
+              </div>
+              <div className="bento-card text-center">
+                <div className="text-xs text-muted mb-1">Taxable Income</div>
+                <div className="tabular-nums font-bold text-primary text-lg">{fmtINR(atData.taxableIncome)}</div>
+              </div>
+              <div className="bento-card text-center">
+                <div className="text-xs text-muted mb-1">Effective Rate</div>
+                <div className="tabular-nums font-bold text-accent text-lg">{atData.regime.effectiveRate.toFixed(2)}%</div>
+              </div>
+              <div className="bento-card text-center">
+                <div className="text-xs text-muted mb-1">Total Tax Liability</div>
+                <div className="tabular-nums font-bold text-danger text-lg">{fmtINR(atData.totalTax)}</div>
+              </div>
+            </div>
+
+            {/* Tax breakdown */}
+            <div className="section-card">
+              <div className="section-card-header">
+                <h3 className="card-title">Tax Computation</h3>
+              </div>
+              <table className="w-full text-sm">
+                <tbody>
+                  {[
+                    ["Basic Tax", `${atData.regime.rate}%`, atData.basicTax],
+                    ["Surcharge", `${atData.regime.surchargeRate}%`, atData.surcharge],
+                    ["Health & Education Cess", `${atData.regime.cessRate}%`, atData.cess],
+                  ].map(([label, rate, amt]) => (
+                    <tr key={label as string} className="responsive-table-row">
+                      <td className="px-4 py-2 text-primary">{label}</td>
+                      <td className="px-4 py-2 tabular-nums text-muted text-right">{rate}</td>
+                      <td className="px-4 py-2 tabular-nums text-danger text-right">{fmtINR(amt as number)}</td>
+                    </tr>
+                  ))}
+                  <tr className="bg-bg-border/10 font-bold">
+                    <td className="px-4 py-2 text-primary">Total Tax</td>
+                    <td className="px-4 py-2 tabular-nums text-muted text-right">{atData.regime.effectiveRate.toFixed(2)}%</td>
+                    <td className="px-4 py-2 tabular-nums text-danger text-right">{fmtINR(atData.totalTax)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Quarterly installments */}
+            <div className="section-card">
+              <div className="section-card-header">
+                <h3 className="card-title">Quarterly Advance Tax Installments</h3>
+              </div>
+              <table className="w-full text-sm">
+                <thead className="border-b border-bg-border">
+                  <tr>
+                    {["Quarter", "Period", "Due Date", "Cumulative %", "Installment", "Cumulative Due", "Profit to Date"].map(h => (
+                      <th key={h} className="table-header">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {atData.quarters.map(q => (
+                    <tr key={q.quarter} className="responsive-table-row">
+                      <td className="px-3 py-2 font-semibold text-primary">{q.quarter}</td>
+                      <td className="px-3 py-2 text-muted">{q.label}</td>
+                      <td className="px-3 py-2 text-accent font-medium">{q.dueDate}</td>
+                      <td className="px-3 py-2 tabular-nums">{q.cumulativePct}%</td>
+                      <td className="px-3 py-2 tabular-nums text-danger">{fmtINR(q.installmentAmount)}</td>
+                      <td className="px-3 py-2 tabular-nums text-danger font-semibold">{fmtINR(q.cumulativeAmount)}</td>
+                      <td className={clsx("px-3 py-2 tabular-nums", q.profitToDate >= 0 ? "text-success" : "text-danger")}>{fmtINR(q.profitToDate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Monthly profit chart */}
+            {atData.monthlyProfitTrend.length > 0 && (
+              <div className="bento-card">
+                <h3 className="card-title mb-3">Monthly Profit Trend</h3>
+                <ResponsiveContainer width="100%" height={250}>
+                  <ComposedChart data={atData.monthlyProfitTrend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-bg-border)" vertical={false} />
+                    <XAxis dataKey="month" tick={{ fontSize: 10, fill: "var(--color-text-muted)" }} />
+                    <YAxis tick={{ fontSize: 10, fill: "var(--color-text-muted)" }} tickFormatter={v => fmtINR(v)} />
+                    <Tooltip formatter={(v: number) => fmtINR(v)} />
+                    <Bar dataKey="profit" fill="var(--color-accent)" name="Monthly Profit" />
+                    <Line type="monotone" dataKey="cumulative" stroke="var(--color-success)" strokeWidth={2} dot={false} name="Cumulative" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ═══ Financial Command Center ═══ */}
+      {tab === "Financial HQ" && <FinancialCommandCenter data={data} voucherIndex={voucherIndex} />}
+
+      {/* ═══ Cashflow Intelligence ═══ */}
+      {tab === "Cashflow Intel" && <CashflowIntelligence data={data} voucherIndex={voucherIndex} />}
+
+      {/* ═══ Ledger Intelligence ═══ */}
+      {tab === "Ledger Intel" && <LedgerIntelligence data={data} voucherIndex={voucherIndex} />}
+
+      {/* ═══ Tax & Compliance Radar ═══ */}
+      {tab === "Tax Radar" && <TaxRadar data={data} voucherIndex={voucherIndex} />}
+
+      {/* ═══ Business Intelligence ═══ */}
+      {tab === "Business Intel" && <BusinessIntelligence data={data} voucherIndex={voucherIndex} />}
+
     </div>
   );
 }
@@ -1636,14 +2104,14 @@ function PredictionRow({ pred, isExpanded, dateColor, onToggle, items, unitMode 
 }) {
   return (
     <>
-      <tr className="border-b border-bg-border/50 hover:bg-bg-border/20 cursor-pointer" onClick={onToggle}>
+      <tr className="responsive-table-row cursor-pointer" onClick={onToggle}>
         <td className="px-4 py-2">
           {isExpanded ? <ChevronDown size={14} className="text-muted" /> : <ChevronRight size={14} className="text-muted" />}
         </td>
         <td className="px-4 py-2 text-primary font-medium">{pred.partyName}</td>
-        <td className="px-4 py-2 font-mono text-muted text-xs">{pred.lastOrderDate}</td>
-        <td className="px-4 py-2 font-mono text-muted text-xs">{pred.avgIntervalDays}d ± {pred.stdDevDays}d</td>
-        <td className={clsx("px-4 py-2 font-mono font-medium text-xs", dateColor)}>
+        <td className="px-4 py-2 tabular-nums text-muted text-xs">{pred.lastOrderDate}</td>
+        <td className="px-4 py-2 tabular-nums text-muted text-xs">{pred.avgIntervalDays}d ± {pred.stdDevDays}d</td>
+        <td className={clsx("px-4 py-2 tabular-nums font-medium text-xs", dateColor)}>
           {pred.predictedNextDate} ({pred.daysUntilPredicted > 0 ? `in ${pred.daysUntilPredicted}d` : `${Math.abs(pred.daysUntilPredicted)}d ago`})
         </td>
         <td className="px-4 py-2">
@@ -1651,7 +2119,7 @@ function PredictionRow({ pred, isExpanded, dateColor, onToggle, items, unitMode 
             <div className="flex-1 h-2 bg-bg-border rounded-full overflow-hidden">
               <div className="h-full bg-accent transition-all" style={{ width: `${pred.confidence * 100}%` }} />
             </div>
-            <span className="text-xs font-mono text-muted w-10">{(pred.confidence * 100).toFixed(0)}%</span>
+            <span className="text-xs tabular-nums text-muted w-10">{(pred.confidence * 100).toFixed(0)}%</span>
           </div>
         </td>
         <td className="px-4 py-2 text-muted text-xs">{pred.topItems.length} + {pred.upsellItems?.length ?? 0}</td>
@@ -1672,10 +2140,10 @@ function PredictionRow({ pred, isExpanded, dateColor, onToggle, items, unitMode 
                       <div key={item.itemId} className="bg-bg-card border border-bg-border rounded-lg p-2 text-xs">
                         <div className="font-medium text-primary truncate">{item.itemName}</div>
                         <div className="flex items-center justify-between mt-1">
-                          <span className="text-muted">Predicted: <span className="font-mono text-primary">
+                          <span className="text-muted">Predicted: <span className="tabular-nums text-primary">
                             {baseDisp.formatted}{pkgDisp ? ` (${pkgDisp.formatted})` : ""}
                           </span></span>
-                          <span className={clsx("font-mono text-xs px-1.5 py-0.5 rounded",
+                          <span className={clsx("tabular-nums text-xs px-1.5 py-0.5 rounded",
                             item.trend === "up" ? "bg-success/10 text-success" :
                             item.trend === "down" ? "bg-danger/10 text-danger" : "bg-muted/10 text-muted"
                           )}>
@@ -1709,14 +2177,14 @@ function PredictionRow({ pred, isExpanded, dateColor, onToggle, items, unitMode 
                             <span className={clsx("text-xs px-1.5 py-0.5 rounded", reasonColor)}>{us.reason}</span>
                           </div>
                           <div className="flex items-center justify-between mt-1">
-                            <span className="text-muted">Suggested: <span className="font-mono text-primary">
+                            <span className="text-muted">Suggested: <span className="tabular-nums text-primary">
                               {baseDisp.formatted}{pkgDisp ? ` (${pkgDisp.formatted})` : ""}
                             </span></span>
                             <div className="flex items-center gap-1">
                               <div className="w-12 h-1.5 bg-bg-border rounded-full overflow-hidden">
                                 <div className="h-full bg-purple-500" style={{ width: `${us.confidence * 100}%` }} />
                               </div>
-                              <span className="text-xs font-mono text-muted">{(us.confidence * 100).toFixed(0)}%</span>
+                              <span className="text-xs tabular-nums text-muted">{(us.confidence * 100).toFixed(0)}%</span>
                             </div>
                           </div>
                         </div>
@@ -1764,22 +2232,22 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
   return (
     <div className="space-y-4">
       {/* Controls */}
-      <div className="flex items-center justify-between flex-wrap gap-3 bg-bg-card border border-bg-border rounded-xl p-4">
+      <div className="flex items-center justify-between flex-wrap gap-3 bento-card">
         <div className="flex items-center gap-3">
           <RefreshCw size={16} className="text-accent" />
-          <h3 className="font-semibold text-primary">Inventory Turnover Analysis</h3>
+          <h3 className="card-title">Inventory Turnover Analysis</h3>
           <select value={turnoverPeriod} onChange={(e) => setTurnoverPeriod(Number(e.target.value))}
-            className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+            className="form-select text-xs py-1 pl-2 min-h-0">
             <option value={3}>Last 3 Months</option>
             <option value={6}>Last 6 Months</option>
             <option value={12}>Last 12 Months</option>
           </select>
           <select value={turnoverGroupFilter} onChange={(e) => setTurnoverGroupFilter(e.target.value)}
-            className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+            className="form-select text-xs py-1 pl-2 min-h-0">
             {turnoverGroups.map(g => <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>)}
           </select>
           <select value={turnoverClassFilter} onChange={(e) => setTurnoverClassFilter(e.target.value as typeof turnoverClassFilter)}
-            className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-sm text-primary outline-none">
+            className="form-select text-xs py-1 pl-2 min-h-0">
             <option value="ALL">All Classifications</option>
             <option value="fast">Fast Moving</option>
             <option value="moderate">Moderate</option>
@@ -1798,7 +2266,7 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
           a.href = URL.createObjectURL(blob);
           a.download = `turnover_${turnoverPeriod}mo_${new Date().toISOString().slice(0, 10)}.csv`;
           a.click();
-        }} className="flex items-center gap-2 bg-bg border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-4 py-2 rounded-lg transition text-sm">
+        }} className="btn-ghost flex items-center gap-2">
           <Download size={14} />Export CSV
         </button>
       </div>
@@ -1814,35 +2282,35 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
           { v: String(turnoverSummary.slow), l: "Slow", c: "text-warn", b: "border-warn/40" },
           { v: String(turnoverSummary.dead), l: "Dead", c: "text-danger", b: "border-danger/40" },
         ].map(({ v, l, c, b }) => (
-          <div key={l} className={`bg-bg-card border ${b} rounded-xl p-3 text-center`}>
-            <div className={`text-2xl font-bold font-mono ${c}`}>{v}</div>
+          <div key={l} className={`bento-card !p-3 text-center border ${b}`}>
+            <div className={`text-2xl font-bold tabular-nums ${c}`}>{v}</div>
             <div className="text-muted text-xs mt-1">{l}</div>
           </div>
         ))}
       </div>
 
       {/* Charts */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-          <h3 className="font-semibold text-primary mb-3 text-sm">Top 15 — Fastest Moving</h3>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 md:gap-4">
+        <div className="bento-card">
+          <h3 className="card-title mb-3">Top 15 — Fastest Moving</h3>
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={[...turnoverData].sort((a, b) => b.turnoverRatio - a.turnoverRatio).slice(0, 15).map(t => ({ name: t.name.length > 20 ? t.name.slice(0, 20) + "..." : t.name, ratio: t.turnoverRatio }))} layout="vertical" barSize={14}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} />
               <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 10, fill: "#64748b" }} />
-              <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number) => [`${v}x`, "Turnover"]} />
+              <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }} formatter={(v: number) => [`${v}x`, "Turnover"]} />
               <Bar dataKey="ratio" fill="#2563eb" radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-          <h3 className="font-semibold text-primary mb-3 text-sm">Bottom 15 — Slowest / Dead Stock</h3>
+        <div className="bento-card">
+          <h3 className="card-title mb-3">Bottom 15 — Slowest / Dead Stock</h3>
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={[...turnoverData].filter(t => t.avgInventoryValue > 0).sort((a, b) => a.turnoverRatio - b.turnoverRatio).slice(0, 15).map(t => ({ name: t.name.length > 20 ? t.name.slice(0, 20) + "..." : t.name, doi: isFinite(t.daysOfInventory) ? t.daysOfInventory : 999 }))} layout="vertical" barSize={14}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 10, fill: "#64748b" }} label={{ value: "Days", position: "insideBottom", fontSize: 10, fill: "#64748b" }} />
               <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 10, fill: "#64748b" }} />
-              <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8 }} formatter={(v: number) => [v >= 999 ? "Inf" : `${v} days`, "Days of Inventory"]} />
+              <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 10, boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)", fontSize: 13 }} formatter={(v: number) => [v >= 999 ? "Inf" : `${v} days`, "Days of Inventory"]} />
               <Bar dataKey="doi" fill="#ef4444" radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -1850,11 +2318,11 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
       </div>
 
       {/* Full table — virtualized if > 200 items */}
-      <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between">
-          <h3 className="font-semibold text-primary">All Items ({filteredTurnover.length})</h3>
+      <div className="section-card">
+        <div className="section-card-header flex items-center justify-between">
+          <h3 className="card-title">All Items ({filteredTurnover.length})</h3>
           <select value={turnoverSort} onChange={(e) => setTurnoverSort(e.target.value as any)}
-            className="bg-bg border border-bg-border rounded-lg px-3 py-1.5 text-xs text-primary outline-none">
+            className="form-select text-xs py-1 pl-2 min-h-0">
             <option value="ratio-desc">Turnover (Fastest)</option>
             <option value="ratio-asc">Turnover (Slowest)</option>
             <option value="doi-asc">DOI (Shortest)</option>
@@ -1865,10 +2333,10 @@ function TurnoverTab({ turnoverData, filteredTurnover, turnoverSummary, turnover
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-bg-card border-b border-bg-border">
+            <thead className="table-header-sticky">
               <tr>
                 {["Item", "Group", "Turnover", "DOI", "COGS", "Avg Inv", "Out Qty", "In Qty", "Opening", "Closing", "Class"].map((h) => (
-                  <th key={h} className="text-left text-muted px-4 py-2 font-medium text-xs">{h}</th>
+                  <th key={h} className="table-header">{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1901,35 +2369,35 @@ function TurnoverRow({ t, style }: { t: import("../engine/inventory").ItemTurnov
 
   if (style) {
     return (
-      <div style={style} className="flex items-center text-sm border-b border-bg-border/50 hover:bg-bg-border/20">
+      <div style={style} className="flex items-center text-sm responsive-table-row">
         <div className="px-4 py-2 text-primary max-w-[200px] truncate flex-1" title={t.name}>{t.name}</div>
         <div className="px-4 py-2 text-muted text-xs w-24 truncate">{t.group}</div>
-        <div className="px-4 py-2 font-mono font-semibold text-primary w-20">{t.turnoverRatio}x</div>
-        <div className="px-4 py-2 font-mono text-muted text-xs w-16">{isFinite(t.daysOfInventory) ? `${t.daysOfInventory}d` : "Inf"}</div>
-        <div className="px-4 py-2 font-mono text-primary text-xs w-24">{fmtINR(t.cogsValue)}</div>
-        <div className="px-4 py-2 font-mono text-muted text-xs w-24">{fmtINR(t.avgInventoryValue)}</div>
-        <div className="px-4 py-2 font-mono text-danger text-xs w-16">{fmtNum(t.totalOutwardQty, 0)}</div>
-        <div className="px-4 py-2 font-mono text-success text-xs w-16">{fmtNum(t.totalInwardQty, 0)}</div>
-        <div className="px-4 py-2 font-mono text-muted text-xs w-16">{fmtNum(t.openingQty, 0)}</div>
-        <div className="px-4 py-2 font-mono text-primary text-xs w-16">{fmtNum(t.closingQty, 0)}</div>
-        <div className="px-4 py-2 w-20"><span className={clsx("text-xs px-2 py-0.5 rounded-full font-medium", classColor)}>{classLabel}</span></div>
+        <div className="px-4 py-2 tabular-nums font-semibold text-primary w-20">{t.turnoverRatio}x</div>
+        <div className="px-4 py-2 tabular-nums text-muted text-xs w-16">{isFinite(t.daysOfInventory) ? `${t.daysOfInventory}d` : "Inf"}</div>
+        <div className="px-4 py-2 tabular-nums text-primary text-xs w-24">{fmtINR(t.cogsValue)}</div>
+        <div className="px-4 py-2 tabular-nums text-muted text-xs w-24">{fmtINR(t.avgInventoryValue)}</div>
+        <div className="px-4 py-2 tabular-nums text-danger text-xs w-16">{fmtNum(t.totalOutwardQty, 0)}</div>
+        <div className="px-4 py-2 tabular-nums text-success text-xs w-16">{fmtNum(t.totalInwardQty, 0)}</div>
+        <div className="px-4 py-2 tabular-nums text-muted text-xs w-16">{fmtNum(t.openingQty, 0)}</div>
+        <div className="px-4 py-2 tabular-nums text-primary text-xs w-16">{fmtNum(t.closingQty, 0)}</div>
+        <div className="px-4 py-2 w-20"><span className={clsx("badge", classColor)}>{classLabel}</span></div>
       </div>
     );
   }
 
   return (
-    <tr className="border-b border-bg-border/50 hover:bg-bg-border/20">
+    <tr className="responsive-table-row">
       <td className="px-4 py-2 text-primary max-w-[200px] truncate" title={t.name}>{t.name}</td>
       <td className="px-4 py-2 text-muted text-xs">{t.group}</td>
-      <td className="px-4 py-2 font-mono font-semibold text-primary">{t.turnoverRatio}x</td>
-      <td className="px-4 py-2 font-mono text-muted text-xs">{isFinite(t.daysOfInventory) ? `${t.daysOfInventory}d` : "Inf"}</td>
-      <td className="px-4 py-2 font-mono text-primary text-xs">{fmtINR(t.cogsValue)}</td>
-      <td className="px-4 py-2 font-mono text-muted text-xs">{fmtINR(t.avgInventoryValue)}</td>
-      <td className="px-4 py-2 font-mono text-danger text-xs">{fmtNum(t.totalOutwardQty, 0)}</td>
-      <td className="px-4 py-2 font-mono text-success text-xs">{fmtNum(t.totalInwardQty, 0)}</td>
-      <td className="px-4 py-2 font-mono text-muted text-xs">{fmtNum(t.openingQty, 0)}</td>
-      <td className="px-4 py-2 font-mono text-primary text-xs">{fmtNum(t.closingQty, 0)}</td>
-      <td className="px-4 py-2"><span className={clsx("text-xs px-2 py-0.5 rounded-full font-medium", classColor)}>{classLabel}</span></td>
+      <td className="px-4 py-2 tabular-nums font-semibold text-primary">{t.turnoverRatio}x</td>
+      <td className="px-4 py-2 tabular-nums text-muted text-xs">{isFinite(t.daysOfInventory) ? `${t.daysOfInventory}d` : "Inf"}</td>
+      <td className="px-4 py-2 tabular-nums text-primary text-xs">{fmtINR(t.cogsValue)}</td>
+      <td className="px-4 py-2 tabular-nums text-muted text-xs">{fmtINR(t.avgInventoryValue)}</td>
+      <td className="px-4 py-2 tabular-nums text-danger text-xs">{fmtNum(t.totalOutwardQty, 0)}</td>
+      <td className="px-4 py-2 tabular-nums text-success text-xs">{fmtNum(t.totalInwardQty, 0)}</td>
+      <td className="px-4 py-2 tabular-nums text-muted text-xs">{fmtNum(t.openingQty, 0)}</td>
+      <td className="px-4 py-2 tabular-nums text-primary text-xs">{fmtNum(t.closingQty, 0)}</td>
+      <td className="px-4 py-2"><span className={clsx("badge", classColor)}>{classLabel}</span></td>
     </tr>
   );
 }
@@ -1992,18 +2460,18 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
   return (
     <div className="space-y-4">
       {/* Navigation */}
-      <div className="flex items-center justify-between bg-bg-card border border-bg-border rounded-xl p-4">
+      <div className="flex items-center justify-between bento-card">
         <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-muted hover:text-primary transition text-sm">
           <ChevronLeft size={16} />Prev
         </button>
-        <h3 className="font-semibold text-primary text-lg">{monthLabel}</h3>
+        <h3 className="subsection-header">{monthLabel}</h3>
         <button onClick={() => navigate(1)} className="flex items-center gap-1 text-muted hover:text-primary transition text-sm">
           Next<ChevronRight size={16} />
         </button>
       </div>
 
       {/* Calendar grid */}
-      <div className="bg-bg-card border border-bg-border rounded-xl overflow-hidden">
+      <div className="section-card">
         {/* Header */}
         <div className="grid grid-cols-7 border-b border-bg-border">
           {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => (
@@ -2025,13 +2493,13 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
                 className={clsx(
                   "min-h-[72px] border-b border-r border-bg-border/50 p-1.5 cursor-pointer transition-colors",
                   !cell.inMonth && "opacity-30",
-                  cell.inMonth && "hover:bg-bg-border/20",
+                  cell.inMonth && "table-row-hover",
                   isSelected && "bg-accent/10",
                   isToday && "ring-2 ring-accent ring-inset",
                   activity && cell.inMonth && "bg-bg-border/10",
                 )}
               >
-                <div className="text-xs font-mono text-muted mb-1">{cell.dayNum}</div>
+                <div className="text-xs tabular-nums text-muted mb-1">{cell.dayNum}</div>
                 {activity && cell.inMonth && (
                   <div className="flex flex-wrap gap-0.5">
                     {activity.salesCount > 0 && (
@@ -2065,25 +2533,25 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
 
       {/* Day detail */}
       {selectedDay && (
-        <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-          <h3 className="font-semibold text-primary mb-3">{fmtDate(selectedDay)}</h3>
+        <div className="bento-card">
+          <h3 className="card-title mb-3">{fmtDate(selectedDay)}</h3>
           {selectedActivity ? (
             <div className="space-y-3">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="bg-bg border border-bg-border rounded-lg p-2 text-center">
-                  <div className="text-lg font-bold font-mono text-blue-600">{fmtINR(selectedActivity.salesValue)}</div>
+                <div className="bento-card !p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums text-blue-600">{fmtINR(selectedActivity.salesValue)}</div>
                   <div className="text-muted text-xs">{selectedActivity.salesCount} Sales</div>
                 </div>
-                <div className="bg-bg border border-bg-border rounded-lg p-2 text-center">
-                  <div className="text-lg font-bold font-mono text-green-600">{fmtINR(selectedActivity.purchaseValue)}</div>
+                <div className="bento-card !p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums text-green-600">{fmtINR(selectedActivity.purchaseValue)}</div>
                   <div className="text-muted text-xs">{selectedActivity.purchaseCount} Purchases</div>
                 </div>
-                <div className="bg-bg border border-bg-border rounded-lg p-2 text-center">
-                  <div className="text-lg font-bold font-mono text-primary">{selectedActivity.receiptCount}</div>
+                <div className="bento-card !p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums text-primary">{selectedActivity.receiptCount}</div>
                   <div className="text-muted text-xs">Receipts</div>
                 </div>
-                <div className="bg-bg border border-bg-border rounded-lg p-2 text-center">
-                  <div className="text-lg font-bold font-mono text-primary">{selectedActivity.paymentCount}</div>
+                <div className="bento-card !p-2 text-center">
+                  <div className="text-lg font-bold tabular-nums text-primary">{selectedActivity.paymentCount}</div>
                   <div className="text-muted text-xs">Payments</div>
                 </div>
               </div>
@@ -2103,7 +2571,7 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
                     <thead className="border-b border-bg-border">
                       <tr>
                         {["Voucher#", "Type", "Party", "Amount"].map(h => (
-                          <th key={h} className="text-left text-muted px-3 py-2 font-medium">{h}</th>
+                          <th key={h} className="table-header">{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -2114,11 +2582,11 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
                           v.voucherType === "Receipt" ? "bg-yellow-500/10 text-yellow-600" :
                           "bg-muted/10 text-muted";
                         return (
-                          <tr key={v.voucherId} className="border-b border-bg-border/50">
-                            <td className="px-3 py-2 font-mono text-primary">{v.voucherNumber}</td>
-                            <td className="px-3 py-2"><span className={clsx("px-1.5 py-0.5 rounded text-xs", typeColor)}>{v.voucherType}</span></td>
+                          <tr key={v.voucherId} className="responsive-table-row">
+                            <td className="px-3 py-2 tabular-nums text-primary">{v.voucherNumber}</td>
+                            <td className="px-3 py-2"><span className={clsx("badge", typeColor)}>{v.voucherType}</span></td>
                             <td className="px-3 py-2 text-primary truncate max-w-[180px]">{v.partyName ?? "-"}</td>
-                            <td className="px-3 py-2 font-mono text-primary">{fmtINR(v.totalAmount)}</td>
+                            <td className="px-3 py-2 tabular-nums text-primary">{fmtINR(v.totalAmount)}</td>
                           </tr>
                         );
                       })}
@@ -2135,3 +2603,4 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
     </div>
   );
 }
+

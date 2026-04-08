@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { ParsedData, CanonicalVoucher } from "../types/canonical";
 import { applyOverridesToItems } from "../utils/applyOverrides";
 import { useOverrideStore } from "./overrideStore";
-import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
+import { generatePredictions, scorePredictions, generateItemForecasts, type PredictionSnapshot } from "../engine/prediction";
 import { saveToStore, loadFromStore } from "../db/idb";
 import { buildVoucherIndex, type VoucherIndex } from "../engine/inventory";
 
@@ -35,7 +35,7 @@ export const useDataStore = create<DataState>((set, get) => ({
     });
 
     // Run audit in development mode (Phase 5.1)
-    if (import.meta.env.DEV) {
+    if ((import.meta as any).env?.DEV) {
       // Dynamically import audit module to avoid circular dependencies
       import("../engine/audit").then(({ auditAllItems }) => {
         const auditResults = auditAllItems(newData.items, newData.vouchers, voucherIndex);
@@ -127,8 +127,8 @@ export const useDataStore = create<DataState>((set, get) => ({
     get().setData(mergedRawData);
 
     // Auto-regenerate predictions after merge (Task 3E)
-    // Run async to not block the merge
-    (async () => {
+    // Defer to idle callback / setTimeout so we don't block the UI render
+    const deferredPredictions = () => (async () => {
       try {
         const { units, rates } = useOverrideStore.getState();
         const itemsWithOverrides = applyOverridesToItems(items, units, rates);
@@ -141,9 +141,16 @@ export const useDataStore = create<DataState>((set, get) => ({
         const purchasePredictions = generatePredictions(allVouchers, itemsWithOverrides, "Purchase");
         const allPredictions = [...salesPredictions, ...purchasePredictions];
 
+        // Generate item-level forecasts and inventory alerts
+        const { forecasts: itemForecasts, alerts: inventoryAlerts } = generateItemForecasts(
+          allVouchers, itemsWithOverrides
+        );
+
         const newSnapshot: PredictionSnapshot = {
           generatedAt: new Date().toISOString(),
           predictions: allPredictions,
+          itemForecasts,
+          inventoryAlerts,
         };
 
         // Score previous predictions against new actuals
@@ -186,5 +193,10 @@ export const useDataStore = create<DataState>((set, get) => ({
         // Silently fail - predictions are non-critical
       }
     })();
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(deferredPredictions);
+    } else {
+      setTimeout(deferredPredictions, 100);
+    }
   },
 }));

@@ -1,13 +1,15 @@
 import { useState, useRef, useEffect } from "react";
-import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive, Activity } from "lucide-react";
+import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive, Activity, Wifi, RefreshCw } from "lucide-react";
 import clsx from "clsx";
 import { useUIStore } from "../store/uiStore";
 import { useDataStore } from "../store/dataStore";
 import { useOverrideStore } from "../store/overrideStore";
+import { useTallyStore } from "../store/tallyStore";
 import { clearAllData, listBackups, loadBackup, deleteBackup, exportBackupAsJSON, exportFullBackupAsJSON, eraseAllStores, listJsonUploads } from "../db/idb";
 import { useToast } from "../components/Toast";
 import { exportUnitsToExcel, importUnitsFromExcel } from "../utils/unitExcelHandler";
 import { deserializeParsedData } from "../utils/serialize";
+import { checkTallyHealth } from "../api/tallyApi";
 
 export default function Settings() {
   const { unitMode, toggleUnitMode, fyYear, setFyYear, coverMonths, setCoverMonths, leadTimeMonths, setLeadTimeMonths, defaultCreditDays, setDefaultCreditDays } = useUIStore();
@@ -22,6 +24,9 @@ export default function Settings() {
   const [jsonUploads, setJsonUploads] = useState<string[]>([]);
   const [auditResults, setAuditResults] = useState<any>(null);
   const [runningAudit, setRunningAudit] = useState(false);
+  const [showDiscrepancies, setShowDiscrepancies] = useState(false);
+  const [showNegativeStock, setShowNegativeStock] = useState(false);
+  const [showNoGstItems, setShowNoGstItems] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load backups and json uploads on mount
@@ -140,6 +145,34 @@ export default function Settings() {
     toast("Audit log exported", "success");
   }
 
+  function handleExportDiscrepancies() {
+    if (!auditResults || auditResults.failures.length === 0) {
+      toast("No discrepancies to export", "info");
+      return;
+    }
+
+    // CSV format
+    const headers = ["Item Name", "Item ID", "Opening Qty", "Inwards", "Outwards", "Expected Closing", "Computed Closing", "Discrepancy"];
+    const rows = auditResults.failures.map((f: any) => [
+      f.itemName,
+      f.itemId,
+      f.openingQtyBase.toFixed(4),
+      f.totalInwards.toFixed(4),
+      f.totalOutwards.toFixed(4),
+      f.expectedClosing.toFixed(4),
+      f.computedClosing.toFixed(4),
+      f.discrepancy.toFixed(4),
+    ]);
+
+    const csv = [headers, ...rows].map(row => row.map((cell: string) => `"${cell}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `inventory_discrepancies_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    toast("Discrepancies exported to CSV", "success");
+  }
+
   function handleExportUnits() {
     if (!data) {
       toast("No data loaded. Import data first.", "error");
@@ -246,10 +279,12 @@ export default function Settings() {
 
   return (
     <div className="max-w-xl space-y-6">
-      <h1 className="text-2xl font-bold text-primary flex items-center gap-3">
-        <SettingsIcon size={24} className="text-accent" />
-        Settings
-      </h1>
+      <div className="page-header">
+        <h1 className="page-title flex items-center gap-3">
+          <SettingsIcon size={24} className="text-accent" />
+          Settings
+        </h1>
+      </div>
 
       {/* Local Data Storage */}
       <Section title="Local Data Storage">
@@ -280,12 +315,15 @@ export default function Settings() {
         </div>
       </Section>
 
+      {/* Tally Connection */}
+      <TallyConnectionSection />
+
       {/* Unit Mode */}
       <Section title="Unit Mode">
         <div className="flex items-center gap-4">
-          <span className="text-sm text-muted">Currently: <span className="text-primary font-mono">{unitMode}</span></span>
+          <span className="text-sm text-muted">Currently: <span className="text-primary tabular-nums">{unitMode}</span></span>
           <button onClick={toggleUnitMode}
-            className="bg-accent hover:bg-accent-hover text-white px-4 py-1.5 rounded-lg text-sm transition">
+            className="btn-primary btn-sm">
             Switch to {unitMode === "BASE" ? "PKG" : "BASE"}
           </button>
         </div>
@@ -294,7 +332,7 @@ export default function Settings() {
       {/* Financial Year */}
       <Section title="Financial Year">
         <select value={fyYear} onChange={(e) => setFyYear(e.target.value)}
-          className="bg-bg border border-bg-border rounded-lg px-3 py-2 text-primary text-sm outline-none">
+          className="form-select">
           {fyOptions.map((y) => <option key={y} value={y}>{y}</option>)}
         </select>
       </Section>
@@ -304,7 +342,7 @@ export default function Settings() {
         <div className="flex gap-2">
           {[1, 1.5, 2, 3].map((m) => (
             <button key={m} onClick={() => setCoverMonths(m)}
-              className={`px-4 py-1.5 rounded-lg text-sm font-mono transition ${coverMonths === m ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary"}`}>
+              className={clsx("btn-sm tabular-nums", coverMonths === m ? "btn-primary" : "btn-secondary")}>
               {m}
             </button>
           ))}
@@ -315,14 +353,14 @@ export default function Settings() {
       <Section title="Lead Time Months">
         <input type="number" value={leadTimeMonths} min={0.5} max={6} step={0.5}
           onChange={(e) => setLeadTimeMonths(parseFloat(e.target.value) || 1.5)}
-          className="bg-bg border border-bg-border rounded-lg px-3 py-2 text-primary text-sm outline-none w-24" />
+          className="form-input w-24" />
       </Section>
 
       {/* Default Credit Days */}
       <Section title="Default Credit Days">
         <input type="number" value={defaultCreditDays} min={0} max={365}
           onChange={(e) => setDefaultCreditDays(parseInt(e.target.value) || 30)}
-          className="bg-bg border border-bg-border rounded-lg px-3 py-2 text-primary text-sm outline-none w-24" />
+          className="form-input w-24" />
       </Section>
 
       {/* Unit Configuration Export/Import */}
@@ -335,7 +373,7 @@ export default function Settings() {
             <button
               onClick={handleExportUnits}
               disabled={!data}
-              className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:bg-muted disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition text-sm"
+              className="btn-primary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <FileSpreadsheet size={14} />
               Export Template
@@ -343,7 +381,7 @@ export default function Settings() {
             <button
               onClick={handleImportUnitsClick}
               disabled={!data || isImporting}
-              className="flex items-center gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 rounded-lg transition text-sm"
+              className="btn-secondary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Upload size={14} />
               {isImporting ? "Importing..." : "Import Excel"}
@@ -371,30 +409,41 @@ export default function Settings() {
             <Activity size={14} className="text-accent" />
             <span className="text-xs text-muted">Run comprehensive data integrity checks</span>
           </div>
-          <button
-            onClick={handleRunAudit}
-            disabled={!data || runningAudit}
-            className="flex items-center gap-2 bg-accent hover:bg-accent-hover disabled:bg-muted disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition text-sm"
-          >
-            <Activity size={14} />
-            {runningAudit ? "Running Audit..." : "Run Audit"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={handleRunAudit}
+              disabled={!data || runningAudit}
+              className="btn-primary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Activity size={14} />
+              {runningAudit ? "Running Audit..." : "Run Audit"}
+            </button>
+            {auditResults && auditResults.failures.length > 0 && (
+              <button
+                onClick={handleExportDiscrepancies}
+                className="btn-secondary btn-sm"
+              >
+                <Download size={14} />
+                Export Discrepancies CSV
+              </button>
+            )}
+          </div>
 
           {auditResults && (
             <div className="space-y-3 bg-bg border border-bg-border rounded-lg p-3 text-sm">
               {/* Summary */}
               <div className="grid grid-cols-2 gap-2">
-                <div className="bg-bg-card border border-bg-border rounded-lg p-2 text-center">
-                  <div className={`text-xl font-bold font-mono ${auditResults.failures.length === 0 ? "text-success" : "text-danger"}`}>
+                <div className="bento-card text-center">
+                  <div className={clsx("metric-value", auditResults.failures.length === 0 ? "text-success" : "text-danger")}>
                     {auditResults.passCount}/{auditResults.totalCount}
                   </div>
-                  <div className="text-muted text-xs">Items Passed</div>
+                  <div className="metric-label">Items Passed</div>
                 </div>
-                <div className="bg-bg-card border border-bg-border rounded-lg p-2 text-center">
-                  <div className={`text-xl font-bold font-mono ${auditResults.chainBreaks.length === 0 ? "text-success" : "text-warn"}`}>
+                <div className="bento-card text-center">
+                  <div className={clsx("metric-value", auditResults.chainBreaks.length === 0 ? "text-success" : "text-warn")}>
                     {auditResults.totalCount - auditResults.chainBreaks.length}/{auditResults.totalCount}
                   </div>
-                  <div className="text-muted text-xs">Chain Valid</div>
+                  <div className="metric-label">Chain Valid</div>
                 </div>
               </div>
 
@@ -402,9 +451,9 @@ export default function Settings() {
               <div className="border-t border-bg-border pt-2">
                 <div className="text-xs font-semibold text-muted mb-1">Invoice Balance</div>
                 <div className="grid grid-cols-3 gap-1 text-xs">
-                  <div><span className="text-muted">Billed:</span> <span className="font-mono text-primary">₹{(auditResults.invoiceAudit.totalBilled / 100000).toFixed(1)}L</span></div>
-                  <div><span className="text-muted">Paid:</span> <span className="font-mono text-success">₹{(auditResults.invoiceAudit.totalPaid / 100000).toFixed(1)}L</span></div>
-                  <div><span className="text-muted">Outstanding:</span> <span className="font-mono text-accent">₹{(auditResults.invoiceAudit.totalOutstanding / 100000).toFixed(1)}L</span></div>
+                  <div><span className="text-muted">Billed:</span> <span className="tabular-nums text-primary">₹{(auditResults.invoiceAudit.totalBilled / 100000).toFixed(1)}L</span></div>
+                  <div><span className="text-muted">Paid:</span> <span className="tabular-nums text-success">₹{(auditResults.invoiceAudit.totalPaid / 100000).toFixed(1)}L</span></div>
+                  <div><span className="text-muted">Outstanding:</span> <span className="tabular-nums text-accent">₹{(auditResults.invoiceAudit.totalOutstanding / 100000).toFixed(1)}L</span></div>
                 </div>
                 {auditResults.invoiceAudit.orphanedPayments.length > 0 && (
                   <div className="text-xs text-warn mt-1">⚠ {auditResults.invoiceAudit.orphanedPayments.length} orphaned payment(s)</div>
@@ -415,13 +464,16 @@ export default function Settings() {
               <div className="border-t border-bg-border pt-2">
                 <div className="text-xs font-semibold text-muted mb-1">Voucher Types</div>
                 <div className="grid grid-cols-2 gap-1 text-xs">
-                  {Array.from(auditResults.voucherDist.entries()).map(([type, counts]) => (
-                    <div key={type}>
-                      <span className="text-muted">{type}:</span> <span className="font-mono text-primary">{counts.active}</span>
-                      {counts.cancelled > 0 && <span className="text-danger ml-1">(-{counts.cancelled})</span>}
-                      {counts.optional > 0 && <span className="text-warn ml-1">(~{counts.optional})</span>}
-                    </div>
-                  ))}
+                  {Array.from(auditResults.voucherDist.entries()).map((entry: any) => {
+                    const [type, counts] = entry;
+                    return (
+                      <div key={type}>
+                        <span className="text-muted">{type}:</span> <span className="tabular-nums text-primary">{counts.active}</span>
+                        {counts.cancelled > 0 && <span className="text-danger ml-1">(-{counts.cancelled})</span>}
+                        {counts.optional > 0 && <span className="text-warn ml-1">(~{counts.optional})</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -429,14 +481,89 @@ export default function Settings() {
               {(auditResults.failures.length > 0 || auditResults.negativeStock.length > 0 || auditResults.noGstItems.length > 0) && (
                 <div className="border-t border-bg-border pt-2">
                   <div className="text-xs font-semibold text-danger mb-1">Issues Found</div>
+
+                  {/* Inventory Discrepancies */}
                   {auditResults.failures.length > 0 && (
-                    <div className="text-xs text-danger">• {auditResults.failures.length} item(s) with inventory discrepancies</div>
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => setShowDiscrepancies(!showDiscrepancies)}
+                        className="text-xs text-danger hover:underline cursor-pointer flex items-center gap-1"
+                      >
+                        • {auditResults.failures.length} item(s) with inventory discrepancies
+                        <span className="text-[10px]">{showDiscrepancies ? "▼" : "▶"}</span>
+                      </button>
+                      {showDiscrepancies && (
+                        <div className="ml-3 max-h-64 overflow-y-auto border border-danger/20 rounded p-2 bg-danger/5 space-y-1">
+                          <div className="text-[10px] font-semibold text-muted grid grid-cols-6 gap-1 pb-1 border-b border-danger/20">
+                            <div className="col-span-2">Item</div>
+                            <div className="text-right">Opening</div>
+                            <div className="text-right">In</div>
+                            <div className="text-right">Out</div>
+                            <div className="text-right">Discrepancy</div>
+                          </div>
+                          {auditResults.failures.map((f: any) => (
+                            <div key={f.itemId} className="text-[10px] grid grid-cols-6 gap-1 py-1 border-b border-danger/10 hover:bg-danger/10">
+                              <div className="col-span-2 truncate text-primary" title={f.itemName}>{f.itemName}</div>
+                              <div className="text-right tabular-nums text-muted">{f.openingQtyBase.toFixed(2)}</div>
+                              <div className="text-right tabular-nums text-success">{f.totalInwards.toFixed(2)}</div>
+                              <div className="text-right tabular-nums text-danger">{f.totalOutwards.toFixed(2)}</div>
+                              <div className="text-right tabular-nums text-danger font-semibold">{f.discrepancy.toFixed(4)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
+
+                  {/* Negative Stock */}
                   {auditResults.negativeStock.length > 0 && (
-                    <div className="text-xs text-warn">• {auditResults.negativeStock.length} item(s) with negative stock</div>
+                    <div className="space-y-2 mt-2">
+                      <button
+                        onClick={() => setShowNegativeStock(!showNegativeStock)}
+                        className="text-xs text-warn hover:underline cursor-pointer flex items-center gap-1"
+                      >
+                        • {auditResults.negativeStock.length} item(s) with negative stock
+                        <span className="text-[10px]">{showNegativeStock ? "▼" : "▶"}</span>
+                      </button>
+                      {showNegativeStock && (
+                        <div className="ml-3 max-h-64 overflow-y-auto border border-warn/20 rounded p-2 bg-warn/5 space-y-1">
+                          <div className="text-[10px] font-semibold text-muted grid grid-cols-2 gap-2 pb-1 border-b border-warn/20">
+                            <div>Item</div>
+                            <div className="text-right">Current Stock</div>
+                          </div>
+                          {auditResults.negativeStock.map((item: any) => (
+                            <div key={item.itemId} className="text-[10px] grid grid-cols-2 gap-2 py-1 border-b border-warn/10 hover:bg-warn/10">
+                              <div className="truncate text-primary" title={item.name}>{item.name}</div>
+                              <div className="text-right tabular-nums text-danger font-semibold">{item.currentStock.toFixed(2)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
+
+                  {/* Items Without GST */}
                   {auditResults.noGstItems.length > 0 && (
-                    <div className="text-xs text-muted">• {auditResults.noGstItems.length} item(s) without GST rates</div>
+                    <div className="space-y-2 mt-2">
+                      <button
+                        onClick={() => setShowNoGstItems(!showNoGstItems)}
+                        className="text-xs text-muted hover:underline cursor-pointer flex items-center gap-1"
+                      >
+                        • {auditResults.noGstItems.length} item(s) without GST rates
+                        <span className="text-[10px]">{showNoGstItems ? "▼" : "▶"}</span>
+                      </button>
+                      {showNoGstItems && (
+                        <div className="ml-3 max-h-64 overflow-y-auto border border-muted/20 rounded p-2 bg-muted/5 space-y-1">
+                          <div className="grid grid-cols-2 gap-2">
+                            {auditResults.noGstItems.map((item: any) => (
+                              <div key={item.itemId} className="text-[10px] truncate text-primary py-1" title={item.name}>
+                                {item.name}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -455,74 +582,50 @@ export default function Settings() {
       {/* Export Audit Log */}
       <Section title="Audit Log">
         <button onClick={handleExportAudit}
-          className="flex items-center gap-2 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-4 py-2 rounded-lg transition text-sm">
+          className="btn-secondary btn-sm">
           <Download size={14} />Export Audit Log
         </button>
       </Section>
 
       {/* Backup Management */}
       <Section title="Backup Management">
-        <div className="space-y-3">
-          <p className="text-xs text-muted">
-            Backups are created automatically before each import. You can restore, download, or delete them here.
-          </p>
+        <div className="space-y-2">
+          <p className="text-xs text-muted">Auto-created before each import and sync. Restore, download, or delete below.</p>
           {backups.length === 0 ? (
-            <p className="text-sm text-muted italic">No backups available</p>
+            <p className="text-sm text-muted italic">No backups yet</p>
           ) : (
-            <div className="space-y-2 max-h-64 overflow-y-auto">
+            <div className="divide-y divide-bg-border border border-bg-border rounded-lg overflow-hidden max-h-72 overflow-y-auto">
               {backups.map((backup) => (
-                <div
-                  key={backup.key}
-                  className="flex items-center justify-between bg-bg border border-bg-border rounded-lg p-3 text-sm"
-                >
+                <div key={backup.key} className="flex items-center gap-3 px-3 py-2.5 bg-bg hover:bg-neutral-50 transition-colors">
+                  <Archive size={13} className="text-accent flex-shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Archive size={14} className="text-accent flex-shrink-0" />
-                      <span className="font-medium text-primary truncate">{backup.label}</span>
+                    <div className="text-xs font-medium text-primary truncate">{backup.label}</div>
+                    <div className="text-2xs text-muted">
+                      {new Date(backup.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
                     </div>
-                    <p className="text-xs text-muted mt-1">
-                      {new Date(backup.createdAt).toLocaleString("en-IN", {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
-                    </p>
                   </div>
-                  <div className="flex items-center gap-2 ml-4">
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
                     <button
                       onClick={() => handleRestoreBackup(backup.key)}
-                      className={clsx(
-                        "flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition",
-                        confirmRestore === backup.key
-                          ? "bg-success/20 border border-success text-success"
-                          : "bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary"
-                      )}
+                      className={clsx("btn-sm text-xs px-2 py-1", confirmRestore === backup.key ? "btn-primary" : "btn-secondary")}
+                      title="Restore this backup"
                     >
-                      <RotateCcw size={12} />
+                      <RotateCcw size={11} />
                       {confirmRestore === backup.key ? "Confirm?" : "Restore"}
                     </button>
-                    <button
-                      onClick={() => handleDownloadBackup(backup.key)}
-                      className="flex items-center gap-1 bg-bg-card border border-bg-border hover:border-accent/50 text-muted hover:text-primary px-3 py-1.5 rounded-lg text-xs transition"
-                    >
-                      <Download size={12} />
-                      Download
+                    <button onClick={() => handleDownloadBackup(backup.key)} className="btn-secondary btn-sm text-xs px-2 py-1" title="Download as JSON">
+                      <Download size={11} />
                     </button>
-                    <button
-                      onClick={() => handleDeleteBackup(backup.key)}
-                      className="flex items-center gap-1 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger px-3 py-1.5 rounded-lg text-xs transition"
-                    >
-                      <Trash2 size={12} />
-                      Delete
+                    <button onClick={() => handleDeleteBackup(backup.key)} className="btn-danger btn-sm text-xs px-2 py-1" title="Delete backup">
+                      <Trash2 size={11} />
                     </button>
                   </div>
                 </div>
               ))}
             </div>
           )}
-          {backups.length > 20 && (
-            <p className="text-xs text-warn">
-              You have {backups.length} backups. Consider deleting old ones to save space.
-            </p>
+          {backups.length > 15 && (
+            <p className="text-xs text-warn">{backups.length} backups stored — consider deleting old ones.</p>
           )}
         </div>
       </Section>
@@ -534,13 +637,13 @@ export default function Settings() {
           <div className="space-y-2">
             <p className="text-xs text-muted">Clear in-memory working data (does not delete persisted backups or JSON uploads).</p>
             {confirmClear && (
-              <div className="flex items-center gap-2 text-danger text-sm bg-danger/10 border border-danger/30 rounded-lg p-3">
+              <div className="alert alert-danger">
                 <AlertTriangle size={14} />
                 This will clear all imported data from memory. Click again to confirm.
               </div>
             )}
             <button onClick={handleClearData}
-              className="flex items-center gap-2 bg-danger/10 hover:bg-danger/20 border border-danger/30 text-danger px-4 py-2 rounded-lg transition text-sm">
+              className="btn-danger btn-sm">
               <Trash2 size={14} />
               {confirmClear ? "Confirm Clear Working Data" : "Clear Working Data"}
             </button>
@@ -557,24 +660,24 @@ export default function Settings() {
               then permanently erases everything from your browser.
             </p>
             {eraseStep === "confirm" && (
-              <div className="flex items-center gap-2 text-danger text-sm bg-danger/10 border border-danger/30 rounded-lg p-3">
+              <div className="alert alert-danger">
                 <AlertTriangle size={14} />
                 A full backup will be downloaded first, then ALL data will be erased. Click again to proceed.
               </div>
             )}
             {eraseStep === "downloading" && (
-              <div className="flex items-center gap-2 text-accent text-sm bg-accent/10 border border-accent/30 rounded-lg p-3">
+              <div className="alert alert-info">
                 Downloading backup and erasing data...
               </div>
             )}
             {eraseStep === "done" && (
-              <div className="flex items-center gap-2 text-success text-sm bg-success/10 border border-success/30 rounded-lg p-3">
+              <div className="alert alert-success">
                 All data erased successfully. Backup was downloaded.
               </div>
             )}
             <button onClick={handleEraseData}
               disabled={eraseStep === "downloading" || eraseStep === "done"}
-              className="flex items-center gap-2 bg-danger hover:bg-danger/80 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition text-sm">
+              className="btn-danger btn-sm disabled:opacity-50 disabled:cursor-not-allowed">
               <Trash2 size={14} />
               {eraseStep === "idle" ? "Erase All Data (with backup)" :
                eraseStep === "confirm" ? "Confirm — Download Backup & Erase" :
@@ -589,8 +692,8 @@ export default function Settings() {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-bg-card border border-bg-border rounded-xl p-4">
-      <h3 className="text-sm font-semibold text-muted mb-3">{title}</h3>
+    <div className="bento-card">
+      <h3 className="section-header">{title}</h3>
       {children}
     </div>
   );
@@ -598,9 +701,147 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="bg-bg border border-bg-border rounded-lg p-3">
-      <div className="text-xl font-mono font-bold text-accent">{value.toLocaleString("en-IN")}</div>
-      <div className="text-muted text-xs mt-0.5">{label}</div>
+    <div className="bento-card">
+      <div className="metric-value text-accent">{value.toLocaleString("en-IN")}</div>
+      <div className="metric-label">{label}</div>
     </div>
+  );
+}
+
+function TallyConnectionSection() {
+  const {
+    proxyUrl,
+    companyName,
+    isConnected,
+    lastSyncAt,
+    fyFromDate,
+    fyToDate,
+    setProxyUrl,
+    setConnected,
+    setFyDates,
+  } = useTallyStore();
+
+  const { toast } = useToast();
+  const [testing, setTesting] = useState(false);
+
+  async function handleTestConnection() {
+    setTesting(true);
+    try {
+      const health = await checkTallyHealth();
+      setConnected(health.connected);
+      if (health.connected) {
+        toast("✓ Connected to Tally proxy", "success");
+      } else {
+        toast(`⚠ Not connected: ${health.error || "Unknown error"}`, "error");
+      }
+    } catch (err: any) {
+      setConnected(false);
+      toast(`Connection failed: ${err.message || err}`, "error");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  const formatLastSync = () => {
+    if (!lastSyncAt) return "Never";
+    return new Date(lastSyncAt).toLocaleString('en-IN', {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    });
+  };
+
+  return (
+    <Section title="Tally Connection">
+      <div className="space-y-4">
+        {/* Connection Status */}
+        <div className={clsx(
+          "flex items-center gap-3 p-3 rounded-lg border",
+          isConnected
+            ? "bg-success/10 border-success/30 text-success"
+            : "bg-danger/10 border-danger/30 text-danger"
+        )}>
+          <Wifi size={16} />
+          <div className="flex-1">
+            <div className="text-sm font-medium">
+              {isConnected ? "Connected" : "Not Connected"}
+            </div>
+            <div className="text-xs opacity-75">
+              {isConnected
+                ? `Proxy: ${proxyUrl}`
+                : "Start proxy: cd server && npm run dev"}
+            </div>
+          </div>
+          <button
+            onClick={handleTestConnection}
+            disabled={testing}
+            className="btn-secondary btn-sm disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={testing ? "animate-spin" : ""} />
+            {testing ? "Testing..." : "Test"}
+          </button>
+        </div>
+
+        {/* Proxy URL */}
+        <div>
+          <label className="form-label">Proxy URL</label>
+          <input
+            type="text"
+            value={proxyUrl}
+            onChange={(e) => setProxyUrl(e.target.value)}
+            placeholder="http://localhost:3100"
+            className="form-input tabular-nums"
+          />
+        </div>
+
+        {/* Company Name */}
+        <div>
+          <label className="form-label">Company Name (Fixed)</label>
+          <input
+            type="text"
+            value={companyName}
+            readOnly
+            className="form-input bg-bg-border text-muted cursor-not-allowed"
+            title="Company name is permanently set to M.K.CYCLES (P) LTD."
+          />
+        </div>
+
+        {/* FY Date Range */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="form-label">FY From (YYYYMMDD)</label>
+            <input
+              type="text"
+              value={fyFromDate}
+              onChange={(e) => setFyDates(e.target.value, fyToDate)}
+              placeholder="20240401"
+              className="form-input tabular-nums"
+            />
+          </div>
+          <div>
+            <label className="form-label">FY To (YYYYMMDD)</label>
+            <input
+              type="text"
+              value={fyToDate}
+              onChange={(e) => setFyDates(fyFromDate, e.target.value)}
+              placeholder="20250331"
+              className="form-input tabular-nums"
+            />
+          </div>
+        </div>
+
+        {/* Auto-Sync info */}
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent/5 border border-accent/20">
+          <RefreshCw size={13} className="text-accent flex-shrink-0" />
+          <p className="text-xs text-accent">Today's vouchers auto-sync every 30 minutes when connected.</p>
+        </div>
+
+        {/* Last Sync */}
+        {lastSyncAt && (
+          <div className="text-xs text-muted">
+            Last sync: {formatLastSync()}
+          </div>
+        )}
+      </div>
+    </Section>
   );
 }

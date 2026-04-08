@@ -42,6 +42,8 @@ const VOUCHER_TYPE_MAP: Record<string, VoucherType> = {
   creditnote: "Credit Note",
   "stock journal": "Stock Journal",
   stockjournal: "Stock Journal",
+  "delivery note": "Delivery Note",
+  deliverynote: "Delivery Note",
 };
 
 export function parseTransactions(raw: unknown): TxParseResult {
@@ -128,11 +130,14 @@ function tallyEnvelopeVoucherToSimple(tv: any): any {
         dueDate: b.DUEDATE ? formatDate(b.DUEDATE) : undefined,
       })
     );
+    // Use AMOUNT sign to determine debit/credit (negative = debit in Tally XML)
+    // ISDEEMEDPOSITIVE is unreliable for contra-entries like Trade Discounts
+    const rawAmt = parseNum(le.AMOUNT);
     lines.push({
       type: "ledger",
       ledgerName: le.LEDGERNAME,
-      isDebit: le.ISDEEMEDPOSITIVE === "Yes",
-      amount: Math.abs(parseNum(le.AMOUNT)),
+      isDebit: rawAmt < 0,
+      amount: Math.abs(rawAmt),
       isPartyLine: le.ISPARTYLEDGER === "Yes",
       billAllocations: billAllocs,
     });
@@ -178,20 +183,28 @@ function parseOneVoucher(rv: any, warnings: ImportWarning[]): CanonicalVoucher |
 
   // Extract partyLedgerId early for unique voucherId generation
   let partyLedgerId: string | undefined;
-  const partyName = rv.partyledgername ?? rv.partyName ?? rv.PARTYLEDGERNAME;
+  let partyName = rv.partyledgername ?? rv.partyName ?? rv.PARTYLEDGERNAME;
 
-  // Build voucherId with partyLedgerId to ensure uniqueness
-  const voucherId = partyName
-    ? `${voucherType}|${voucherNumber}|${date}|${String(partyName).toUpperCase().trim()}`
-    : `${voucherType}|${voucherNumber}|${date}`;
+  // Build voucherId: prefer Tally GUID (globally unique), fall back to composite key
+  const tallyGuid = String(rv.guid ?? rv.GUID ?? "").trim();
+  const voucherId = tallyGuid
+    ? tallyGuid  // Tally GUID is the most reliable unique identifier
+    : partyName
+      ? `${voucherType}|${voucherNumber}|${date}|${String(partyName).toUpperCase().trim()}`
+      : `${voucherType}|${voucherNumber}|${date}`;
 
   const lines: CanonicalVoucherLine[] = [];
   let totalAmount = 0;
 
-  // Real Tally format uses ledgerentries (SALES) or allledgerentries (others)
+  // Real Tally format uses allledgerentries (Receipt/Payment) or ledgerentries (Sales/Purchase).
+  // Must use length-aware fallback: an empty array [] is not nullish, so ?? won't fall through.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rawLedgerEntries: any[] = toArray(
-    rv.allledgerentries ?? rv.ledgerentries ?? rv.lines?.filter((l: unknown) => {
+  const allLE = toArray(rv.allledgerentries);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const simpleLE = toArray(rv.ledgerentries);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rawLedgerEntries: any[] = allLE.length > 0 ? allLE : simpleLE.length > 0 ? simpleLE : toArray(
+    rv.lines?.filter((l: unknown) => {
       if (!l || typeof l !== "object") return false;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (l as any).type === "ledger";
@@ -204,14 +217,11 @@ function parseOneVoucher(rv: any, warnings: ImportWarning[]): CanonicalVoucher |
     const ledgerId = String(ledgerName).toUpperCase().trim();
     if (!ledgerId) continue;
 
-    // In real Tally JSON, isdeemedpositive is a boolean
-    // In simple format, isDebit is boolean
-    const isDebit = le.isdeemedpositive !== undefined
-      ? Boolean(le.isdeemedpositive)
-      : Boolean(le.isDebit ?? le.ISDEEMEDPOSITIVE === "Yes");
-
-    // Amount: may be string ("-49919.00") or number; always take abs value
-    const amount = Math.abs(parseNum(le.amount ?? le.AMOUNT ?? 0));
+    // Use AMOUNT sign to determine debit/credit (negative = debit in Tally XML)
+    // ISDEEMEDPOSITIVE is unreliable for contra-entries like Trade Discounts
+    const rawAmtVal = parseNum(le.amount ?? le.AMOUNT ?? 0);
+    const isDebit = rawAmtVal < 0;
+    const amount = Math.abs(rawAmtVal);
 
     // isPartyLine: boolean in real Tally
     const isPartyLine = le.ispartyledger !== undefined
@@ -238,11 +248,13 @@ function parseOneVoucher(rv: any, warnings: ImportWarning[]): CanonicalVoucher |
     lines.push({ type: "ledger", ledgerId, isDebit, amount, isPartyLine, billAllocations: billAllocs });
   }
 
-  // Inventory entries
+  // Inventory entries — same length-aware fallback as ledger entries
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rawInventoryEntries: any[] = toArray(
-    rv.allinventoryentries ?? rv.inventoryentries ??
-    rv.ALLINVENTORYENTRIES ?? rv.INVENTORYENTRIES ??
+  const allIE = toArray(rv.allinventoryentries ?? rv.ALLINVENTORYENTRIES);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const simpleIE2 = toArray(rv.inventoryentries ?? rv.INVENTORYENTRIES);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rawInventoryEntries: any[] = allIE.length > 0 ? allIE : simpleIE2.length > 0 ? simpleIE2 : toArray(
     rv.lines?.filter((l: unknown) => {
       if (!l || typeof l !== "object") return false;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

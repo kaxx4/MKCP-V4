@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
-import { X, CheckCircle, AlertTriangle, Info } from "lucide-react";
+import { X, CheckCircle, AlertTriangle, Info, XCircle } from "lucide-react";
 import clsx from "clsx";
 
 interface Toast {
@@ -26,7 +26,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm" role="region" aria-label="Notifications">
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} onDismiss={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))} />
         ))}
@@ -35,29 +35,32 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
+const TOAST_STYLES = {
+  success: { border: "border-success/25", bg: "bg-success/[0.04]", icon: CheckCircle, iconColor: "text-success-600" },
+  error: { border: "border-danger/25", bg: "bg-danger/[0.04]", icon: XCircle, iconColor: "text-danger-600" },
+  warn: { border: "border-warn/25", bg: "bg-warn/[0.04]", icon: AlertTriangle, iconColor: "text-warn-600" },
+  info: { border: "border-accent/25", bg: "bg-accent/[0.04]", icon: Info, iconColor: "text-accent" },
+} as const;
+
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
-  const icons = {
-    success: <CheckCircle size={16} className="text-success" />,
-    error: <AlertTriangle size={16} className="text-danger" />,
-    warn: <AlertTriangle size={16} className="text-warn" />,
-    info: <Info size={16} className="text-accent" />,
-  };
+  const style = TOAST_STYLES[toast.type];
+  const Icon = style.icon;
 
   return (
     <div
       className={clsx(
-        "flex items-start gap-3 bg-bg-card border rounded-lg px-4 py-3 shadow-xl animate-slide-in",
-        {
-          "border-success/30": toast.type === "success",
-          "border-danger/30": toast.type === "error",
-          "border-warn/30": toast.type === "warn",
-          "border-accent/30": toast.type === "info",
-        }
+        "flex items-start gap-2.5 bg-white border border-neutral-200 rounded-lg px-4 py-3 shadow-lg animate-slide-in",
+        style.border
       )}
+      role="alert"
     >
-      {icons[toast.type]}
-      <p className="text-primary text-sm flex-1">{toast.message}</p>
-      <button onClick={onDismiss} className="text-muted hover:text-primary ml-1">
+      <Icon size={16} className={clsx("flex-shrink-0 mt-0.5", style.iconColor)} />
+      <p className="text-neutral-950 text-sm flex-1 leading-snug">{toast.message}</p>
+      <button
+        onClick={onDismiss}
+        className="text-neutral-500 hover:text-neutral-950 transition-colors flex-shrink-0 -mr-1"
+        aria-label="Dismiss notification"
+      >
         <X size={14} />
       </button>
     </div>

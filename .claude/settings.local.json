@@ -20,7 +20,21 @@
       "Bash(git checkout:*)",
       "Bash(npm create:*)",
       "Bash(git remote set-url:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"$c=''/** * TALLY COMMUNICATION LAYER - DEFINITIVE IMPLEMENTATION * * This module handles all communication with TallyPrime using official XML formats. * It provides functions to query stock items, ledgers, vouchers, and company information. */ import { XMLParser } from ''''fast-xml-parser''''; const ARRAY_TAGS = [ ''''STOCKITEM'''', ''''LEDGER'''', ''''VOUCHER'''', ''''COMPANY'''', ''''INVENTORYENTRIES.LIST'''', ''''ALLLEDGERENTRIES.LIST'''', ''''BATCHALLOCATIONS.LIST'''', ''''CATEGORYALLOCATIONS.LIST'''' ]; const parser = new XMLParser\\({ ignoreAttributes: false, attributeNamePrefix: '''''''', textNodeName: ''''_text'''', ignoreDeclaration: true, isArray: \\(tagName\\) => ARRAY_TAGS.includes\\(tagName\\) }\\);''; $c | Out-File -FilePath tally.ts -Encoding UTF8; Write-Output ''Part 1 written''\")",
+      "Bash(test:*)",
+      "Bash(git restore:*)",
+      "Bash(uipro init:*)",
+      "Bash(npx tsx src/index.ts)",
+      "Bash(tasklist)",
+      "Bash(cmd.exe /c \"taskkill /PID 7000 /F\")",
+      "Bash(wmic process:*)",
+      "Bash(npx tsx:*)",
+      "Read(//c/Users/kanis/Desktop/MKCP/mkcycles-dashboard/**)"
     ]
   }
 }

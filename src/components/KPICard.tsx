@@ -14,34 +14,50 @@ interface KPICardProps {
 
 export const KPICard = memo(function KPICard({ title, value, sub, icon, trend, accent, danger }: KPICardProps) {
   return (
-    <div
+    <article
       className={clsx(
-        "bg-bg-card border rounded-xl p-4 flex flex-col gap-2",
-        accent ? "border-accent/40" : danger ? "border-danger/40" : "border-bg-border"
+        "card-elevated flex flex-col gap-4 min-w-0",
+        accent && "border border-accent/15",
+        danger && "border border-danger/15",
+        !accent && !danger && "border border-neutral-200/60"
       )}
+      aria-label={`${title}: ${value}${sub ? `, ${sub}` : ""}`}
     >
-      <div className="flex items-center justify-between">
-        <span className="text-muted text-xs font-sans uppercase tracking-wider">{title}</span>
-        {icon && <span className="text-muted">{icon}</span>}
+      <div className="flex items-center justify-between gap-3 min-w-0">
+        <h3 className="metric-label truncate">{title}</h3>
+        {icon && (
+          <span
+            className={clsx(
+              "flex-shrink-0 w-5 h-5 flex items-center justify-center",
+              accent ? "text-accent" : danger ? "text-danger" : "text-neutral-500"
+            )}
+            aria-hidden="true"
+          >
+            {icon}
+          </span>
+        )}
       </div>
       <div
         className={clsx(
-          "text-2xl font-mono font-semibold",
-          accent ? "text-accent" : danger ? "text-danger" : "text-primary"
+          "metric-value truncate",
+          accent ? "text-accent" : danger ? "text-danger" : "text-neutral-950"
         )}
+        title={value}
       >
         {value}
       </div>
       {sub && (
-        <div
+        <p
           className={clsx(
-            "text-xs font-sans",
-            trend === "up" ? "text-success" : trend === "down" ? "text-danger" : "text-muted"
+            "text-xs truncate font-medium",
+            trend === "up" && "text-success-600",
+            trend === "down" && "text-danger-600",
+            trend !== "up" && trend !== "down" && "text-neutral-600"
           )}
         >
           {sub}
-        </div>
+        </p>
       )}
-    </div>
+    </article>
   );
 });

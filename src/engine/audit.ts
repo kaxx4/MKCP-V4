@@ -133,6 +133,8 @@ export function auditAllItems(
           a.debitNoteQty += qty;
           break;
         case "Stock Journal":
+        case "Journal":
+          // Stock Journal and Journal can have +ve or -ve qty
           if (qty > 0) a.stockJournalInQty += qty;
           else a.stockJournalOutQty += Math.abs(qty);
           break;

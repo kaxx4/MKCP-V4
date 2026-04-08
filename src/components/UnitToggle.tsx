@@ -7,21 +7,22 @@ export function UnitToggle() {
   return (
     <button
       onClick={toggleUnitMode}
-      className="flex items-center gap-1 bg-bg-border rounded-lg p-1 text-xs font-mono"
+      className="inline-flex items-center bg-bg-hover rounded-lg p-0.5 text-xs font-mono"
       title="Toggle unit mode"
+      aria-label={`Unit mode: ${unitMode}. Click to toggle.`}
     >
       <span
         className={clsx(
-          "px-2 py-1 rounded transition",
-          unitMode === "BASE" ? "bg-accent text-white" : "text-muted hover:text-primary"
+          "px-2 py-1 rounded-md transition-all duration-150",
+          unitMode === "BASE" ? "bg-accent text-white shadow-xs font-medium" : "text-muted hover:text-primary"
         )}
       >
         BASE
       </span>
       <span
         className={clsx(
-          "px-2 py-1 rounded transition",
-          unitMode === "PKG" ? "bg-accent text-white" : "text-muted hover:text-primary"
+          "px-2 py-1 rounded-md transition-all duration-150",
+          unitMode === "PKG" ? "bg-accent text-white shadow-xs font-medium" : "text-muted hover:text-primary"
         )}
       >
         PKG

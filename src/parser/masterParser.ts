@@ -15,10 +15,28 @@
 
 import type { CanonicalItem, CanonicalLedger, CompanyInfo, ImportWarning } from "../types/canonical";
 
+export interface StockGroupInfo {
+  name: string;
+  parent: string;
+  isAddable: boolean;
+}
+
+export interface UnitInfo {
+  name: string;
+  originalName: string;
+  baseUnits: string;
+  additionalUnits: string;
+  conversion: string;
+  isSimple: boolean;
+  isCompound: boolean;
+}
+
 export interface MasterParseResult {
   company: CompanyInfo | null;
   items: Map<string, CanonicalItem>;
   ledgers: Map<string, CanonicalLedger>;
+  stockGroups: StockGroupInfo[];
+  units: UnitInfo[];
   warnings: ImportWarning[];
 }
 
@@ -26,6 +44,8 @@ export function parseMasters(raw: unknown): MasterParseResult {
   const warnings: ImportWarning[] = [];
   const items = new Map<string, CanonicalItem>();
   const ledgers = new Map<string, CanonicalLedger>();
+  const stockGroups: StockGroupInfo[] = [];
+  const units: UnitInfo[] = [];
   let company: CompanyInfo | null = null;
 
   const normalized = normalizeMasterInput(raw, warnings);
@@ -56,11 +76,36 @@ export function parseMasters(raw: unknown): MasterParseResult {
     }
   }
 
+  for (const raw_group of normalized.stockGroups ?? []) {
+    try {
+      const g = tallyRealStockGroupToSimple(raw_group);
+      if (g) stockGroups.push(g);
+    } catch (e) {
+      warnings.push({ severity: "warn", context: `stockGroup:${raw_group?.name}`, message: String(e) });
+    }
+  }
+
+  for (const raw_unit of normalized.units ?? []) {
+    try {
+      const u = tallyRealUnitToSimple(raw_unit);
+      if (u) units.push(u);
+    } catch (e) {
+      warnings.push({ severity: "warn", context: `unit:${raw_unit?.name}`, message: String(e) });
+    }
+  }
+
+  if (stockGroups.length > 0) {
+    warnings.push({ severity: "info", context: "parser", message: `Parsed ${stockGroups.length} stock groups` });
+  }
+  if (units.length > 0) {
+    warnings.push({ severity: "info", context: "parser", message: `Parsed ${units.length} units` });
+  }
+
   if (items.size === 0 && ledgers.size === 0) {
     warnings.push({ severity: "warn", context: "parser", message: "No items or ledgers found in masters file" });
   }
 
-  return { company, items, ledgers, warnings };
+  return { company, items, ledgers, stockGroups, units, warnings };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,6 +121,10 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ledgers: any[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stockGroups: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const units: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let company: any = null;
 
     for (const msg of obj.tallymessage) {
@@ -84,6 +133,10 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
         stockItems.push(tallyRealStockItemToSimple(msg));
       } else if (type === "Ledger" || type === "LEDGER") {
         ledgers.push(tallyRealLedgerToSimple(msg));
+      } else if (type === "Stock Group" || type === "STOCKGROUP") {
+        stockGroups.push(msg);
+      } else if (type === "Unit" || type === "UNIT") {
+        units.push(msg);
       } else if (type === "Company" || type === "COMPANY") {
         company = msg;
       }
@@ -93,7 +146,7 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
       warnings.push({ severity: "warn", context: "parser", message: `tallymessage has ${obj.tallymessage.length} entries but no Stock Items or Ledgers found` });
     }
 
-    return { stockItems, ledgers, company };
+    return { stockItems, ledgers, stockGroups, units, company };
   }
 
   // ── Format 2: Tally ENVELOPE format ──
@@ -120,6 +173,30 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
   return obj;
 }
 
+function tallyRealStockGroupToSimple(msg: any): StockGroupInfo | null {
+  const name = msg?.metadata?.name ?? msg?.name ?? "";
+  if (!name) return null;
+  return {
+    name: String(name).trim(),
+    parent: String(msg?.parent ?? "Primary").trim(),
+    isAddable: String(msg?.isaddable ?? "Yes").trim() === "Yes",
+  };
+}
+
+function tallyRealUnitToSimple(msg: any): UnitInfo | null {
+  const name = msg?.metadata?.name ?? msg?.name ?? "";
+  if (!name) return null;
+  return {
+    name: String(name).trim(),
+    originalName: String(msg?.originalname ?? name).trim(),
+    baseUnits: String(msg?.baseunits ?? "").trim(),
+    additionalUnits: String(msg?.additionalunits ?? "").trim(),
+    conversion: String(msg?.conversion ?? "").trim(),
+    isSimple: String(msg?.issimpleunit ?? "No").trim() === "Yes",
+    isCompound: String(msg?.isformallycompound ?? "No").trim() === "Yes",
+  };
+}
+
 /** Convert real Tally JSON stock item to simple form */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function tallyRealStockItemToSimple(msg: any): any {
@@ -138,14 +215,19 @@ function tallyRealStockItemToSimple(msg: any): any {
   // Parse opening value (may be negative in Tally = debit)
   const openingValue = Math.abs(parseNumber(msg?.openingvalue ?? 0));
 
+  // Parse closing balance: same format as opening
+  const closingBalStr = String(msg?.closingbalance ?? "0").trim();
+  const closingQty = parseQtyString(closingBalStr);
+  const closingRateStr = String(msg?.closingrate ?? "0").trim();
+  const closingRate = parseRateString(closingRateStr);
+  const closingValue = Math.abs(parseNumber(msg?.closingvalue ?? 0));
+
   // Parse denominator (units per pkg): " 4" → 4
   const denomStr = String(msg?.denominator ?? "1").trim();
   const denom = parseNumber(denomStr);
 
-  // Extract parent (group) — may contain HSN info like "TRICYCLE DASH ( 950300 @ 12/ 5 %)"
-  let parent = String(msg?.parent ?? "Ungrouped").trim();
-  // Clean up: remove HSN suffix in parentheses at end
-  parent = parent.replace(/\s*\([^)]*\)\s*$/, "").trim() || parent;
+  // Extract parent (group) — keep the full name as it appears in Tally
+  const parent = String(msg?.parent ?? "Ungrouped").trim();
 
   // GST rate from gstdetails
   let gstRate: number | undefined;
@@ -171,12 +253,16 @@ function tallyRealStockItemToSimple(msg: any): any {
   return {
     name,
     group: parent,
+    category: String(msg?.category ?? "").trim() || undefined,
     baseUnit: String(msg?.baseunits ?? "PC").trim(),
     pkgUnit: hasAddlUnits ? addlUnits : null,
     unitsPerPkg: hasAddlUnits && denom > 0 ? denom : 1,
     openingQty,
     openingValue,
     openingRate,
+    closingQty,
+    closingValue,
+    closingRate,
     hsn,
     gstRate,
   };
@@ -259,16 +345,29 @@ function parseOneItem(raw: any, warnings: ImportWarning[]): CanonicalItem | null
     warnings.push({ severity: "info", context: `item:${name}`, message: "No group/parent found" });
   }
 
+  // Parse closing balance fields
+  const closingQty = parseNumber(raw.closingQty ?? raw.closingQtyBase ?? 0);
+  const closingValueRaw = parseNumber(raw.closingValue ?? 0);
+  const explicitClosingRate = parseNumber(raw.closingRate ?? 0);
+  const closingRate = explicitClosingRate > 0
+    ? explicitClosingRate
+    : (closingQty > 0 ? (closingValueRaw / closingQty) : 0);
+
   return {
     itemId,
     name,
     group: String(raw.group ?? raw.parent ?? "Ungrouped").trim(),
+    category: raw.category ? String(raw.category).trim() : undefined,
     baseUnit: String(raw.baseUnit ?? raw.baseUnits ?? "PC").toUpperCase().trim(),
     pkgUnit,
     unitsPerPkg: unitsPerPkg > 0 ? unitsPerPkg : 1,
     openingQtyBase: openingQty,
     openingRate,
     openingValue,
+    closingQtyBase: closingQty > 0 ? closingQty : undefined,
+    closingRate: closingRate > 0 ? closingRate : undefined,
+    // closingValue=0 is valid (item fully sold out) — don't use || which treats 0 as falsy
+    closingValue: closingValueRaw,
     hsn: raw.hsn ? String(raw.hsn) : undefined,
     gstRate: raw.gstRate ? Number(raw.gstRate) : undefined,
   };
@@ -289,14 +388,23 @@ function parseOneLedger(raw: any, _warnings: ImportWarning[]): CanonicalLedger |
   };
 }
 
-/** Parse quantity string like " 240 PC" → 240 */
+/** Parse quantity string like " 240 PC", "9.000 Pcs", "-1234 Nos", "0.500 Kg" → number */
 function parseQtyString(s: string): number {
   if (!s) return 0;
-  // Extract first number from string
-  const match = s.match(/^[\s-]*([0-9]+(?:\.[0-9]+)?)/);
+  const cleaned = s.trim();
+  if (!cleaned) return 0;
+  // Match optional leading minus/space, then digits with optional decimal
+  const match = cleaned.match(/^(-?\s*\d+(?:\.\d+)?)/);
   if (match) {
-    const n = parseFloat(match[1]);
-    return s.trim().startsWith("-") ? -n : n;
+    const numStr = match[1].replace(/\s+/g, "");
+    const n = parseFloat(numStr);
+    return isFinite(n) ? n : 0;
+  }
+  // Fallback: try extracting any number from the string
+  const fallbackMatch = cleaned.match(/(-?\d+(?:\.\d+)?)/);
+  if (fallbackMatch) {
+    const n = parseFloat(fallbackMatch[1]);
+    return isFinite(n) ? n : 0;
   }
   return parseNumber(s);
 }
