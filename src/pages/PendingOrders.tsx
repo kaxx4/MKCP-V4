@@ -230,7 +230,6 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                     const amt = line.lineAmount ?? qty * rate;
                     const stock = item ? getCurrentStockIndexed(item, voucherIndex) : null;
                     const inStock = stock !== null && stock >= qty;
-                    const rowBg = stock === null ? "" : inStock ? "bg-green-50" : "bg-red-50";
                     const stockLabel = stock === null ? null
                       : stock >= qty ? `${stock} in stock`
                       : stock > 0 ? `only ${stock} in stock`
@@ -240,7 +239,7 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
                     const priceOk = priceMatches(rate, refRate);
                     const hasRef = refRate > 0;
                     return (
-                      <tr key={i} className={clsx("border-b border-neutral-100 last:border-0", rowBg)}>
+                      <tr key={i} className="border-b border-neutral-100 last:border-0">
                         <td className="py-2 pr-4 text-neutral-900 max-w-0" style={{ width: "100%" }}>
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="block truncate" title={name}>{name}</span>
