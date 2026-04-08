@@ -109,7 +109,7 @@ function VoucherSelector({
       ) : (
         <>
           {/* Table — with proper row height */}
-          <div className="overflow-x-auto -mx-5 -mb-5">
+          <div className="overflow-x-auto -mx-5 -mb-5 pr-5">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-bg-border text-xs text-muted bg-bg">
@@ -252,7 +252,7 @@ function DiscountBreakdown({
           )}
 
           {/* Table — spacious layout */}
-          <div className="overflow-x-auto -mx-5 -mb-5">
+          <div className="overflow-x-auto -mx-5 -mb-5 pr-5">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-bg-border text-xs text-muted bg-bg">
