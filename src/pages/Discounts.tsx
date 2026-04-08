@@ -1,25 +1,93 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Pencil, Upload, AlertTriangle, X, Plus, Trash2, RotateCcw, ChevronDown, ChevronRight } from "lucide-react";
+import { Pencil, Upload, ChevronDown, X } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useDiscountStore } from "../store/discountStore";
-import {
-  DEFAULT_ITEM_CATEGORY_MAP,
-  calculateVoucherDiscount,
-  type DiscountCategory,
-  type DiscountTier,
-  type LineDiscountResult,
-} from "../engine/discounts";
+import { calculateVoucherDiscount, DEFAULT_DISCOUNT_CATEGORIES } from "../engine/discounts";
 import { fmtINR, fmtNum, fmtDate } from "../utils/format";
 import type { CanonicalVoucher } from "../types/canonical";
 
-// ── Constants ─────────────────────────────────────────────────────────────────
 const PAGE_SIZE = 20;
-
-// ── Voucher Selector ──────────────────────────────────────────────────────────
 type VoucherTab = "Sales" | "Delivery Note";
 
+// ── Group Breakdown Modal ─────────────────────────────────────────────────────
+function GroupDetailsModal({
+  isOpen,
+  onClose,
+  groupName,
+  totalPackages,
+  items,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  groupName: string;
+  totalPackages: number;
+  items: Array<{ itemName: string; qty: number; packages: number }>;
+}) {
+  if (!isOpen) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-xl shadow-2xl w-96 max-h-96 overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-200 flex-shrink-0">
+          <h3 className="text-lg font-semibold text-neutral-900">{groupName}</h3>
+          <button
+            onClick={onClose}
+            className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-neutral-100"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {/* Total Packages */}
+          <div className="px-4 py-3 bg-blue-50 rounded-lg border border-blue-200">
+            <div className="text-sm text-blue-700 font-medium">Total Packages in Group</div>
+            <div className="text-2xl font-bold text-blue-900 mt-1">{totalPackages}</div>
+          </div>
+
+          {/* Items List */}
+          <div>
+            <div className="text-xs font-semibold text-neutral-600 uppercase tracking-wide mb-3">
+              Items in This Group
+            </div>
+            <div className="space-y-2">
+              {items.map((item, idx) => (
+                <div key={idx} className="px-3 py-2 bg-neutral-50 rounded-lg border border-neutral-200">
+                  <div className="text-sm font-medium text-neutral-900">{item.itemName}</div>
+                  <div className="text-xs text-neutral-600 mt-1">
+                    {fmtNum(item.qty, 0)} units = {item.packages} pkg{item.packages !== 1 ? 's' : ''}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-3 border-t border-neutral-200 flex-shrink-0">
+          <button
+            onClick={onClose}
+            className="w-full px-4 py-2 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Voucher Selector ──────────────────────────────────────────────────────────
 function VoucherSelector({
   vouchers,
   selectedId,
@@ -32,6 +100,7 @@ function VoucherSelector({
   const [tab, setTab] = useState<VoucherTab>("Delivery Note");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -64,61 +133,50 @@ function VoucherSelector({
   };
 
   return (
-    <div className="card space-y-6">
-      {/* Header Section */}
-      <div className="space-y-4">
-        {/* Tab Buttons */}
-        <div className="flex gap-2">
-          {(["Sales", "Delivery Note"] as VoucherTab[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => handleTabChange(t)}
-              className={clsx(
-                "px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150",
-                tab === t
-                  ? "bg-blue-500 text-white shadow-sm"
-                  : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-              )}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-
-        {/* Search Bar */}
-        <div className="flex items-center gap-3">
-          <input
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(0);
-            }}
-            placeholder="Search party or voucher #"
-            className="search-input flex-1"
-          />
-          <span className="text-xs font-medium text-neutral-500 whitespace-nowrap">
-            {filtered.length} found
-          </span>
-        </div>
+    <div className="card space-y-4">
+      <div className="flex gap-2">
+        {(["Sales", "Delivery Note"] as VoucherTab[]).map((t) => (
+          <button
+            key={t}
+            onClick={() => handleTabChange(t)}
+            className={clsx(
+              "px-4 py-2.5 rounded-lg text-sm font-medium transition-all",
+              tab === t
+                ? "bg-blue-500 text-white shadow-sm"
+                : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+            )}
+          >
+            {t}
+          </button>
+        ))}
       </div>
 
-      {/* Content Section */}
+      <div className="flex items-center gap-3">
+        <input
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(0);
+          }}
+          placeholder="Search party or voucher #"
+          className="search-input flex-1"
+        />
+        <span className="text-xs font-medium text-neutral-500 whitespace-nowrap">
+          {filtered.length} found
+        </span>
+      </div>
+
       {filtered.length === 0 ? (
-        <div className="py-16 text-center">
-          <div className="text-neutral-500 text-sm">
-            {tab === "Delivery Note"
-              ? "No delivery notes found in loaded data"
-              : "No sales vouchers found"}
-          </div>
+        <div className="py-12 text-center text-neutral-500 text-sm">
+          No {tab === "Delivery Note" ? "delivery notes" : "sales vouchers"} found
         </div>
       ) : (
         <>
-          {/* Table */}
           <div className="border border-neutral-200 rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-neutral-200 bg-neutral-50">
-                  <th className="w-8 text-center px-4 py-3"></th>
+                  <th className="text-left px-4 py-3 font-semibold text-neutral-700 w-8"></th>
                   <th className="text-left px-4 py-3 font-semibold text-neutral-700">Voucher</th>
                   <th className="text-left px-4 py-3 font-semibold text-neutral-700">Date</th>
                   <th className="text-left px-4 py-3 font-semibold text-neutral-700">Party</th>
@@ -133,30 +191,30 @@ function VoucherSelector({
                       key={v.voucherId}
                       onClick={() => onSelect(v.voucherId)}
                       className={clsx(
-                        "cursor-pointer transition-colors duration-150",
+                        "cursor-pointer transition-colors",
                         isSelected
                           ? "bg-blue-50 hover:bg-blue-100"
                           : "hover:bg-neutral-50"
                       )}
                     >
-                      <td className="text-center px-4 py-3">
+                      <td className="px-4 py-3">
                         <input
                           type="radio"
                           readOnly
                           checked={isSelected}
-                          className="accent-blue-500 cursor-pointer"
+                          className="accent-blue-500"
                         />
                       </td>
                       <td className="px-4 py-3 font-mono text-xs font-medium text-blue-600">
                         {v.voucherNumber}
                       </td>
-                      <td className="px-4 py-3 text-sm text-neutral-600 whitespace-nowrap">
+                      <td className="px-4 py-3 text-sm text-neutral-600">
                         {fmtDate(v.date)}
                       </td>
                       <td className="px-4 py-3 text-sm text-neutral-900 truncate max-w-xs">
                         {v.partyName ?? v.partyLedgerId ?? "—"}
                       </td>
-                      <td className="px-4 py-3 text-right text-sm font-semibold text-neutral-900 tabular-nums">
+                      <td className="px-4 py-3 text-right text-sm font-semibold text-neutral-900">
                         {fmtINR(v.totalAmount)}
                       </td>
                     </tr>
@@ -166,13 +224,12 @@ function VoucherSelector({
             </table>
           </div>
 
-          {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2 flex-wrap pt-2">
+            <div className="flex items-center justify-center gap-2 flex-wrap">
               <button
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0}
-                className="px-3 py-2 text-sm rounded-lg border border-neutral-200 disabled:opacity-40 hover:bg-neutral-100 transition-colors font-medium"
+                className="px-3 py-2 text-sm rounded-lg border border-neutral-200 disabled:opacity-40 hover:bg-neutral-100 font-medium"
               >
                 ‹
               </button>
@@ -193,7 +250,7 @@ function VoucherSelector({
                       "px-3 py-2 text-sm rounded-lg font-medium transition-colors",
                       page === pageNum
                         ? "bg-blue-500 text-white shadow-sm"
-                        : "border border-neutral-200 hover:bg-neutral-100 text-neutral-700"
+                        : "border border-neutral-200 hover:bg-neutral-100"
                     )}
                   >
                     {pageNum + 1}
@@ -203,7 +260,7 @@ function VoucherSelector({
               <button
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={page === totalPages - 1}
-                className="px-3 py-2 text-sm rounded-lg border border-neutral-200 disabled:opacity-40 hover:bg-neutral-100 transition-colors font-medium"
+                className="px-3 py-2 text-sm rounded-lg border border-neutral-200 disabled:opacity-40 hover:bg-neutral-100 font-medium"
               >
                 ›
               </button>
@@ -215,17 +272,19 @@ function VoucherSelector({
   );
 }
 
-// ── Discount Breakdown ────────────────────────────────────────────────────────
+// ── Discount Breakdown (Group-wise) ──────────────────────────────────────────
 function DiscountBreakdown({
   voucher,
-  lines,
   result,
+  items,
 }: {
   voucher: CanonicalVoucher;
-  lines: LineDiscountResult[];
-  result: { totalLineAmount: number; totalDiscountAmount: number; effectivePct: number };
+  result: any;
+  items: Map<string, any>;
 }) {
-  const allNoDiscount = lines.every((l) => l.discountPct === 0);
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+
+  if (!result) return null;
 
   return (
     <div className="card space-y-6">
@@ -244,106 +303,134 @@ function DiscountBreakdown({
         </div>
       </div>
 
-      {lines.length === 0 ? (
-        <div className="py-16 text-center text-neutral-500 text-sm">
-          No inventory items found in this voucher
-        </div>
-      ) : (
+      {result.groupSummaries && result.groupSummaries.length > 0 ? (
         <>
-          {/* Group-wise Summary */}
-          {result.groupSummaries && result.groupSummaries.length > 0 && (
-            <div className="space-y-3">
-              <div className="text-xs font-semibold text-neutral-500 uppercase tracking-wide">
-                Group Discount Summary
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {result.groupSummaries.map((g) => (
-                  <div key={g.categoryId} className="px-4 py-3 rounded-lg border border-neutral-200 bg-neutral-50">
-                    <div className="text-xs font-semibold text-neutral-900 truncate mb-2">{g.categoryName}</div>
-                    <div className="flex items-center justify-between gap-2 text-xs mb-2">
-                      <span className="text-neutral-600">{g.totalPackages} pkg{g.totalPackages !== 1 ? 's' : ''}</span>
-                      <span className={g.appliedDiscountPct > 0 ? "text-green-600 font-semibold" : "text-neutral-500"}>
-                        {g.appliedDiscountPct > 0 ? `${g.appliedDiscountPct.toFixed(1)}%` : "—"}
-                      </span>
+          {/* Total Discount Summary */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-5 bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg border-2 border-green-200">
+            <div className="text-center">
+              <div className="text-sm font-medium text-green-700">Subtotal</div>
+              <div className="text-2xl font-bold text-green-900 mt-2">{fmtINR(result.totalLineAmount)}</div>
+            </div>
+            <div className="text-center border-l border-r border-green-200">
+              <div className="text-sm font-medium text-green-700">Total Discount</div>
+              <div className="text-2xl font-bold text-green-900 mt-2">−{fmtINR(result.totalDiscountAmount)}</div>
+            </div>
+            <div className="text-center">
+              <div className="text-sm font-medium text-green-700">Effective Rate</div>
+              <div className="text-2xl font-bold text-green-900 mt-2">{fmtNum(result.effectivePct, 2)}%</div>
+            </div>
+          </div>
+
+          {/* Group Summary Cards */}
+          <div className="space-y-3">
+            <div className="text-xs font-semibold text-neutral-600 uppercase tracking-wide">
+              Discount by Category (Group-wise)
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {result.groupSummaries.map((group: any) => (
+                <div
+                  key={group.categoryId}
+                  onClick={() => setSelectedGroup(group.categoryId)}
+                  className={clsx(
+                    "p-4 rounded-lg border-2 cursor-pointer hover:shadow-md transition-all",
+                    group.groupRuleApplied
+                      ? "border-blue-400 bg-blue-50"
+                      : "border-neutral-200 bg-neutral-50 hover:bg-neutral-100"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div>
+                      <div className="font-semibold text-neutral-900">{group.categoryName}</div>
+                      <div className="text-xs text-neutral-600 mt-1">{group.totalPackages} packages</div>
                     </div>
-                    <div className="flex items-center justify-between gap-2 text-xs text-neutral-600 pt-2 border-t border-neutral-200">
-                      <span>{fmtINR(g.totalAmount)}</span>
-                      {g.totalDiscount > 0 && <span className="text-green-600 font-medium">−{fmtINR(g.totalDiscount)}</span>}
+                    <div className="text-right">
+                      <div className={clsx(
+                        "text-lg font-bold",
+                        group.appliedDiscountPct > 0 ? "text-green-600" : "text-neutral-500"
+                      )}>
+                        {group.appliedDiscountPct.toFixed(1)}%
+                      </div>
+                      <div className="text-xs text-neutral-600 mt-1">discount</div>
                     </div>
                   </div>
-                ))}
-              </div>
+                  <div className="space-y-2 text-xs">
+                    <div className="flex justify-between text-neutral-600">
+                      <span>Subtotal:</span>
+                      <span className="font-medium text-neutral-900">{fmtINR(group.totalAmount)}</span>
+                    </div>
+                    <div className="flex justify-between pt-1 border-t border-neutral-200">
+                      <span className="text-green-700 font-medium">Discount:</span>
+                      <span className="font-semibold text-green-700">−{fmtINR(group.totalDiscount)}</span>
+                    </div>
+
+                    {/* Discount Tier Display */}
+                    <div className="pt-2 space-y-1.5 border-t border-neutral-200">
+                      {group.baseTierInfo && (
+                        <div className="px-2.5 py-1.5 bg-neutral-100 rounded border border-neutral-300">
+                          <div className="text-xs text-neutral-600 font-medium">Base Tier</div>
+                          <div className="text-sm font-semibold text-neutral-900 mt-0.5">
+                            {group.baseTierInfo}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Show if Group Rule was applied */}
+                      {group.groupRuleApplied && (
+                        <div className="px-2.5 py-1.5 bg-blue-200 rounded border border-blue-400">
+                          <div className="text-xs text-blue-800 font-bold">🎯 {group.groupRuleApplied}</div>
+                          <div className="text-sm font-bold text-blue-900 mt-0.5">
+                            Upgraded to {group.appliedDiscountPct}%
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    className="mt-3 w-full text-xs font-medium text-blue-600 hover:text-blue-700 py-1.5 px-2 rounded hover:bg-blue-50"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedGroup(group.categoryId);
+                    }}
+                  >
+                    View Items →
+                  </button>
+                </div>
+              ))}
             </div>
-          )}
+          </div>
 
-          {/* No Discount Alert */}
-          {allNoDiscount && (
-            <div className="px-4 py-3 bg-amber-50 text-amber-900 text-sm rounded-lg border border-amber-200 font-medium">
-              No discounts applicable to this invoice
+          {/* Items Breakdown (collapsible) */}
+          <div className="space-y-2">
+            <div className="text-xs font-semibold text-neutral-600 uppercase tracking-wide">
+              Items in Invoice
             </div>
-          )}
-
-          {/* Items Table */}
-          <div className="border border-neutral-200 rounded-lg overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-neutral-200 bg-neutral-50">
-                  <th className="text-left px-4 py-3 font-semibold text-neutral-700">Item Name</th>
-                  <th className="text-right px-4 py-3 font-semibold text-neutral-700">Qty</th>
-                  <th className="text-right px-4 py-3 font-semibold text-neutral-700">Unit Rate</th>
-                  <th className="text-right px-4 py-3 font-semibold text-neutral-700">Line ₹</th>
-                  <th className="text-left px-4 py-3 font-semibold text-neutral-700">Category</th>
-                  <th className="text-center px-4 py-3 font-semibold text-neutral-700">Disc%</th>
-                  <th className="text-right px-4 py-3 font-semibold text-neutral-700">Disc ₹</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-100">
-                {lines.map((line, idx) => {
-                  const hasDiscount = line.discountPct > 0;
-                  const unitsNotConfigured =
-                    line.unitsPerPkg === 1 && line.categoryId !== "NO_DISCOUNT";
-                  const unitRate = line.qtyBase > 0 ? line.lineAmount / line.qtyBase : 0;
-
-                  return (
+            <div className="border border-neutral-200 rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-neutral-200 bg-neutral-50">
+                    <th className="text-left px-4 py-3 font-semibold text-neutral-700">Item</th>
+                    <th className="text-right px-4 py-3 font-semibold text-neutral-700">Qty</th>
+                    <th className="text-left px-4 py-3 font-semibold text-neutral-700">Category</th>
+                    <th className="text-right px-4 py-3 font-semibold text-neutral-700">Amount</th>
+                    <th className="text-center px-4 py-3 font-semibold text-neutral-700">Disc%</th>
+                    <th className="text-right px-4 py-3 font-semibold text-neutral-700">Discount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-100">
+                  {result.lines.map((line: any, idx: number) => (
                     <tr
                       key={idx}
                       className={clsx(
-                        "transition-colors duration-150",
-                        hasDiscount ? "bg-green-50 hover:bg-green-100" : "hover:bg-neutral-50"
+                        "transition-colors",
+                        line.discountPct > 0 ? "bg-green-50 hover:bg-green-100" : "hover:bg-neutral-50"
                       )}
                     >
-                      <td className="px-4 py-3 max-w-xs">
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 min-w-0">
-                            <div className={clsx(
-                              "font-medium truncate text-sm",
-                              hasDiscount ? "text-neutral-900" : "text-neutral-700"
-                            )}>
-                              {line.itemName}
-                            </div>
-                            <div className="text-xs text-neutral-500 mt-1">{line.tierLabel}</div>
-                          </div>
-                          {unitsNotConfigured && (
-                            <span
-                              title="Package unit not configured — discounting on individual units"
-                              className="text-amber-600 flex-shrink-0 cursor-help"
-                            >
-                              <AlertTriangle size={14} />
-                            </span>
-                          )}
+                      <td className="px-4 py-3 text-neutral-900 font-medium">{line.itemName}</td>
+                      <td className="px-4 py-3 text-right text-neutral-700">
+                        <div className="font-medium tabular-nums">{fmtNum(line.qtyBase, 0)}</div>
+                        <div className="text-xs text-neutral-500 mt-0.5">
+                          {line.packages} pkg{line.packages !== 1 ? 's' : ''}
                         </div>
-                      </td>
-                      <td className="px-4 py-3 text-right text-sm font-medium text-neutral-900 tabular-nums">
-                        {fmtNum(line.qtyBase, 0)}
-                        <div className="text-xs text-neutral-500 mt-1">
-                          {line.unitsPerPkg > 1 ? `${line.packages} pkg` : "pc"}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono text-sm text-neutral-700 tabular-nums">
-                        {fmtNum(unitRate, 2)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-sm font-semibold text-neutral-900 tabular-nums">
-                        {fmtINR(line.lineAmount)}
                       </td>
                       <td className="px-4 py-3">
                         <span className={clsx(
@@ -355,412 +442,51 @@ function DiscountBreakdown({
                           {line.categoryName}
                         </span>
                       </td>
+                      <td className="px-4 py-3 text-right font-semibold text-neutral-900 tabular-nums">
+                        {fmtINR(line.lineAmount)}
+                      </td>
                       <td className={clsx(
-                        "px-4 py-3 text-center text-sm font-semibold tabular-nums",
-                        hasDiscount ? "text-green-600" : "text-neutral-500"
+                        "px-4 py-3 text-center font-semibold tabular-nums",
+                        line.discountPct > 0 ? "text-green-600" : "text-neutral-500"
                       )}>
                         {line.discountPct > 0 ? `${line.discountPct}%` : "—"}
                       </td>
                       <td className={clsx(
-                        "px-4 py-3 text-right text-sm font-semibold tabular-nums",
-                        hasDiscount ? "text-green-600" : "text-neutral-500"
+                        "px-4 py-3 text-right font-semibold tabular-nums",
+                        line.discountPct > 0 ? "text-green-600" : "text-neutral-500"
                       )}>
-                        {hasDiscount ? fmtINR(line.discountAmount) : "—"}
+                        {line.discountPct > 0 ? fmtINR(line.discountAmount) : "—"}
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="border-t-2 border-neutral-200 bg-neutral-50 font-semibold text-sm">
-                  <td className="px-4 py-4 text-neutral-900" colSpan={4}>
-                    Total
-                  </td>
-                  <td className="px-4 py-4"></td>
-                  <td className="px-4 py-4 text-center text-green-600">
-                    {fmtNum(result.effectivePct, 2)}%
-                  </td>
-                  <td className="px-4 py-4 text-right tabular-nums text-green-600 text-base">
-                    {fmtINR(result.totalDiscountAmount)}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-            <div className="px-5 py-4 bg-neutral-50 rounded-lg border border-neutral-200">
-              <div className="text-sm text-neutral-600">Invoice subtotal (items)</div>
-              <div className="font-mono font-semibold text-neutral-900 mt-1 text-lg">
-                {fmtINR(result.totalLineAmount)}
-              </div>
-            </div>
-            <div className="px-5 py-4 bg-green-50 rounded-lg border border-green-200">
-              <div className="text-sm text-green-700">Total discount applied</div>
-              <div className="font-mono font-semibold text-green-900 mt-1 text-lg">
-                {fmtINR(result.totalDiscountAmount)} ({fmtNum(result.effectivePct, 2)}%)
-              </div>
-            </div>
-          </div>
         </>
+      ) : (
+        <div className="py-16 text-center text-neutral-500">
+          No items with discounts in this invoice
+        </div>
       )}
-    </div>
-  );
-}
 
-// ── Edit Rules Modal ──────────────────────────────────────────────────────────
-function EditRulesModal({
-  onClose,
-  allItemIds,
-}: {
-  onClose: () => void;
-  allItemIds: string[];
-}) {
-  const { categories, itemCategoryOverrides, setCategories, setItemCategoryOverrides, resetToDefaults } =
-    useDiscountStore();
-
-  const [localCats, setLocalCats] = useState<DiscountCategory[]>(() =>
-    JSON.parse(JSON.stringify(categories))
-  );
-  const [localOverrides, setLocalOverrides] = useState<Record<string, string>>(() => ({
-    ...itemCategoryOverrides,
-  }));
-  const [activeTab, setActiveTab] = useState<"tiers" | "items">("tiers");
-  const [itemSearch, setItemSearch] = useState("");
-  const [expandedCatId, setExpandedCatId] = useState<string | null>(null);
-
-  const mergedMap = useMemo(
-    () => ({ ...DEFAULT_ITEM_CATEGORY_MAP, ...localOverrides }),
-    [localOverrides]
-  );
-
-  const allItems = useMemo(() => {
-    const staticKeys = new Set(Object.keys(DEFAULT_ITEM_CATEGORY_MAP));
-    const extra = allItemIds.filter((id) => !staticKeys.has(id));
-    return [
-      ...Object.keys(DEFAULT_ITEM_CATEGORY_MAP),
-      ...extra,
-    ];
-  }, [allItemIds]);
-
-  const filteredItems = useMemo(() => {
-    const q = itemSearch.toLowerCase();
-    return allItems.filter((id) => !q || id.toLowerCase().includes(q)).slice(0, 100);
-  }, [allItems, itemSearch]);
-
-  // ── Tier helpers ─────────────────────────────────────────────
-  function updateTier(catId: string, tierIdx: number, field: keyof DiscountTier, value: string) {
-    setLocalCats((cats) =>
-      cats.map((c) => {
-        if (c.id !== catId) return c;
-        const newTiers = c.tiers.map((t, i) => {
-          if (i !== tierIdx) return t;
-          if (field === "maxQty") {
-            return { ...t, maxQty: value === "" ? null : Number(value) };
-          }
-          return { ...t, [field]: Number(value) };
-        });
-        return { ...c, tiers: newTiers };
-      })
-    );
-  }
-
-  function addTier(catId: string) {
-    setLocalCats((cats) =>
-      cats.map((c) => {
-        if (c.id !== catId) return c;
-        return {
-          ...c,
-          tiers: [...c.tiers, { minQty: 1, maxQty: null, discountPct: 0 }],
-        };
-      })
-    );
-  }
-
-  function removeTier(catId: string, tierIdx: number) {
-    setLocalCats((cats) =>
-      cats.map((c) => {
-        if (c.id !== catId) return c;
-        return { ...c, tiers: c.tiers.filter((_, i) => i !== tierIdx) };
-      })
-    );
-  }
-
-  function deleteCategory(catId: string) {
-    if (!window.confirm(`Delete category "${localCats.find((c) => c.id === catId)?.name}"?`)) return;
-    setLocalCats((cats) => cats.filter((c) => c.id !== catId));
-  }
-
-  function addCategory() {
-    const name = window.prompt("Category name:")?.trim();
-    if (!name) return;
-    const id = name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
-    setLocalCats((cats) => [...cats, { id, name, tiers: [] }]);
-  }
-
-  // ── Save & actions ────────────────────────────────────────────
-  function handleSave() {
-    setCategories(localCats);
-    setItemCategoryOverrides(localOverrides);
-    onClose();
-  }
-
-  function handleReset() {
-    if (!window.confirm("Reset all discount rules to defaults?")) return;
-    resetToDefaults();
-    onClose();
-  }
-
-  const handleBackdrop = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) onClose();
-    },
-    [onClose]
-  );
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      onClick={handleBackdrop}
-    >
-      <div
-        className="bg-white rounded-xl shadow-2xl flex flex-col"
-        style={{ width: "92vw", maxWidth: "900px", height: "88vh" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-5 border-b border-neutral-200 flex-shrink-0">
-          <h2 className="text-xl font-bold text-neutral-900">Edit Discount Rules</h2>
-          <button
-            onClick={onClose}
-            className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-neutral-100 transition-colors"
-            aria-label="Close"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        {/* Tabs */}
-        <div className="flex gap-0 border-b border-neutral-200 flex-shrink-0 px-6">
-          {(["tiers", "items"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setActiveTab(t)}
-              className={clsx(
-                "px-4 py-3 text-sm font-medium border-b-2 transition-colors",
-                activeTab === t
-                  ? "border-blue-500 text-blue-600"
-                  : "border-transparent text-neutral-600 hover:text-neutral-900"
-              )}
-            >
-              {t === "tiers" ? "Discount Tiers" : "Item Assignments"}
-            </button>
-          ))}
-        </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto p-6">
-          {activeTab === "tiers" && (
-            <div className="flex flex-col gap-4">
-              {localCats.map((cat) => {
-                const isExpanded = expandedCatId === cat.id;
-                const isNoDisco = cat.id === "NO_DISCOUNT";
-
-                return (
-                  <div key={cat.id} className="border border-neutral-200 rounded-lg overflow-hidden bg-white">
-                    {/* Category header */}
-                    <div
-                      className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-neutral-50 transition-colors"
-                      onClick={() => setExpandedCatId(isExpanded ? null : cat.id)}
-                    >
-                      <div className="flex items-center gap-3">
-                        {isExpanded ? (
-                          <ChevronDown size={16} className="text-neutral-500 flex-shrink-0" />
-                        ) : (
-                          <ChevronRight size={16} className="text-neutral-500 flex-shrink-0" />
-                        )}
-                        <span className="font-medium text-base text-neutral-900">{cat.name}</span>
-                        <span className="text-xs text-neutral-500">({cat.tiers.length} tiers)</span>
-                      </div>
-                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => addTier(cat.id)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors text-neutral-600 font-medium"
-                        >
-                          <Plus size={14} /> Add Tier
-                        </button>
-                        {!isNoDisco && (
-                          <button
-                            onClick={() => deleteCategory(cat.id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors font-medium"
-                          >
-                            <Trash2 size={14} /> Delete
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Tier rows */}
-                    {isExpanded && (
-                      <div className="border-t border-neutral-200 bg-neutral-50">
-                        {cat.tiers.length === 0 ? (
-                          <div className="px-5 py-4 text-sm text-neutral-500 italic">
-                            No tiers — items in this category get 0% discount
-                          </div>
-                        ) : (
-                          <>
-                            {/* Tier header */}
-                            <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 px-5 py-3 text-xs font-semibold text-neutral-600 border-b border-neutral-200 bg-white">
-                              <span>Min Qty (pkgs)</span>
-                              <span>Max Qty (blank = unlimited)</span>
-                              <span>Discount %</span>
-                              <span className="w-8" />
-                            </div>
-                            {cat.tiers.map((tier, ti) => (
-                              <div
-                                key={ti}
-                                className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 px-5 py-3 items-center border-b border-neutral-100 last:border-b-0"
-                              >
-                                <input
-                                  type="number"
-                                  min={0}
-                                  value={tier.minQty}
-                                  onChange={(e) => updateTier(cat.id, ti, "minQty", e.target.value)}
-                                  className="form-input text-sm"
-                                />
-                                <input
-                                  type="number"
-                                  min={0}
-                                  value={tier.maxQty === null ? "" : tier.maxQty}
-                                  placeholder="unlimited"
-                                  onChange={(e) => updateTier(cat.id, ti, "maxQty", e.target.value)}
-                                  className="form-input text-sm"
-                                />
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={100}
-                                  step={0.5}
-                                  value={tier.discountPct}
-                                  onChange={(e) => updateTier(cat.id, ti, "discountPct", e.target.value)}
-                                  className="form-input text-sm"
-                                />
-                                <button
-                                  onClick={() => removeTier(cat.id, ti)}
-                                  className="w-8 h-8 flex items-center justify-center rounded hover:bg-red-100 text-red-600 transition-colors"
-                                  aria-label="Remove tier"
-                                >
-                                  <X size={16} />
-                                </button>
-                              </div>
-                            ))}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-
-              <button
-                onClick={addCategory}
-                className="flex items-center justify-center gap-2 py-4 rounded-lg border-2 border-dashed border-neutral-300 text-neutral-600 hover:text-neutral-900 hover:border-blue-400 transition-colors text-sm font-medium"
-              >
-                <Plus size={18} /> Add New Category
-              </button>
-            </div>
-          )}
-
-          {activeTab === "items" && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                <input
-                  value={itemSearch}
-                  onChange={(e) => setItemSearch(e.target.value)}
-                  placeholder="Search items…"
-                  className="search-input flex-1"
-                />
-                <span className="text-xs text-neutral-600 font-medium whitespace-nowrap">
-                  {filteredItems.length} of {allItems.length}
-                </span>
-              </div>
-
-              <div className="border border-neutral-200 rounded-lg overflow-hidden">
-                {/* Header */}
-                <div className="grid grid-cols-2 px-5 py-3 text-xs font-semibold text-neutral-600 border-b border-neutral-200 bg-neutral-50">
-                  <span>Item Name</span>
-                  <span>Category</span>
-                </div>
-                {filteredItems.map((itemId) => {
-                  const isNew = !(itemId in DEFAULT_ITEM_CATEGORY_MAP);
-                  const effectiveCat = mergedMap[itemId] ?? "No Discount";
-                  return (
-                    <div
-                      key={itemId}
-                      className="grid grid-cols-2 px-5 py-3 items-center border-b border-neutral-100 last:border-b-0 hover:bg-neutral-50"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-xs text-neutral-700 truncate font-medium">{itemId}</span>
-                        {isNew && (
-                          <span className="px-2 py-0.5 text-2xs bg-blue-100 text-blue-700 rounded font-semibold flex-shrink-0">
-                            NEW
-                          </span>
-                        )}
-                      </div>
-                      <select
-                        value={effectiveCat}
-                        onChange={(e) => {
-                          const newCat = e.target.value;
-                          setLocalOverrides((ov) => {
-                            const staticDefault = DEFAULT_ITEM_CATEGORY_MAP[itemId] ?? "No Discount";
-                            if (newCat === staticDefault) {
-                              const { [itemId]: _, ...rest } = ov;
-                              return rest;
-                            }
-                            return { ...ov, [itemId]: newCat };
-                          });
-                        }}
-                        className="form-select text-xs"
-                      >
-                        {localCats.map((c) => (
-                          <option key={c.id} value={c.name}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Modal Footer */}
-        <div className="flex items-center justify-between px-6 py-5 border-t border-neutral-200 flex-shrink-0 bg-neutral-50">
-          <button
-            onClick={handleReset}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors font-medium"
-          >
-            <RotateCcw size={16} /> Reset to Defaults
-          </button>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onClose}
-              className="px-4 py-2.5 text-sm rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-100 transition-colors font-medium"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              className="px-4 py-2.5 text-sm rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition-colors font-medium shadow-sm"
-            >
-              Save Changes
-            </button>
-          </div>
-        </div>
-      </div>
+      {/* Group Details Modal */}
+      {selectedGroup && (
+        <GroupDetailsModal
+          isOpen={true}
+          onClose={() => setSelectedGroup(null)}
+          groupName={result.groupSummaries.find((g: any) => g.categoryId === selectedGroup)?.categoryName || ""}
+          totalPackages={result.groupSummaries.find((g: any) => g.categoryId === selectedGroup)?.totalPackages || 0}
+          items={result.lines
+            .filter((line: any) => line.categoryId === selectedGroup)
+            .map((line: any) => ({
+              itemName: line.itemName,
+              qty: line.qtyBase,
+              packages: line.packages,
+            }))}
+        />
+      )}
     </div>
   );
 }
@@ -772,7 +498,6 @@ export default function Discounts() {
   const { categories, itemCategoryOverrides } = useDiscountStore();
 
   const [selectedVoucherId, setSelectedVoucherId] = useState<string | null>(null);
-  const [showModal, setShowModal] = useState(false);
 
   const vouchers = useMemo(
     () => (data?.vouchers ?? []).filter((v) => !v.isCancelled && !v.isOptional),
@@ -794,11 +519,6 @@ export default function Discounts() {
     );
   }, [selectedVoucher, data, categories, itemCategoryOverrides]);
 
-  const allItemIds = useMemo(
-    () => (data ? Array.from(data.items.keys()) : []),
-    [data]
-  );
-
   if (!data) {
     return (
       <div className="empty-state">
@@ -814,16 +534,16 @@ export default function Discounts() {
 
   return (
     <div className="page-section">
-      {/* Page Header */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
         <div>
           <h1 className="page-title">Discounts</h1>
           <p className="text-sm text-neutral-600 mt-2">
-            Calculate automatic discounts for Sales invoices based on quantity tiers
+            Group-wise automatic discounts for Sales invoices
           </p>
         </div>
         <button
-          onClick={() => setShowModal(true)}
+          onClick={() => navigate("/discount-rules")}
           className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-white text-neutral-900 border border-neutral-200 hover:bg-neutral-50 transition-colors font-medium shadow-sm"
         >
           <Pencil size={16} /> Edit Rules
@@ -844,15 +564,10 @@ export default function Discounts() {
         <div className="mb-8">
           <DiscountBreakdown
             voucher={selectedVoucher}
-            lines={discountResult.lines}
             result={discountResult}
+            items={data.items}
           />
         </div>
-      )}
-
-      {/* Edit Rules Modal */}
-      {showModal && (
-        <EditRulesModal onClose={() => setShowModal(false)} allItemIds={allItemIds} />
       )}
     </div>
   );
