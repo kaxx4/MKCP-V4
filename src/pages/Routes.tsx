@@ -1,5 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import { useState, useMemo, useEffect, useRef } from "react";
 import L from "leaflet";
 import { Navigation, ExternalLink, X, AlertTriangle, MapPin } from "lucide-react";
 import clsx from "clsx";
@@ -15,48 +14,41 @@ import {
 } from "../data/stationData";
 import "leaflet/dist/leaflet.css";
 
-// Fix Leaflet default icon paths broken by Vite bundling
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-});
+const GODOWN_ORIGIN = "B20+KMDA+Kona+Truck+Terminal+Howrah+West+Bengal+India";
 
-function makeIcon(color: string, selected: boolean): L.DivIcon {
+function mapsDirectionsUrl(station: StationData) {
+  return `https://www.google.com/maps/dir/?api=1&origin=${GODOWN_ORIGIN}&destination=${station.googleMapsQuery}&travelmode=driving`;
+}
+
+function hasWarning(station: StationData): boolean {
+  return (
+    station.freightRate > 8000 ||
+    station.notes.toLowerCase().includes("actual") ||
+    station.notes.toLowerCase().includes("special")
+  );
+}
+
+function makeDotIcon(color: string, selected: boolean) {
   const size = selected ? 18 : 13;
-  const border = selected ? "3px solid #fff" : "2px solid rgba(255,255,255,0.8)";
-  const shadow = selected ? "0 2px 8px rgba(0,0,0,0.45)" : "0 1px 4px rgba(0,0,0,0.3)";
+  const border = selected ? "3px solid #fff" : "2px solid rgba(255,255,255,0.85)";
+  const shadow = selected ? "0 2px 8px rgba(0,0,0,0.5)" : "0 1px 4px rgba(0,0,0,0.3)";
   return L.divIcon({
     className: "",
     html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};border:${border};box-shadow:${shadow};"></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -(size / 2 + 4)],
   });
 }
 
-function makeGodownIcon(): L.DivIcon {
+function makeGodownIcon() {
   return L.divIcon({
     className: "",
-    html: `<div style="width:20px;height:20px;border-radius:4px;background:#1d4ed8;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;">
-      <div style="width:6px;height:6px;background:#fff;border-radius:50%;"></div>
-    </div>`,
+    html: `<div style="width:20px;height:20px;border-radius:4px;background:#1d4ed8;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;"><div style="width:6px;height:6px;background:#fff;border-radius:50%;"></div></div>`,
     iconSize: [20, 20],
     iconAnchor: [10, 10],
+    popupAnchor: [0, -14],
   });
-}
-
-// Component to fly map to selected station
-function MapController({ selected }: { selected: StationData | null }) {
-  const map = useMap();
-  useEffect(() => {
-    if (selected) {
-      map.flyTo([selected.lat, selected.lng], 12, { duration: 0.8 });
-    } else {
-      map.flyTo([22.8, 88.2], 8, { duration: 0.8 });
-    }
-  }, [selected, map]);
-  return null;
 }
 
 type SortKey = "freight" | "distance" | "name" | "invoices";
@@ -78,25 +70,16 @@ const ZONE_OPTIONS: { value: Zone; label: string }[] = [
   { value: "far", label: "Far (> 175 km)" },
 ];
 
-const GODOWN_ORIGIN = "B20+KMDA+Kona+Truck+Terminal+Howrah+West+Bengal+India";
-
-function mapsDirectionsUrl(station: StationData) {
-  return `https://www.google.com/maps/dir/?api=1&origin=${GODOWN_ORIGIN}&destination=${station.googleMapsQuery}&travelmode=driving`;
-}
-
-function hasWarning(station: StationData): boolean {
-  return (
-    station.freightRate > 8000 ||
-    station.notes.toLowerCase().includes("actual") ||
-    station.notes.toLowerCase().includes("special")
-  );
-}
-
 export default function Routes() {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("freight");
   const [zoneFilter, setZoneFilter] = useState<Zone>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const mapRef = useRef<HTMLDivElement>(null);
+  const leafletMap = useRef<L.Map | null>(null);
+  const markersRef = useRef<Map<string, L.Marker>>(new Map());
+  const onSelectRef = useRef<(id: string) => void>(() => {});
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -124,21 +107,95 @@ export default function Routes() {
     [selectedId]
   );
 
+  // Keep onSelectRef in sync so marker click handlers don't need re-binding
+  onSelectRef.current = (id: string) => {
+    setSelectedId((prev) => (prev === id ? null : id));
+  };
+
+  // Initialise map once
+  useEffect(() => {
+    if (!mapRef.current || leafletMap.current) return;
+
+    const map = L.map(mapRef.current, { center: [22.8, 88.2], zoom: 8, zoomControl: true });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 18,
+    }).addTo(map);
+
+    // Godown marker
+    L.marker([GODOWN.lat, GODOWN.lng], { icon: makeGodownIcon(), zIndexOffset: 2000 })
+      .addTo(map)
+      .bindPopup(`<b>MK Cycles Godown</b><br><span style="font-size:11px;color:#6b7280">${GODOWN.address}</span>`);
+
+    // Station markers
+    STATIONS.forEach((station) => {
+      const zone = getDistanceZone(station.distanceKm);
+      const color = ZONE_COLORS[zone];
+      const popupHtml = `
+        <div style="min-width:160px;font-size:12px;">
+          <div style="font-weight:700;font-size:13px;margin-bottom:2px;">${station.name}</div>
+          <div style="color:#6b7280;margin-bottom:4px;">${station.district}</div>
+          <div style="font-weight:700;color:${color};font-size:14px;">₹${station.freightRate.toLocaleString("en-IN")}<span style="font-weight:400;font-size:11px;color:#6b7280"> / truck</span></div>
+          ${station.distanceKm !== null ? `<div style="color:#6b7280;margin-top:2px;">${station.distanceKm} km · ~${formatDriveTime(station.estimatedDriveMinutes)}</div>` : ""}
+          <a href="${mapsDirectionsUrl(station)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:6px;color:#2563eb;font-size:11px;">Get directions ↗</a>
+        </div>`;
+      const marker = L.marker([station.lat, station.lng], {
+        icon: makeDotIcon(color, false),
+        zIndexOffset: 0,
+      })
+        .addTo(map)
+        .bindPopup(popupHtml)
+        .on("click", () => onSelectRef.current(station.id));
+      markersRef.current.set(station.id, marker);
+    });
+
+    leafletMap.current = map;
+
+    return () => {
+      map.remove();
+      leafletMap.current = null;
+      markersRef.current.clear();
+    };
+  }, []);
+
+  // Update marker icons when selection changes
+  useEffect(() => {
+    markersRef.current.forEach((marker, id) => {
+      const station = STATIONS.find((s) => s.id === id)!;
+      const zone = getDistanceZone(station.distanceKm);
+      const color = ZONE_COLORS[zone];
+      const isSelected = id === selectedId;
+      marker.setIcon(makeDotIcon(color, isSelected));
+      if (isSelected) {
+        marker.setZIndexOffset(1000);
+      } else {
+        marker.setZIndexOffset(0);
+      }
+    });
+  }, [selectedId]);
+
+  // Fly to selected station
+  useEffect(() => {
+    if (!leafletMap.current) return;
+    if (selected) {
+      leafletMap.current.flyTo([selected.lat, selected.lng], 12, { duration: 0.7 });
+    } else {
+      leafletMap.current.flyTo([22.8, 88.2], 8, { duration: 0.7 });
+    }
+  }, [selected]);
+
   return (
-    <div className="page-section flex flex-col h-full min-h-0">
-      {/* Header */}
-      <div className="page-header mb-3">
+    <div className="flex flex-col" style={{ height: "calc(100vh - 56px)", overflow: "hidden", padding: "12px 16px" }}>
+      <div className="flex items-center justify-between mb-3 flex-shrink-0">
         <div>
           <h1 className="page-title">Routes Map</h1>
           <p className="text-xs text-muted mt-0.5">MK Cycles delivery network — {GODOWN.address}</p>
         </div>
       </div>
 
-      {/* Main layout */}
       <div className="flex gap-3 flex-1 min-h-0 overflow-hidden">
         {/* Side Panel */}
         <div className="w-[340px] flex-shrink-0 flex flex-col min-h-0 section-card overflow-hidden">
-          {/* Controls */}
           <div className="p-3 border-b border-bg-border space-y-2">
             <input
               value={search}
@@ -147,42 +204,27 @@ export default function Routes() {
               className="search-input w-full"
             />
             <div className="flex gap-2">
-              <select
-                value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as SortKey)}
-                className="form-select flex-1 text-xs"
-              >
-                {SORT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
+              <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} className="form-select flex-1 text-xs">
+                {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
-              <select
-                value={zoneFilter}
-                onChange={(e) => setZoneFilter(e.target.value as Zone)}
-                className="form-select flex-1 text-xs"
-              >
-                {ZONE_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
+              <select value={zoneFilter} onChange={(e) => setZoneFilter(e.target.value as Zone)} className="form-select flex-1 text-xs">
+                {ZONE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </div>
           </div>
 
-          {/* Station list */}
           <div className="flex-1 overflow-y-auto">
             {sorted.map((station) => {
               const zone = getDistanceZone(station.distanceKm);
               const zoneColor = ZONE_COLORS[zone];
               const isSelected = station.id === selectedId;
               const warn = hasWarning(station);
-
               return (
                 <button
                   key={station.id}
                   onClick={() => setSelectedId(isSelected ? null : station.id)}
                   className={clsx(
-                    "w-full text-left border-b border-bg-border/50 last:border-0 transition-colors duration-100 px-3 py-2.5",
-                    "hover:bg-neutral-50 focus:outline-none",
+                    "w-full text-left border-b border-bg-border/50 last:border-0 px-3 py-2.5 transition-colors duration-100 hover:bg-neutral-50 focus:outline-none",
                     isSelected && "bg-accent/5 ring-1 ring-inset ring-accent/30"
                   )}
                   style={{ borderLeft: `4px solid ${zoneColor}` }}
@@ -197,18 +239,15 @@ export default function Routes() {
                         <span className="text-[10px] bg-neutral-100 text-muted px-1 rounded flex-shrink-0">No sales</span>
                       )}
                     </div>
-                    {/* Freight cost — primary metric */}
                     <span className="text-sm font-bold tabular-nums flex-shrink-0" style={{ color: zoneColor }}>
                       ₹{station.freightRate.toLocaleString("en-IN")}
                     </span>
                   </div>
-
                   <div className="text-[11px] text-muted">
                     {station.district}
                     {station.distanceKm !== null ? ` · ${station.distanceKm} km` : " · — km"}
                     {station.estimatedDriveMinutes !== null ? ` · ~${formatDriveTime(station.estimatedDriveMinutes)}` : ""}
                   </div>
-
                   {station.salesInvoices > 0 && (
                     <div className="text-[10px] text-muted mt-0.5">
                       {station.salesInvoices} invoice{station.salesInvoices !== 1 ? "s" : ""}
@@ -221,7 +260,6 @@ export default function Routes() {
             })}
           </div>
 
-          {/* Footer + Legend */}
           <div className="border-t border-bg-border">
             <div className="px-3 py-1.5 text-xs text-muted">
               Showing {sorted.length} of {STATIONS.length} stations
@@ -242,80 +280,19 @@ export default function Routes() {
           </div>
         </div>
 
-        {/* Map + Detail panel */}
+        {/* Map + Detail */}
         <div className="flex-1 flex flex-col min-h-0 gap-3">
-          {/* Leaflet Map */}
-          <div className="flex-1 section-card overflow-hidden min-h-0" style={{ minHeight: selected ? "calc(100% - 200px)" : "100%" }}>
-            <MapContainer
-              center={[22.8, 88.2]}
-              zoom={8}
-              style={{ width: "100%", height: "100%", minHeight: "400px" }}
-              scrollWheelZoom
-            >
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              />
-              <MapController selected={selected} />
+          <div
+            ref={mapRef}
+            className="section-card overflow-hidden"
+            style={{ flex: 1, minHeight: 0 }}
+          />
 
-              {/* Godown marker */}
-              <Marker position={[GODOWN.lat, GODOWN.lng]} icon={makeGodownIcon()}>
-                <Popup>
-                  <div className="text-xs font-semibold">MK Cycles Godown</div>
-                  <div className="text-xs text-gray-500">{GODOWN.address}</div>
-                </Popup>
-              </Marker>
-
-              {/* Station markers */}
-              {STATIONS.map((station) => {
-                const zone = getDistanceZone(station.distanceKm);
-                const color = ZONE_COLORS[zone];
-                const isSelected = station.id === selectedId;
-                return (
-                  <Marker
-                    key={station.id}
-                    position={[station.lat, station.lng]}
-                    icon={makeIcon(color, isSelected)}
-                    eventHandlers={{ click: () => setSelectedId(station.id === selectedId ? null : station.id) }}
-                    zIndexOffset={isSelected ? 1000 : 0}
-                  >
-                    <Popup>
-                      <div className="text-xs space-y-0.5" style={{ minWidth: 160 }}>
-                        <div className="font-semibold text-sm">{station.name}</div>
-                        <div className="text-gray-500">{station.district}</div>
-                        <div className="font-bold" style={{ color }}>
-                          ₹{station.freightRate.toLocaleString("en-IN")} / truck
-                        </div>
-                        {station.distanceKm !== null && (
-                          <div className="text-gray-500">
-                            {station.distanceKm} km · ~{formatDriveTime(station.estimatedDriveMinutes)}
-                          </div>
-                        )}
-                        <a
-                          href={mapsDirectionsUrl(station)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-blue-600 hover:underline mt-1"
-                        >
-                          Get directions
-                        </a>
-                      </div>
-                    </Popup>
-                  </Marker>
-                );
-              })}
-            </MapContainer>
-          </div>
-
-          {/* Station Detail Card */}
           {selected && (
             <div className="section-card p-4 flex-shrink-0">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div className="flex items-center gap-2 min-w-0">
-                  <div
-                    className="w-3 h-3 rounded-full flex-shrink-0"
-                    style={{ backgroundColor: ZONE_COLORS[getDistanceZone(selected.distanceKm)] }}
-                  />
+                  <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: ZONE_COLORS[getDistanceZone(selected.distanceKm)] }} />
                   <div>
                     <h2 className="text-base font-bold text-primary leading-tight">{selected.name}</h2>
                     <p className="text-xs text-muted">{selected.district}</p>
@@ -337,9 +314,7 @@ export default function Routes() {
                 </div>
                 <div className="text-center bg-neutral-50 rounded-lg py-2">
                   <div className="text-xs text-muted mb-0.5">Distance</div>
-                  <div className="text-base font-bold text-primary">
-                    {selected.distanceKm !== null ? `${selected.distanceKm} km` : "—"}
-                  </div>
+                  <div className="text-base font-bold text-primary">{selected.distanceKm !== null ? `${selected.distanceKm} km` : "—"}</div>
                   <div className="text-[10px] text-muted">from godown</div>
                 </div>
                 <div className="text-center bg-neutral-50 rounded-lg py-2">
@@ -366,22 +341,12 @@ export default function Routes() {
               )}
 
               <div className="flex gap-2">
-                <a
-                  href={mapsDirectionsUrl(selected)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn-primary btn-sm flex items-center gap-1.5"
-                >
+                <a href={mapsDirectionsUrl(selected)} target="_blank" rel="noopener noreferrer" className="btn-primary btn-sm flex items-center gap-1.5">
                   <Navigation size={13} />
                   Get Directions
                   <ExternalLink size={11} />
                 </a>
-                <a
-                  href={`https://www.google.com/maps/search/?api=1&query=${selected.googleMapsQuery}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn-secondary btn-sm flex items-center gap-1.5"
-                >
+                <a href={`https://www.google.com/maps/search/?api=1&query=${selected.googleMapsQuery}`} target="_blank" rel="noopener noreferrer" className="btn-secondary btn-sm flex items-center gap-1.5">
                   <MapPin size={13} />
                   View on Map
                   <ExternalLink size={11} />
