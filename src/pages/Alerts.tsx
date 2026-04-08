@@ -11,7 +11,7 @@ import {
 } from "../engine/inventory";
 import { toDisplay } from "../engine/unitEngine";
 import { fmtINR, fmtNum } from "../utils/format";
-import { AlertTriangle, Upload, ShoppingCart, Check, Download } from "lucide-react";
+import { AlertTriangle, Upload, ShoppingCart, Check } from "lucide-react";
 import clsx from "clsx";
 import type { CanonicalItem } from "../types/canonical";
 
@@ -115,34 +115,6 @@ export default function Alerts() {
   };
 
   // CSV export
-  const exportCSV = () => {
-    const rows = [
-      ["Item", "Group", "Current Stock", "Unit", "Avg Monthly Out (3mo)", "Months Remaining", "Suggested Reorder", "Severity"],
-      ...filtered.map((d) => {
-        const stockDisp = toDisplay(d.item, Math.ceil(d.stock), unitMode);
-        const avgDisp = toDisplay(d.item, Math.ceil(d.avgOut), unitMode);
-        const sugDisp = toDisplay(d.item, Math.ceil(d.suggested), unitMode);
-        const months = d.avgOut > 0 ? (d.stock / d.avgOut).toFixed(1) : "N/A";
-        return [
-          d.item.name,
-          d.item.group,
-          stockDisp.value,
-          stockDisp.label,
-          avgDisp.value,
-          months,
-          sugDisp.value,
-          d.severity,
-        ];
-      }),
-    ];
-    const csv = rows.map((r) => r.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `low_stock_alerts_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-  };
-
   // No data state
   if (!data) {
     return (
@@ -185,13 +157,6 @@ export default function Alerts() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={exportCSV}
-            className="btn-secondary btn-sm"
-          >
-            <Download size={14} />
-            Export
-          </button>
           <button
             onClick={handleAddAll}
             className="btn-primary btn-sm"
