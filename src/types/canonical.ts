@@ -13,6 +13,13 @@ export interface CompanyInfo {
   fyStartMonth: number; // 1=Jan, 4=April (default for India)
 }
 
+export interface DealerPrice {
+  priceListName: string;   // e.g. "Dealer Price List A"
+  dealerRate: number;      // dealer-specific rate per base unit
+  dealerDiscount?: number; // discount percentage (if specified in Tally)
+  barcode?: string;        // optional barcode from price list
+}
+
 export interface CanonicalItem {
   itemId: string;          // normalized uppercase name used as key
   name: string;            // display name (original case from JSON)
@@ -29,6 +36,7 @@ export interface CanonicalItem {
   closingValue?: number;   // total closing value
   hsn?: string;
   gstRate?: number;
+  dealerPrices?: DealerPrice[]; // dealer-specific rates from price lists
 }
 
 export interface CanonicalLedger {

@@ -13,7 +13,7 @@
  *  - isdeemedpositive: boolean (not "Yes"/"No" string)
  */
 
-import type { CanonicalItem, CanonicalLedger, CompanyInfo, ImportWarning } from "../types/canonical";
+import type { CanonicalItem, CanonicalLedger, CompanyInfo, ImportWarning, DealerPrice } from "../types/canonical";
 
 export interface StockGroupInfo {
   name: string;
@@ -31,12 +31,24 @@ export interface UnitInfo {
   isCompound: boolean;
 }
 
+export interface DealerPriceListInfo {
+  priceListName: string;
+  items: Array<{
+    itemName: string;
+    itemGuid?: string;
+    priceRate: number;
+    dealerDiscount?: number;
+    barcode?: string;
+  }>;
+}
+
 export interface MasterParseResult {
   company: CompanyInfo | null;
   items: Map<string, CanonicalItem>;
   ledgers: Map<string, CanonicalLedger>;
   stockGroups: StockGroupInfo[];
   units: UnitInfo[];
+  dealerPriceLists: DealerPriceListInfo[];
   warnings: ImportWarning[];
 }
 
@@ -46,6 +58,7 @@ export function parseMasters(raw: unknown): MasterParseResult {
   const ledgers = new Map<string, CanonicalLedger>();
   const stockGroups: StockGroupInfo[] = [];
   const units: UnitInfo[] = [];
+  const dealerPriceLists: DealerPriceListInfo[] = [];
   let company: CompanyInfo | null = null;
 
   const normalized = normalizeMasterInput(raw, warnings);
@@ -94,18 +107,30 @@ export function parseMasters(raw: unknown): MasterParseResult {
     }
   }
 
+  for (const raw_pl of normalized.dealerPriceLists ?? []) {
+    try {
+      const pl = parseOneDealerPriceList(raw_pl, items, warnings);
+      if (pl) dealerPriceLists.push(pl);
+    } catch (e) {
+      warnings.push({ severity: "warn", context: `priceList:${raw_pl?.name}`, message: String(e) });
+    }
+  }
+
   if (stockGroups.length > 0) {
     warnings.push({ severity: "info", context: "parser", message: `Parsed ${stockGroups.length} stock groups` });
   }
   if (units.length > 0) {
     warnings.push({ severity: "info", context: "parser", message: `Parsed ${units.length} units` });
   }
+  if (dealerPriceLists.length > 0) {
+    warnings.push({ severity: "info", context: "parser", message: `Parsed ${dealerPriceLists.length} dealer price lists` });
+  }
 
   if (items.size === 0 && ledgers.size === 0) {
     warnings.push({ severity: "warn", context: "parser", message: "No items or ledgers found in masters file" });
   }
 
-  return { company, items, ledgers, stockGroups, units, warnings };
+  return { company, items, ledgers, stockGroups, units, dealerPriceLists, warnings };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -125,6 +150,8 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const units: any[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dealerPriceLists: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let company: any = null;
 
     for (const msg of obj.tallymessage) {
@@ -137,6 +164,8 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
         stockGroups.push(msg);
       } else if (type === "Unit" || type === "UNIT") {
         units.push(msg);
+      } else if (type === "Price List" || type === "PRICELIST") {
+        dealerPriceLists.push(msg);
       } else if (type === "Company" || type === "COMPANY") {
         company = msg;
       }
@@ -146,7 +175,7 @@ function normalizeMasterInput(raw: unknown, warnings: ImportWarning[]): any {
       warnings.push({ severity: "warn", context: "parser", message: `tallymessage has ${obj.tallymessage.length} entries but no Stock Items or Ledgers found` });
     }
 
-    return { stockItems, ledgers, stockGroups, units, company };
+    return { stockItems, ledgers, stockGroups, units, dealerPriceLists, company };
   }
 
   // ── Format 2: Tally ENVELOPE format ──
@@ -385,6 +414,55 @@ function parseOneLedger(raw: any, _warnings: ImportWarning[]): CanonicalLedger |
     openingBalance: parseNumber(raw.openingBalance ?? 0),
     gstin: raw.gstin ? String(raw.gstin) : undefined,
     creditDays: parseNumber(raw.creditDays ?? raw.creditPeriod ?? raw.creditperiod ?? 0),
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseOneDealerPriceList(
+  raw: any,
+  items: Map<string, CanonicalItem>,
+  warnings: ImportWarning[]
+): DealerPriceListInfo | null {
+  if (!raw?.name && !raw?.metadata?.name) return null;
+  const plName = String(raw.metadata?.name ?? raw.name ?? "").trim();
+  if (!plName) return null;
+
+  const plItems = (raw.items ?? []).map((item: any) => {
+    const itemName = String(item.itemName ?? item.name ?? "").trim();
+    const rate = parseNumber(item.priceRate ?? item.rate ?? item.unitRate ?? 0);
+
+    return {
+      itemName,
+      itemGuid: item.itemGuid ? String(item.itemGuid).trim() : undefined,
+      priceRate: rate,
+      dealerDiscount: item.dealerDiscount ? parseNumber(item.dealerDiscount) : undefined,
+      barcode: item.barcode ? String(item.barcode).trim() : undefined,
+    };
+  }).filter((i: any) => i.itemName && i.priceRate > 0);
+
+  if (plItems.length === 0) {
+    warnings.push({ severity: "warn", context: `priceList:${plName}`, message: "No valid price items found" });
+    return null;
+  }
+
+  // Attach dealer prices to each item
+  for (const plItem of plItems) {
+    const itemId = plItem.itemName.toUpperCase();
+    const item = items.get(itemId);
+    if (item) {
+      if (!item.dealerPrices) item.dealerPrices = [];
+      item.dealerPrices.push({
+        priceListName: plName,
+        dealerRate: plItem.priceRate,
+        dealerDiscount: plItem.dealerDiscount,
+        barcode: plItem.barcode,
+      });
+    }
+  }
+
+  return {
+    priceListName: plName,
+    items: plItems,
   };
 }
 

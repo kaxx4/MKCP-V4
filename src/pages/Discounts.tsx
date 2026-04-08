@@ -29,7 +29,7 @@ function VoucherSelector({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const [tab, setTab] = useState<VoucherTab>("Sales");
+  const [tab, setTab] = useState<VoucherTab>("Delivery Note");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
 
@@ -64,43 +64,48 @@ function VoucherSelector({
   };
 
   return (
-    <div className="section-card">
-      {/* Controls — with breathing room */}
-      <div className="mb-5 flex flex-col gap-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="flex gap-2">
-            {(["Sales", "Delivery Note"] as VoucherTab[]).map((t) => (
-              <button
-                key={t}
-                onClick={() => handleTabChange(t)}
-                className={clsx(
-                  "px-3.5 py-2 rounded-lg text-sm font-medium transition-colors",
-                  tab === t
-                    ? "bg-accent text-white"
-                    : "bg-bg border border-bg-border text-muted hover:text-primary"
-                )}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-          <div className="flex-1 flex items-center gap-2">
-            <input
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-              placeholder="Search party or voucher #"
-              className="search-input flex-1 min-w-[140px]"
-            />
-            <span className="text-xs text-muted tabular-nums whitespace-nowrap px-2">
-              {filtered.length} total
-            </span>
-          </div>
+    <div className="card space-y-6">
+      {/* Header Section */}
+      <div className="space-y-4">
+        {/* Tab Buttons */}
+        <div className="flex gap-2">
+          {(["Sales", "Delivery Note"] as VoucherTab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => handleTabChange(t)}
+              className={clsx(
+                "px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150",
+                tab === t
+                  ? "bg-blue-500 text-white shadow-sm"
+                  : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+              )}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+
+        {/* Search Bar */}
+        <div className="flex items-center gap-3">
+          <input
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(0);
+            }}
+            placeholder="Search party or voucher #"
+            className="search-input flex-1"
+          />
+          <span className="text-xs font-medium text-neutral-500 whitespace-nowrap">
+            {filtered.length} found
+          </span>
         </div>
       </div>
 
+      {/* Content Section */}
       {filtered.length === 0 ? (
-        <div className="py-12 text-center">
-          <div className="text-muted text-sm">
+        <div className="py-16 text-center">
+          <div className="text-neutral-500 text-sm">
             {tab === "Delivery Note"
               ? "No delivery notes found in loaded data"
               : "No sales vouchers found"}
@@ -108,19 +113,19 @@ function VoucherSelector({
         </div>
       ) : (
         <>
-          {/* Table — with proper row height */}
-          <div className="overflow-x-auto -mx-5 -mb-5 pr-5">
+          {/* Table */}
+          <div className="border border-neutral-200 rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-bg-border text-xs text-muted bg-bg">
-                  <th className="text-left px-5 py-3 font-medium w-8"></th>
-                  <th className="text-left px-5 py-3 font-medium">Vch No</th>
-                  <th className="text-left px-5 py-3 font-medium">Date</th>
-                  <th className="text-left px-5 py-3 font-medium">Party</th>
-                  <th className="text-right px-5 py-3 font-medium">Amount</th>
+                <tr className="border-b border-neutral-200 bg-neutral-50">
+                  <th className="w-8 text-center px-4 py-3"></th>
+                  <th className="text-left px-4 py-3 font-semibold text-neutral-700">Voucher</th>
+                  <th className="text-left px-4 py-3 font-semibold text-neutral-700">Date</th>
+                  <th className="text-left px-4 py-3 font-semibold text-neutral-700">Party</th>
+                  <th className="text-right px-4 py-3 font-semibold text-neutral-700">Amount</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-neutral-100">
                 {pageVouchers.map((v) => {
                   const isSelected = v.voucherId === selectedId;
                   return (
@@ -128,30 +133,30 @@ function VoucherSelector({
                       key={v.voucherId}
                       onClick={() => onSelect(v.voucherId)}
                       className={clsx(
-                        "border-b border-bg-border/40 cursor-pointer transition-colors duration-150",
+                        "cursor-pointer transition-colors duration-150",
                         isSelected
-                          ? "bg-accent/10 hover:bg-accent/15"
-                          : "hover:bg-bg-hover"
+                          ? "bg-blue-50 hover:bg-blue-100"
+                          : "hover:bg-neutral-50"
                       )}
                     >
-                      <td className="px-5 py-3">
+                      <td className="text-center px-4 py-3">
                         <input
                           type="radio"
                           readOnly
                           checked={isSelected}
-                          className="accent-accent cursor-pointer"
+                          className="accent-blue-500 cursor-pointer"
                         />
                       </td>
-                      <td className="px-5 py-3 font-mono text-xs tabular-nums text-primary font-medium">
+                      <td className="px-4 py-3 font-mono text-xs font-medium text-blue-600">
                         {v.voucherNumber}
                       </td>
-                      <td className="px-5 py-3 text-xs text-muted whitespace-nowrap">
+                      <td className="px-4 py-3 text-sm text-neutral-600 whitespace-nowrap">
                         {fmtDate(v.date)}
                       </td>
-                      <td className="px-5 py-3 text-primary max-w-xs truncate">
+                      <td className="px-4 py-3 text-sm text-neutral-900 truncate max-w-xs">
                         {v.partyName ?? v.partyLedgerId ?? "—"}
                       </td>
-                      <td className="px-5 py-3 text-right font-medium tabular-nums">
+                      <td className="px-4 py-3 text-right text-sm font-semibold text-neutral-900 tabular-nums">
                         {fmtINR(v.totalAmount)}
                       </td>
                     </tr>
@@ -161,13 +166,13 @@ function VoucherSelector({
             </table>
           </div>
 
-          {/* Pagination — with better spacing */}
+          {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-1.5 mt-5 flex-wrap">
+            <div className="flex items-center justify-center gap-2 flex-wrap pt-2">
               <button
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0}
-                className="px-2.5 py-1.5 text-sm rounded-lg border border-bg-border disabled:opacity-40 hover:bg-bg-hover transition-colors font-medium"
+                className="px-3 py-2 text-sm rounded-lg border border-neutral-200 disabled:opacity-40 hover:bg-neutral-100 transition-colors font-medium"
               >
                 ‹
               </button>
@@ -185,10 +190,10 @@ function VoucherSelector({
                     key={pageNum}
                     onClick={() => setPage(pageNum)}
                     className={clsx(
-                      "px-3 py-1.5 text-sm rounded-lg border font-medium transition-colors",
+                      "px-3 py-2 text-sm rounded-lg font-medium transition-colors",
                       page === pageNum
-                        ? "border-accent bg-accent text-white"
-                        : "border-bg-border hover:bg-bg-hover text-muted"
+                        ? "bg-blue-500 text-white shadow-sm"
+                        : "border border-neutral-200 hover:bg-neutral-100 text-neutral-700"
                     )}
                   >
                     {pageNum + 1}
@@ -198,7 +203,7 @@ function VoucherSelector({
               <button
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={page === totalPages - 1}
-                className="px-2.5 py-1.5 text-sm rounded-lg border border-bg-border disabled:opacity-40 hover:bg-bg-hover transition-colors font-medium"
+                className="px-3 py-2 text-sm rounded-lg border border-neutral-200 disabled:opacity-40 hover:bg-neutral-100 transition-colors font-medium"
               >
                 ›
               </button>
@@ -223,45 +228,47 @@ function DiscountBreakdown({
   const allNoDiscount = lines.every((l) => l.discountPct === 0);
 
   return (
-    <div className="section-card">
-      {/* Voucher header — with breathing room */}
-      <div className="mb-5 pb-4 border-b border-bg-border">
-        <div className="font-semibold text-lg text-primary">
+    <div className="card space-y-6">
+      {/* Voucher Header */}
+      <div className="pb-5 border-b border-neutral-200">
+        <div className="font-semibold text-lg text-neutral-900">
           {voucher.partyName ?? voucher.partyLedgerId ?? "—"}
         </div>
-        <div className="text-sm text-muted mt-1.5 space-y-0.5">
+        <div className="text-sm text-neutral-600 mt-2 space-y-1">
           <div>{voucher.voucherType} {voucher.voucherNumber}</div>
           <div className="flex items-center gap-2 text-xs">
             <span>{fmtDate(voucher.date)}</span>
-            <span className="text-muted/50">•</span>
-            <span className="font-mono font-medium text-primary">{fmtINR(voucher.totalAmount)}</span>
+            <span className="text-neutral-400">•</span>
+            <span className="font-mono font-medium text-neutral-900">{fmtINR(voucher.totalAmount)}</span>
           </div>
         </div>
       </div>
 
       {lines.length === 0 ? (
-        <div className="py-12 text-center text-muted text-sm">
+        <div className="py-16 text-center text-neutral-500 text-sm">
           No inventory items found in this voucher
         </div>
       ) : (
         <>
           {/* Group-wise Summary */}
           {result.groupSummaries && result.groupSummaries.length > 0 && (
-            <div className="mb-4 space-y-2">
-              <div className="text-xs font-medium text-muted uppercase tracking-wide">Group Discount Summary</div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+            <div className="space-y-3">
+              <div className="text-xs font-semibold text-neutral-500 uppercase tracking-wide">
+                Group Discount Summary
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 {result.groupSummaries.map((g) => (
-                  <div key={g.categoryId} className="px-3 py-2 rounded-lg border border-bg-border bg-bg/50">
-                    <div className="text-xs font-semibold text-primary truncate mb-1">{g.categoryName}</div>
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="text-muted">{g.totalPackages} pkg{g.totalPackages !== 1 ? 's' : ''}</span>
-                      <span className={g.appliedDiscountPct > 0 ? "text-success font-medium" : "text-muted"}>
+                  <div key={g.categoryId} className="px-4 py-3 rounded-lg border border-neutral-200 bg-neutral-50">
+                    <div className="text-xs font-semibold text-neutral-900 truncate mb-2">{g.categoryName}</div>
+                    <div className="flex items-center justify-between gap-2 text-xs mb-2">
+                      <span className="text-neutral-600">{g.totalPackages} pkg{g.totalPackages !== 1 ? 's' : ''}</span>
+                      <span className={g.appliedDiscountPct > 0 ? "text-green-600 font-semibold" : "text-neutral-500"}>
                         {g.appliedDiscountPct > 0 ? `${g.appliedDiscountPct.toFixed(1)}%` : "—"}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between gap-2 text-2xs text-muted mt-1 pt-1 border-t border-bg-border">
+                    <div className="flex items-center justify-between gap-2 text-xs text-neutral-600 pt-2 border-t border-neutral-200">
                       <span>{fmtINR(g.totalAmount)}</span>
-                      {g.totalDiscount > 0 && <span className="text-success">−{fmtINR(g.totalDiscount)}</span>}
+                      {g.totalDiscount > 0 && <span className="text-green-600 font-medium">−{fmtINR(g.totalDiscount)}</span>}
                     </div>
                   </div>
                 ))}
@@ -269,27 +276,28 @@ function DiscountBreakdown({
             </div>
           )}
 
+          {/* No Discount Alert */}
           {allNoDiscount && (
-            <div className="mb-4 px-4 py-3 bg-warn/10 text-warn text-sm rounded-lg border border-warn/20 font-medium">
+            <div className="px-4 py-3 bg-amber-50 text-amber-900 text-sm rounded-lg border border-amber-200 font-medium">
               No discounts applicable to this invoice
             </div>
           )}
 
-          {/* Table — spacious layout */}
-          <div className="overflow-x-auto -mx-5 -mb-5 pr-5">
+          {/* Items Table */}
+          <div className="border border-neutral-200 rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-bg-border text-xs text-muted bg-bg">
-                  <th className="text-left px-5 py-3 font-medium">Item Name</th>
-                  <th className="text-right px-5 py-3 font-medium">Qty</th>
-                  <th className="text-right px-5 py-3 font-medium">Unit Rate</th>
-                  <th className="text-right px-5 py-3 font-medium">Line ₹</th>
-                  <th className="text-left px-5 py-3 font-medium">Category</th>
-                  <th className="text-center px-5 py-3 font-medium">Disc%</th>
-                  <th className="text-right px-5 py-3 font-medium">Disc ₹</th>
+                <tr className="border-b border-neutral-200 bg-neutral-50">
+                  <th className="text-left px-4 py-3 font-semibold text-neutral-700">Item Name</th>
+                  <th className="text-right px-4 py-3 font-semibold text-neutral-700">Qty</th>
+                  <th className="text-right px-4 py-3 font-semibold text-neutral-700">Unit Rate</th>
+                  <th className="text-right px-4 py-3 font-semibold text-neutral-700">Line ₹</th>
+                  <th className="text-left px-4 py-3 font-semibold text-neutral-700">Category</th>
+                  <th className="text-center px-4 py-3 font-semibold text-neutral-700">Disc%</th>
+                  <th className="text-right px-4 py-3 font-semibold text-neutral-700">Disc ₹</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-neutral-100">
                 {lines.map((line, idx) => {
                   const hasDiscount = line.discountPct > 0;
                   const unitsNotConfigured =
@@ -300,62 +308,62 @@ function DiscountBreakdown({
                     <tr
                       key={idx}
                       className={clsx(
-                        "border-b border-bg-border/40 transition-colors duration-150",
-                        hasDiscount ? "bg-success/8 hover:bg-success/12" : "hover:bg-bg-hover"
+                        "transition-colors duration-150",
+                        hasDiscount ? "bg-green-50 hover:bg-green-100" : "hover:bg-neutral-50"
                       )}
                     >
-                      <td className="px-5 py-3 max-w-xs">
+                      <td className="px-4 py-3 max-w-xs">
                         <div className="flex items-center gap-2">
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <div className={clsx(
-                              "font-medium truncate",
-                              hasDiscount ? "text-primary" : "text-muted"
+                              "font-medium truncate text-sm",
+                              hasDiscount ? "text-neutral-900" : "text-neutral-700"
                             )}>
                               {line.itemName}
                             </div>
-                            <div className="text-2xs text-muted/60 mt-0.5">{line.tierLabel}</div>
+                            <div className="text-xs text-neutral-500 mt-1">{line.tierLabel}</div>
                           </div>
                           {unitsNotConfigured && (
                             <span
                               title="Package unit not configured — discounting on individual units"
-                              className="text-warn flex-shrink-0 cursor-help"
+                              className="text-amber-600 flex-shrink-0 cursor-help"
                             >
                               <AlertTriangle size={14} />
                             </span>
                           )}
                         </div>
                       </td>
-                      <td className="px-5 py-3 text-right tabular-nums text-sm">
+                      <td className="px-4 py-3 text-right text-sm font-medium text-neutral-900 tabular-nums">
                         {fmtNum(line.qtyBase, 0)}
-                        <div className="text-2xs text-muted/60 mt-0.5">
+                        <div className="text-xs text-neutral-500 mt-1">
                           {line.unitsPerPkg > 1 ? `${line.packages} pkg` : "pc"}
                         </div>
                       </td>
-                      <td className="px-5 py-3 text-right font-mono text-sm tabular-nums">
+                      <td className="px-4 py-3 text-right font-mono text-sm text-neutral-700 tabular-nums">
                         {fmtNum(unitRate, 2)}
                       </td>
-                      <td className="px-5 py-3 text-right font-medium tabular-nums text-sm">
+                      <td className="px-4 py-3 text-right text-sm font-semibold text-neutral-900 tabular-nums">
                         {fmtINR(line.lineAmount)}
                       </td>
-                      <td className="px-5 py-3">
+                      <td className="px-4 py-3">
                         <span className={clsx(
-                          "inline-block px-2 py-1 rounded text-xs font-medium whitespace-nowrap",
+                          "inline-block px-2.5 py-1 rounded text-xs font-medium whitespace-nowrap",
                           line.categoryId === "NO_DISCOUNT"
                             ? "bg-neutral-100 text-neutral-600"
-                            : "bg-accent/15 text-accent"
+                            : "bg-blue-100 text-blue-700"
                         )}>
                           {line.categoryName}
                         </span>
                       </td>
                       <td className={clsx(
-                        "px-5 py-3 text-center font-medium tabular-nums",
-                        hasDiscount ? "text-success font-semibold" : "text-muted"
+                        "px-4 py-3 text-center text-sm font-semibold tabular-nums",
+                        hasDiscount ? "text-green-600" : "text-neutral-500"
                       )}>
                         {line.discountPct > 0 ? `${line.discountPct}%` : "—"}
                       </td>
                       <td className={clsx(
-                        "px-5 py-3 text-right font-medium tabular-nums",
-                        hasDiscount ? "text-success font-semibold" : "text-muted"
+                        "px-4 py-3 text-right text-sm font-semibold tabular-nums",
+                        hasDiscount ? "text-green-600" : "text-neutral-500"
                       )}>
                         {hasDiscount ? fmtINR(line.discountAmount) : "—"}
                       </td>
@@ -364,15 +372,15 @@ function DiscountBreakdown({
                 })}
               </tbody>
               <tfoot>
-                <tr className="border-t-2 border-bg-border bg-bg/50 font-semibold text-sm">
-                  <td className="px-5 py-4 text-primary" colSpan={4}>
+                <tr className="border-t-2 border-neutral-200 bg-neutral-50 font-semibold text-sm">
+                  <td className="px-4 py-4 text-neutral-900" colSpan={4}>
                     Total
                   </td>
-                  <td className="px-5 py-4"></td>
-                  <td className="px-5 py-4 text-center text-success">
+                  <td className="px-4 py-4"></td>
+                  <td className="px-4 py-4 text-center text-green-600">
                     {fmtNum(result.effectivePct, 2)}%
                   </td>
-                  <td className="px-5 py-4 text-right tabular-nums text-success text-base">
+                  <td className="px-4 py-4 text-right tabular-nums text-green-600 text-base">
                     {fmtINR(result.totalDiscountAmount)}
                   </td>
                 </tr>
@@ -380,14 +388,19 @@ function DiscountBreakdown({
             </table>
           </div>
 
-          <div className="mt-4 p-3 bg-bg rounded-lg text-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <span className="text-muted">Invoice subtotal (items)</span>
-              <span className="font-mono font-semibold text-primary">{fmtINR(result.totalLineAmount)}</span>
+          {/* Summary Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+            <div className="px-5 py-4 bg-neutral-50 rounded-lg border border-neutral-200">
+              <div className="text-sm text-neutral-600">Invoice subtotal (items)</div>
+              <div className="font-mono font-semibold text-neutral-900 mt-1 text-lg">
+                {fmtINR(result.totalLineAmount)}
+              </div>
             </div>
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mt-2 pt-2 border-t border-bg-border">
-              <span className="text-muted">Total discount applied</span>
-              <span className="font-mono font-semibold text-success">{fmtINR(result.totalDiscountAmount)} ({fmtNum(result.effectivePct, 2)}%)</span>
+            <div className="px-5 py-4 bg-green-50 rounded-lg border border-green-200">
+              <div className="text-sm text-green-700">Total discount applied</div>
+              <div className="font-mono font-semibold text-green-900 mt-1 text-lg">
+                {fmtINR(result.totalDiscountAmount)} ({fmtNum(result.effectivePct, 2)}%)
+              </div>
             </div>
           </div>
         </>
@@ -417,13 +430,11 @@ function EditRulesModal({
   const [itemSearch, setItemSearch] = useState("");
   const [expandedCatId, setExpandedCatId] = useState<string | null>(null);
 
-  // Merged item->category for display
   const mergedMap = useMemo(
     () => ({ ...DEFAULT_ITEM_CATEGORY_MAP, ...localOverrides }),
     [localOverrides]
   );
 
-  // All items to show: static 550 + any extra from loaded data
   const allItems = useMemo(() => {
     const staticKeys = new Set(Object.keys(DEFAULT_ITEM_CATEGORY_MAP));
     const extra = allItemIds.filter((id) => !staticKeys.has(id));
@@ -501,7 +512,6 @@ function EditRulesModal({
     onClose();
   }
 
-  // Close on backdrop click
   const handleBackdrop = useCallback(
     (e: React.MouseEvent) => {
       if (e.target === e.currentTarget) onClose();
@@ -520,24 +530,28 @@ function EditRulesModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-5 border-b border-bg-border flex-shrink-0">
-          <h2 className="text-xl font-bold text-primary">Edit Discount Rules</h2>
-          <button onClick={onClose} className="btn-icon hover:bg-bg-hover rounded-lg transition-colors" aria-label="Close">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-neutral-200 flex-shrink-0">
+          <h2 className="text-xl font-bold text-neutral-900">Edit Discount Rules</h2>
+          <button
+            onClick={onClose}
+            className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-neutral-100 transition-colors"
+            aria-label="Close"
+          >
             <X size={20} />
           </button>
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-0 border-b border-bg-border flex-shrink-0 px-6">
+        <div className="flex gap-0 border-b border-neutral-200 flex-shrink-0 px-6">
           {(["tiers", "items"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setActiveTab(t)}
               className={clsx(
-                "px-1 py-3 text-sm font-medium border-b-2 transition-colors",
+                "px-4 py-3 text-sm font-medium border-b-2 transition-colors",
                 activeTab === t
-                  ? "border-accent text-accent"
-                  : "border-transparent text-muted hover:text-primary"
+                  ? "border-blue-500 text-blue-600"
+                  : "border-transparent text-neutral-600 hover:text-neutral-900"
               )}
             >
               {t === "tiers" ? "Discount Tiers" : "Item Assignments"}
@@ -545,43 +559,43 @@ function EditRulesModal({
           ))}
         </div>
 
-        {/* Body — scrollable with breathing room */}
+        {/* Body */}
         <div className="flex-1 overflow-y-auto p-6">
           {activeTab === "tiers" && (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-4">
               {localCats.map((cat) => {
                 const isExpanded = expandedCatId === cat.id;
                 const isNoDisco = cat.id === "NO_DISCOUNT";
 
                 return (
-                  <div key={cat.id} className="section-card overflow-hidden">
+                  <div key={cat.id} className="border border-neutral-200 rounded-lg overflow-hidden bg-white">
                     {/* Category header */}
                     <div
-                      className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-bg-hover transition-colors"
+                      className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-neutral-50 transition-colors"
                       onClick={() => setExpandedCatId(isExpanded ? null : cat.id)}
                     >
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-3">
                         {isExpanded ? (
-                          <ChevronDown size={14} className="text-muted flex-shrink-0" />
+                          <ChevronDown size={16} className="text-neutral-500 flex-shrink-0" />
                         ) : (
-                          <ChevronRight size={14} className="text-muted flex-shrink-0" />
+                          <ChevronRight size={16} className="text-neutral-500 flex-shrink-0" />
                         )}
-                        <span className="font-medium text-sm text-primary">{cat.name}</span>
-                        <span className="text-xs text-muted">({cat.tiers.length} tiers)</span>
+                        <span className="font-medium text-base text-neutral-900">{cat.name}</span>
+                        <span className="text-xs text-neutral-500">({cat.tiers.length} tiers)</span>
                       </div>
                       <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <button
                           onClick={() => addTier(cat.id)}
-                          className="flex items-center gap-1 px-2.5 py-1 text-xs rounded border border-bg-border hover:bg-bg-hover transition-colors text-muted hover:text-primary"
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors text-neutral-600 font-medium"
                         >
-                          <Plus size={12} /> Add Tier
+                          <Plus size={14} /> Add Tier
                         </button>
                         {!isNoDisco && (
                           <button
                             onClick={() => deleteCategory(cat.id)}
-                            className="flex items-center gap-1 px-2.5 py-1 text-xs rounded border border-danger/30 text-danger hover:bg-danger/10 transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors font-medium"
                           >
-                            <Trash2 size={12} /> Delete
+                            <Trash2 size={14} /> Delete
                           </button>
                         )}
                       </div>
@@ -589,24 +603,24 @@ function EditRulesModal({
 
                     {/* Tier rows */}
                     {isExpanded && (
-                      <div className="border-t border-bg-border">
+                      <div className="border-t border-neutral-200 bg-neutral-50">
                         {cat.tiers.length === 0 ? (
-                          <div className="px-4 py-3 text-xs text-muted italic">
+                          <div className="px-5 py-4 text-sm text-neutral-500 italic">
                             No tiers — items in this category get 0% discount
                           </div>
                         ) : (
                           <>
                             {/* Tier header */}
-                            <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 px-4 py-2 text-xs font-medium text-muted border-b border-bg-border/50 bg-bg">
+                            <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 px-5 py-3 text-xs font-semibold text-neutral-600 border-b border-neutral-200 bg-white">
                               <span>Min Qty (pkgs)</span>
                               <span>Max Qty (blank = unlimited)</span>
                               <span>Discount %</span>
-                              <span className="w-6" />
+                              <span className="w-8" />
                             </div>
                             {cat.tiers.map((tier, ti) => (
                               <div
                                 key={ti}
-                                className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 px-4 py-2 items-center border-b border-bg-border/30 last:border-b-0"
+                                className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 px-5 py-3 items-center border-b border-neutral-100 last:border-b-0"
                               >
                                 <input
                                   type="number"
@@ -634,10 +648,10 @@ function EditRulesModal({
                                 />
                                 <button
                                   onClick={() => removeTier(cat.id, ti)}
-                                  className="w-6 h-6 flex items-center justify-center rounded hover:bg-danger/10 text-danger transition-colors"
+                                  className="w-8 h-8 flex items-center justify-center rounded hover:bg-red-100 text-red-600 transition-colors"
                                   aria-label="Remove tier"
                                 >
-                                  <X size={14} />
+                                  <X size={16} />
                                 </button>
                               </div>
                             ))}
@@ -651,30 +665,30 @@ function EditRulesModal({
 
               <button
                 onClick={addCategory}
-                className="flex items-center justify-center gap-2 py-3 rounded-lg border-2 border-dashed border-bg-border text-muted hover:text-primary hover:border-accent/50 transition-colors text-sm"
+                className="flex items-center justify-center gap-2 py-4 rounded-lg border-2 border-dashed border-neutral-300 text-neutral-600 hover:text-neutral-900 hover:border-blue-400 transition-colors text-sm font-medium"
               >
-                <Plus size={16} /> Add New Category
+                <Plus size={18} /> Add New Category
               </button>
             </div>
           )}
 
           {activeTab === "items" && (
-            <div>
-              <div className="mb-3 flex items-center gap-2">
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
                 <input
                   value={itemSearch}
                   onChange={(e) => setItemSearch(e.target.value)}
                   placeholder="Search items…"
                   className="search-input flex-1"
                 />
-                <span className="text-xs text-muted tabular-nums whitespace-nowrap">
-                  Showing {filteredItems.length} of {allItems.length} items
+                <span className="text-xs text-neutral-600 font-medium whitespace-nowrap">
+                  {filteredItems.length} of {allItems.length}
                 </span>
               </div>
 
-              <div className="section-card overflow-hidden">
+              <div className="border border-neutral-200 rounded-lg overflow-hidden">
                 {/* Header */}
-                <div className="grid grid-cols-2 px-4 py-2.5 text-xs font-medium text-muted border-b border-bg-border bg-bg">
+                <div className="grid grid-cols-2 px-5 py-3 text-xs font-semibold text-neutral-600 border-b border-neutral-200 bg-neutral-50">
                   <span>Item Name</span>
                   <span>Category</span>
                 </div>
@@ -684,12 +698,12 @@ function EditRulesModal({
                   return (
                     <div
                       key={itemId}
-                      className="grid grid-cols-2 px-4 py-2 items-center border-b border-bg-border/30 last:border-b-0 hover:bg-bg-hover"
+                      className="grid grid-cols-2 px-5 py-3 items-center border-b border-neutral-100 last:border-b-0 hover:bg-neutral-50"
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-xs text-primary truncate">{itemId}</span>
+                        <span className="text-xs text-neutral-700 truncate font-medium">{itemId}</span>
                         {isNew && (
-                          <span className="px-1.5 py-0.5 text-2xs bg-info/15 text-info rounded font-medium flex-shrink-0">
+                          <span className="px-2 py-0.5 text-2xs bg-blue-100 text-blue-700 rounded font-semibold flex-shrink-0">
                             NEW
                           </span>
                         )}
@@ -699,7 +713,6 @@ function EditRulesModal({
                         onChange={(e) => {
                           const newCat = e.target.value;
                           setLocalOverrides((ov) => {
-                            // Only store if different from static default
                             const staticDefault = DEFAULT_ITEM_CATEGORY_MAP[itemId] ?? "No Discount";
                             if (newCat === staticDefault) {
                               const { [itemId]: _, ...rest } = ov;
@@ -725,18 +738,24 @@ function EditRulesModal({
         </div>
 
         {/* Modal Footer */}
-        <div className="flex items-center justify-between px-6 py-5 border-t border-bg-border flex-shrink-0">
+        <div className="flex items-center justify-between px-6 py-5 border-t border-neutral-200 flex-shrink-0 bg-neutral-50">
           <button
             onClick={handleReset}
-            className="flex items-center gap-2 px-3.5 py-2.5 text-sm rounded-lg border border-danger/30 text-danger hover:bg-danger/10 transition-colors font-medium"
+            className="flex items-center gap-2 px-4 py-2.5 text-sm rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors font-medium"
           >
             <RotateCcw size={16} /> Reset to Defaults
           </button>
           <div className="flex items-center gap-3">
-            <button onClick={onClose} className="btn-secondary text-sm px-4 py-2.5">
+            <button
+              onClick={onClose}
+              className="px-4 py-2.5 text-sm rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-100 transition-colors font-medium"
+            >
               Cancel
             </button>
-            <button onClick={handleSave} className="btn-primary text-sm px-4 py-2.5">
+            <button
+              onClick={handleSave}
+              className="px-4 py-2.5 text-sm rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition-colors font-medium shadow-sm"
+            >
               Save Changes
             </button>
           </div>
@@ -775,7 +794,6 @@ export default function Discounts() {
     );
   }, [selectedVoucher, data, categories, itemCategoryOverrides]);
 
-  // All item IDs for the modal item assignments tab
   const allItemIds = useMemo(
     () => (data ? Array.from(data.items.keys()) : []),
     [data]
@@ -796,24 +814,24 @@ export default function Discounts() {
 
   return (
     <div className="page-section">
-      {/* Page Header — with proper spacing */}
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
         <div>
           <h1 className="page-title">Discounts</h1>
-          <p className="text-sm text-muted mt-2">
-            Calculate automatic discounts for Sales invoices
+          <p className="text-sm text-neutral-600 mt-2">
+            Calculate automatic discounts for Sales invoices based on quantity tiers
           </p>
         </div>
         <button
           onClick={() => setShowModal(true)}
-          className="btn-secondary flex items-center gap-2 px-4 py-2.5 font-medium flex-shrink-0"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-white text-neutral-900 border border-neutral-200 hover:bg-neutral-50 transition-colors font-medium shadow-sm"
         >
           <Pencil size={16} /> Edit Rules
         </button>
       </div>
 
       {/* Voucher Selector */}
-      <div className="mb-6">
+      <div className="mb-8">
         <VoucherSelector
           vouchers={vouchers}
           selectedId={selectedVoucherId}
@@ -823,7 +841,7 @@ export default function Discounts() {
 
       {/* Discount Breakdown */}
       {selectedVoucher && discountResult && (
-        <div className="mb-6">
+        <div className="mb-8">
           <DiscountBreakdown
             voucher={selectedVoucher}
             lines={discountResult.lines}
