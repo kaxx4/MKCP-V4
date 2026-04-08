@@ -42,6 +42,8 @@ const VOUCHER_TYPE_MAP: Record<string, VoucherType> = {
   creditnote: "Credit Note",
   "stock journal": "Stock Journal",
   stockjournal: "Stock Journal",
+  "delivery note": "Delivery Note",
+  deliverynote: "Delivery Note",
 };
 
 export function parseTransactions(raw: unknown): TxParseResult {

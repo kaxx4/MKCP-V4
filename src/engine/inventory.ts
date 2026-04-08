@@ -69,6 +69,8 @@ function _applyVoucherToBuckets(
     } else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") {
       if (qty > 0) monthlyIn[ym] = (monthlyIn[ym] ?? 0) + qty;
       else monthlyOut[ym] = (monthlyOut[ym] ?? 0) + Math.abs(qty);
+    } else if (v.voucherType === "Delivery Note") {
+      monthlyOut[ym] = (monthlyOut[ym] ?? 0) + qty;
     }
   }
 }
@@ -83,6 +85,7 @@ function _applyVoucherToStock(v: CanonicalVoucher, itemId: string, running: numb
     else if (v.voucherType === "Purchase") running += qty;
     else if (v.voucherType === "Debit Note") running -= qty;
     else if (v.voucherType === "Stock Journal" || v.voucherType === "Journal") running += qty;
+    else if (v.voucherType === "Delivery Note") running -= qty;
   }
   return running;
 }

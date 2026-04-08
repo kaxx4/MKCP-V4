@@ -1,110 +1,101 @@
 import { useEffect, useRef } from "react";
 import { useTallyStore } from "../store/tallyStore";
 import { useDataStore } from "../store/dataStore";
-import { fullSync } from "../api/tallyApi";
-import { parseMasters } from "../parser/masterParser";
+import { syncDayBook } from "../api/tallyApi";
 import { parseTransactions } from "../parser/transactionParser";
-import { saveData } from "../db/idb";
-import { serializeParsedData } from "../utils/serialize";
-import type { ParsedData } from "../types/canonical";
+import { saveData, loadData, createBackup } from "../db/idb";
+import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
 import { useToast } from "../components/Toast";
 
+const INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+
+function todayStr(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+}
+
 /**
- * Auto-sync hook - runs periodic Tally sync in the background
- * Only runs if isConnected && autoSyncMinutes > 0
+ * Silently syncs today's vouchers from Tally every 30 minutes.
+ * Only runs when Tally is connected. No full-sync — daybook only.
  */
 export function useTallyAutoSync() {
-  const {
-    isConnected,
-    isSyncing,
-    autoSyncMinutes,
-    companyName,
-    fyFromDate,
-    fyToDate,
-    setLastSync,
-    setSyncing,
-  } = useTallyStore();
-
+  const { isConnected, isSyncing, companyName, setSyncing, setLastSync, setLastVoucherDate, setLastVouchersSync } =
+    useTallyStore();
   const { mergeData } = useDataStore();
   const { toast } = useToast();
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const isSyncingRef = useRef(isSyncing);
   useEffect(() => { isSyncingRef.current = isSyncing; }, [isSyncing]);
 
+  const isConnectedRef = useRef(isConnected);
+  useEffect(() => { isConnectedRef.current = isConnected; }, [isConnected]);
+
+  const companyRef = useRef(companyName);
+  useEffect(() => { companyRef.current = companyName; }, [companyName]);
+
   useEffect(() => {
-    // Clear any existing interval
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+    const runSync = async () => {
+      if (!isConnectedRef.current || isSyncingRef.current || !companyRef.current.trim()) return;
 
-    // Only set up auto-sync if enabled and connected
-    if (!isConnected || autoSyncMinutes <= 0 || !companyName.trim()) {
-      return;
-    }
-
-    const runAutoSync = async () => {
-      // Skip if already syncing
-      if (isSyncingRef.current) {
-        console.log("[auto-sync] Skipping - sync already in progress");
-        return;
-      }
+      const today = todayStr();
+      console.log(`[auto-sync] Today's daybook sync — ${today}`);
+      setSyncing(true);
 
       try {
-        console.log(`[auto-sync] Starting auto-sync for "${companyName}"`);
-        setSyncing(true);
+        const result = await syncDayBook(companyRef.current, today, today, "daily");
 
-        const result = await fullSync(companyName, fyFromDate, fyToDate);
-
-        // Parse using existing parsers
-        const mastersResult = parseMasters(result.masters);
-        const txResult = parseTransactions(result.transactions);
-
-        // Build ParsedData
-        const data: ParsedData = {
-          company: mastersResult.company,
-          items: mastersResult.items,
-          ledgers: mastersResult.ledgers,
-          vouchers: txResult.vouchers,
-          importedAt: new Date().toISOString(),
-          sourceFiles: ["tally-auto-sync"],
-          warnings: [...mastersResult.warnings, ...txResult.warnings],
-        };
-
-        // Merge and save
-        mergeData(data);
-        const merged = useDataStore.getState().data!;
-        if (merged) {
-          await saveData("parsedData", serializeParsedData(merged));
+        if (!result.data?.tallymessage?.length) {
+          console.log("[auto-sync] No vouchers for today yet.");
+          return;
         }
 
-        setLastSync(new Date().toISOString());
-        console.log(`[auto-sync] Complete: ${result.stats.vouchers} vouchers, ${result.stats.stockItems} items`);
+        const parsed = parseTransactions(result.data);
+        if (!parsed.vouchers.length) return;
 
-        toast(
-          `Auto-sync complete: ${result.stats.vouchers} vouchers`,
-          "success"
-        );
+        const existingRaw = await loadData<unknown>("parsedData");
+        const existing = existingRaw ? deserializeParsedData(existingRaw) : null;
+        if (existing) await createBackup(existingRaw, "pre-auto-sync");
+
+        mergeData({
+          company: existing?.company ?? { name: companyRef.current, fyStartMonth: 4 },
+          items: existing?.items ?? new Map(),
+          ledgers: existing?.ledgers ?? new Map(),
+          vouchers: parsed.vouchers,
+          importedAt: new Date().toISOString(),
+          sourceFiles: ["tally-auto-sync"],
+          warnings: parsed.warnings,
+        });
+
+        const merged = useDataStore.getState().data!;
+        await saveData("parsedData", serializeParsedData(merged));
+
+        const now = new Date().toISOString();
+        setLastSync(now);
+        setLastVouchersSync(now);
+
+        const dates = parsed.vouchers.map((v) => v.date).filter(Boolean).sort();
+        if (dates.length) setLastVoucherDate(dates[dates.length - 1]!);
+
+        toast(`Auto-synced ${parsed.vouchers.length} voucher(s) from today.`, "success");
+        console.log(`[auto-sync] Done — ${parsed.vouchers.length} vouchers merged.`);
       } catch (err: any) {
-        console.error("[auto-sync] Failed:", err.message);
-        toast(`Auto-sync failed: ${err.message}`, "error");
+        console.warn("[auto-sync] Failed:", err.message);
+        // Silent failure — don't toast errors on background sync
       } finally {
         setSyncing(false);
       }
     };
 
-    // Set up interval
-    const intervalMs = autoSyncMinutes * 60 * 1000;
-    console.log(`[auto-sync] Enabled: every ${autoSyncMinutes} minutes`);
+    // Run once immediately on mount (after a short delay to let the app settle)
+    const initialTimer = setTimeout(runSync, 10_000);
 
-    intervalRef.current = setInterval(runAutoSync, intervalMs);
+    // Then every 30 minutes
+    const interval = setInterval(runSync, INTERVAL_MS);
 
-    // Cleanup on unmount
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+      clearTimeout(initialTimer);
+      clearInterval(interval);
     };
-  }, [isConnected, autoSyncMinutes, companyName, fyFromDate, fyToDate]);
+  }, []); // stable — reads via refs, no deps needed
 }

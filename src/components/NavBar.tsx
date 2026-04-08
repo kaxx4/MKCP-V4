@@ -9,6 +9,8 @@ import {
   Settings,
   Pencil,
   AlertTriangle,
+  Truck,
+  Tag,
   ChevronLeft,
   ChevronRight,
   Bike,
@@ -17,6 +19,7 @@ import {
   MoreHorizontal,
   X,
   RefreshCw,
+  Map,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
@@ -47,6 +50,9 @@ const NAV_ITEMS = [
   { path: "/orders", icon: ShoppingCart, label: "Orders" },
   { path: "/alerts", icon: AlertTriangle, label: "Alerts" },
   { path: "/invoices", icon: FileText, label: "Invoices" },
+  { path: "/pending-orders", icon: Truck, label: "Pending Orders" },
+  { path: "/price-list", icon: Tag, label: "Price List" },
+  { path: "/routes", icon: Map, label: "Routes" },
   { path: "/reports", icon: BarChart2, label: "Reports" },
   { path: "/edit", icon: Pencil, label: "Edit Units" },
   { path: "/settings", icon: Settings, label: "Settings" },
