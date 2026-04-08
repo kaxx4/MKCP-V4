@@ -1,11 +1,10 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronUp, Download, Upload, FileText, FileDown } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, Upload, FileText } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useUIStore } from "../store/uiStore";
-import { useDiscountStore } from "../store/discountStore";
 import { computeOutstandingInvoices, type InvoiceRecord } from "../engine/financial";
 import { fmtINR, fmtDate } from "../utils/format";
 
@@ -46,10 +45,6 @@ export default function Invoices() {
     if (inv.agingBucket === "current") return "text-success bg-success/10";
     if (inv.agingBucket === "1-30") return "text-warn bg-warn/10";
     return "text-danger bg-danger/10";
-  }
-
-  function exportPurchasePDFs() {
-    // TODO: Implement purchase PDF export when purchasePDFExporter is available
   }
 
   function exportCSV() {
@@ -110,11 +105,6 @@ export default function Invoices() {
       <div className="page-header">
         <h1 className="page-title">Invoices</h1>
         <div className="flex gap-2">
-          {typeFilter !== "Sales" && (
-            <button onClick={exportPurchasePDFs} className="btn-secondary btn-sm">
-              <FileDown size={14} />Export PDFs
-            </button>
-          )}
           <button onClick={exportCSV} className="btn-secondary btn-sm">
             <Download size={14} />Export CSV
           </button>
@@ -173,71 +163,49 @@ export default function Invoices() {
   );
 }
 
-/** Discount-aware expanded detail for a voucher */
+/** Expanded voucher detail */
 function VoucherDetail({ voucher, data }: {
   voucher: import("../types/canonical").CanonicalVoucher;
   data: import("../types/canonical").ParsedData;
 }) {
-  const { getDiscount, itemAssignments } = useDiscountStore();
-
-  const invLines = voucher.lines.filter(l => l.type === "inventory" && l.itemId);
+  const invLines = voucher.lines.filter(l => l.type === "inventory");
   const ledgerLines = voucher.lines.filter(l => l.type === "ledger");
 
-  let totalSubtotal = 0;
-  let totalDiscount = 0;
-
-  const invRows = invLines.map((line, i) => {
-    const item = line.itemId ? data.items.get(line.itemId) : null;
-    const name = item?.name ?? line.itemId ?? "";
-    const qtyBase = line.qtyBase ?? 0;
-    const unitsPerPkg = item?.unitsPerPkg ?? 1;
-    const qtyPkg = unitsPerPkg > 0 ? qtyBase / unitsPerPkg : qtyBase;
-    const qtyPkgRounded = Math.round(qtyPkg);
-    const subtotal = line.lineAmount ?? (qtyBase * (line.ratePerBase ?? 0));
-    const catName = line.itemId ? itemAssignments[line.itemId.toUpperCase()] : undefined;
-    const discPct = line.itemId ? getDiscount(line.itemId, qtyPkgRounded) : 0;
-    const discAmt = subtotal * (discPct / 100);
-    const net = subtotal - discAmt;
-    totalSubtotal += subtotal;
-    totalDiscount += discAmt;
-    return (
-      <div key={i} className="flex gap-2 items-baseline text-xs tabular-nums">
-        <span className="text-muted w-8 flex-shrink-0">Inv</span>
-        <span className="truncate flex-1 min-w-0" title={name}>{name}</span>
-        <span className="text-muted flex-shrink-0">{qtyPkgRounded} pkg</span>
-        <span className="flex-shrink-0">{fmtINR(subtotal)}</span>
-        {discPct > 0 ? (
-          <>
-            <span className="text-warn-700 flex-shrink-0">−{discPct}%</span>
-            <span className="font-semibold text-success-700 flex-shrink-0">{fmtINR(net)}</span>
-          </>
-        ) : (
-          <span className="text-muted flex-shrink-0 text-[10px]">{catName ? "0%" : "no cat."}</span>
-        )}
-      </div>
-    );
-  });
-
   return (
-    <div className="text-xs space-y-1.5">
-      {invRows}
-      {invLines.length > 0 && totalDiscount > 0 && (
-        <div className="flex justify-between pt-1 border-t border-neutral-200 font-medium">
-          <span className="text-muted">Total discount</span>
-          <span className="text-warn-700">−{fmtINR(totalDiscount)}</span>
-          <span className="text-success-700">{fmtINR(totalSubtotal - totalDiscount)}</span>
-        </div>
+    <div className="text-xs space-y-1">
+      {invLines.length > 0 && (
+        <>
+          <div className="text-muted font-medium mb-1">Items</div>
+          {invLines.map((line, i) => {
+            const item = line.itemId ? data.items.get(line.itemId) : null;
+            const name = item?.name ?? line.itemId ?? "Unknown";
+            const qtyBase = line.qtyBase ?? 0;
+            const subtotal = line.lineAmount ?? 0;
+            return (
+              <div key={i} className="flex items-center gap-2 tabular-nums text-primary">
+                <span className="truncate flex-1" title={name}>{name}</span>
+                <span className="text-muted flex-shrink-0">{qtyBase} {item?.baseUnit ?? ""}</span>
+                <span className="flex-shrink-0">{fmtINR(subtotal)}</span>
+              </div>
+            );
+          })}
+        </>
       )}
-      {ledgerLines.map((line, i) => {
-        const ledgerName = line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
-        return (
-          <div key={`l${i}`} className="flex gap-4 tabular-nums text-xs text-muted">
-            <span className="w-8 flex-shrink-0">{line.isDebit ? "Dr" : "Cr"}</span>
-            <span className="truncate flex-1" title={ledgerName}>{ledgerName}</span>
-            <span className="ml-auto">{fmtINR(line.amount ?? 0)}</span>
-          </div>
-        );
-      })}
+      {ledgerLines.length > 0 && (
+        <>
+          <div className="text-muted font-medium mt-2 mb-1">Ledgers</div>
+          {ledgerLines.map((line, i) => {
+            const ledgerName = line.ledgerId ? (data.ledgers.get(line.ledgerId)?.name ?? line.ledgerId) : "";
+            return (
+              <div key={i} className="flex gap-4 tabular-nums text-primary">
+                <span className="text-muted w-6">{line.isDebit ? "Dr" : "Cr"}</span>
+                <span className="truncate flex-1">{ledgerName}</span>
+                <span>{fmtINR(line.amount ?? 0)}</span>
+              </div>
+            );
+          })}
+        </>
+      )}
     </div>
   );
 }
@@ -320,10 +288,9 @@ function InvoiceTable({ filtered, expandedId, setExpandedId, agingColor, data }:
                     </div>
                   </div>
 
-                  {/* Expanded voucher detail */}
+                  {/* Expanded voucher detail - full width, no grid */}
                   {isExpanded && voucher && (
                     <div className="bg-bg border-b border-bg-border px-6 py-4">
-                      <p className="text-xs font-medium text-muted mb-2">Voucher Lines</p>
                       <VoucherDetail voucher={voucher} data={data} />
                     </div>
                   )}
@@ -390,7 +357,6 @@ function MobileInvoiceCards({ filtered, expandedId, setExpandedId, agingColor, d
 
             {isExpanded && voucher && (
               <div className="border-t border-bg-border bg-bg px-3 py-2">
-                <p className="text-[10px] text-muted font-medium mb-1.5">Voucher Lines</p>
                 <VoucherDetail voucher={voucher} data={data} />
               </div>
             )}

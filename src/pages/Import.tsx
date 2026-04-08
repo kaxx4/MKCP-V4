@@ -11,7 +11,8 @@ import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
 import type { ParsedData, ImportWarning } from "../types/canonical";
 import { useToast } from "../components/Toast";
 import { generatePredictions, scorePredictions, type PredictionSnapshot } from "../engine/prediction";
-import { checkTallyHealth, fullSync, syncMasters, syncDayBook, detectCompany, subscribeToProgress, type TallySyncResult } from "../api/tallyApi";
+import { checkTallyHealth, syncMasters, syncDayBook, detectCompany, subscribeToProgress } from "../api/tallyApi";
+import { fmtDateForInput, fmtFYRange } from "../utils/format";
 
 interface ImportReport {
   items: number;
@@ -29,24 +30,6 @@ interface ImportReport {
 
 type DropZone = "masters" | "transactions";
 type TabMode = "live" | "upload";
-
-/**
- * Convert YYYYMMDD to YYYY-MM-DD for HTML5 date input
- */
-function formatDateForInput(yyyymmdd: string): string {
-  if (!yyyymmdd || yyyymmdd.length !== 8) return '';
-  return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
-}
-
-/**
- * Format FY date range for display
- */
-function formatFYRange(from: string, to: string): string {
-  if (!from || !to) return 'Not set';
-  const fromYear = from.slice(0, 4);
-  const toYear = to.slice(0, 4);
-  return `FY ${fromYear}-${toYear.slice(2)}`;
-}
 
 /** Cap a YYYYMMDD date at today — prevents syncing future dates from Tally */
 function capToday(yyyymmdd: string): string {
@@ -139,115 +122,6 @@ export default function ImportPage() {
     } catch (err) {
       setConnected(false);
       addLog(`⚠ Connection check failed: ${err}`);
-    }
-  }
-
-  async function handleTallySync() {
-    if (!companyName.trim()) {
-      toast("Please enter company name", "warn");
-      return;
-    }
-
-    setSyncing(true);
-    setDebugLog([]);
-    try {
-      addLog(`Starting sync for "${companyName}"...`);
-      addLog("Note: First sync of a large company can take 2-5 minutes. Watch the proxy terminal for progress.");
-      const t0 = Date.now();
-
-      // Call full sync
-      const result: TallySyncResult = await fullSync(companyName, fyFromDate, capToday(fyToDate));
-
-      // Show partial errors
-      if (result.errors) {
-        for (const err of result.errors) addLog(`⚠  ${err}`);
-      }
-
-      // Show error if sync failed
-      if (!result.success && result.error) {
-        addLog(`⚠ ${result.error}`);
-      }
-
-      // Check if we actually got data (may be empty if AlterID indicates no changes)
-      if (result.stats.stockItems === 0 && result.stats.ledgers === 0 && result.stats.vouchers === 0) {
-        // Check if server said "no changes" via incremental AlterID check
-        const noChanges = result.stats.elapsedSeconds === 0 && result.success;
-        if (noChanges) {
-          addLog("✓ No changes detected since last sync (AlterID match) — skipped");
-          toast("Already up to date — no changes in Tally", "success");
-        } else {
-          addLog("ERROR: Tally returned zero data!");
-          addLog("Check: 1) Company name exact match  2) Company loaded in Tally  3) FY dates correct");
-          addLog("Test: Open a new terminal and run:");
-          addLog(`  curl -X POST http://localhost:3100/api/tally/debug -H "Content-Type: application/json" -d "{\\"company\\":\\"${companyName}\\",\\"test\\":\\"stock\\"}"`);
-          toast("Sync returned empty data — check log", "error");
-        }
-        setSyncing(false);
-        return;
-      }
-
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      addLog(`✓ Data fetched in ${elapsed}s`);
-      addLog(`  ${result.stats.stockGroups} stock groups`);
-      addLog(`  ${result.stats.units} units`);
-      addLog(`  ${result.stats.stockItems} stock items`);
-      addLog(`  ${result.stats.ledgers} ledgers`);
-      addLog(`  ${result.stats.vouchers} vouchers`);
-
-      // Parse using EXISTING parsers
-      addLog("Parsing masters...");
-      const mastersResult = parseMasters(result.masters);
-      addLog("Parsing transactions...");
-      const txResult = parseTransactions(result.transactions);
-
-      // Build ParsedData
-      const data: ParsedData = {
-        company: mastersResult.company,
-        items: mastersResult.items,
-        ledgers: mastersResult.ledgers,
-        vouchers: txResult.vouchers,
-        importedAt: new Date().toISOString(),
-        sourceFiles: ["tally-live-sync"],
-        warnings: [...mastersResult.warnings, ...txResult.warnings],
-      };
-
-      addLog("✓ Parsing complete");
-
-      // Reconciliation check
-      addLog("Running reconciliation checks...");
-      const reconErrors: string[] = [];
-      for (const v of data.vouchers) {
-        const ledgerLines = v.lines.filter((l) => l.type === "ledger");
-        const debits = ledgerLines.filter((l) => l.isDebit).reduce((s, l) => s + (l.amount ?? 0), 0);
-        const credits = ledgerLines.filter((l) => !l.isDebit).reduce((s, l) => s + (l.amount ?? 0), 0);
-        if (Math.abs(debits - credits) > 1 && ledgerLines.length > 1) {
-          reconErrors.push(
-            `${v.voucherType} ${v.voucherNumber} (${v.date}): Dr=${debits.toFixed(0)} Cr=${credits.toFixed(0)}`
-          );
-        }
-      }
-      addLog(`Found ${reconErrors.length} reconciliation issues`);
-
-      setPendingData(data);
-      setReport({
-        items: data.items.size,
-        ledgers: data.ledgers.size,
-        vouchers: data.vouchers.length,
-        stockGroups: mastersResult.stockGroups.length,
-        units: mastersResult.units.length,
-        warnings: data.warnings,
-        reconErrors: reconErrors.slice(0, 20),
-        mergeMode: false,
-      });
-
-      setLastSync(new Date().toISOString());
-      addLog("✓ Sync complete — review summary below");
-    } catch (err: any) {
-      addLog(`ERROR: ${err.message || err}`);
-      toast(`Sync failed: ${err.message || err}`, "error");
-      setConnected(false);
-    } finally {
-      setSyncing(false);
     }
   }
 
@@ -1073,7 +947,7 @@ export default function ImportPage() {
                 </label>
                 <input
                   type="date"
-                  value={formatDateForInput(fyFromDate)}
+                  value={fmtDateForInput(fyFromDate)}
                   onChange={(e) => {
                     const yyyymmdd = e.target.value.replace(/-/g, '');
                     setFyDates(yyyymmdd, fyToDate);
@@ -1087,7 +961,7 @@ export default function ImportPage() {
                 </label>
                 <input
                   type="date"
-                  value={formatDateForInput(fyToDate)}
+                  value={fmtDateForInput(fyToDate)}
                   onChange={(e) => {
                     const yyyymmdd = e.target.value.replace(/-/g, '');
                     setFyDates(fyFromDate, yyyymmdd);
@@ -1099,7 +973,7 @@ export default function ImportPage() {
             {/* Date range summary + Reset + Chunk mode */}
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex-1 alert alert-info text-xs">
-                <strong>Range:</strong> {fyFromDate.slice(6,8)}/{fyFromDate.slice(4,6)}/{fyFromDate.slice(0,4)} — {fyToDate.slice(6,8)}/{fyToDate.slice(4,6)}/{fyToDate.slice(0,4)} ({formatFYRange(fyFromDate, fyToDate)})
+                <strong>Range:</strong> {fyFromDate.slice(6,8)}/{fyFromDate.slice(4,6)}/{fyFromDate.slice(0,4)} — {fyToDate.slice(6,8)}/{fyToDate.slice(4,6)}/{fyToDate.slice(0,4)} ({fmtFYRange(fyFromDate, fyToDate)})
                 {fyFromDate === fyToDate && <span className="text-danger ml-2 font-bold">⚠ SINGLE DAY — click Reset FY!</span>}
                 {fyFromDate > fyToDate && <span className="text-danger ml-2 font-bold">⚠ FROM after TO — click Reset FY!</span>}
               </div>

@@ -66,31 +66,34 @@ export class SyncOrchestrator {
     if (bsReport) console.log(`[MASTERS] ✓ BS: Capital=${(bsReport.capitalAccount / 100000).toFixed(1)}L`);
     console.log(`[MASTERS] ✓ Parallel: ${groups.tallymessage.length} groups, ${units.tallymessage.length} units, ${godowns.tallymessage.length} godowns, ${costCentres.tallymessage.length} cost centres`);
 
-    // Stock Items
+    // Stock Items + Ledgers — fetch in parallel (independent requests)
     let stocks = { tallymessage: [] as any[] };
-    if (!signal?.aborted) {
-      emit("masters", 2, 8, "Fetching stock items (large)...");
-      try {
-        const seqDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "StockItem")!;
-        const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(seqDef, company), seqDef.timeout, false, 1, signal);
-        stocks = convertStockItems(xml);
-        console.log(`[MASTERS] ✓ ${stocks.tallymessage.length} stock items`);
-      } catch (e: any) {
-        if (!e.message?.includes("Aborted")) { errors.push(`Stock items: ${e.message}`); }
-      }
-    }
-
-    // Ledgers
     let ledgers = { tallymessage: [] as any[] };
     if (!signal?.aborted) {
-      emit("masters", 3, 8, "Fetching ledgers (large)...");
-      try {
-        const seqDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "Ledger")!;
-        const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(seqDef, company), seqDef.timeout, false, 1, signal);
-        ledgers = convertLedgers(xml);
+      emit("masters", 2, 8, "Fetching stock items + ledgers in parallel (large)...");
+      const stocksDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "StockItem")!;
+      const ledgersDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "Ledger")!;
+      const [stocksRes, ledgersRes] = await Promise.allSettled([
+        (async () => {
+          const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(stocksDef, company), stocksDef.timeout, false, 1, signal);
+          return convertStockItems(xml);
+        })(),
+        (async () => {
+          const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(ledgersDef, company), ledgersDef.timeout, false, 1, signal);
+          return convertLedgers(xml);
+        })(),
+      ]);
+      if (stocksRes.status === "fulfilled") {
+        stocks = stocksRes.value;
+        console.log(`[MASTERS] ✓ ${stocks.tallymessage.length} stock items`);
+      } else if (!stocksRes.reason?.message?.includes("Aborted")) {
+        errors.push(`Stock items: ${stocksRes.reason?.message}`);
+      }
+      if (ledgersRes.status === "fulfilled") {
+        ledgers = ledgersRes.value;
         console.log(`[MASTERS] ✓ ${ledgers.tallymessage.length} ledgers`);
-      } catch (e: any) {
-        if (!e.message?.includes("Aborted")) { errors.push(`Ledgers: ${e.message}`); }
+      } else if (!ledgersRes.reason?.message?.includes("Aborted")) {
+        errors.push(`Ledgers: ${ledgersRes.reason?.message}`);
       }
     }
 
@@ -160,9 +163,13 @@ export class SyncOrchestrator {
 
     const voucherDef = TRANSACTION_COLLECTIONS[0];
 
-    for (let i = 0; i < chunks.length; i++) {
-      if (signal?.aborted) { console.log("[DAYBOOK] Aborted — stopping"); break; }
-      const chunk = chunks[i];
+    // Concurrency-limited parallel fetch — 3 chunks at a time.
+    // Tally is single-threaded but can queue requests; 3 concurrent keeps throughput
+    // high without overwhelming it. Results are merged in order after each wave.
+    const CONCURRENCY = 3;
+
+    const processChunk = async (chunk: typeof chunks[0], i: number): Promise<void> => {
+      if (signal?.aborted) return;
       const chunkT0 = Date.now();
 
       onProgress?.({
@@ -184,12 +191,13 @@ export class SyncOrchestrator {
       } catch (e: any) {
         const isTimeout = e.message?.includes("timeout") || e.message?.includes("TIMEOUT");
 
-        // Auto-fallback: timeout → weekly sub-chunks
+        // Auto-fallback: timeout → weekly sub-chunks (sequential within the fallback)
         if (isTimeout && strategy !== "daily" && chunk.from !== chunk.to) {
           console.log(`[DAYBOOK] ⚡ ${chunk.label} timed out — auto-splitting into weekly sub-chunks...`);
           const subChunks = getWeeklyChunks(chunk.from, chunk.to);
           let subTotal = 0;
           for (const sub of subChunks) {
+            if (signal?.aborted) break;
             try {
               const subVouchers = await this._fetchVoucherChunk(company, sub.from, sub.to, sub.label, voucherDef.timeout, signal);
               subTotal += this._collectVouchers(subVouchers, sub.label, allVouchers, seenGuids);
@@ -207,6 +215,13 @@ export class SyncOrchestrator {
           console.error(`[DAYBOOK] ✗ ${chunk.label}: ${e.message}`);
         }
       }
+    };
+
+    // Process chunks in waves of CONCURRENCY
+    for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+      if (signal?.aborted) { console.log("[DAYBOOK] Aborted — stopping"); break; }
+      const wave = chunks.slice(i, i + CONCURRENCY);
+      await Promise.all(wave.map((chunk, j) => processChunk(chunk, i + j)));
     }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
