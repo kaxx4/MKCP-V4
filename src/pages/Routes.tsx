@@ -12,7 +12,17 @@ import {
   getDistanceZone,
   type StationData,
 } from "../data/stationData";
+import { useDataStore } from "../store/dataStore";
 import "leaflet/dist/leaflet.css";
+
+// Inject beacon pulse keyframe once
+const BEACON_STYLE = `@keyframes beacon-pulse{0%{transform:scale(1);opacity:0.25}70%{transform:scale(2.4);opacity:0}100%{transform:scale(2.4);opacity:0}}`;
+if (typeof document !== "undefined" && !document.getElementById("beacon-pulse-style")) {
+  const s = document.createElement("style");
+  s.id = "beacon-pulse-style";
+  s.textContent = BEACON_STYLE;
+  document.head.appendChild(s);
+}
 
 const GODOWN_ORIGIN = "B20+KMDA+Kona+Truck+Terminal+Howrah+West+Bengal+India";
 
@@ -38,6 +48,25 @@ function makeDotIcon(color: string, selected: boolean) {
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
     popupAnchor: [0, -(size / 2 + 4)],
+  });
+}
+
+function makeBeaconIcon(color: string, selected: boolean) {
+  const dot = selected ? 18 : 13;
+  const ring = dot + 14;
+  const offset = (ring - dot) / 2;
+  const border = selected ? "3px solid #fff" : "2px solid rgba(255,255,255,0.85)";
+  const shadow = selected ? "0 2px 8px rgba(0,0,0,0.5)" : "0 1px 4px rgba(0,0,0,0.3)";
+  return L.divIcon({
+    className: "",
+    html: `
+      <div style="position:relative;width:${ring}px;height:${ring}px;">
+        <div style="position:absolute;inset:0;border-radius:50%;background:${color};opacity:0.25;animation:beacon-pulse 1.6s ease-out infinite;"></div>
+        <div style="position:absolute;top:${offset}px;left:${offset}px;width:${dot}px;height:${dot}px;border-radius:50%;background:${color};border:${border};box-shadow:${shadow};"></div>
+      </div>`,
+    iconSize: [ring, ring],
+    iconAnchor: [ring / 2, ring / 2],
+    popupAnchor: [0, -(ring / 2 + 4)],
   });
 }
 
@@ -76,10 +105,35 @@ export default function Routes() {
   const [zoneFilter, setZoneFilter] = useState<Zone>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  const { data } = useDataStore();
+
+  // Build map of stationId → pending delivery note count
+  const pendingCountMap = useMemo<Map<string, number>>(() => {
+    if (!data) return new Map();
+    const deliveryNotes = data.vouchers.filter(
+      (v) => v.voucherType === "Delivery Note" && !v.isCancelled && !v.isOptional
+    );
+    const result = new Map<string, number>();
+    for (const v of deliveryNotes) {
+      if (!v.partyName) continue;
+      const party = v.partyName.toLowerCase();
+      for (const station of STATIONS) {
+        if (station.parties.some((p) => p.toLowerCase() === party)) {
+          result.set(station.id, (result.get(station.id) ?? 0) + 1);
+          break;
+        }
+      }
+    }
+    return result;
+  }, [data]);
+
+  const pendingStationIds = useMemo(() => new Set(pendingCountMap.keys()), [pendingCountMap]);
+
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
   const onSelectRef = useRef<(id: string) => void>(() => {});
+  const pendingIdsRef = useRef<Set<string>>(new Set());
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -107,10 +161,11 @@ export default function Routes() {
     [selectedId]
   );
 
-  // Keep onSelectRef in sync so marker click handlers don't need re-binding
+  // Keep refs in sync — markers read these without needing re-binding
   onSelectRef.current = (id: string) => {
     setSelectedId((prev) => (prev === id ? null : id));
   };
+  pendingIdsRef.current = pendingStationIds;
 
   // Initialise map once
   useEffect(() => {
@@ -139,9 +194,10 @@ export default function Routes() {
           ${station.distanceKm !== null ? `<div style="color:#6b7280;margin-top:2px;">${station.distanceKm} km · ~${formatDriveTime(station.estimatedDriveMinutes)}</div>` : ""}
           <a href="${mapsDirectionsUrl(station)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:6px;color:#2563eb;font-size:11px;">Get directions ↗</a>
         </div>`;
+      const hasPending = pendingIdsRef.current.has(station.id);
       const marker = L.marker([station.lat, station.lng], {
-        icon: makeDotIcon(color, false),
-        zIndexOffset: 0,
+        icon: hasPending ? makeBeaconIcon(color, false) : makeDotIcon(color, false),
+        zIndexOffset: hasPending ? 500 : 0,
       })
         .addTo(map)
         .bindPopup(popupHtml)
@@ -158,21 +214,32 @@ export default function Routes() {
     };
   }, []);
 
-  // Update marker icons when selection changes
+  // Update marker icons + popups when selection or pending map changes
   useEffect(() => {
     markersRef.current.forEach((marker, id) => {
       const station = STATIONS.find((s) => s.id === id)!;
       const zone = getDistanceZone(station.distanceKm);
       const color = ZONE_COLORS[zone];
       const isSelected = id === selectedId;
-      marker.setIcon(makeDotIcon(color, isSelected));
-      if (isSelected) {
-        marker.setZIndexOffset(1000);
-      } else {
-        marker.setZIndexOffset(0);
-      }
+      const count = pendingCountMap.get(id) ?? 0;
+      const hasPending = count > 0;
+      marker.setIcon(hasPending ? makeBeaconIcon(color, isSelected) : makeDotIcon(color, isSelected));
+      marker.setZIndexOffset(isSelected ? 1000 : hasPending ? 500 : 0);
+      // Refresh popup with pending count
+      const pendingRow = hasPending
+        ? `<div style="margin-top:5px;padding:3px 6px;background:#fff7ed;border-radius:4px;color:#ea580c;font-weight:600;font-size:11px;">🚚 ${count} pending order${count > 1 ? "s" : ""}</div>`
+        : "";
+      marker.setPopupContent(`
+        <div style="min-width:160px;font-size:12px;">
+          <div style="font-weight:700;font-size:13px;margin-bottom:2px;">${station.name}</div>
+          <div style="color:#6b7280;margin-bottom:4px;">${station.district}</div>
+          <div style="font-weight:700;color:${color};font-size:14px;">₹${station.freightRate.toLocaleString("en-IN")}<span style="font-weight:400;font-size:11px;color:#6b7280"> / truck</span></div>
+          ${station.distanceKm !== null ? `<div style="color:#6b7280;margin-top:2px;">${station.distanceKm} km · ~${formatDriveTime(station.estimatedDriveMinutes)}</div>` : ""}
+          ${pendingRow}
+          <a href="${mapsDirectionsUrl(station)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:6px;color:#2563eb;font-size:11px;">Get directions ↗</a>
+        </div>`);
     });
-  }, [selectedId]);
+  }, [selectedId, pendingCountMap]);
 
   // Fly to selected station
   useEffect(() => {
@@ -219,6 +286,7 @@ export default function Routes() {
               const zoneColor = ZONE_COLORS[zone];
               const isSelected = station.id === selectedId;
               const warn = hasWarning(station);
+              const hasPending = pendingStationIds.has(station.id);
               return (
                 <button
                   key={station.id}
@@ -234,6 +302,12 @@ export default function Routes() {
                       <span className="text-sm font-semibold text-primary truncate">
                         {station.name.length > 20 ? station.name.slice(0, 20) + "…" : station.name}
                       </span>
+                      {hasPending && (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-medium bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded flex-shrink-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse inline-block" />
+                          Pending
+                        </span>
+                      )}
                       {warn && <AlertTriangle size={11} className="text-warn flex-shrink-0" />}
                       {station.salesInvoices === 0 && (
                         <span className="text-[10px] bg-neutral-100 text-muted px-1 rounded flex-shrink-0">No sales</span>
@@ -297,6 +371,15 @@ export default function Routes() {
                     <h2 className="text-base font-bold text-primary leading-tight">{selected.name}</h2>
                     <p className="text-xs text-muted">{selected.district}</p>
                   </div>
+                  {(() => {
+                    const count = pendingCountMap.get(selected.id) ?? 0;
+                    return count > 0 ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full flex-shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
+                        {count} pending
+                      </span>
+                    ) : null;
+                  })()}
                   {hasWarning(selected) && <AlertTriangle size={14} className="text-warn flex-shrink-0" />}
                 </div>
                 <button onClick={() => setSelectedId(null)} className="btn-icon flex-shrink-0" aria-label="Close">
