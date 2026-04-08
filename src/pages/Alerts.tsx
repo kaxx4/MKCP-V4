@@ -119,9 +119,9 @@ export default function Alerts() {
     const rows = [
       ["Item", "Group", "Current Stock", "Unit", "Avg Monthly Out (3mo)", "Months Remaining", "Suggested Reorder", "Severity"],
       ...filtered.map((d) => {
-        const stockDisp = toDisplay(d.item, d.stock, unitMode);
-        const avgDisp = toDisplay(d.item, d.avgOut, unitMode);
-        const sugDisp = toDisplay(d.item, d.suggested, unitMode);
+        const stockDisp = toDisplay(d.item, Math.ceil(d.stock), unitMode);
+        const avgDisp = toDisplay(d.item, Math.ceil(d.avgOut), unitMode);
+        const sugDisp = toDisplay(d.item, Math.ceil(d.suggested), unitMode);
         const months = d.avgOut > 0 ? (d.stock / d.avgOut).toFixed(1) : "N/A";
         return [
           d.item.name,
@@ -270,8 +270,8 @@ export default function Alerts() {
       {isMobile ? (
         <div ref={parentRef} className="flex-1 overflow-y-auto min-h-0 space-y-2">
           {filtered.map((d) => {
-            const stockDisp = toDisplay(d.item, d.stock, unitMode);
-            const sugDisp = toDisplay(d.item, d.suggested, unitMode);
+            const stockDisp = toDisplay(d.item, Math.ceil(d.stock), unitMode);
+            const sugDisp = toDisplay(d.item, Math.ceil(d.suggested), unitMode);
             const isAdded = addedItems.has(d.item.itemId);
 
             return (
@@ -290,7 +290,7 @@ export default function Alerts() {
                   </div>
                   <div>
                     <span className="text-muted">Avg/mo</span>
-                    <div className="tabular-nums font-medium text-muted">{toDisplay(d.item, d.avgOut, unitMode).formatted}</div>
+                    <div className="tabular-nums font-medium text-muted">{toDisplay(d.item, Math.ceil(d.avgOut), unitMode).formatted}</div>
                   </div>
                   <div>
                     <span className="text-muted">Reorder</span>
@@ -338,9 +338,9 @@ export default function Alerts() {
             >
               {virtualizer.getVirtualItems().map((virtualRow) => {
                 const d = filtered[virtualRow.index];
-                const stockDisp = toDisplay(d.item, d.stock, unitMode);
-                const avgDisp = toDisplay(d.item, d.avgOut, unitMode);
-                const sugDisp = toDisplay(d.item, d.suggested, unitMode);
+                const stockDisp = toDisplay(d.item, Math.ceil(d.stock), unitMode);
+                const avgDisp = toDisplay(d.item, Math.ceil(d.avgOut), unitMode);
+                const sugDisp = toDisplay(d.item, Math.ceil(d.suggested), unitMode);
                 const isAdded = addedItems.has(d.item.itemId);
 
                 let monthsLabel: string;

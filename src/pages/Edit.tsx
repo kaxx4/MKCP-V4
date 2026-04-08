@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Save, RotateCcw, Upload, Package } from "lucide-react";
+import { Save, RotateCcw, Upload, Package, Wand2 } from "lucide-react";
 import Fuse from "fuse.js";
 import { useDataStore } from "../store/dataStore";
 import { useOverrideStore } from "../store/overrideStore";
@@ -77,6 +77,24 @@ export default function Edit() {
 
   const dirtyCount = Object.values(rows).filter((r) => r.dirty).length;
 
+  function autoFillFromTally() {
+    if (!data) return;
+    const newRows: Record<string, EditRow> = { ...rows };
+    for (const item of data.items.values()) {
+      if (!item.pkgUnit) continue; // only prefill items Tally has alternate units for
+      newRows[item.itemId] = {
+        itemId: item.itemId,
+        name: item.name,
+        group: item.group,
+        baseUnit: item.baseUnit,
+        pkgUnit: item.pkgUnit,
+        unitsPerPkg: item.unitsPerPkg,
+        dirty: true,
+      };
+    }
+    setRows(newRows);
+  }
+
   function saveAll() {
     if (!data) return;
     const newItems = new Map(data.items);
@@ -137,20 +155,18 @@ export default function Edit() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <h1 className="page-title">Edit Units</h1>
         <div className="flex items-center gap-2">
+          <button onClick={autoFillFromTally} className="btn-secondary btn-sm" title="Pre-fill pkg units from Tally alternate unit data">
+            <Wand2 size={12} />
+            Auto-fill from Tally
+          </button>
           {dirtyCount > 0 && (
             <>
               <span className="caption-text text-warn tabular-nums">{dirtyCount} unsaved</span>
-              <button
-                onClick={resetAll}
-                className="btn-secondary btn-sm"
-              >
+              <button onClick={resetAll} className="btn-secondary btn-sm">
                 <RotateCcw size={12} />
                 Reset
               </button>
-              <button
-                onClick={saveAll}
-                className="btn-primary btn-sm"
-              >
+              <button onClick={saveAll} className="btn-primary btn-sm">
                 <Save size={12} />
                 Save All
               </button>

@@ -589,67 +589,43 @@ export default function Settings() {
 
       {/* Backup Management */}
       <Section title="Backup Management">
-        <div className="space-y-3">
-          <p className="text-xs text-muted">
-            Backups are created automatically before each import. You can restore, download, or delete them here.
-          </p>
+        <div className="space-y-2">
+          <p className="text-xs text-muted">Auto-created before each import and sync. Restore, download, or delete below.</p>
           {backups.length === 0 ? (
-            <p className="text-sm text-muted italic">No backups available</p>
+            <p className="text-sm text-muted italic">No backups yet</p>
           ) : (
-            <div className="space-y-2 max-h-64 overflow-y-auto">
+            <div className="divide-y divide-bg-border border border-bg-border rounded-lg overflow-hidden max-h-72 overflow-y-auto">
               {backups.map((backup) => (
-                <div
-                  key={backup.key}
-                  className="flex items-center justify-between bg-bg border border-bg-border rounded-lg p-3 text-sm"
-                >
+                <div key={backup.key} className="flex items-center gap-3 px-3 py-2.5 bg-bg hover:bg-neutral-50 transition-colors">
+                  <Archive size={13} className="text-accent flex-shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Archive size={14} className="text-accent flex-shrink-0" />
-                      <span className="font-medium text-primary truncate">{backup.label}</span>
+                    <div className="text-xs font-medium text-primary truncate">{backup.label}</div>
+                    <div className="text-2xs text-muted">
+                      {new Date(backup.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
                     </div>
-                    <p className="text-xs text-muted mt-1">
-                      {new Date(backup.createdAt).toLocaleString("en-IN", {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
-                    </p>
                   </div>
-                  <div className="flex items-center gap-2 ml-4">
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
                     <button
                       onClick={() => handleRestoreBackup(backup.key)}
-                      className={clsx(
-                        "btn-sm",
-                        confirmRestore === backup.key
-                          ? "btn-primary bg-success hover:bg-success/80"
-                          : "btn-secondary"
-                      )}
+                      className={clsx("btn-sm text-xs px-2 py-1", confirmRestore === backup.key ? "btn-primary" : "btn-secondary")}
+                      title="Restore this backup"
                     >
-                      <RotateCcw size={12} />
+                      <RotateCcw size={11} />
                       {confirmRestore === backup.key ? "Confirm?" : "Restore"}
                     </button>
-                    <button
-                      onClick={() => handleDownloadBackup(backup.key)}
-                      className="btn-secondary btn-sm"
-                    >
-                      <Download size={12} />
-                      Download
+                    <button onClick={() => handleDownloadBackup(backup.key)} className="btn-secondary btn-sm text-xs px-2 py-1" title="Download as JSON">
+                      <Download size={11} />
                     </button>
-                    <button
-                      onClick={() => handleDeleteBackup(backup.key)}
-                      className="btn-danger btn-sm"
-                    >
-                      <Trash2 size={12} />
-                      Delete
+                    <button onClick={() => handleDeleteBackup(backup.key)} className="btn-danger btn-sm text-xs px-2 py-1" title="Delete backup">
+                      <Trash2 size={11} />
                     </button>
                   </div>
                 </div>
               ))}
             </div>
           )}
-          {backups.length > 20 && (
-            <p className="text-xs text-warn">
-              You have {backups.length} backups. Consider deleting old ones to save space.
-            </p>
+          {backups.length > 15 && (
+            <p className="text-xs text-warn">{backups.length} backups stored — consider deleting old ones.</p>
           )}
         </div>
       </Section>
@@ -738,13 +714,10 @@ function TallyConnectionSection() {
     companyName,
     isConnected,
     lastSyncAt,
-    autoSyncMinutes,
     fyFromDate,
     fyToDate,
     setProxyUrl,
-    setCompanyName,
     setConnected,
-    setAutoSync,
     setFyDates,
   } = useTallyStore();
 
@@ -856,23 +829,10 @@ function TallyConnectionSection() {
           </div>
         </div>
 
-        {/* Auto-Sync */}
-        <div>
-          <label className="form-label">Auto-Sync (minutes)</label>
-          <select
-            value={autoSyncMinutes}
-            onChange={(e) => setAutoSync(Number(e.target.value))}
-            className="form-select"
-          >
-            <option value="0">Disabled</option>
-            <option value="5">Every 5 minutes</option>
-            <option value="15">Every 15 minutes</option>
-            <option value="30">Every 30 minutes</option>
-            <option value="60">Every hour</option>
-          </select>
-          <p className="text-xs text-muted mt-1">
-            Automatically sync data from Tally at regular intervals (requires active connection)
-          </p>
+        {/* Auto-Sync info */}
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent/5 border border-accent/20">
+          <RefreshCw size={13} className="text-accent flex-shrink-0" />
+          <p className="text-xs text-accent">Today's vouchers auto-sync every 30 minutes when connected.</p>
         </div>
 
         {/* Last Sync */}
