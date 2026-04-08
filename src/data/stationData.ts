@@ -1079,6 +1079,42 @@ export const STATIONS: StationData[] = [
   },
 ];
 
+// ── Smart route pairings (derived from station notes) ────────────────────────
+// Each entry lists stations explicitly named as route companions in the notes.
+// Pairings are bidirectional: if A lists B, B also pairs with A.
+export const ROUTE_PAIRS: Record<string, string[]> = {
+  bagnan:          ["panskura"],
+  panskura:        ["bagnan", "ballichak"],
+  thakurpukur:     ["behala_maheshtalla", "nischintapur"],
+  behala_maheshtalla: ["thakurpukur"],
+  nischintapur:    ["thakurpukur"],
+  madhyamgram:     ["rajarhat", "bagula", "santipur"],
+  rajarhat:        ["madhyamgram", "bhangar", "berachapa"],
+  bhangar:         ["rajarhat"],
+  berachapa:       ["rajarhat", "bongaon"],
+  ghatakpukur:     ["mukundapur", "hatatgunj"],
+  mukundapur:      ["ghatakpukur"],
+  hatatgunj:       ["ghatakpukur"],
+  bongaon:         ["berachapa"],
+  lakhikantopur:   ["kashinagar", "kakdweep"],
+  kashinagar:      ["lakhikantopur"],
+  kakdweep:        ["lakhikantopur"],
+  haldia:          ["contai"],
+  contai:          ["haldia", "egra"],
+  egra:            ["contai"],
+  itaberia:        ["bhupatinagar"],
+  bhupatinagar:    ["itaberia"],
+  temathani:       ["ballichak"],
+  ballichak:       ["panskura", "temathani", "dantan"],
+  dantan:          ["ballichak"],
+  ck_town:         ["khirpai"],
+  khirpai:         ["ck_town"],
+  krishnanagar:    ["bagula"],
+  bagula:          ["krishnanagar", "madhyamgram"],
+  santipur:        ["madhyamgram"],
+  debogram:        ["krishnanagar"],
+};
+
 // ── Derived helpers ──────────────────────────────────────────────────────────
 
 export const GODOWN = {
