@@ -72,24 +72,6 @@ export default function PriceList() {
     return <span className="text-accent">{sortDir === "asc" ? "↑" : "↓"}</span>;
   }
 
-  function exportCSV() {
-    function esc(v: string | number) {
-      const s = String(v);
-      return s.includes(",") || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
-    }
-    const header = ["Item", "Group", "Rate (₹)"];
-    const csvRows = sorted.map((r) => [
-      r.name, r.group, r.baseRate.toFixed(2),
-    ].map(esc).join(","));
-    const csv = [header.map(esc).join(","), ...csvRows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `dealer_pricelist_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
-
   if (!data) {
     return (
       <div className="empty-state">
@@ -108,9 +90,6 @@ export default function PriceList() {
     <div className="page-section">
       <div className="page-header">
         <h1 className="page-title">Dealer Price List</h1>
-        <button onClick={exportCSV} className="btn-secondary btn-sm" disabled={!sorted.length}>
-          <Download size={13} /> Export CSV
-        </button>
       </div>
 
       {/* Filters */}

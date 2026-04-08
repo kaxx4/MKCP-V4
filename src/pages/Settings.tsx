@@ -145,34 +145,6 @@ export default function Settings() {
     toast("Audit log exported", "success");
   }
 
-  function handleExportDiscrepancies() {
-    if (!auditResults || auditResults.failures.length === 0) {
-      toast("No discrepancies to export", "info");
-      return;
-    }
-
-    // CSV format
-    const headers = ["Item Name", "Item ID", "Opening Qty", "Inwards", "Outwards", "Expected Closing", "Computed Closing", "Discrepancy"];
-    const rows = auditResults.failures.map((f: any) => [
-      f.itemName,
-      f.itemId,
-      f.openingQtyBase.toFixed(4),
-      f.totalInwards.toFixed(4),
-      f.totalOutwards.toFixed(4),
-      f.expectedClosing.toFixed(4),
-      f.computedClosing.toFixed(4),
-      f.discrepancy.toFixed(4),
-    ]);
-
-    const csv = [headers, ...rows].map(row => row.map((cell: string) => `"${cell}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `inventory_discrepancies_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    toast("Discrepancies exported to CSV", "success");
-  }
-
   function handleExportUnits() {
     if (!data) {
       toast("No data loaded. Import data first.", "error");
@@ -418,15 +390,6 @@ export default function Settings() {
               <Activity size={14} />
               {runningAudit ? "Running Audit..." : "Run Audit"}
             </button>
-            {auditResults && auditResults.failures.length > 0 && (
-              <button
-                onClick={handleExportDiscrepancies}
-                className="btn-secondary btn-sm"
-              >
-                <Download size={14} />
-                Export Discrepancies CSV
-              </button>
-            )}
           </div>
 
           {auditResults && (
