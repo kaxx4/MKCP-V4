@@ -5,6 +5,7 @@ import clsx from "clsx";
 import {
   STATIONS,
   GODOWN,
+  ROUTE_PAIRS,
   ZONE_COLORS,
   ZONE_LABELS,
   ZONE_RANGES,
@@ -70,6 +71,17 @@ function makeBeaconIcon(color: string, selected: boolean) {
   });
 }
 
+function makePairedIcon(color: string) {
+  // Larger ring, white inner dot — visually distinct from selected/normal
+  return L.divIcon({
+    className: "",
+    html: `<div style="width:17px;height:17px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 0 0 2px ${color},0 2px 8px rgba(0,0,0,0.35);"></div>`,
+    iconSize: [17, 17],
+    iconAnchor: [8.5, 8.5],
+    popupAnchor: [0, -12],
+  });
+}
+
 function makeGodownIcon() {
   return L.divIcon({
     className: "",
@@ -132,8 +144,20 @@ export default function Routes() {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
+  const routeLinesRef = useRef<L.Polyline[]>([]);
   const onSelectRef = useRef<(id: string) => void>(() => {});
   const pendingIdsRef = useRef<Set<string>>(new Set());
+
+  // Paired station IDs for the currently selected station
+  const pairedIds = useMemo<Set<string>>(() => {
+    if (!selectedId) return new Set();
+    return new Set(ROUTE_PAIRS[selectedId] ?? []);
+  }, [selectedId]);
+
+  const pairedStations = useMemo(() =>
+    [...pairedIds].map((id) => STATIONS.find((s) => s.id === id)).filter(Boolean) as StationData[],
+    [pairedIds]
+  );
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -214,20 +238,56 @@ export default function Routes() {
     };
   }, []);
 
-  // Update marker icons + popups when selection or pending map changes
+  // Update marker icons + popups; draw route polylines when selection changes
   useEffect(() => {
+    const map = leafletMap.current;
+
+    // Clear old route lines
+    routeLinesRef.current.forEach((l) => l.remove());
+    routeLinesRef.current = [];
+
+    // Draw new route lines: godown → selected → each paired station
+    if (map && selectedId) {
+      const sel = STATIONS.find((s) => s.id === selectedId);
+      if (sel) {
+        const paired = ROUTE_PAIRS[selectedId] ?? [];
+        paired.forEach((pid) => {
+          const ps = STATIONS.find((s) => s.id === pid);
+          if (!ps) return;
+          const line = L.polyline(
+            [[GODOWN.lat, GODOWN.lng], [sel.lat, sel.lng], [ps.lat, ps.lng]],
+            { color: "#6366f1", weight: 2.5, opacity: 0.65, dashArray: "6 5" }
+          ).addTo(map);
+          routeLinesRef.current.push(line);
+        });
+      }
+    }
+
     markersRef.current.forEach((marker, id) => {
       const station = STATIONS.find((s) => s.id === id)!;
       const zone = getDistanceZone(station.distanceKm);
       const color = ZONE_COLORS[zone];
       const isSelected = id === selectedId;
+      const isPaired = pairedIds.has(id);
       const count = pendingCountMap.get(id) ?? 0;
       const hasPending = count > 0;
-      marker.setIcon(hasPending ? makeBeaconIcon(color, isSelected) : makeDotIcon(color, isSelected));
-      marker.setZIndexOffset(isSelected ? 1000 : hasPending ? 500 : 0);
-      // Refresh popup with pending count
+
+      if (isSelected) {
+        marker.setIcon(hasPending ? makeBeaconIcon(color, true) : makeDotIcon(color, true));
+        marker.setZIndexOffset(1000);
+      } else if (isPaired) {
+        marker.setIcon(makePairedIcon(color));
+        marker.setZIndexOffset(800);
+      } else {
+        marker.setIcon(hasPending ? makeBeaconIcon(color, false) : makeDotIcon(color, false));
+        marker.setZIndexOffset(hasPending ? 500 : 0);
+      }
+
       const pendingRow = hasPending
         ? `<div style="margin-top:5px;padding:3px 6px;background:#fff7ed;border-radius:4px;color:#ea580c;font-weight:600;font-size:11px;">🚚 ${count} pending order${count > 1 ? "s" : ""}</div>`
+        : "";
+      const pairedRow = isPaired && selectedId
+        ? `<div style="margin-top:5px;padding:3px 6px;background:#eef2ff;border-radius:4px;color:#4f46e5;font-weight:600;font-size:11px;">↔ Route pair with ${STATIONS.find((s) => s.id === selectedId)?.name ?? ""}</div>`
         : "";
       marker.setPopupContent(`
         <div style="min-width:160px;font-size:12px;">
@@ -235,11 +295,11 @@ export default function Routes() {
           <div style="color:#6b7280;margin-bottom:4px;">${station.district}</div>
           <div style="font-weight:700;color:${color};font-size:14px;">₹${station.freightRate.toLocaleString("en-IN")}<span style="font-weight:400;font-size:11px;color:#6b7280"> / truck</span></div>
           ${station.distanceKm !== null ? `<div style="color:#6b7280;margin-top:2px;">${station.distanceKm} km · ~${formatDriveTime(station.estimatedDriveMinutes)}</div>` : ""}
-          ${pendingRow}
+          ${pendingRow}${pairedRow}
           <a href="${mapsDirectionsUrl(station)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:6px;color:#2563eb;font-size:11px;">Get directions ↗</a>
         </div>`);
     });
-  }, [selectedId, pendingCountMap]);
+  }, [selectedId, pendingCountMap, pairedIds]);
 
   // Fly to selected station
   useEffect(() => {
@@ -285,6 +345,7 @@ export default function Routes() {
               const zone = getDistanceZone(station.distanceKm);
               const zoneColor = ZONE_COLORS[zone];
               const isSelected = station.id === selectedId;
+              const isPaired = pairedIds.has(station.id);
               const warn = hasWarning(station);
               const hasPending = pendingStationIds.has(station.id);
               return (
@@ -293,7 +354,8 @@ export default function Routes() {
                   onClick={() => setSelectedId(isSelected ? null : station.id)}
                   className={clsx(
                     "w-full text-left border-b border-bg-border/50 last:border-0 px-3 py-2.5 transition-colors duration-100 hover:bg-neutral-50 focus:outline-none",
-                    isSelected && "bg-accent/5 ring-1 ring-inset ring-accent/30"
+                    isSelected && "bg-accent/5 ring-1 ring-inset ring-accent/30",
+                    isPaired && !isSelected && "bg-indigo-50/60"
                   )}
                   style={{ borderLeft: `4px solid ${zoneColor}` }}
                 >
@@ -307,6 +369,9 @@ export default function Routes() {
                           <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse inline-block" />
                           Pending
                         </span>
+                      )}
+                      {isPaired && !isSelected && (
+                        <span className="text-[10px] font-semibold bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded flex-shrink-0">↔ pair</span>
                       )}
                       {warn && <AlertTriangle size={11} className="text-warn flex-shrink-0" />}
                       {station.salesInvoices === 0 && (
@@ -420,6 +485,39 @@ export default function Routes() {
                 <div className="mb-3 text-xs bg-warn/5 border border-warn/20 rounded px-2 py-1.5">
                   <span className="text-warn font-medium">Note: </span>
                   <span className="text-muted">{selected.notes}</span>
+                </div>
+              )}
+
+              {pairedStations.length > 0 && (
+                <div className="mb-3">
+                  <div className="text-xs font-medium text-muted mb-1.5 flex items-center gap-1.5">
+                    <div className="w-3 h-0.5 border-t-2 border-dashed border-indigo-400" />
+                    Route pairings — combine for one truck trip
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    {pairedStations.map((ps) => {
+                      const pzone = getDistanceZone(ps.distanceKm);
+                      const pcolor = ZONE_COLORS[pzone];
+                      return (
+                        <button
+                          key={ps.id}
+                          onClick={() => setSelectedId(ps.id)}
+                          className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-indigo-50 border border-indigo-100 hover:bg-indigo-100 transition-colors text-left w-full"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-2.5 h-2.5 rounded-full flex-shrink-0 ring-2 ring-white" style={{ background: pcolor, boxShadow: `0 0 0 1.5px ${pcolor}` }} />
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-indigo-900 truncate">{ps.name}</div>
+                              <div className="text-[10px] text-indigo-500">{ps.district}{ps.distanceKm ? ` · ${ps.distanceKm} km` : ""}</div>
+                            </div>
+                          </div>
+                          <div className="text-xs font-bold flex-shrink-0" style={{ color: pcolor }}>
+                            ₹{ps.freightRate.toLocaleString("en-IN")}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
