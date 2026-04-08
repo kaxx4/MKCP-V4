@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, Tag } from "lucide-react";
+import { Upload, Tag, ChevronDown, Search } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { computeItemMargins } from "../engine/financial";
@@ -15,6 +15,7 @@ interface PriceRow {
   group: string;
   displayRate: number;
   source: "sales" | "closing" | "opening" | "none";
+  dealerPrices?: Array<{ priceListName: string; dealerRate: number; dealerDiscount?: number }>;
 }
 
 export default function PriceList() {
@@ -24,6 +25,7 @@ export default function PriceList() {
   const [groupFilter, setGroupFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
 
   const rows = useMemo<PriceRow[]>(() => {
     if (!data) return [];
@@ -48,7 +50,18 @@ export default function PriceList() {
         source = "opening";
       }
 
-      return { itemId: item.itemId, name: item.name, group: item.group, displayRate, source };
+      return {
+        itemId: item.itemId,
+        name: item.name,
+        group: item.group,
+        displayRate,
+        source,
+        dealerPrices: item.dealerPrices?.map(dp => ({
+          priceListName: dp.priceListName,
+          dealerRate: dp.dealerRate,
+          dealerDiscount: dp.dealerDiscount,
+        })),
+      };
     });
   }, [data]);
 
@@ -82,117 +95,244 @@ export default function PriceList() {
   }
 
   function sortIcon(key: SortKey) {
-    if (sortKey !== key) return <span className="text-neutral-300">↕</span>;
-    return <span className="text-accent">{sortDir === "asc" ? "↑" : "↓"}</span>;
+    if (sortKey !== key) return <span className="text-slate-300">↕</span>;
+    return <span className="text-blue-600 font-bold">{sortDir === "asc" ? "↑" : "↓"}</span>;
+  }
+
+  function toggleExpanded(itemId: string) {
+    const next = new Set(expandedItems);
+    if (next.has(itemId)) next.delete(itemId);
+    else next.add(itemId);
+    setExpandedItems(next);
   }
 
   if (!data) {
     return (
-      <div className="empty-state">
-        <Tag size={48} className="empty-state-icon" />
-        <h2 className="empty-state-title">No Data Loaded</h2>
-        <button onClick={() => navigate("/import")} className="btn-primary mt-2">
-          <Upload size={14} /> Import Data
+      <div className="flex flex-col items-center justify-center min-h-[50vh] py-20">
+        <Tag size={56} className="text-slate-300 mb-6" />
+        <h2 className="text-2xl font-bold text-slate-900 mb-2">No Data Loaded</h2>
+        <p className="text-slate-600 mb-6">Import your Tally data to view the price list</p>
+        <button
+          onClick={() => navigate("/import")}
+          className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+        >
+          <Upload size={18} /> Import Data
         </button>
       </div>
     );
   }
 
-  const COL = "1fr 160px 120px";
-
   return (
     <div className="page-section">
-      <div className="page-header">
-        <h1 className="page-title">Dealer Price List</h1>
+      {/* Page Header */}
+      <div className="mb-8">
+        <h1 className="text-4xl font-bold text-slate-900 mb-1">Dealer Price List</h1>
+        <p className="text-slate-600">Manage and view all item pricing across dealer price lists</p>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search items…"
-          className="search-input flex-1 min-w-[180px]"
-        />
-        <select
-          value={groupFilter}
-          onChange={(e) => setGroupFilter(e.target.value)}
-          className="form-select"
-        >
-          {groups.map((g) => (
-            <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>
-          ))}
-        </select>
-        <span className="text-xs text-muted tabular-nums">{sorted.length} items</span>
+      {/* Filters Section */}
+      <div className="mb-8 p-6 bg-white rounded-xl border border-slate-200 shadow-sm">
+        <h2 className="text-sm font-bold text-slate-900 mb-4 uppercase tracking-wider">Filters & Search</h2>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Search Input */}
+          <div className="md:col-span-2">
+            <label htmlFor="search" className="block text-sm font-semibold text-slate-700 mb-2">
+              Search Items
+            </label>
+            <div className="relative">
+              <Search size={18} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input
+                id="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by item name or group…"
+                className="w-full pl-10 pr-4 py-3 text-base font-medium text-slate-900 placeholder-slate-500 border-2 border-slate-200 rounded-lg focus:border-blue-600 focus:outline-none transition-colors"
+              />
+            </div>
+          </div>
+
+          {/* Group Filter */}
+          <div>
+            <label htmlFor="group" className="block text-sm font-semibold text-slate-700 mb-2">
+              Filter by Group
+            </label>
+            <select
+              id="group"
+              value={groupFilter}
+              onChange={(e) => setGroupFilter(e.target.value)}
+              className="w-full px-4 py-3 text-base font-medium text-slate-900 border-2 border-slate-200 rounded-lg focus:border-blue-600 focus:outline-none transition-colors cursor-pointer"
+            >
+              {groups.map((g) => (
+                <option key={g} value={g}>
+                  {g === "ALL" ? "All Groups" : g}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Results Summary */}
+        <div className="mt-4 pt-4 border-t border-slate-200">
+          <p className="text-sm font-semibold text-slate-700">
+            <span className="text-blue-600 font-bold text-base">{sorted.length}</span> item{sorted.length !== 1 ? "s" : ""} found
+          </p>
+        </div>
       </div>
 
-      {/* Table */}
-      <div className="section-card overflow-hidden">
-        {/* Header */}
-        <div className="grid table-header-sticky text-xs" style={{ gridTemplateColumns: COL }}>
+      {/* Table Section */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        {/* Table Header */}
+        <div className="grid text-sm font-bold text-slate-900 bg-slate-50 border-b-2 border-slate-200" style={{ gridTemplateColumns: "48px 1fr 160px 140px" }}>
+          <div className="px-4 py-4"></div>
           <div
-            className="px-3 py-2.5 cursor-pointer select-none flex items-center gap-1 hover:text-primary transition-colors"
+            className="px-4 py-4 cursor-pointer select-none flex items-center gap-2 hover:bg-slate-100 transition-colors"
             onClick={() => toggleSort("name")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") toggleSort("name");
+            }}
+            aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
           >
-            Item {sortIcon("name")}
+            Item Name {sortIcon("name")}
           </div>
           <div
-            className="px-3 py-2.5 cursor-pointer select-none flex items-center gap-1 hover:text-primary transition-colors"
+            className="px-4 py-4 cursor-pointer select-none flex items-center gap-2 hover:bg-slate-100 transition-colors"
             onClick={() => toggleSort("group")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") toggleSort("group");
+            }}
+            aria-sort={sortKey === "group" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
           >
             Group {sortIcon("group")}
           </div>
           <div
-            className="px-3 py-2.5 text-right cursor-pointer select-none flex items-center justify-end gap-1 hover:text-primary transition-colors"
+            className="px-4 py-4 text-right cursor-pointer select-none flex items-center justify-end gap-2 hover:bg-slate-100 transition-colors"
             onClick={() => toggleSort("baseRate")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") toggleSort("baseRate");
+            }}
+            aria-sort={sortKey === "baseRate" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
           >
-            Rate {sortIcon("baseRate")}
+            Base Rate {sortIcon("baseRate")}
           </div>
         </div>
 
-        {/* Body */}
-        <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 260px)" }}>
+        {/* Table Body */}
+        <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 340px)" }}>
           {sorted.length === 0 ? (
-            <div className="empty-state py-10">
-              <span className="empty-state-description">No items match your filters</span>
+            <div className="flex flex-col items-center justify-center py-16 px-4">
+              <Tag size={48} className="text-slate-300 mb-4" />
+              <p className="text-lg font-semibold text-slate-600">No items match your filters</p>
+              <p className="text-sm text-slate-500 mt-2">Try adjusting your search or group selection</p>
             </div>
           ) : (
-            sorted.map((row) => (
-              <div
-                key={row.itemId}
-                className="grid items-center border-b border-bg-border/50 last:border-0 hover:bg-neutral-50 transition-colors duration-100"
-                style={{ gridTemplateColumns: COL }}
-              >
-                <div className="px-3 py-2 min-w-0">
-                  <div className="text-sm font-medium text-primary truncate" title={row.name}>
-                    {row.name}
+            sorted.map((row, idx) => {
+              const expanded = expandedItems.has(row.itemId);
+              const hasDealerPrices = (row.dealerPrices?.length ?? 0) > 0;
+              return (
+                <div key={row.itemId} className={idx > 0 ? "border-t border-slate-100" : ""}>
+                  {/* Main Row */}
+                  <div
+                    className="grid items-center px-4 py-4 hover:bg-blue-50 transition-colors duration-150"
+                    style={{ gridTemplateColumns: "48px 1fr 160px 140px" }}
+                  >
+                    {/* Expand Button */}
+                    <div className="flex justify-center">
+                      {hasDealerPrices && (
+                        <button
+                          onClick={() => toggleExpanded(row.itemId)}
+                          className="p-2 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                          title={expanded ? "Collapse dealer prices" : "Expand to view dealer prices"}
+                          aria-expanded={expanded}
+                          aria-label={`${expanded ? "Collapse" : "Expand"} dealer prices for ${row.name}`}
+                        >
+                          <ChevronDown
+                            size={18}
+                            className={clsx(
+                              "transition-transform text-slate-600",
+                              expanded && "rotate-180"
+                            )}
+                          />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Item Name */}
+                    <div className="px-2 min-w-0">
+                      <div
+                        className="text-base font-bold text-slate-900 truncate"
+                        title={row.name}
+                      >
+                        {row.name}
+                      </div>
+                    </div>
+
+                    {/* Group */}
+                    <div className="px-2">
+                      <span
+                        className="inline-block px-3 py-1 bg-slate-100 text-slate-700 font-semibold text-sm rounded-full"
+                        title={row.group}
+                      >
+                        {row.group}
+                      </span>
+                    </div>
+
+                    {/* Rate */}
+                    <div className="px-2 text-right">
+                      <div className={clsx(
+                        "text-lg font-bold tabular-nums",
+                        row.displayRate > 0 ? "text-blue-600" : "text-slate-400"
+                      )}>
+                        {row.displayRate > 0 ? fmtRate(row.displayRate) : "—"}
+                      </div>
+                      {row.displayRate > 0 && (
+                        <div className={clsx(
+                          "text-xs font-semibold mt-1.5",
+                          row.source === "sales" && "text-green-600 bg-green-50 px-2 py-1 rounded inline-block",
+                          row.source === "closing" && "text-amber-600 bg-amber-50 px-2 py-1 rounded inline-block",
+                          row.source === "opening" && "text-red-600 bg-red-50 px-2 py-1 rounded inline-block"
+                        )}>
+                          {row.source === "sales" && "✓ From Sales"}
+                          {row.source === "closing" && "• Closing Stock"}
+                          {row.source === "opening" && "⚠ Opening Rate"}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <div className="px-3 py-2 text-xs text-muted truncate" title={row.group}>
-                  {row.group}
-                </div>
-                <div className="px-3 py-2 text-right">
-                  <div className={clsx(
-                    "text-sm tabular-nums font-medium",
-                    row.displayRate > 0 ? "text-primary" : "text-muted"
-                  )}>
-                    {row.displayRate > 0 ? fmtRate(row.displayRate) : "—"}
-                  </div>
-                  {row.displayRate > 0 && (
-                    <div className={clsx(
-                      "text-2xs mt-1",
-                      row.source === "sales" && "text-success",
-                      row.source === "closing" && "text-warn",
-                      row.source === "opening" && "text-danger"
-                    )}>
-                      {row.source === "sales" && "from sales"}
-                      {row.source === "closing" && "closing stock"}
-                      {row.source === "opening" && "opening rate"}
+
+                  {/* Dealer Prices Expansion Panel */}
+                  {expanded && hasDealerPrices && (
+                    <div className="bg-blue-50 border-t border-blue-200 px-4 py-5 ml-12">
+                      <h3 className="text-sm font-bold text-slate-900 mb-4 uppercase tracking-wider">Dealer Price Lists</h3>
+                      <div className="space-y-3">
+                        {row.dealerPrices?.map((dp) => (
+                          <div
+                            key={dp.priceListName}
+                            className="flex items-center justify-between p-3 bg-white rounded-lg border border-blue-100"
+                          >
+                            <span className="font-semibold text-slate-900">{dp.priceListName}</span>
+                            <div className="flex items-center gap-3">
+                              <span className="font-bold text-blue-600 tabular-nums">{fmtRate(dp.dealerRate)}</span>
+                              {dp.dealerDiscount && (
+                                <span className="px-3 py-1 bg-red-100 text-red-700 font-bold text-sm rounded-full">
+                                  -{dp.dealerDiscount}%
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>
