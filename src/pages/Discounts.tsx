@@ -1,10 +1,10 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Pencil, Upload, ChevronDown, X } from "lucide-react";
+import { Pencil, Upload, X } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useDiscountStore } from "../store/discountStore";
-import { calculateVoucherDiscount, DEFAULT_DISCOUNT_CATEGORIES } from "../engine/discounts";
+import { calculateVoucherDiscount } from "../engine/discounts";
 import { fmtINR, fmtNum, fmtDate } from "../utils/format";
 import type { CanonicalVoucher } from "../types/canonical";
 
@@ -100,8 +100,6 @@ function VoucherSelector({
   const [tab, setTab] = useState<VoucherTab>("Delivery Note");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return vouchers
@@ -133,17 +131,18 @@ function VoucherSelector({
   };
 
   return (
-    <div className="card space-y-4">
-      <div className="flex gap-2">
+    <div className="card space-y-6">
+      {/* Tabs */}
+      <div className="flex gap-2 border-b border-neutral-200 pb-4">
         {(["Sales", "Delivery Note"] as VoucherTab[]).map((t) => (
           <button
             key={t}
             onClick={() => handleTabChange(t)}
             className={clsx(
-              "px-4 py-2.5 rounded-lg text-sm font-medium transition-all",
+              "px-4 py-2.5 rounded-lg text-sm font-medium transition-all border-b-2",
               tab === t
-                ? "bg-blue-500 text-white shadow-sm"
-                : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+                ? "border-blue-500 text-blue-600 bg-blue-50"
+                : "border-transparent text-neutral-600 hover:text-neutral-900"
             )}
           >
             {t}
@@ -161,7 +160,7 @@ function VoucherSelector({
           placeholder="Search party or voucher #"
           className="search-input flex-1"
         />
-        <span className="text-xs font-medium text-neutral-500 whitespace-nowrap">
+        <span className="text-xs font-semibold text-neutral-600 whitespace-nowrap px-3 py-1.5 bg-neutral-100 rounded-lg">
           {filtered.length} found
         </span>
       </div>
@@ -276,29 +275,34 @@ function VoucherSelector({
 function DiscountBreakdown({
   voucher,
   result,
-  items,
 }: {
   voucher: CanonicalVoucher;
   result: any;
-  items: Map<string, any>;
 }) {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 
   if (!result) return null;
 
   return (
-    <div className="card space-y-6">
+    <div className="card space-y-8">
       {/* Voucher Header */}
-      <div className="pb-5 border-b border-neutral-200">
-        <div className="font-semibold text-lg text-neutral-900">
-          {voucher.partyName ?? voucher.partyLedgerId ?? "—"}
-        </div>
-        <div className="text-sm text-neutral-600 mt-2 space-y-1">
-          <div>{voucher.voucherType} {voucher.voucherNumber}</div>
-          <div className="flex items-center gap-2 text-xs">
-            <span>{fmtDate(voucher.date)}</span>
-            <span className="text-neutral-400">•</span>
-            <span className="font-mono font-medium text-neutral-900">{fmtINR(voucher.totalAmount)}</span>
+      <div className="pb-6 border-b border-neutral-200">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="font-black text-xl text-neutral-900">
+              {voucher.partyName ?? voucher.partyLedgerId ?? "—"}
+            </div>
+            <div className="flex items-center gap-3 mt-2.5">
+              <span className="px-3 py-1 bg-neutral-100 rounded-md text-xs font-bold text-neutral-700 uppercase tracking-wide">
+                {voucher.voucherType}
+              </span>
+              <span className="text-sm font-mono font-semibold text-blue-600">{voucher.voucherNumber}</span>
+            </div>
+            <div className="text-sm text-neutral-500 mt-2">{fmtDate(voucher.date)}</div>
+          </div>
+          <div className="text-right flex-shrink-0">
+            <div className="text-xs text-neutral-500 font-medium uppercase tracking-wide">Invoice Total</div>
+            <div className="text-xl font-black text-neutral-900 mt-1 tabular-nums">{fmtINR(voucher.totalAmount)}</div>
           </div>
         </div>
       </div>
@@ -306,114 +310,121 @@ function DiscountBreakdown({
       {result.groupSummaries && result.groupSummaries.length > 0 ? (
         <>
           {/* Total Discount Summary */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-5 bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg border-2 border-green-200">
-            <div className="text-center">
-              <div className="text-sm font-medium text-green-700">Subtotal</div>
-              <div className="text-2xl font-bold text-green-900 mt-2">{fmtINR(result.totalLineAmount)}</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-0 bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl border-2 border-green-200 overflow-hidden">
+            <div className="text-center px-6 py-5">
+              <div className="text-xs font-bold text-green-700 uppercase tracking-wide">Subtotal</div>
+              <div className="text-2xl font-black text-green-900 mt-2 tabular-nums">{fmtINR(result.totalLineAmount)}</div>
             </div>
-            <div className="text-center border-l border-r border-green-200">
-              <div className="text-sm font-medium text-green-700">Total Discount</div>
-              <div className="text-2xl font-bold text-green-900 mt-2">−{fmtINR(result.totalDiscountAmount)}</div>
+            <div className="text-center px-6 py-5 border-y sm:border-y-0 sm:border-x border-green-200">
+              <div className="text-xs font-bold text-green-700 uppercase tracking-wide">Total Discount</div>
+              <div className="text-2xl font-black text-green-900 mt-2 tabular-nums">−{fmtINR(result.totalDiscountAmount)}</div>
             </div>
-            <div className="text-center">
-              <div className="text-sm font-medium text-green-700">Effective Rate</div>
-              <div className="text-2xl font-bold text-green-900 mt-2">{fmtNum(result.effectivePct, 2)}%</div>
+            <div className="text-center px-6 py-5">
+              <div className="text-xs font-bold text-green-700 uppercase tracking-wide">Effective Rate</div>
+              <div className="text-2xl font-black text-green-900 mt-2 tabular-nums">{fmtNum(result.effectivePct, 2)}%</div>
             </div>
           </div>
 
           {/* Group Summary Cards */}
-          <div className="space-y-3">
-            <div className="text-xs font-semibold text-neutral-600 uppercase tracking-wide">
-              Discount by Category (Group-wise)
+          <div className="space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="h-1 w-4 bg-blue-500 rounded-full"></div>
+              <div className="text-sm font-bold text-neutral-900 uppercase tracking-wider">
+                Discount by Category (Group-wise)
+              </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {result.groupSummaries.map((group: any) => (
                 <div
                   key={group.categoryId}
                   onClick={() => setSelectedGroup(group.categoryId)}
                   className={clsx(
-                    "p-4 rounded-lg border-2 cursor-pointer hover:shadow-md transition-all",
+                    "p-5 rounded-xl border-2 cursor-pointer hover:shadow-lg transition-all",
                     group.groupRuleApplied
-                      ? "border-blue-400 bg-blue-50"
-                      : "border-neutral-200 bg-neutral-50 hover:bg-neutral-100"
+                      ? "border-blue-400 bg-blue-50 hover:bg-blue-100"
+                      : "border-neutral-200 bg-white hover:shadow-md"
                   )}
                 >
-                  <div className="flex items-start justify-between gap-3 mb-3">
+                  {/* Card Header */}
+                  <div className="flex items-start justify-between gap-4 mb-4">
                     <div>
-                      <div className="font-semibold text-neutral-900">{group.categoryName}</div>
-                      <div className="text-xs text-neutral-600 mt-1">{group.totalPackages} packages</div>
+                      <div className="font-bold text-base text-neutral-900">{group.categoryName}</div>
+                      <div className="text-xs text-neutral-500 mt-1.5 font-medium">
+                        {group.totalPackages} package{group.totalPackages !== 1 ? 's' : ''} total
+                      </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right flex-shrink-0">
                       <div className={clsx(
-                        "text-lg font-bold",
-                        group.appliedDiscountPct > 0 ? "text-green-600" : "text-neutral-500"
+                        "text-2xl font-black leading-none",
+                        group.appliedDiscountPct > 0 ? "text-green-600" : "text-neutral-400"
                       )}>
                         {group.appliedDiscountPct.toFixed(1)}%
                       </div>
-                      <div className="text-xs text-neutral-600 mt-1">discount</div>
+                      <div className="text-xs text-neutral-500 mt-1">discount</div>
                     </div>
                   </div>
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between text-neutral-600">
-                      <span>Subtotal:</span>
-                      <span className="font-medium text-neutral-900">{fmtINR(group.totalAmount)}</span>
-                    </div>
-                    <div className="flex justify-between pt-1 border-t border-neutral-200">
-                      <span className="text-green-700 font-medium">Discount:</span>
-                      <span className="font-semibold text-green-700">−{fmtINR(group.totalDiscount)}</span>
-                    </div>
 
-                    {/* Discount Tier Display */}
-                    <div className="pt-2 space-y-1.5 border-t border-neutral-200">
-                      {group.baseTierInfo && (
-                        <div className="px-2.5 py-1.5 bg-neutral-100 rounded border border-neutral-300">
-                          <div className="text-xs text-neutral-600 font-medium">Base Tier</div>
-                          <div className="text-sm font-semibold text-neutral-900 mt-0.5">
-                            {group.baseTierInfo}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Show if Group Rule was applied */}
-                      {group.groupRuleApplied && (
-                        <div className="px-2.5 py-1.5 bg-blue-200 rounded border border-blue-400">
-                          <div className="text-xs text-blue-800 font-bold">🎯 {group.groupRuleApplied}</div>
-                          <div className="text-sm font-bold text-blue-900 mt-0.5">
-                            Upgraded to {group.appliedDiscountPct}%
-                          </div>
-                        </div>
-                      )}
+                  {/* Amounts */}
+                  <div className="space-y-2 mb-4">
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-neutral-600">Subtotal</span>
+                      <span className="font-semibold text-neutral-900 tabular-nums">{fmtINR(group.totalAmount)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm pt-2 border-t border-neutral-200">
+                      <span className="text-green-700 font-semibold">Discount</span>
+                      <span className="font-bold text-green-700 tabular-nums">−{fmtINR(group.totalDiscount)}</span>
                     </div>
                   </div>
+
+                  {/* Tier Badges */}
+                  <div className="space-y-2">
+                    {group.baseTierInfo && (
+                      <div className="px-3 py-2 bg-neutral-100 rounded-lg border border-neutral-200">
+                        <div className="text-xs text-neutral-500 font-semibold uppercase tracking-wide mb-0.5">Base Tier</div>
+                        <div className="text-sm font-semibold text-neutral-800">{group.baseTierInfo}</div>
+                      </div>
+                    )}
+                    {group.groupRuleApplied && (
+                      <div className="px-3 py-2 bg-blue-100 rounded-lg border border-blue-300">
+                        <div className="text-xs text-blue-700 font-bold uppercase tracking-wide mb-0.5">Group Rule Applied</div>
+                        <div className="text-sm font-bold text-blue-900">{group.groupRuleApplied}</div>
+                        <div className="text-xs text-blue-700 mt-0.5">Upgraded → {group.appliedDiscountPct}%</div>
+                      </div>
+                    )}
+                  </div>
+
                   <button
-                    className="mt-3 w-full text-xs font-medium text-blue-600 hover:text-blue-700 py-1.5 px-2 rounded hover:bg-blue-50"
+                    className="mt-4 w-full text-xs font-semibold text-blue-600 hover:text-blue-800 py-2 px-3 rounded-lg hover:bg-blue-50 border border-blue-200 transition-colors"
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedGroup(group.categoryId);
                     }}
                   >
-                    View Items →
+                    View Items in Group →
                   </button>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Items Breakdown (collapsible) */}
-          <div className="space-y-2">
-            <div className="text-xs font-semibold text-neutral-600 uppercase tracking-wide">
-              Items in Invoice
+          {/* Items Breakdown */}
+          <div className="space-y-4 pt-2">
+            <div className="flex items-center gap-3">
+              <div className="h-1 w-4 bg-neutral-400 rounded-full"></div>
+              <div className="text-sm font-bold text-neutral-900 uppercase tracking-wider">
+                Items in Invoice
+              </div>
             </div>
-            <div className="border border-neutral-200 rounded-lg overflow-hidden">
+            <div className="border border-neutral-200 rounded-lg overflow-hidden bg-white">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-neutral-200 bg-neutral-50">
-                    <th className="text-left px-4 py-3 font-semibold text-neutral-700">Item</th>
-                    <th className="text-right px-4 py-3 font-semibold text-neutral-700">Qty</th>
-                    <th className="text-left px-4 py-3 font-semibold text-neutral-700">Category</th>
-                    <th className="text-right px-4 py-3 font-semibold text-neutral-700">Amount</th>
-                    <th className="text-center px-4 py-3 font-semibold text-neutral-700">Disc%</th>
-                    <th className="text-right px-4 py-3 font-semibold text-neutral-700">Discount</th>
+                    <th className="text-left px-5 py-4 font-bold text-neutral-800">Item</th>
+                    <th className="text-right px-5 py-4 font-bold text-neutral-800">Qty</th>
+                    <th className="text-left px-5 py-4 font-bold text-neutral-800">Category</th>
+                    <th className="text-right px-5 py-4 font-bold text-neutral-800">Amount</th>
+                    <th className="text-center px-5 py-4 font-bold text-neutral-800">Disc%</th>
+                    <th className="text-right px-5 py-4 font-bold text-neutral-800">Discount</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-100">
@@ -422,38 +433,38 @@ function DiscountBreakdown({
                       key={idx}
                       className={clsx(
                         "transition-colors",
-                        line.discountPct > 0 ? "bg-green-50 hover:bg-green-100" : "hover:bg-neutral-50"
+                        line.discountPct > 0 ? "bg-green-50 hover:bg-green-100" : "bg-white hover:bg-neutral-50"
                       )}
                     >
-                      <td className="px-4 py-3 text-neutral-900 font-medium">{line.itemName}</td>
-                      <td className="px-4 py-3 text-right text-neutral-700">
-                        <div className="font-medium tabular-nums">{fmtNum(line.qtyBase, 0)}</div>
-                        <div className="text-xs text-neutral-500 mt-0.5">
+                      <td className="px-5 py-4 text-neutral-900 font-semibold">{line.itemName}</td>
+                      <td className="px-5 py-4 text-right text-neutral-700">
+                        <div className="font-semibold tabular-nums">{fmtNum(line.qtyBase, 0)}</div>
+                        <div className="text-xs text-neutral-500 mt-1">
                           {line.packages} pkg{line.packages !== 1 ? 's' : ''}
                         </div>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-5 py-4">
                         <span className={clsx(
-                          "inline-block px-2.5 py-1 rounded text-xs font-medium whitespace-nowrap",
+                          "inline-block px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap",
                           line.categoryId === "NO_DISCOUNT"
-                            ? "bg-neutral-100 text-neutral-600"
-                            : "bg-blue-100 text-blue-700"
+                            ? "bg-neutral-100 text-neutral-700"
+                            : "bg-blue-100 text-blue-800"
                         )}>
                           {line.categoryName}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right font-semibold text-neutral-900 tabular-nums">
+                      <td className="px-5 py-4 text-right font-bold text-neutral-900 tabular-nums">
                         {fmtINR(line.lineAmount)}
                       </td>
                       <td className={clsx(
-                        "px-4 py-3 text-center font-semibold tabular-nums",
-                        line.discountPct > 0 ? "text-green-600" : "text-neutral-500"
+                        "px-5 py-4 text-center font-bold tabular-nums",
+                        line.discountPct > 0 ? "text-green-700" : "text-neutral-400"
                       )}>
                         {line.discountPct > 0 ? `${line.discountPct}%` : "—"}
                       </td>
                       <td className={clsx(
-                        "px-4 py-3 text-right font-semibold tabular-nums",
-                        line.discountPct > 0 ? "text-green-600" : "text-neutral-500"
+                        "px-5 py-4 text-right font-bold tabular-nums",
+                        line.discountPct > 0 ? "text-green-700" : "text-neutral-400"
                       )}>
                         {line.discountPct > 0 ? fmtINR(line.discountAmount) : "—"}
                       </td>
@@ -565,7 +576,6 @@ export default function Discounts() {
           <DiscountBreakdown
             voucher={selectedVoucher}
             result={discountResult}
-            items={data.items}
           />
         </div>
       )}
