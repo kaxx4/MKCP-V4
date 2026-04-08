@@ -37,6 +37,8 @@ export interface GroupDiscountSummary {
   appliedDiscountPct: number;
   totalAmount: number;
   totalDiscount: number;
+  groupRuleApplied?: string;  // name of rule applied, if any
+  baseTierInfo?: string;      // base tier before rule upgrade
 }
 
 export interface VoucherDiscountResult {
@@ -45,6 +47,14 @@ export interface VoucherDiscountResult {
   totalLineAmount: number;
   totalDiscountAmount: number;
   effectivePct: number; // totalDiscountAmount / totalLineAmount * 100
+}
+
+export interface GroupRule {
+  id: string;
+  name: string;
+  categoryIds: string[];  // categories to combine
+  minPackages: number;    // if combined packages >= this
+  upgradeDiscountPct: number;  // upgrade all items in these categories to this %
 }
 
 // ── Default Categories (from Discount Tiers sheet) ────────────────────────────
@@ -713,6 +723,19 @@ export const DEFAULT_ITEM_CATEGORY_MAP: Record<string, string> = {
 };
 // Total: 550 items — complete list from MK_CYCLES_DISCOUNT_CALCULATOR.xlsx, sheet "Master Lookup"
 
+// ── Group Rules (special combined category discounts) ─────────────────────────
+// These rules allow multiple categories to be considered together for discount upgrades
+
+export const DEFAULT_GROUP_RULES: GroupRule[] = [
+  {
+    id: "LOCK_COMBO_10PKG",
+    name: "LOCK Combo (10+ pkgs → 3%)",
+    categoryIds: ["LOCK_HERD", "LOCK_KIRAN", "LOCK_EURO", "LOCK_CROWN"],
+    minPackages: 10,
+    upgradeDiscountPct: 3.0,
+  },
+];
+
 // ── Lookup helper ─────────────────────────────────────────────────────────────
 
 /**
@@ -805,53 +828,207 @@ export function calculateVoucherDiscount(
   categories: DiscountCategory[],
   runtimeOverrides: Record<string, string>
 ): VoucherDiscountResult {
-  const lines: LineDiscountResult[] = [];
-  const groupMap = new Map<string, { categoryId: string; categoryName: string; packages: number; totalAmount: number; totalDiscount: number }>();
+  console.log(`[DISCOUNT] ═══════════════════════════════════════════════════════════`);
+  console.log(`[DISCOUNT] Calculating discounts for: ${voucher.voucherNumber} (${voucher.voucherType})`);
 
+  // ─── Phase 1: Group items by category and collect line data ─────────────────
+
+  interface LineInfo {
+    itemName: string;
+    qtyBase: number;
+    unitsPerPkg: number;
+    packages: number;
+    lineAmount: number;
+    categoryId: string;
+    categoryName: string;
+  }
+
+  interface GroupInfo {
+    categoryId: string;
+    categoryName: string;
+    lineIndices: number[];
+    totalPackages: number;
+    totalAmount: number;
+  }
+
+  const lineData: LineInfo[] = [];
+  const groupMap = new Map<string, GroupInfo>();
+
+  console.log(`[DISCOUNT] Phase 1: Grouping items by category...`);
+
+  // First pass: collect all lines and group by category
   for (const line of voucher.lines) {
     if (line.type !== "inventory" || !line.itemId || (line.qtyBase ?? 0) === 0) continue;
 
     const item = items.get(line.itemId);
-    const lineResult = calculateLineDiscount({
-      itemId: line.itemId,
-      itemName: item?.name ?? line.itemId,
-      qtyBase: line.qtyBase ?? 0,
-      unitsPerPkg: item?.unitsPerPkg ?? 1,
-      lineAmount: line.lineAmount ?? 0,
-      runtimeOverrides,
-      categories,
-    });
-    lines.push(lineResult);
+    const upkg = (item?.unitsPerPkg ?? 1) > 0 ? (item?.unitsPerPkg ?? 1) : 1;
+    const qtyBase = line.qtyBase ?? 0;
+    const packages = qtyBase > 0 ? Math.max(1, Math.floor(qtyBase / upkg)) : 0;
+    const lineAmount = line.lineAmount ?? 0;
 
-    // Aggregate by category for group summaries
-    const key = lineResult.categoryId;
+    const category = resolveCategoryForItem(line.itemId, runtimeOverrides, categories);
+
+    // Store line data
+    const lineIdx = lineData.length;
+    lineData.push({
+      itemName: item?.name ?? line.itemId,
+      qtyBase,
+      unitsPerPkg: upkg,
+      packages,
+      lineAmount,
+      categoryId: category.id,
+      categoryName: category.name,
+    });
+
+    console.log(`[DISCOUNT]   "${item?.name ?? line.itemId}": qty=${qtyBase}, upkg=${upkg}, pkgs=${packages}, cat=${category.name}`);
+
+    // Accumulate by group
+    const key = category.id;
     if (!groupMap.has(key)) {
       groupMap.set(key, {
-        categoryId: lineResult.categoryId,
-        categoryName: lineResult.categoryName,
-        packages: 0,
+        categoryId: category.id,
+        categoryName: category.name,
+        lineIndices: [],
+        totalPackages: 0,
         totalAmount: 0,
-        totalDiscount: 0,
       });
     }
     const group = groupMap.get(key)!;
-    group.packages += lineResult.packages;
-    group.totalAmount += lineResult.lineAmount;
-    group.totalDiscount += lineResult.discountAmount;
+    group.lineIndices.push(lineIdx);
+    group.totalPackages += packages;
+    group.totalAmount += lineAmount;
   }
 
-  const groupSummaries: GroupDiscountSummary[] = Array.from(groupMap.values()).map((g) => ({
-    categoryId: g.categoryId,
-    categoryName: g.categoryName,
-    totalPackages: g.packages,
-    appliedDiscountPct: g.totalAmount > 0 ? (g.totalDiscount / g.totalAmount) * 100 : 0,
-    totalAmount: g.totalAmount,
-    totalDiscount: g.totalDiscount,
-  }));
+  console.log(`[DISCOUNT] Phase 1 Complete. Groups formed:`, Array.from(groupMap.values()).map((g) => ({
+    name: g.categoryName,
+    pkgs: g.totalPackages,
+    amt: g.totalAmount,
+  })));
 
-  const totalLineAmount = lines.reduce((s, l) => s + l.lineAmount, 0);
+  // ─── Phase 2: Determine discount % per group based on total packages ─────────
+  // Then apply that % to all items in the group
+
+  const lines: LineDiscountResult[] = [];
+  const groupSummaries: GroupDiscountSummary[] = [];
+
+  console.log(`[DISCOUNT] Phase 2: Determining discounts per group...`);
+
+  for (const group of groupMap.values()) {
+    // Find category definition
+    const category = categories.find((c) => c.id === group.categoryId) ||
+                     { id: "NO_DISCOUNT", name: "No Discount", tiers: [] };
+
+    // Determine discount % based on group's total packages
+    const { discountPct: groupDiscountPct, tierLabel } =
+      group.totalPackages > 0 && category.tiers.length > 0
+        ? matchTier(group.totalPackages, category)
+        : {
+            discountPct: 0,
+            tierLabel: category.tiers.length === 0 ? "No discount" : "Qty is 0",
+          };
+
+    console.log(`[DISCOUNT]   "${group.categoryName}": ${group.totalPackages} pkgs → ${groupDiscountPct}% (${tierLabel})`);
+
+    // Apply this discount to all items in the group
+    let groupTotalDiscount = 0;
+    for (const lineIdx of group.lineIndices) {
+      const item = lineData[lineIdx];
+      const discountAmount = (item.lineAmount * groupDiscountPct) / 100;
+      groupTotalDiscount += discountAmount;
+
+      lines.push({
+        itemName: item.itemName,
+        qtyBase: item.qtyBase,
+        unitsPerPkg: item.unitsPerPkg,
+        packages: item.packages,
+        lineAmount: item.lineAmount,
+        categoryId: group.categoryId,
+        categoryName: group.categoryName,
+        discountPct: groupDiscountPct,
+        discountAmount,
+        tierLabel,
+      });
+    }
+
+    // Record group summary with base tier info
+    const summaryObj: GroupDiscountSummary = {
+      categoryId: group.categoryId,
+      categoryName: group.categoryName,
+      totalPackages: group.totalPackages,
+      appliedDiscountPct: groupDiscountPct,
+      totalAmount: group.totalAmount,
+      totalDiscount: groupTotalDiscount,
+      baseTierInfo: tierLabel,
+    };
+    groupSummaries.push(summaryObj);
+  }
+
+  console.log(`[DISCOUNT] Phase 2 Complete. Lines created: ${lines.length}`);
+
+  // ─── Phase 3: Apply Group Rules (upgrade discounts for combined categories) ───
+
+  console.log(`[DISCOUNT RULE] Phase 3 Starting. Groups present:`, Array.from(groupMap.keys()));
+
+  // Check each group rule
+  for (const rule of DEFAULT_GROUP_RULES) {
+    // Sum packages across all categories in this rule
+    const ruleCategories = Array.from(groupMap.values()).filter((g) =>
+      rule.categoryIds.includes(g.categoryId)
+    );
+
+    console.log(`[DISCOUNT RULE] Evaluating "${rule.name}":`, {
+      requiredCategories: rule.categoryIds,
+      foundCategories: ruleCategories.map((g) => ({ name: g.categoryName, pkgs: g.totalPackages })),
+      totalPkgs: ruleCategories.reduce((s, g) => s + g.totalPackages, 0),
+      threshold: rule.minPackages,
+    });
+
+    const rulePackages = ruleCategories.reduce((sum, g) => sum + g.totalPackages, 0);
+
+    // If combined packages meet the threshold, upgrade discount
+    if (rulePackages >= rule.minPackages) {
+      console.log(`[DISCOUNT RULE] ✓ "${rule.name}" triggered! (${rulePackages} >= ${rule.minPackages}) → Applying ${rule.upgradeDiscountPct}%`);
+
+      // Update all lines and group summaries for these categories
+      for (let i = 0; i < lines.length; i++) {
+        if (rule.categoryIds.includes(lines[i].categoryId)) {
+          const oldPct = lines[i].discountPct;
+          const oldAmount = lines[i].discountAmount;
+          lines[i].discountPct = rule.upgradeDiscountPct;
+          lines[i].discountAmount = (lines[i].lineAmount * lines[i].discountPct) / 100;
+          lines[i].tierLabel = `${rule.name} → ${rule.upgradeDiscountPct}%`;
+          console.log(`[DISCOUNT RULE]   Item "${lines[i].itemName}": ${oldPct}% (₹${oldAmount.toFixed(2)}) → ${lines[i].discountPct}% (₹${lines[i].discountAmount.toFixed(2)})`);
+        }
+      }
+
+      // Update group summaries
+      for (const summary of groupSummaries) {
+        if (rule.categoryIds.includes(summary.categoryId)) {
+          const oldDiscount = summary.appliedDiscountPct;
+          const oldAmount = summary.totalDiscount;
+          summary.appliedDiscountPct = rule.upgradeDiscountPct;
+          summary.totalDiscount = (summary.totalAmount * summary.appliedDiscountPct) / 100;
+          summary.groupRuleApplied = rule.name;
+          console.log(`[DISCOUNT RULE]   Group "${summary.categoryName}": ${oldDiscount}% (₹${oldAmount.toFixed(2)}) → ${summary.appliedDiscountPct}% (₹${summary.totalDiscount.toFixed(2)})`);
+        }
+      }
+    } else {
+      console.log(`[DISCOUNT RULE] ✗ "${rule.name}" NOT triggered (${rulePackages} < ${rule.minPackages})`);
+    }
+  }
+
+  const totalLineAmount = lineData.reduce((s, l) => s + l.lineAmount, 0);
   const totalDiscountAmount = lines.reduce((s, l) => s + l.discountAmount, 0);
   const effectivePct = totalLineAmount > 0 ? (totalDiscountAmount / totalLineAmount) * 100 : 0;
+
+  console.log(`[DISCOUNT] ═══════════════════════════════════════════════════════════`);
+  console.log(`[DISCOUNT] Final Result:`, {
+    totalSubtotal: totalLineAmount,
+    totalDiscount: totalDiscountAmount,
+    effectiveRate: `${effectivePct.toFixed(2)}%`,
+    rulesApplied: groupSummaries.filter((g) => g.groupRuleApplied).map((g) => g.groupRuleApplied),
+  });
+  console.log(`[DISCOUNT] ═══════════════════════════════════════════════════════════`);
 
   return { lines, groupSummaries, totalLineAmount, totalDiscountAmount, effectivePct };
 }
