@@ -1,13 +1,51 @@
 import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, Truck, X } from "lucide-react";
+import { Upload, Truck, X, CheckCircle2, XCircle, PackageCheck } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useUIStore } from "../store/uiStore";
 import { fmtINR, fmtDate } from "../utils/format";
 import { getCurrentStockIndexed } from "../engine/inventory";
+import { computeItemMargins } from "../engine/financial";
 import type { CanonicalVoucher, ParsedData } from "../types/canonical";
 import type { VoucherIndex } from "../engine/inventory";
+
+// Price tolerance: exact match (within ₹0.01 rounding from Tally)
+const PRICE_TOLERANCE = 0.005;
+
+function getPriceList(data: ParsedData): Map<string, number> {
+  const margins = computeItemMargins(data.items, data.vouchers);
+  const map = new Map<string, number>();
+  for (const m of margins) {
+    const rate = m.avgSalesRate > 0
+      ? m.avgSalesRate
+      : (data.items.get(m.itemId)?.closingRate ?? data.items.get(m.itemId)?.openingRate ?? 0);
+    if (rate > 0) map.set(m.itemId, rate);
+  }
+  return map;
+}
+
+function priceMatches(rate: number, ref: number): boolean {
+  if (ref <= 0) return true; // no reference — can't verify
+  return Math.abs(rate - ref) / ref <= PRICE_TOLERANCE;
+}
+
+/** Compute delivery-readiness for a voucher */
+function computeReadiness(voucher: CanonicalVoucher, data: ParsedData, voucherIndex: VoucherIndex, priceList: Map<string, number>) {
+  const inv = voucher.lines.filter((l) => l.type === "inventory");
+  let allInStock = true;
+  let allPricesMatch = true;
+  for (const line of inv) {
+    const item = line.itemId ? data.items.get(line.itemId) : null;
+    const qty = line.qtyBase ?? 0;
+    const rate = line.ratePerBase ?? 0;
+    const stock = item ? getCurrentStockIndexed(item, voucherIndex) : null;
+    if (stock === null || stock < qty) allInStock = false;
+    const ref = line.itemId ? (priceList.get(line.itemId) ?? 0) : 0;
+    if (ref > 0 && !priceMatches(rate, ref)) allPricesMatch = false;
+  }
+  return { allInStock, allPricesMatch, ready: allInStock && allPricesMatch };
+}
 
 export default function PendingOrders() {
   const navigate = useNavigate();
@@ -21,6 +59,8 @@ export default function PendingOrders() {
       .filter((v) => v.voucherType === "Delivery Note" && !v.isCancelled && !v.isOptional)
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [data]);
+
+  const priceList = useMemo(() => data ? getPriceList(data) : new Map<string, number>(), [data]);
 
   // Close modal on Escape
   useEffect(() => {
@@ -50,27 +90,29 @@ export default function PendingOrders() {
         </div>
 
         {isMobile
-          ? <MobileList notes={deliveryNotes} onSelect={setSelected} />
-          : <DesktopTable notes={deliveryNotes} onSelect={setSelected} />}
+          ? <MobileList notes={deliveryNotes} data={data!} voucherIndex={voucherIndex} priceList={priceList} onSelect={setSelected} />
+          : <DesktopTable notes={deliveryNotes} data={data!} voucherIndex={voucherIndex} priceList={priceList} onSelect={setSelected} />}
       </div>
 
       {/* Modal */}
       {selected && (
-        <DNModal voucher={selected} data={data} voucherIndex={voucherIndex} onClose={() => setSelected(null)} />
+        <DNModal voucher={selected} data={data} voucherIndex={voucherIndex} priceList={priceList} onClose={() => setSelected(null)} />
       )}
     </>
   );
 }
 
 /* ─── Modal popup ─────────────────────────────────────── */
-function DNModal({ voucher, data, voucherIndex, onClose }: {
+function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
   voucher: CanonicalVoucher;
   data: ParsedData;
   voucherIndex: VoucherIndex;
+  priceList: Map<string, number>;
   onClose: () => void;
 }) {
   const inv = voucher.lines.filter((l) => l.type === "inventory");
   const led = voucher.lines.filter((l) => l.type === "ledger");
+  const { allInStock, allPricesMatch, ready } = computeReadiness(voucher, data, voucherIndex, priceList);
 
   return (
     <div
@@ -101,13 +143,27 @@ function DNModal({ voucher, data, voucherIndex, onClose }: {
               {voucher.narration && <> · <span className="italic">{voucher.narration}</span></>}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="ml-4 p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 transition-colors cursor-pointer flex-shrink-0"
-            aria-label="Close"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+            {ready ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-green-100 text-green-700 text-xs font-semibold">
+                <PackageCheck size={13} />
+                Ready to Deliver
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-100 text-neutral-500 text-xs font-medium">
+                {!allInStock && "Stock issues"}
+                {!allInStock && !allPricesMatch && " · "}
+                {!allPricesMatch && "Price mismatch"}
+              </span>
+            )}
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 transition-colors cursor-pointer"
+              aria-label="Close"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -122,6 +178,7 @@ function DNModal({ voucher, data, voucherIndex, onClose }: {
                     <th className="pb-2 text-left font-medium pr-4">Item</th>
                     <th className="pb-2 text-right font-medium pr-4 w-24 whitespace-nowrap">Qty</th>
                     <th className="pb-2 text-right font-medium pr-4 w-28 whitespace-nowrap">Rate</th>
+                    <th className="pb-2 text-center font-medium w-6" title="Price verified against price list" />
                     <th className="pb-2 text-right font-medium w-24 whitespace-nowrap">Amount</th>
                   </tr>
                 </thead>
@@ -140,6 +197,9 @@ function DNModal({ voucher, data, voucherIndex, onClose }: {
                       : stock > 0 ? `only ${stock} in stock`
                       : stock === 0 ? "out of stock"
                       : `${stock} (short by ${Math.abs(stock)})`;
+                    const refRate = line.itemId ? (priceList.get(line.itemId) ?? 0) : 0;
+                    const priceOk = priceMatches(rate, refRate);
+                    const hasRef = refRate > 0;
                     return (
                       <tr key={i} className={clsx("border-b border-neutral-100 last:border-0", rowBg)}>
                         <td className="py-2 pr-4 text-neutral-900 max-w-0" style={{ width: "100%" }}>
@@ -158,8 +218,20 @@ function DNModal({ voucher, data, voucherIndex, onClose }: {
                         <td className="py-2 pr-4 text-right tabular-nums text-neutral-600 whitespace-nowrap">
                           {qty} {item?.baseUnit ?? ""}
                         </td>
-                        <td className="py-2 pr-4 text-right tabular-nums text-neutral-600 whitespace-nowrap">
+                        <td className="py-2 pr-1 text-right tabular-nums text-neutral-600 whitespace-nowrap">
                           {fmtINR(rate)}
+                        </td>
+                        <td className="py-2 px-1 text-center">
+                          {hasRef ? (
+                            priceOk
+                              ? <span title={`Price verified — matches price list (${fmtINR(refRate)})`}><CheckCircle2 size={14} className="text-blue-500 inline" /></span>
+                              : (() => {
+                                  const diff = rate - refRate;
+                                  const pct = ((diff / refRate) * 100).toFixed(1);
+                                  const sign = diff > 0 ? "+" : "";
+                                  return <span title={`Price mismatch — billed ${fmtINR(rate)}, price list ${fmtINR(refRate)} (${sign}${pct}%)`}><XCircle size={14} className="text-yellow-500 inline" /></span>;
+                                })()
+                          ) : null}
                         </td>
                         <td className="py-2 text-right tabular-nums font-medium text-neutral-900 whitespace-nowrap">
                           {fmtINR(amt)}
@@ -210,11 +282,14 @@ function DNModal({ voucher, data, voucherIndex, onClose }: {
 }
 
 /* ─── Desktop table ───────────────────────────────────── */
-function DesktopTable({ notes, onSelect }: {
+function DesktopTable({ notes, data, voucherIndex, priceList, onSelect }: {
   notes: CanonicalVoucher[];
+  data: ParsedData;
+  voucherIndex: VoucherIndex;
+  priceList: Map<string, number>;
   onSelect: (v: CanonicalVoucher) => void;
 }) {
-  const COL = "90px 120px 1fr 110px";
+  const COL = "90px 120px 1fr 140px 110px";
 
   return (
     <div className="section-card overflow-hidden">
@@ -225,36 +300,47 @@ function DesktopTable({ notes, onSelect }: {
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <div className="grid table-header-sticky" style={{ gridTemplateColumns: COL, minWidth: 520 }}>
-            {["Date", "DN#", "Party", "Value"].map((h) => (
-              <div key={h} className={clsx("px-3 py-2", h === "Value" && "text-right")}>{h}</div>
+          <div className="grid table-header-sticky" style={{ gridTemplateColumns: COL, minWidth: 580 }}>
+            {["Date", "DN#", "Party", "", "Value"].map((h, i) => (
+              <div key={i} className={clsx("px-3 py-2", h === "Value" && "text-right")}>{h}</div>
             ))}
           </div>
-          <div className="overflow-y-auto max-h-[calc(100vh-240px)]" style={{ minWidth: 520 }}>
-            {notes.map((v) => (
-              <div
-                key={v.voucherId}
-                className="grid items-center border-b border-bg-border/50 last:border-0 cursor-pointer hover:bg-neutral-50 transition-colors duration-150"
-                style={{ gridTemplateColumns: COL }}
-                onClick={() => onSelect(v)}
-              >
-                <div className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">
-                  {fmtDate(v.date)}
+          <div className="overflow-y-auto max-h-[calc(100vh-240px)]" style={{ minWidth: 580 }}>
+            {notes.map((v) => {
+              const { ready } = computeReadiness(v, data, voucherIndex, priceList);
+              return (
+                <div
+                  key={v.voucherId}
+                  className="grid items-center border-b border-bg-border/50 last:border-0 cursor-pointer hover:bg-neutral-50 transition-colors duration-150"
+                  style={{ gridTemplateColumns: COL }}
+                  onClick={() => onSelect(v)}
+                >
+                  <div className="px-3 py-2.5 text-xs text-muted whitespace-nowrap">
+                    {fmtDate(v.date)}
+                  </div>
+                  <div className="px-3 py-2.5 text-xs font-mono text-primary truncate">
+                    {v.voucherNumber}
+                  </div>
+                  <div className="px-3 py-2.5 min-w-0">
+                    <div className="text-sm font-medium text-primary truncate">{v.partyName ?? "—"}</div>
+                    {v.narration && (
+                      <div className="text-xs text-muted truncate">{v.narration}</div>
+                    )}
+                  </div>
+                  <div className="px-3 py-2.5">
+                    {ready && (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-green-100 text-green-700 px-2 py-0.5 rounded-full whitespace-nowrap">
+                        <PackageCheck size={11} />
+                        Ready to Deliver
+                      </span>
+                    )}
+                  </div>
+                  <div className="px-3 py-2.5 text-sm tabular-nums font-medium text-primary text-right whitespace-nowrap">
+                    {fmtINR(v.totalAmount)}
+                  </div>
                 </div>
-                <div className="px-3 py-2.5 text-xs font-mono text-primary truncate">
-                  {v.voucherNumber}
-                </div>
-                <div className="px-3 py-2.5 min-w-0">
-                  <div className="text-sm font-medium text-primary truncate">{v.partyName ?? "—"}</div>
-                  {v.narration && (
-                    <div className="text-xs text-muted truncate">{v.narration}</div>
-                  )}
-                </div>
-                <div className="px-3 py-2.5 text-sm tabular-nums font-medium text-primary text-right whitespace-nowrap">
-                  {fmtINR(v.totalAmount)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -263,8 +349,11 @@ function DesktopTable({ notes, onSelect }: {
 }
 
 /* ─── Mobile card list ────────────────────────────────── */
-function MobileList({ notes, onSelect }: {
+function MobileList({ notes, data, voucherIndex, priceList, onSelect }: {
   notes: CanonicalVoucher[];
+  data: ParsedData;
+  voucherIndex: VoucherIndex;
+  priceList: Map<string, number>;
   onSelect: (v: CanonicalVoucher) => void;
 }) {
   if (!notes.length) {
@@ -280,6 +369,7 @@ function MobileList({ notes, onSelect }: {
     <div className="space-y-1.5">
       {notes.map((v) => {
         const itemCount = v.lines.filter((l) => l.type === "inventory").length;
+        const { ready } = computeReadiness(v, data, voucherIndex, priceList);
         return (
           <div
             key={v.voucherId}
@@ -288,11 +378,17 @@ function MobileList({ notes, onSelect }: {
           >
             <div className="flex items-center gap-2">
               <div className="flex-1 min-w-0">
-                <div className="flex items-baseline gap-2">
+                <div className="flex items-baseline gap-2 flex-wrap">
                   <span className="text-sm font-medium text-primary truncate">
                     {v.partyName ?? v.voucherNumber}
                   </span>
                   <span className="text-2xs text-muted font-mono flex-shrink-0">{v.voucherNumber}</span>
+                  {ready && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                      <PackageCheck size={10} />
+                      Ready
+                    </span>
+                  )}
                 </div>
                 <div className="text-xs text-muted mt-0.5">
                   {fmtDate(v.date)}
