@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Pencil, Upload, X, RotateCcw } from "lucide-react";
+import { Pencil, Upload, X, RotateCcw, ChevronDown } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useDiscountStore } from "../store/discountStore";
@@ -286,6 +286,8 @@ function DiscountBreakdown({
   onClearOverride: (itemName: string) => void;
 }) {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const [groupsOpen, setGroupsOpen] = useState(true);
+  const [itemsOpen, setItemsOpen] = useState(true);
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -353,13 +355,20 @@ function DiscountBreakdown({
 
           {/* Group Summary Cards */}
           <div className="space-y-5">
-            <div className="flex items-center gap-3">
-              <div className="h-1 w-4 bg-blue-500 rounded-full"></div>
-              <div className="text-sm font-bold text-neutral-900 uppercase tracking-wider">
+            <button
+              onClick={() => setGroupsOpen((o) => !o)}
+              className="flex items-center gap-3 w-full text-left group"
+            >
+              <div className="h-1 w-4 bg-blue-500 rounded-full flex-shrink-0"></div>
+              <div className="text-sm font-bold text-neutral-900 uppercase tracking-wider flex-1">
                 Discount by Category (Group-wise)
               </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <ChevronDown
+                size={16}
+                className={clsx("text-neutral-400 transition-transform duration-200", groupsOpen ? "rotate-0" : "-rotate-90")}
+              />
+            </button>
+            {groupsOpen && <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {result.groupSummaries.map((group: any) => (
                 <div
                   key={group.categoryId}
@@ -430,18 +439,25 @@ function DiscountBreakdown({
                   </button>
                 </div>
               ))}
-            </div>
+            </div>}
           </div>
 
           {/* Items Breakdown */}
           <div className="space-y-4 pt-2">
-            <div className="flex items-center gap-3">
-              <div className="h-1 w-4 bg-neutral-400 rounded-full"></div>
-              <div className="text-sm font-bold text-neutral-900 uppercase tracking-wider">
+            <button
+              onClick={() => setItemsOpen((o) => !o)}
+              className="flex items-center gap-3 w-full text-left group"
+            >
+              <div className="h-1 w-4 bg-neutral-400 rounded-full flex-shrink-0"></div>
+              <div className="text-sm font-bold text-neutral-900 uppercase tracking-wider flex-1">
                 Items in Invoice
               </div>
-            </div>
-            <div className="border border-neutral-200 rounded-lg overflow-hidden bg-white">
+              <ChevronDown
+                size={16}
+                className={clsx("text-neutral-400 transition-transform duration-200", itemsOpen ? "rotate-0" : "-rotate-90")}
+              />
+            </button>
+            {itemsOpen && <div className="border border-neutral-200 rounded-lg overflow-hidden bg-white">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-neutral-200 bg-neutral-50">
@@ -539,7 +555,7 @@ function DiscountBreakdown({
                   ))}
                 </tbody>
               </table>
-            </div>
+            </div>}
           </div>
 
         </>
