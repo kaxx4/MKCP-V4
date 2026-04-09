@@ -1,6 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Pencil, Upload, X } from "lucide-react";
+import { Pencil, Upload, X, RotateCcw } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useDiscountStore } from "../store/discountStore";
@@ -275,11 +275,37 @@ function VoucherSelector({
 function DiscountBreakdown({
   voucher,
   result,
+  manualOverrides,
+  onSetOverride,
+  onClearOverride,
 }: {
   voucher: CanonicalVoucher;
   result: any;
+  manualOverrides: Record<string, number>;
+  onSetOverride: (itemName: string, pct: number) => void;
+  onClearOverride: (itemName: string) => void;
 }) {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const [editingItem, setEditingItem] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editingItem && inputRef.current) inputRef.current.select();
+  }, [editingItem]);
+
+  function startEdit(itemName: string, currentPct: number) {
+    setEditingItem(itemName);
+    setEditValue(String(currentPct));
+  }
+
+  function commitEdit(itemName: string) {
+    const val = parseFloat(editValue);
+    if (!isNaN(val) && val >= 0 && val <= 100) {
+      onSetOverride(itemName, val);
+    }
+    setEditingItem(null);
+  }
 
   if (!result) return null;
 
@@ -456,15 +482,56 @@ function DiscountBreakdown({
                       <td className="px-5 py-4 text-right font-bold text-neutral-900 tabular-nums">
                         {fmtINR(line.lineAmount)}
                       </td>
-                      <td className={clsx(
-                        "px-5 py-4 text-center font-bold tabular-nums",
-                        line.discountPct > 0 ? "text-green-700" : "text-neutral-400"
-                      )}>
-                        {line.discountPct > 0 ? `${line.discountPct}%` : "—"}
+                      <td className="px-5 py-4 text-center">
+                        {editingItem === line.itemName ? (
+                          <input
+                            ref={inputRef}
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.5"
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            onBlur={() => commitEdit(line.itemName)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") commitEdit(line.itemName);
+                              if (e.key === "Escape") setEditingItem(null);
+                            }}
+                            className="w-16 text-center font-bold border-2 border-blue-400 rounded-md px-1 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                          />
+                        ) : (
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => startEdit(line.itemName, line.discountPct)}
+                              className={clsx(
+                                "font-bold tabular-nums px-2 py-0.5 rounded hover:ring-2 hover:ring-blue-300 transition-all",
+                                manualOverrides[line.itemName] !== undefined
+                                  ? "text-amber-700 bg-amber-50 ring-1 ring-amber-300"
+                                  : line.discountPct > 0
+                                  ? "text-green-700 hover:bg-green-50"
+                                  : "text-neutral-400 hover:bg-neutral-50"
+                              )}
+                              title="Click to override"
+                            >
+                              {line.discountPct > 0 ? `${line.discountPct}%` : "—"}
+                            </button>
+                            {manualOverrides[line.itemName] !== undefined && (
+                              <button
+                                onClick={() => onClearOverride(line.itemName)}
+                                className="text-neutral-400 hover:text-red-500 transition-colors"
+                                title="Clear override"
+                              >
+                                <RotateCcw size={11} />
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td className={clsx(
                         "px-5 py-4 text-right font-bold tabular-nums",
-                        line.discountPct > 0 ? "text-green-700" : "text-neutral-400"
+                        manualOverrides[line.itemName] !== undefined
+                          ? "text-amber-700"
+                          : line.discountPct > 0 ? "text-green-700" : "text-neutral-400"
                       )}>
                         {line.discountPct > 0 ? fmtINR(line.discountAmount) : "—"}
                       </td>
@@ -509,6 +576,7 @@ export default function Discounts() {
   const { categories, itemCategoryOverrides } = useDiscountStore();
 
   const [selectedVoucherId, setSelectedVoucherId] = useState<string | null>(null);
+  const [manualOverrides, setManualOverrides] = useState<Record<string, number>>({});
 
   const vouchers = useMemo(
     () => (data?.vouchers ?? []).filter((v) => !v.isCancelled && !v.isOptional),
@@ -520,6 +588,11 @@ export default function Discounts() {
     [vouchers, selectedVoucherId]
   );
 
+  // Reset manual overrides when switching vouchers
+  useEffect(() => {
+    setManualOverrides({});
+  }, [selectedVoucherId]);
+
   const discountResult = useMemo(() => {
     if (!selectedVoucher || !data) return null;
     return calculateVoucherDiscount(
@@ -529,6 +602,49 @@ export default function Discounts() {
       itemCategoryOverrides
     );
   }, [selectedVoucher, data, categories, itemCategoryOverrides]);
+
+  // Apply manual overrides on top of calculated result
+  const displayResult = useMemo(() => {
+    if (!discountResult) return null;
+    if (Object.keys(manualOverrides).length === 0) return discountResult;
+
+    const lines = discountResult.lines.map((line: any) => {
+      const pct = manualOverrides[line.itemName];
+      if (pct === undefined) return line;
+      return {
+        ...line,
+        discountPct: pct,
+        discountAmount: (line.lineAmount * pct) / 100,
+        tierLabel: `Manual: ${pct}%`,
+      };
+    });
+
+    // Recalculate group summary totals
+    const groupSummaries = discountResult.groupSummaries.map((g: any) => {
+      const groupLines = lines.filter((l: any) => l.categoryId === g.categoryId);
+      const totalDiscount = groupLines.reduce((s: number, l: any) => s + l.discountAmount, 0);
+      return { ...g, totalDiscount };
+    });
+
+    const totalDiscountAmount = lines.reduce((s: number, l: any) => s + l.discountAmount, 0);
+    const effectivePct = discountResult.totalLineAmount > 0
+      ? (totalDiscountAmount / discountResult.totalLineAmount) * 100
+      : 0;
+
+    return { ...discountResult, lines, groupSummaries, totalDiscountAmount, effectivePct };
+  }, [discountResult, manualOverrides]);
+
+  function handleSetOverride(itemName: string, pct: number) {
+    setManualOverrides((prev) => ({ ...prev, [itemName]: pct }));
+  }
+
+  function handleClearOverride(itemName: string) {
+    setManualOverrides((prev) => {
+      const next = { ...prev };
+      delete next[itemName];
+      return next;
+    });
+  }
 
   if (!data) {
     return (
@@ -571,11 +687,14 @@ export default function Discounts() {
       </div>
 
       {/* Discount Breakdown */}
-      {selectedVoucher && discountResult && (
+      {selectedVoucher && displayResult && (
         <div className="mb-8">
           <DiscountBreakdown
             voucher={selectedVoucher}
-            result={discountResult}
+            result={displayResult}
+            manualOverrides={manualOverrides}
+            onSetOverride={handleSetOverride}
+            onClearOverride={handleClearOverride}
           />
         </div>
       )}
