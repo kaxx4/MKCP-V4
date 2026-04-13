@@ -1,65 +1,78 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, Tag, ChevronDown, Search } from "lucide-react";
+import { Upload, Tag, ChevronDown, Search, FileUp, Trash2 } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
-import { computeItemMargins } from "../engine/financial";
 import { fmtRate } from "../utils/format";
+import { useTallyPriceListStore } from "../store/tallyPriceListStore";
+import { parseTallyPriceListJson } from "../parser/tallyPriceListParser";
 
-type SortKey = "name" | "group" | "baseRate";
+type SortKey = "name" | "group";
 type SortDir = "asc" | "desc";
 
 interface PriceRow {
   itemId: string;
   name: string;
   group: string;
-  displayRate: number;
-  source: "sales" | "closing" | "opening" | "tally-pricelist" | "none";
+  tallyRate?: number;
+  tallyUnit?: string;
+  tallyCostPrice?: number;
   dealerPrices?: Array<{ priceListName: string; dealerRate: number; dealerDiscount?: number }>;
 }
 
 export default function PriceList() {
   const navigate = useNavigate();
   const { data } = useDataStore();
+  const { entries: tallyEntries, importedAt, itemCount: tallyItemCount, setPriceList, clearPriceList } = useTallyPriceListStore();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const [search, setSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
 
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportError(null);
+    setImporting(true);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const text = ev.target?.result as string;
+        const entries = parseTallyPriceListJson(text);
+        if (entries.length === 0) {
+          setImportError("No items with selling rates found in the file.");
+        } else {
+          setPriceList(entries, new Date().toISOString());
+        }
+      } catch (err) {
+        setImportError((err as Error).message);
+      } finally {
+        setImporting(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    };
+    reader.onerror = () => {
+      setImportError("Failed to read file.");
+      setImporting(false);
+    };
+    reader.readAsText(file, "UTF-8");
+  }
+
   const rows = useMemo<PriceRow[]>(() => {
     if (!data) return [];
-    const margins = computeItemMargins(data.items, data.vouchers);
-    const marginMap = new Map(margins.map((m) => [m.itemId, m]));
-
     return Array.from(data.items.values()).map((item) => {
-      const m = marginMap.get(item.itemId);
-
-      // Priority: sales rate > closing rate > opening rate > first Tally price list > none
-      let displayRate = 0;
-      let source: "sales" | "closing" | "opening" | "tally-pricelist" | "none" = "none";
-
-      if (m && m.avgSalesRate > 0) {
-        displayRate = m.avgSalesRate;
-        source = "sales";
-      } else if (item.closingRate && item.closingRate > 0) {
-        displayRate = item.closingRate;
-        source = "closing";
-      } else if (item.openingRate && item.openingRate > 0) {
-        displayRate = item.openingRate;
-        source = "opening";
-      } else if (item.dealerPrices && item.dealerPrices.length > 0) {
-        // Use first Tally price list rate as fallback
-        displayRate = item.dealerPrices[0].dealerRate;
-        source = "tally-pricelist";
-      }
-
+      const tallyEntry = tallyEntries[item.name.toUpperCase()];
       return {
         itemId: item.itemId,
         name: item.name,
         group: item.group,
-        displayRate,
-        source,
+        tallyRate: tallyEntry?.sellingRate,
+        tallyUnit: tallyEntry?.unit,
+        tallyCostPrice: tallyEntry?.costPrice,
         dealerPrices: item.dealerPrices?.map(dp => ({
           priceListName: dp.priceListName,
           dealerRate: dp.dealerRate,
@@ -67,7 +80,7 @@ export default function PriceList() {
         })),
       };
     });
-  }, [data]);
+  }, [data, tallyEntries]);
 
   const groups = useMemo(() => {
     const gs = new Set(rows.map((r) => r.group));
@@ -88,23 +101,9 @@ export default function PriceList() {
       let cmp = 0;
       if (sortKey === "name") cmp = a.name.localeCompare(b.name);
       else if (sortKey === "group") cmp = a.group.localeCompare(b.group) || a.name.localeCompare(b.name);
-      else if (sortKey === "baseRate") cmp = a.displayRate - b.displayRate;
       return sortDir === "asc" ? cmp : -cmp;
     });
   }, [filtered, sortKey, sortDir]);
-
-  // Calculate price source stats
-  const stats = useMemo(() => {
-    const counts = {
-      total: rows.length,
-      fromSales: rows.filter(r => r.source === "sales").length,
-      fromClosing: rows.filter(r => r.source === "closing").length,
-      fromOpening: rows.filter(r => r.source === "opening").length,
-      fromTallyPriceLists: rows.filter(r => r.source === "tally-pricelist").length,
-      withDealerPrices: rows.filter(r => (r.dealerPrices?.length ?? 0) > 0).length,
-    };
-    return counts;
-  }, [rows]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -122,6 +121,8 @@ export default function PriceList() {
     else next.add(itemId);
     setExpandedItems(next);
   }
+
+  const cols = tallyItemCount > 0 ? "48px 1fr 160px 140px" : "48px 1fr 160px";
 
   if (!data) {
     return (
@@ -142,47 +143,54 @@ export default function PriceList() {
   return (
     <div className="page-section">
       {/* Page Header */}
-      <div className="mb-8">
-        <h1 className="text-4xl font-bold text-slate-900 mb-1">Dealer Price List</h1>
-        <p className="text-slate-600">Manage and view all item pricing across dealer price lists</p>
-      </div>
-
-      {/* Stats Section */}
-      {stats.total > 0 && (
-        <div className="mb-8 grid grid-cols-2 md:grid-cols-6 gap-3">
-          <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
-            <div className="text-2xs font-bold text-slate-600 uppercase mb-1">Total</div>
-            <div className="text-2xl font-bold text-slate-900">{stats.total}</div>
-          </div>
-          <div className="bg-green-50 rounded-lg p-4 border border-green-200 shadow-sm">
-            <div className="text-2xs font-bold text-green-600 uppercase mb-1">Sales</div>
-            <div className="text-2xl font-bold text-green-700">{stats.fromSales}</div>
-          </div>
-          <div className="bg-amber-50 rounded-lg p-4 border border-amber-200 shadow-sm">
-            <div className="text-2xs font-bold text-amber-600 uppercase mb-1">Closing</div>
-            <div className="text-2xl font-bold text-amber-700">{stats.fromClosing}</div>
-          </div>
-          <div className="bg-red-50 rounded-lg p-4 border border-red-200 shadow-sm">
-            <div className="text-2xs font-bold text-red-600 uppercase mb-1">Opening</div>
-            <div className="text-2xl font-bold text-red-700">{stats.fromOpening}</div>
-          </div>
-          <div className="bg-purple-50 rounded-lg p-4 border border-purple-200 shadow-sm">
-            <div className="text-2xs font-bold text-purple-600 uppercase mb-1">Tally Price</div>
-            <div className="text-2xl font-bold text-purple-700">{stats.fromTallyPriceLists}</div>
-          </div>
-          <div className="bg-blue-50 rounded-lg p-4 border border-blue-200 shadow-sm">
-            <div className="text-2xs font-bold text-blue-600 uppercase mb-1">w/ Dealer</div>
-            <div className="text-2xl font-bold text-blue-700">{stats.withDealerPrices}</div>
-          </div>
+      <div className="mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div>
+          <h1 className="text-4xl font-bold text-slate-900 mb-1">Dealer Price List</h1>
+          <p className="text-slate-600">Manage and view all item pricing across dealer price lists</p>
         </div>
-      )}
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white font-semibold rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors text-sm"
+            >
+              <FileUp size={16} />
+              {importing ? "Importing…" : "Import Tally Rates"}
+            </button>
+            {tallyItemCount > 0 && (
+              <button
+                onClick={clearPriceList}
+                className="flex items-center gap-2 px-3 py-2 bg-red-100 text-red-700 font-semibold rounded-lg hover:bg-red-200 transition-colors text-sm"
+                title="Clear imported rates"
+              >
+                <Trash2 size={15} />
+              </button>
+            )}
+          </div>
+          {tallyItemCount > 0 && importedAt && (
+            <p className="text-xs text-emerald-700 font-semibold">
+              {tallyItemCount} rates loaded · {new Date(importedAt).toLocaleDateString()}
+            </p>
+          )}
+          {importError && (
+            <p className="text-xs text-red-600 font-semibold max-w-xs text-right">{importError}</p>
+          )}
+        </div>
+      </div>
 
       {/* Filters Section */}
       <div className="mb-8 p-6 bg-white rounded-xl border border-slate-200 shadow-sm">
         <h2 className="text-sm font-bold text-slate-900 mb-4 uppercase tracking-wider">Filters & Search</h2>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Search Input */}
           <div className="md:col-span-2">
             <label htmlFor="search" className="block text-sm font-semibold text-slate-700 mb-2">
               Search Items
@@ -199,7 +207,6 @@ export default function PriceList() {
             </div>
           </div>
 
-          {/* Group Filter */}
           <div>
             <label htmlFor="group" className="block text-sm font-semibold text-slate-700 mb-2">
               Filter by Group
@@ -219,7 +226,6 @@ export default function PriceList() {
           </div>
         </div>
 
-        {/* Results Summary */}
         <div className="mt-4 pt-4 border-t border-slate-200">
           <p className="text-sm font-semibold text-slate-700">
             <span className="text-blue-600 font-bold text-base">{sorted.length}</span> item{sorted.length !== 1 ? "s" : ""} found
@@ -230,16 +236,14 @@ export default function PriceList() {
       {/* Table Section */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         {/* Table Header */}
-        <div className="grid text-sm font-bold text-slate-900 bg-slate-50 border-b-2 border-slate-200" style={{ gridTemplateColumns: "48px 1fr 160px 140px" }}>
+        <div className="grid text-sm font-bold text-slate-900 bg-slate-50 border-b-2 border-slate-200" style={{ gridTemplateColumns: cols }}>
           <div className="px-4 py-4"></div>
           <div
             className="px-4 py-4 cursor-pointer select-none flex items-center gap-2 hover:bg-slate-100 transition-colors"
             onClick={() => toggleSort("name")}
             role="button"
             tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") toggleSort("name");
-            }}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleSort("name"); }}
             aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
           >
             Item Name {sortIcon("name")}
@@ -249,25 +253,16 @@ export default function PriceList() {
             onClick={() => toggleSort("group")}
             role="button"
             tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") toggleSort("group");
-            }}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleSort("group"); }}
             aria-sort={sortKey === "group" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
           >
             Group {sortIcon("group")}
           </div>
-          <div
-            className="px-4 py-4 text-right cursor-pointer select-none flex items-center justify-end gap-2 hover:bg-slate-100 transition-colors"
-            onClick={() => toggleSort("baseRate")}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") toggleSort("baseRate");
-            }}
-            aria-sort={sortKey === "baseRate" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
-          >
-            Base Rate {sortIcon("baseRate")}
-          </div>
+          {tallyItemCount > 0 && (
+            <div className="px-4 py-4 text-right text-emerald-700">
+              Tally Rate
+            </div>
+          )}
         </div>
 
         {/* Table Body */}
@@ -287,7 +282,7 @@ export default function PriceList() {
                   {/* Main Row */}
                   <div
                     className="grid items-center px-4 py-4 hover:bg-blue-50 transition-colors duration-150"
-                    style={{ gridTemplateColumns: "48px 1fr 160px 140px" }}
+                    style={{ gridTemplateColumns: cols }}
                   >
                     {/* Expand Button */}
                     <div className="flex justify-center">
@@ -301,10 +296,7 @@ export default function PriceList() {
                         >
                           <ChevronDown
                             size={18}
-                            className={clsx(
-                              "transition-transform text-slate-600",
-                              expanded && "rotate-180"
-                            )}
+                            className={clsx("transition-transform text-slate-600", expanded && "rotate-180")}
                           />
                         </button>
                       )}
@@ -312,47 +304,37 @@ export default function PriceList() {
 
                     {/* Item Name */}
                     <div className="px-2 min-w-0">
-                      <div
-                        className="text-base font-bold text-slate-900 truncate"
-                        title={row.name}
-                      >
+                      <div className="text-base font-bold text-slate-900 truncate" title={row.name}>
                         {row.name}
                       </div>
                     </div>
 
                     {/* Group */}
                     <div className="px-2">
-                      <span
-                        className="inline-block px-3 py-1 bg-slate-100 text-slate-700 font-semibold text-sm rounded-full"
-                        title={row.group}
-                      >
+                      <span className="inline-block px-3 py-1 bg-slate-100 text-slate-700 font-semibold text-sm rounded-full" title={row.group}>
                         {row.group}
                       </span>
                     </div>
 
-                    {/* Rate */}
-                    <div className="px-2 text-right">
-                      <div className={clsx(
-                        "text-lg font-bold tabular-nums",
-                        row.displayRate > 0 ? "text-blue-600" : "text-slate-400"
-                      )}>
-                        {row.displayRate > 0 ? fmtRate(row.displayRate) : "—"}
+                    {/* Tally Rate */}
+                    {tallyItemCount > 0 && (
+                      <div className="px-2 text-right">
+                        {row.tallyRate !== undefined ? (
+                          <>
+                            <div className="text-lg font-bold tabular-nums text-emerald-600">
+                              {fmtRate(row.tallyRate)}
+                            </div>
+                            {row.tallyCostPrice !== undefined && (
+                              <div className="text-xs font-semibold mt-1 text-slate-500">
+                                Cost: {fmtRate(row.tallyCostPrice)}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-slate-300 text-lg">—</span>
+                        )}
                       </div>
-                      {row.displayRate > 0 && (
-                        <div className={clsx(
-                          "text-xs font-semibold mt-1.5",
-                          row.source === "sales" && "text-green-600 bg-green-50 px-2 py-1 rounded inline-block",
-                          row.source === "closing" && "text-amber-600 bg-amber-50 px-2 py-1 rounded inline-block",
-                          row.source === "opening" && "text-red-600 bg-red-50 px-2 py-1 rounded inline-block",
-                          row.source === "tally-pricelist" && "text-purple-600 bg-purple-50 px-2 py-1 rounded inline-block"
-                        )}>
-                          {row.source === "sales" && "✓ From Sales"}
-                          {row.source === "closing" && "• Closing Stock"}
-                          {row.source === "opening" && "⚠ Opening Rate"}
-                          {row.source === "tally-pricelist" && "📋 Tally Price List"}
-                        </div>
-                      )}
-                    </div>
+                    )}
                   </div>
 
                   {/* Dealer Prices Expansion Panel */}
