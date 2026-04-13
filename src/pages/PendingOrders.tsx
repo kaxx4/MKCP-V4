@@ -9,20 +9,36 @@ import { getCurrentStockIndexed } from "../engine/inventory";
 import { computeItemMargins } from "../engine/financial";
 import type { CanonicalVoucher, ParsedData } from "../types/canonical";
 import type { VoucherIndex } from "../engine/inventory";
+import { useTallyPriceListStore, type TallyPriceEntry } from "../store/tallyPriceListStore";
 
 // Price tolerance: ±1% to absorb Tally rounding and minor rate variations
 const PRICE_TOLERANCE = 0.01;
 
-function getPriceList(data: ParsedData): Map<string, number> {
-  const margins = computeItemMargins(data.items, data.vouchers);
+function getPriceList(data: ParsedData, tallyEntries: Record<string, TallyPriceEntry>): Map<string, number> {
   const map = new Map<string, number>();
-  for (const m of margins) {
-    // Prefer avgSalesRate (actual billed history); fall back to Tally item rates
-    const item = data.items.get(m.itemId);
-    const rate = m.avgSalesRate > 0
+  const hasTally = Object.keys(tallyEntries).length > 0;
+
+  // Build margin fallback map only when needed
+  const marginMap = hasTally ? null : (() => {
+    const margins = computeItemMargins(data.items, data.vouchers);
+    return new Map(margins.map((m) => [m.itemId, m]));
+  })();
+
+  for (const [itemId, item] of data.items) {
+    // 1. Tally rate takes priority when available
+    if (hasTally) {
+      const entry = tallyEntries[item.name.toUpperCase()];
+      if (entry && entry.sellingRate > 0) {
+        map.set(itemId, entry.sellingRate);
+        continue;
+      }
+    }
+    // 2. Fall back to sales history → closing rate → opening rate
+    const m = marginMap?.get(itemId);
+    const rate = m && m.avgSalesRate > 0
       ? m.avgSalesRate
-      : (item?.closingRate ?? item?.openingRate ?? 0);
-    if (rate > 0) map.set(m.itemId, rate);
+      : (item.closingRate ?? item.openingRate ?? 0);
+    if (rate > 0) map.set(itemId, rate);
   }
   return map;
 }
@@ -166,6 +182,7 @@ export default function PendingOrders() {
   const navigate = useNavigate();
   const { data, voucherIndex } = useDataStore();
   const { isMobile } = useUIStore();
+  const { entries: tallyEntries } = useTallyPriceListStore();
   const [selected, setSelected] = useState<CanonicalVoucher | null>(null);
 
   const deliveryNotes = useMemo(() => {
@@ -175,7 +192,7 @@ export default function PendingOrders() {
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [data]);
 
-  const priceList = useMemo(() => data ? getPriceList(data) : new Map<string, number>(), [data]);
+  const priceList = useMemo(() => data ? getPriceList(data, tallyEntries) : new Map<string, number>(), [data, tallyEntries]);
 
   // Close modal on Escape
   useEffect(() => {
