@@ -22,6 +22,7 @@ import {
   Map as MapIcon,
   Percent,
   Terminal,
+  Phone,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
@@ -56,6 +57,7 @@ const NAV_ITEMS = [
   { path: "/price-list", icon: Tag, label: "Price List" },
   { path: "/routes", icon: MapIcon, label: "Routes" },
   { path: "/reports", icon: BarChart2, label: "Reports" },
+  { path: "/outreach", icon: Phone, label: "Outreach" },
   { path: "/discounts", icon: Percent, label: "Discounts" },
   { path: "/edit", icon: Pencil, label: "Edit Units" },
   { path: "/settings", icon: Settings, label: "Settings" },
