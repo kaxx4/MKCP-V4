@@ -93,7 +93,7 @@ export default function Invoices() {
         <div className="flex gap-1">
           {(["All", "Sales", "Purchase"] as FilterType[]).map((t) => (
             <button key={t} onClick={() => setTypeFilter(t)}
-              className={clsx("px-2.5 md:px-3 py-1.5 rounded-lg text-xs md:text-sm transition", typeFilter === t ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>
+              className={clsx("filter-chip", typeFilter === t && "filter-chip-active")}>
               {t}
             </button>
           ))}

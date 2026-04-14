@@ -181,24 +181,24 @@ export default function PriceListCorrection() {
   return (
     <div className="page-section">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
-        <div>
-          <h1 className="page-title">Price List Correction</h1>
-          <p className="text-sm text-muted mt-2">
-            Fix {costPriceItems.length} cost prices using recent sales data
-          </p>
+      <div className="page-header">
+        <div className="page-header-row">
+          <div>
+            <h1 className="page-title">Price List Correction</h1>
+            <p className="page-subtitle">Fix {costPriceItems.length} cost prices using recent sales data</p>
+          </div>
+          <button
+            onClick={generateTallyCSV}
+            disabled={selectedItems.size === 0}
+            className="btn-primary flex-shrink-0"
+          >
+            <Download size={16} /> Export {selectedItems.size > 0 ? `(${selectedItems.size})` : ""}
+          </button>
         </div>
-        <button
-          onClick={generateTallyCSV}
-          disabled={selectedItems.size === 0}
-          className={clsx("btn-primary flex items-center gap-2 px-4 py-2.5 font-medium flex-shrink-0", selectedItems.size === 0 && "opacity-50 cursor-not-allowed")}
-        >
-          <Download size={16} /> Export {selectedItems.size > 0 ? `(${selectedItems.size})` : ""}
-        </button>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-2 md:gap-3 mb-6">
+      <div className="grid grid-cols-3 gap-2 md:gap-3">
         <div className="bento-card">
           <div className="metric-label">Critical</div>
           <div className="metric-value text-danger">{criticalCount}</div>

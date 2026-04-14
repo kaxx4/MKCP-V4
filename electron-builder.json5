@@ -1,0 +1,50 @@
+{
+  appId: "com.mkcycles.dashboard",
+  productName: "MK Cycles Dashboard",
+  copyright: "Copyright © 2025 M.K. Cycles (P) Ltd.",
+  directories: {
+    buildResources: "public",
+    output: "release",            // Separate from dist/ so dist/**/* doesn't bundle previous builds
+  },
+  files: [
+    // React build (self-contained — no node_modules needed at runtime)
+    "dist/**/*",
+    "!dist/electron/**",         // Safety: exclude any old electron output inside dist/
+    // Electron shell
+    "public/electron.js",
+    "public/preload.js",
+    "public/favicon.svg",
+    "public/icon.png",
+    "public/package.json",
+    "package.json",
+    // Explicitly exclude everything else that would bloat the asar
+    "!node_modules/**",
+    "!server/**",
+    "!src/**",
+    "!scripts/**",
+    "!*.md",
+  ],
+  extraResources: [
+    {
+      // Server runs OUTSIDE the asar via utilityProcess.fork() — needs its own node_modules
+      from: "server",
+      to: "server",
+      filter: ["dist/**/*", "package.json", "node_modules/**/*"],
+    },
+  ],
+  extraMetadata: {
+    main: "public/electron.js",
+  },
+  win: {
+    target: [{ target: "nsis", arch: ["x64"] }],
+    icon: "public/icon.png",
+  },
+  nsis: {
+    oneClick: false,
+    allowToChangeInstallationDirectory: true,
+    createDesktopShortcut: true,
+    createStartMenuShortcut: true,
+    shortcutName: "MK Cycles Dashboard",
+  },
+  publish: null,
+}

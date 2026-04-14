@@ -129,31 +129,25 @@ export default function DiscountRules() {
   return (
     <div className="page-section">
       {/* Header with back button */}
-      <div className="flex items-center gap-4 mb-8">
-        <button
-          onClick={() => navigate("/discounts")}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-100 transition-colors font-medium"
-        >
-          <ArrowLeft size={18} /> Back to Discounts
-        </button>
-        <div>
-          <h1 className="page-title">Edit Discount Rules</h1>
-          <p className="text-sm text-neutral-600 mt-1">Configure discount tiers and item assignments</p>
+      <div className="page-header">
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate("/discounts")} className="btn-secondary btn-sm">
+            <ArrowLeft size={14} /> Back
+          </button>
+          <div>
+            <h1 className="page-title">Edit Discount Rules</h1>
+            <p className="page-subtitle">Configure discount tiers and item assignments</p>
+          </div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-0 border-b border-neutral-200 mb-8">
+      <div className="tab-list">
         {(["tiers", "items"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setActiveTab(t)}
-            className={clsx(
-              "px-6 py-3 text-sm font-medium border-b-2 transition-colors",
-              activeTab === t
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-neutral-600 hover:text-neutral-900"
-            )}
+            className={clsx("tab-item", activeTab === t && "tab-item-active")}
           >
             {t === "tiers" ? "Discount Tiers" : "Item Assignments"}
           </button>
@@ -162,7 +156,7 @@ export default function DiscountRules() {
 
       {/* Content */}
       {activeTab === "tiers" && (
-        <div className="space-y-4 mb-8">
+        <div className="space-y-4">
           {localCats.map((cat) => {
             const isExpanded = expandedCatId === cat.id;
             const isNoDisco = cat.id === "NO_DISCOUNT";
