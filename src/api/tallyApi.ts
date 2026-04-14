@@ -66,22 +66,11 @@ export async function fullSync(company: string, fromDate?: string, toDate?: stri
   }
 }
 
-export interface TallyPLReport {
-  sales: number; costOfSales: number; openingStock: number; purchases: number;
-  closingStock: number; directExpenses: number; indirectIncome: number;
-  indirectExpenses: number; netProfit: number;
-}
-
-export interface TallyBSReport {
-  capitalAccount: number; loans: number; currentLiabilities: number;
-  profitAndLoss: number; fixedAssets: number; investments: number; currentAssets: number;
-}
 
 export interface MastersSyncResult {
   success: boolean;
   errors?: string[];
   data: { tallymessage: any[] };
-  tallyFinancials?: { pl: TallyPLReport | null; bs: TallyBSReport | null };
   stats: { stockGroups: number; units: number; stockItems: number; ledgers: number; godowns: number; costCentres: number; elapsedSeconds: number };
 }
 

@@ -66,7 +66,6 @@ export interface MastersSyncResult {
   success: boolean;
   errors?: string[];
   data: { tallymessage: any[] };
-  tallyFinancials?: { pl: any | null; bs: any | null };
   stats: {
     stockGroups: number;
     units: number;
@@ -74,7 +73,6 @@ export interface MastersSyncResult {
     ledgers: number;
     godowns: number;
     costCentres: number;
-    dealerPriceLists: number;
     elapsedSeconds: number;
   };
 }
