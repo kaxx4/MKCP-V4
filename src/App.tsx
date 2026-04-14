@@ -29,6 +29,7 @@ const Discounts = lazy(() => import("./pages/Discounts"));
 const DiscountRules = lazy(() => import("./pages/DiscountRules"));
 const PriceListCorrection = lazy(() => import("./pages/PriceListCorrection"));
 const ServerLogs = lazy(() => import("./pages/ServerLogs"));
+const Outreach = lazy(() => import("./pages/Outreach"));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -107,6 +108,7 @@ function AppRoutes() {
           <Route path="/discounts" element={<Discounts />} />
           <Route path="/discount-rules" element={<DiscountRules />} />
           <Route path="/price-correction" element={<PriceListCorrection />} />
+          <Route path="/outreach" element={<Outreach />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/server-logs" element={<ServerLogs />} />
           <Route path="*" element={<Navigate to="/" replace />} />
