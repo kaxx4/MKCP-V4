@@ -75,7 +75,7 @@ export default function Ledgers() {
     // Show detail view if a ledger is selected
     if (selectedLedger) {
       return (
-        <div className="flex flex-col h-[calc(100vh-112px)]">
+        <div className="flex flex-col gap-0">
           {/* Header with back button */}
           <div className="section-card-header rounded-t-xl">
             <button
@@ -98,7 +98,7 @@ export default function Ledgers() {
           </div>
 
           {/* Transaction cards */}
-          <div className="flex-1 overflow-y-auto bg-bg-card border-x border-b border-bg-border rounded-b-xl">
+          <div className="overflow-y-auto bg-bg-card border-x border-b border-bg-border rounded-b-xl" style={{ maxHeight: "70vh" }}>
             {/* Opening balance card */}
             <div className="px-3 py-2 border-b border-bg-border bg-bg-border/10 text-xs">
               <div className="flex justify-between">
@@ -136,11 +136,11 @@ export default function Ledgers() {
 
     // Show list view
     return (
-      <div className="flex flex-col h-[calc(100vh-112px)]">
+      <div className="flex flex-col gap-4">
         <div className="page-header">
           <h1 className="page-title">Ledgers</h1>
         </div>
-        <div className="bento-card !p-0 flex flex-col flex-1 overflow-hidden">
+        <div className="bento-card !p-0 flex flex-col overflow-hidden">
           <div className="p-3 border-b border-bg-border space-y-2">
             <div>
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search ledgers…"
@@ -151,7 +151,7 @@ export default function Ledgers() {
               {groups.map((g) => <option key={g} value={g}>{g === "ALL" ? "All Groups" : g}</option>)}
             </select>
           </div>
-          <div className="flex-1 overflow-y-auto">
+          <div className="overflow-y-auto" style={{ maxHeight: "65vh" }}>
             {filtered.map((ledger) => (
               <div key={ledger.ledgerId}
                 onClick={() => setSelectedLedgerId(ledger.ledgerId)}
@@ -173,7 +173,7 @@ export default function Ledgers() {
 
   // ─── Desktop: Side-by-side layout ──────────────────────────────
   return (
-    <div className="flex gap-4 h-[calc(100vh-112px)]">
+    <div className="flex gap-4" style={{ height: "min(80vh, 800px)" }}>
       {/* Page title for accessibility - hidden from view */}
       <h1 className="sr-only">Ledger Accounts</h1>
       {/* Left: Ledger List */}

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -28,6 +28,7 @@ const RoutesPage = lazy(() => import("./pages/Routes"));
 const Discounts = lazy(() => import("./pages/Discounts"));
 const DiscountRules = lazy(() => import("./pages/DiscountRules"));
 const PriceListCorrection = lazy(() => import("./pages/PriceListCorrection"));
+const ServerLogs = lazy(() => import("./pages/ServerLogs"));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -45,7 +46,7 @@ function AppRoutes() {
   useTallyAutoSync();
 
   // Enable automatic data persistence and monitoring
-  usePersistenceMonitor({ verbose: true });
+  usePersistenceMonitor({ verbose: (import.meta as any).env?.DEV });
 
   // Restore from IndexedDB on first load with comprehensive error handling
   useEffect(() => {
@@ -107,6 +108,7 @@ function AppRoutes() {
           <Route path="/discount-rules" element={<DiscountRules />} />
           <Route path="/price-correction" element={<PriceListCorrection />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/server-logs" element={<ServerLogs />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
@@ -114,13 +116,17 @@ function AppRoutes() {
   );
 }
 
+// file:// URLs (Electron packaged build) need HashRouter — BrowserRouter requires
+// a server to handle path rewrites, which doesn't exist in a local file context.
+const Router = (window as any).electronAPI?.isElectron ? HashRouter : BrowserRouter;
+
 export default function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <BrowserRouter>
+        <Router>
           <AppRoutes />
-        </BrowserRouter>
+        </Router>
       </ToastProvider>
     </ErrorBoundary>
   );
