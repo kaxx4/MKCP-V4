@@ -222,7 +222,16 @@ app.get("/api/tally/debug/raw", (_req, res) => {
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`\n✓ MKCP Tally Proxy → http://localhost:${PORT}`);
   console.log(`   Target: ${TALLY}\n`);
+});
+
+httpServer.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    // Port already occupied — log but do NOT crash Electron (we run in the main process)
+    console.error(`❌ Port ${PORT} already in use — server did not start. Close any other instance and restart.`);
+  } else {
+    console.error(`❌ Server error: ${err.message}`);
+  }
 });
