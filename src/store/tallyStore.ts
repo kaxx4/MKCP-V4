@@ -26,6 +26,7 @@ interface TallyConnectionState {
   setFyDates: (from: string, to: string) => void;
   setSyncMode: (mode: "smart" | "monthly" | "daily" | "weekly") => void;
   resetToCurrentFY: () => void;
+  resetToPreviousFY: () => void;
   setLastVoucherDate: (d: string | null) => void;
   setLastMastersSync: (at: string) => void;
   setLastVouchersSync: (at: string) => void;
@@ -63,6 +64,10 @@ export const useTallyStore = create<TallyConnectionState>()(
       resetToCurrentFY: () => set({
         fyFromDate: getDefaultFYStart(),
         fyToDate: getDefaultFYEnd(),
+      }),
+      resetToPreviousFY: () => set({
+        fyFromDate: getPreviousFYStart(),
+        fyToDate: getPreviousFYEnd(),
       }),
     }),
     {
@@ -113,5 +118,18 @@ export function getDefaultFYStart(): string {
 export function getDefaultFYEnd(): string {
   const now = new Date();
   const fyEndYear = now.getMonth() < 3 ? now.getFullYear() : now.getFullYear() + 1;
+  return `${fyEndYear}0331`;
+}
+
+/** Previous FY — one year before current. Useful on fresh installs early in a new FY. */
+export function getPreviousFYStart(): string {
+  const now = new Date();
+  const fyStartYear = now.getMonth() < 3 ? now.getFullYear() - 2 : now.getFullYear() - 1;
+  return `${fyStartYear}0401`;
+}
+
+export function getPreviousFYEnd(): string {
+  const now = new Date();
+  const fyEndYear = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
   return `${fyEndYear}0331`;
 }

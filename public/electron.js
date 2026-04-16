@@ -138,6 +138,59 @@ ipcMain.handle('get-settings', () => readConfig());
 ipcMain.handle('set-setting', (_e, key, value) => { setConfig(key, value); return { success: true }; });
 ipcMain.handle('get-version', () => app.getVersion());
 
+// ── Discount Rules file persistence ──────────────────────────────────────────
+const discountRulesPath = path.join(app.getPath('userData'), 'discount-rules.json');
+
+ipcMain.handle('discount-rules:load', () => {
+  try {
+    if (fs.existsSync(discountRulesPath)) {
+      return { ok: true, data: JSON.parse(fs.readFileSync(discountRulesPath, 'utf8')) };
+    }
+    return { ok: false, reason: 'not-found' };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+});
+
+ipcMain.handle('discount-rules:save', (_e, payload) => {
+  try {
+    fs.writeFileSync(discountRulesPath, JSON.stringify(payload, null, 2));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+});
+
+ipcMain.handle('discount-rules:export', async (_e, payload) => {
+  const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export Discount Rules',
+    defaultPath: `discount-rules-${new Date().toISOString().slice(0, 10)}.json`,
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  if (canceled || !filePath) return { ok: false, reason: 'canceled' };
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
+    return { ok: true, filePath };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+});
+
+ipcMain.handle('discount-rules:import', async () => {
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import Discount Rules',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+    properties: ['openFile'],
+  });
+  if (canceled || filePaths.length === 0) return { ok: false, reason: 'canceled' };
+  try {
+    const data = JSON.parse(fs.readFileSync(filePaths[0], 'utf8'));
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+});
+
 app.on('second-instance', () => {
   if (mainWindow) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.focus(); }
 });

@@ -16,6 +16,12 @@ export interface MovementRecord {
   direction: MovementDirection;
 }
 
+/** Voucher types that represent pending/planned outward movements (not stock-affecting) */
+export const ORDER_DOC_TYPES = new Set(["Sales Order", "Quotation", "Delivery Note"]);
+
+/** Actual outward voucher types (affect stock) */
+export const ACTUAL_OUTWARD_TYPES = new Set(["Sales", "Debit Note", "Delivery Note"]);
+
 /**
  * Get all inward or outward movements for a specific item,
  * optionally filtered to a specific month (YYYY-MM).
@@ -40,7 +46,7 @@ export function getItemMovements(
 
       if (v.voucherType === "Purchase" || v.voucherType === "Credit Note") {
         dir = "inward";
-      } else if (v.voucherType === "Sales" || v.voucherType === "Debit Note") {
+      } else if (v.voucherType === "Sales" || v.voucherType === "Debit Note" || v.voucherType === "Delivery Note") {
         dir = "outward";
       } else if (v.voucherType === "Stock Journal") {
         dir = qty > 0 ? "inward" : "outward";
@@ -64,6 +70,47 @@ export function getItemMovements(
   }
 
   // Sort by date descending (newest first)
+  records.sort((a, b) => b.date.localeCompare(a.date));
+  return records;
+}
+
+/**
+ * Get Sales Order and Quotation documents for a specific item from the raw
+ * vouchers array (which includes optional/order-type vouchers the voucherIndex
+ * excludes). Optionally filtered to a specific month (YYYY-MM).
+ */
+export function getItemOrderDocs(
+  item: CanonicalItem,
+  allVouchers: CanonicalVoucher[],
+  month?: string,
+): MovementRecord[] {
+  const records: MovementRecord[] = [];
+
+  for (const v of allVouchers) {
+    if (v.isCancelled) continue;
+    if (v.voucherType !== "Sales Order" && v.voucherType !== "Quotation") continue;
+    if (month && !v.date.startsWith(month)) continue;
+
+    for (const line of v.lines) {
+      if (line.type !== "inventory" || line.itemId !== item.itemId) continue;
+      const qty = line.qtyBase ?? 0;
+      if (qty === 0) continue;
+
+      records.push({
+        voucherId: v.voucherId,
+        voucherNumber: v.voucherNumber,
+        voucherType: v.voucherType,
+        date: v.date,
+        partyName: v.partyName ?? "—",
+        itemName: item.name,
+        qty: Math.abs(qty),
+        rate: line.ratePerBase ?? 0,
+        amount: line.lineAmount ?? 0,
+        direction: "outward",
+      });
+    }
+  }
+
   records.sort((a, b) => b.date.localeCompare(a.date));
   return records;
 }
