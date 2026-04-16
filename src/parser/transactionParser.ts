@@ -31,7 +31,10 @@ export interface TxParseResult {
 const VOUCHER_TYPE_MAP: Record<string, VoucherType> = {
   sales: "Sales",
   sale: "Sales",
+  "sales invoice": "Sales",
+  "tax invoice": "Sales",
   purchase: "Purchase",
+  "purchase invoice": "Purchase",
   receipt: "Receipt",
   payment: "Payment",
   journal: "Journal",
@@ -44,6 +47,26 @@ const VOUCHER_TYPE_MAP: Record<string, VoucherType> = {
   stockjournal: "Stock Journal",
   "delivery note": "Delivery Note",
   deliverynote: "Delivery Note",
+  // TallyPrime renames "Delivery Note" to "Sales Order Note" in some configurations
+  "sales order note": "Delivery Note",
+  salesordernote: "Delivery Note",
+  "sale order note": "Delivery Note",
+  saleordernote: "Delivery Note",
+  // Sales Orders
+  "sales order": "Sales Order",
+  salesorder: "Sales Order",
+  "sale order": "Sales Order",
+  saleorder: "Sales Order",
+  "order": "Sales Order",
+  // Quotations / Proformas
+  "quotation": "Quotation",
+  "quote": "Quotation",
+  "sales quotation": "Quotation",
+  salesquotation: "Quotation",
+  "proforma": "Quotation",
+  "proforma invoice": "Quotation",
+  proformainvoice: "Quotation",
+  "estimate": "Quotation",
 };
 
 export function parseTransactions(raw: unknown): TxParseResult {

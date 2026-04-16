@@ -23,6 +23,7 @@ interface PersistenceConfig {
 export function usePersistenceMonitor(config: PersistenceConfig = {}) {
   const { autoBackupInterval = 5 * 60 * 1000, verbose = false } = config;
   const { data } = useDataStore();
+  // Use importedAt as a cheap change sentinel — O(1) vs O(n) JSON.stringify
   const lastSavedRef = useRef<string | null>(null);
   const backupTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -30,14 +31,15 @@ export function usePersistenceMonitor(config: PersistenceConfig = {}) {
   useEffect(() => {
     if (!data) return;
 
-    const dataString = JSON.stringify(data);
+    // importedAt is updated on every setData/mergeData call — use it as change key
+    const changeKey = data.importedAt;
 
     // Only save if data actually changed
-    if (dataString === lastSavedRef.current) {
+    if (changeKey === lastSavedRef.current) {
       return;
     }
 
-    lastSavedRef.current = dataString;
+    lastSavedRef.current = changeKey;
 
     const performSave = async () => {
       try {

@@ -150,11 +150,12 @@ export default function Edit() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-112px)] gap-3">
+    <div className="page-section">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-        <h1 className="page-title">Edit Units</h1>
-        <div className="flex items-center gap-2">
+      <div className="page-header">
+        <div className="page-header-row">
+          <h1 className="page-title">Edit Units</h1>
+          <div className="flex items-center gap-2">
           <button onClick={autoFillFromTally} className="btn-secondary btn-sm" title="Pre-fill pkg units from Tally alternate unit data">
             <Wand2 size={12} />
             Auto-fill from Tally
@@ -172,6 +173,7 @@ export default function Edit() {
               </button>
             </>
           )}
+          </div>
         </div>
       </div>
 
@@ -197,7 +199,7 @@ export default function Edit() {
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-auto section-card">
+      <div className="section-card overflow-auto" style={{ maxHeight: "min(65vh, 640px)" }}>
         <table className="w-full text-sm min-w-[540px]">
           <thead className="table-header-sticky">
             <tr className="border-b border-bg-border">

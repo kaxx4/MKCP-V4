@@ -66,7 +66,6 @@ export interface MastersSyncResult {
   success: boolean;
   errors?: string[];
   data: { tallymessage: any[] };
-  tallyFinancials?: { pl: any | null; bs: any | null };
   stats: {
     stockGroups: number;
     units: number;

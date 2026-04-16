@@ -1,7 +1,7 @@
 {
   "name": "mkcp-tally-proxy",
   "version": "3.0.0",
-  "type": "module",
+  "type": "commonjs",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",

@@ -147,20 +147,15 @@ export default function Alerts() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-112px)] gap-3 md:gap-4">
+    <div className="page-section">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-        <div className="flex items-center gap-3">
-          <h1 className="page-title">Low Stock Alerts</h1>
-          <span className="badge badge-muted">
-            {filtered.length} items
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleAddAll}
-            className="btn-primary btn-sm"
-          >
+      <div className="page-header">
+        <div className="page-header-row">
+          <div className="flex items-center gap-3">
+            <h1 className="page-title">Low Stock Alerts</h1>
+            <span className="badge badge-muted">{filtered.length} items</span>
+          </div>
+          <button onClick={handleAddAll} className="btn-primary btn-sm">
             <ShoppingCart size={14} />
             Add All
           </button>
@@ -233,7 +228,7 @@ export default function Alerts() {
 
       {/* Mobile: Card list / Desktop: Virtualized Table */}
       {isMobile ? (
-        <div ref={parentRef} className="flex-1 overflow-y-auto min-h-0 space-y-2">
+        <div ref={parentRef} className="overflow-y-auto space-y-2" style={{ maxHeight: "65vh" }}>
           {filtered.map((d) => {
             const stockDisp = toDisplay(d.item, Math.ceil(d.stock), unitMode);
             const sugDisp = toDisplay(d.item, Math.ceil(d.suggested), unitMode);
@@ -279,7 +274,7 @@ export default function Alerts() {
           })}
         </div>
       ) : (
-        <div className="section-card overflow-hidden flex flex-col flex-1 min-h-0">
+        <div className="section-card overflow-hidden flex flex-col">
           {/* Table header */}
           <div className="flex table-header-sticky">
             <div className="flex-1 px-4 py-2.5 min-w-0">Item</div>
@@ -293,7 +288,7 @@ export default function Alerts() {
           </div>
 
           {/* Table body */}
-          <div ref={parentRef} className="flex-1 overflow-y-auto min-h-0">
+          <div ref={parentRef} className="overflow-y-auto" style={{ height: "min(65vh, 600px)" }}>
             <div
               style={{
                 height: `${virtualizer.getTotalSize()}px`,

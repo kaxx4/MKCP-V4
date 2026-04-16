@@ -19,8 +19,12 @@ import {
   MoreHorizontal,
   X,
   RefreshCw,
-  Map,
+  Map as MapIcon,
   Percent,
+  Terminal,
+  Phone,
+  CalendarDays,
+  Activity,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
@@ -53,11 +57,15 @@ const NAV_ITEMS = [
   { path: "/invoices", icon: FileText, label: "Invoices" },
   { path: "/pending-orders", icon: Truck, label: "Pending Orders" },
   { path: "/price-list", icon: Tag, label: "Price List" },
-  { path: "/routes", icon: Map, label: "Routes" },
+  { path: "/routes", icon: MapIcon, label: "Routes" },
   { path: "/reports", icon: BarChart2, label: "Reports" },
+  { path: "/outreach", icon: Phone, label: "Outreach" },
+  { path: "/calendar", icon: CalendarDays, label: "Calendar" },
   { path: "/discounts", icon: Percent, label: "Discounts" },
   { path: "/edit", icon: Pencil, label: "Edit Units" },
   { path: "/settings", icon: Settings, label: "Settings" },
+  { path: "/server-logs", icon: Terminal, label: "Server Logs" },
+  { path: "/perf-log", icon: Activity, label: "Perf Log" },
 ];
 
 const MOBILE_PRIMARY = NAV_ITEMS.slice(0, 5);
@@ -133,7 +141,7 @@ export function NavBar() {
     return (
       <>
         <nav
-          className={clsx("fixed bottom-0 left-0 right-0 h-14 flex items-center justify-around z-30 px-1", COLORS.bg, "border-t", COLORS.border, "bg-white/95 backdrop-blur-md")}
+          className={clsx("fixed bottom-0 left-0 right-0 h-14 flex items-center justify-around z-30 px-1", COLORS.bg, "border-t", COLORS.border)}
           aria-label="Main navigation"
         >
           {MOBILE_PRIMARY.map(({ path, icon: Icon, label }) => (
@@ -167,7 +175,7 @@ export function NavBar() {
         {moreOpen && (
           <div className="fixed inset-0 z-40 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Navigation menu">
             <div
-              className="absolute inset-0 bg-black/30 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/40"
               onClick={() => setMoreOpen(false)}
               role="button"
               tabIndex={0}

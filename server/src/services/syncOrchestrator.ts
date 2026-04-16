@@ -2,14 +2,12 @@ import type {
   SyncPlan, SyncProgress, SyncResult, MastersSyncResult, VouchersSyncResult
 } from "../types.js";
 import { tallyPostWithRetry } from "../tally.js";
-import { profitAndLossXml, balanceSheetXml, parsePLReport, parseBSReport } from "../tally.js";
-import { buildCollectionXml, buildCompanyListXml, buildDayBookXml } from "./xmlBuilder.js";
-import { buildSmartBatches } from "./voucherBatcher.js";
+import { buildCollectionXml, buildDayBookXml } from "./xmlBuilder.js";
+
 import { getMonthlyChunks, getWeeklyChunks, getDailyChunks } from "../tally.js";
 import {
   convertStockGroups, convertUnits, convertGodowns, convertCostCentres,
-  convertStockItems, convertLedgers, convertDealerPriceLists, convertVouchers, convertCompanies,
-  convertCollection
+  convertStockItems, convertLedgers, convertVouchers
 } from "../converters/convert.js";
 import { PARALLEL_MASTERS, SEQUENTIAL_MASTERS, TRANSACTION_COLLECTIONS } from "../config/collections.js";
 import type { ChangeDetector } from "./changeDetector.js";
@@ -19,16 +17,6 @@ export class SyncOrchestrator {
     private tallyUrl: string,
     private changeDetector: ChangeDetector
   ) {}
-
-  // ── Validate company ──────────────────────────────────────────────────────
-  private async validateCompany(company: string, signal?: AbortSignal): Promise<void> {
-    const parsed = await tallyPostWithRetry(this.tallyUrl, buildCompanyListXml(), 10_000, false, 1, signal);
-    const companies = convertCompanies(parsed);
-    const names = companies.map(c => c.name?.trim().toUpperCase());
-    if (names.length > 0 && !names.includes(company.trim().toUpperCase())) {
-      throw new Error(`Company "${company}" not found in Tally. Available: ${names.join(", ")}`);
-    }
-  }
 
   // ── Fetch masters ─────────────────────────────────────────────────────────
   async syncMastersOnly(
@@ -44,39 +32,37 @@ export class SyncOrchestrator {
       console.log(`[MASTERS] Step ${step}/${total}: ${detail}`);
     };
 
-    emit("masters", 1, 8, "Fetching parallel masters (groups, units, godowns, costCentres, P&L, BS)...");
+    // Wave 1: 4 small/fast parallel requests — do NOT include P&L/BS here.
+    // Sending P&L+BS alongside these 4 = 6 concurrent requests, which overwhelms
+    // single-threaded TallyPrime and causes it to crash or time out.
+    emit("masters", 1, 8, "Fetching parallel masters (groups, units, godowns, costCentres)...");
 
-    const [groupsRes, unitsRes, godownsRes, costCentresRes, plRes, bsRes] = await Promise.allSettled([
+    const [groupsRes, unitsRes, godownsRes, costCentresRes] = await Promise.allSettled([
       (async () => { const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(PARALLEL_MASTERS[0], company), PARALLEL_MASTERS[0].timeout, false, 1, signal); return convertStockGroups(xml); })(),
       (async () => { const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(PARALLEL_MASTERS[1], company), PARALLEL_MASTERS[1].timeout, false, 1, signal); return convertUnits(xml); })(),
       (async () => { const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(PARALLEL_MASTERS[2], company), PARALLEL_MASTERS[2].timeout, false, 1, signal); return convertGodowns(xml); })(),
       (async () => { const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(PARALLEL_MASTERS[3], company), PARALLEL_MASTERS[3].timeout, false, 1, signal); return convertCostCentres(xml); })(),
-      (async () => { const xml = await tallyPostWithRetry(this.tallyUrl, profitAndLossXml(company), 30_000, true, 1, signal); return parsePLReport(xml); })(),
-      (async () => { const xml = await tallyPostWithRetry(this.tallyUrl, balanceSheetXml(company), 30_000, true, 1, signal); return parseBSReport(xml); })(),
     ]);
 
     const groups = groupsRes.status === "fulfilled" ? groupsRes.value : (() => { errors.push(`Stock groups: ${(groupsRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
     const units = unitsRes.status === "fulfilled" ? unitsRes.value : (() => { errors.push(`Units: ${(unitsRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
     const godowns = godownsRes.status === "fulfilled" ? godownsRes.value : (() => { errors.push(`Godowns: ${(godownsRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
     const costCentres = costCentresRes.status === "fulfilled" ? costCentresRes.value : (() => { errors.push(`Cost centres: ${(costCentresRes as PromiseRejectedResult).reason?.message}`); return { tallymessage: [] as any[] }; })();
-    const plReport = plRes.status === "fulfilled" ? plRes.value : null;
-    const bsReport = bsRes.status === "fulfilled" ? bsRes.value : null;
 
-    if (plReport) console.log(`[MASTERS] ✓ P&L: Sales=${(plReport.sales / 100000).toFixed(1)}L, Closing=${(plReport.closingStock / 100000).toFixed(1)}L`);
-    if (bsReport) console.log(`[MASTERS] ✓ BS: Capital=${(bsReport.capitalAccount / 100000).toFixed(1)}L`);
     console.log(`[MASTERS] ✓ Parallel: ${groups.tallymessage.length} groups, ${units.tallymessage.length} units, ${godowns.tallymessage.length} godowns, ${costCentres.tallymessage.length} cost centres`);
 
-    // Stock Items + Ledgers + Dealer Price Lists — fetch in parallel (independent requests)
+    // Stock Items + Ledgers — fetch in parallel
     let stocks = { tallymessage: [] as any[] };
     let ledgers = { tallymessage: [] as any[] };
-    let dealerPriceLists = { tallymessage: [] as any[] };
     if (!signal?.aborted) {
-      emit("masters", 2, 8, "Fetching stock items + ledgers + dealer price lists...");
+      // Dealer price lists removed from this wave — the PriceList collection query
+      // crashes TallyPrime (ECONNRESET / 5-minute timeout) which then prevents all
+      // subsequent voucher fetches. Stock items + ledgers only.
+      emit("masters", 2, 8, "Fetching stock items + ledgers...");
       const stocksDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "StockItem")!;
       const ledgersDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "Ledger")!;
-      const plDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "PriceList");
 
-      const requests = [
+      const [stocksRes, ledgersRes] = await Promise.allSettled([
         (async () => {
           const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(stocksDef, company), stocksDef.timeout, false, 1, signal);
           return convertStockItems(xml);
@@ -85,16 +71,7 @@ export class SyncOrchestrator {
           const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(ledgersDef, company), ledgersDef.timeout, false, 1, signal);
           return convertLedgers(xml);
         })(),
-      ];
-
-      if (plDef) {
-        requests.push((async () => {
-          const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(plDef, company), plDef.timeout, false, 1, signal);
-          return convertDealerPriceLists(xml);
-        })());
-      }
-
-      const [stocksRes, ledgersRes, ...plRes] = await Promise.allSettled(requests);
+      ]);
 
       if (stocksRes.status === "fulfilled") {
         stocks = stocksRes.value;
@@ -107,15 +84,6 @@ export class SyncOrchestrator {
         console.log(`[MASTERS] ✓ ${ledgers.tallymessage.length} ledgers`);
       } else if (!ledgersRes.reason?.message?.includes("Aborted")) {
         errors.push(`Ledgers: ${ledgersRes.reason?.message}`);
-      }
-      if (plDef && plRes.length > 0 && plRes[0].status === "fulfilled") {
-        dealerPriceLists = plRes[0].value;
-        console.log(`[MASTERS] ✓ ${dealerPriceLists.tallymessage.length} dealer price lists`);
-      } else if (plDef && plRes.length > 0 && plRes[0].status === "rejected") {
-        const rejected = plRes[0] as PromiseRejectedResult;
-        if (!rejected.reason?.message?.includes("Aborted")) {
-          errors.push(`Dealer price lists: ${rejected.reason?.message}`);
-        }
       }
     }
 
@@ -134,10 +102,8 @@ export class SyncOrchestrator {
           ...ledgers.tallymessage,
           ...godowns.tallymessage,
           ...costCentres.tallymessage,
-          ...dealerPriceLists.tallymessage,
         ],
       },
-      tallyFinancials: plReport || bsReport ? { pl: plReport, bs: bsReport } : undefined,
       stats: {
         stockGroups: groups.tallymessage.length,
         units: units.tallymessage.length,
@@ -145,7 +111,6 @@ export class SyncOrchestrator {
         ledgers: ledgers.tallymessage.length,
         godowns: godowns.tallymessage.length,
         costCentres: costCentres.tallymessage.length,
-        dealerPriceLists: dealerPriceLists.tallymessage.length,
         elapsedSeconds: parseFloat(elapsed),
       },
     };
@@ -162,12 +127,12 @@ export class SyncOrchestrator {
   ): Promise<VouchersSyncResult> {
     const t0 = Date.now();
 
-    // Build chunks based on strategy
+    // Build chunks based on strategy.
+    // "smart" is treated as "monthly" — the smart count query sends a Voucher collection
+    // to Tally which can trigger "incorrect object type" and crash TallyPrime.
     let chunks: { from: string; to: string; label: string; estimatedCount: number }[];
-    if (strategy === "smart") {
-      console.log(`[DAYBOOK] Building smart batches...`);
-      const batches = await buildSmartBatches(this.tallyUrl, company, fromDate, toDate, 3000, signal);
-      chunks = batches;
+    if (strategy === "smart" || strategy === "monthly") {
+      chunks = getMonthlyChunks(fromDate, toDate).map(c => ({ ...c, estimatedCount: -1 }));
     } else if (strategy === "daily") {
       chunks = getDailyChunks(fromDate, toDate).map(c => ({ ...c, estimatedCount: -1 }));
     } else if (strategy === "weekly") {
@@ -185,7 +150,7 @@ export class SyncOrchestrator {
     let chunksSucceeded = 0;
     let chunksFailed = 0;
 
-    const voucherDef = TRANSACTION_COLLECTIONS[0];
+    const voucherTimeoutMs = TRANSACTION_COLLECTIONS[0].timeout;
 
     // Concurrency-limited parallel fetch — 3 chunks at a time.
     // Tally is single-threaded but can queue requests; 3 concurrent keeps throughput
@@ -206,7 +171,7 @@ export class SyncOrchestrator {
 
       try {
         console.log(`[DAYBOOK] Chunk ${i + 1}/${chunks.length}: ${chunk.label} (${chunk.from} → ${chunk.to})...`);
-        const vouchers = await this._fetchVoucherChunk(company, chunk.from, chunk.to, chunk.label, voucherDef.timeout, signal);
+        const vouchers = await this._fetchVoucherChunk(company, chunk.from, chunk.to, chunk.label, voucherTimeoutMs, signal);
         const added = this._collectVouchers(vouchers, chunk.label, allVouchers, seenGuids);
         const ms = Date.now() - chunkT0;
         chunkDetails.push({ label: chunk.label, count: added, ms });
@@ -223,7 +188,7 @@ export class SyncOrchestrator {
           for (const sub of subChunks) {
             if (signal?.aborted) break;
             try {
-              const subVouchers = await this._fetchVoucherChunk(company, sub.from, sub.to, sub.label, voucherDef.timeout, signal);
+              const subVouchers = await this._fetchVoucherChunk(company, sub.from, sub.to, sub.label, voucherTimeoutMs, signal);
               subTotal += this._collectVouchers(subVouchers, sub.label, allVouchers, seenGuids);
             } catch (subErr: any) {
               errors.push(`${sub.label}: ${subErr.message}`);
@@ -241,11 +206,28 @@ export class SyncOrchestrator {
       }
     };
 
-    // Process chunks in waves of CONCURRENCY
+    // Process chunks in waves of CONCURRENCY.
+    // Early-exit: if an entire wave yields 0 new vouchers (all deduped), Tally is ignoring the
+    // date filter and returning the same data every time. Stop — we already have everything.
+    let consecutiveEmptyWaves = 0;
     for (let i = 0; i < chunks.length; i += CONCURRENCY) {
       if (signal?.aborted) { console.log("[DAYBOOK] Aborted — stopping"); break; }
+      const prevCount = allVouchers.length;
       const wave = chunks.slice(i, i + CONCURRENCY);
       await Promise.all(wave.map((chunk, j) => processChunk(chunk, i + j)));
+      const newInWave = allVouchers.length - prevCount;
+      if (newInWave === 0 && allVouchers.length > 0) {
+        consecutiveEmptyWaves++;
+        if (consecutiveEmptyWaves >= 2) {
+          const remaining = chunks.length - (i + CONCURRENCY);
+          if (remaining > 0) {
+            console.log(`[DAYBOOK] ⚡ Tally date filter not working — got same data twice in a row. Skipping ${remaining} remaining chunks.`);
+          }
+          break;
+        }
+      } else {
+        consecutiveEmptyWaves = 0;
+      }
     }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -356,37 +338,31 @@ export class SyncOrchestrator {
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<ReturnType<typeof convertVouchers>> {
+    // PRIMARY: Collection with TDL date formula filter — the only method that actually
+    // respects the date range. Day Book uses Tally's display period, not SVFROMDATE/SVTODATE,
+    // so it returns the same single day's data for every chunk request.
+    // NOTE: Wildcards (AllLedgerEntries.*) are intentionally omitted — they crash TallyPrime.
+    //       TallyPrime returns all standard sub-fields when the parent key is requested.
     const voucherDef = TRANSACTION_COLLECTIONS[0];
-    let vouchers: ReturnType<typeof convertVouchers>;
     try {
-      const xml = await tallyPostWithRetry(this.tallyUrl, buildCollectionXml(voucherDef, company, from, to), timeoutMs, false, 1, signal);
-      vouchers = convertVouchers(xml);
-      if (vouchers.tallymessage.length === 0) {
-        console.log(`[DAYBOOK]   Collection returned 0 for ${label}, trying Day Book fallback...`);
-        const xml2 = await tallyPostWithRetry(this.tallyUrl, buildDayBookXml(company, from, to), timeoutMs, false, 1, signal);
-        const fallback = convertVouchers(xml2);
-        if (fallback.tallymessage.length > 0) {
-          let inRange = 0;
-          for (const v of fallback.tallymessage) {
-            const vDate = String(v.date ?? "").replace(/-/g, "");
-            const vNum = parseInt(vDate, 10);
-            if (vNum && vNum >= parseInt(from, 10) && vNum <= parseInt(to, 10)) inRange++;
-          }
-          if (inRange > 0) {
-            console.log(`[DAYBOOK]   Day Book returned ${fallback.tallymessage.length} vouchers, ${inRange} in range`);
-            vouchers = fallback;
-          } else {
-            console.warn(`[DAYBOOK]   Day Book returned vouchers but NONE in range — discarding`);
-          }
-        }
+      const collectionXml = buildCollectionXml(voucherDef, company, from, to);
+      const result = await tallyPostWithRetry(this.tallyUrl, collectionXml, timeoutMs, false, 1, signal);
+      const converted = convertVouchers(result);
+      if (converted.tallymessage.length > 0) {
+        console.log(`[DAYBOOK] Collection: ${converted.tallymessage.length} vouchers for ${label}`);
+        return converted;
       }
-    } catch (primaryErr: any) {
-      if (primaryErr.message?.includes("Aborted")) throw primaryErr;
-      console.log(`[DAYBOOK]   Collection failed for ${label}, trying Day Book fallback...`);
-      const xml2 = await tallyPostWithRetry(this.tallyUrl, buildDayBookXml(company, from, to), timeoutMs, false, 1, signal);
-      vouchers = convertVouchers(xml2);
+      // Collection returned 0 — could be genuinely empty or unsupported. Fall through to Day Book.
+      console.log(`[DAYBOOK] Collection returned 0 for ${label} — trying Day Book fallback`);
+    } catch (e: any) {
+      if (e.message?.includes("Aborted")) throw e;
+      console.log(`[DAYBOOK] Collection failed for ${label} (${e.message}) — trying Day Book fallback`);
     }
-    return vouchers;
+
+    // FALLBACK: Day Book — ignores date range but may return something if Collection fails.
+    // Results will be deduplicated by GUID across chunks so duplicates are safe.
+    const xml = await tallyPostWithRetry(this.tallyUrl, buildDayBookXml(company, from, to), timeoutMs, false, 1, signal);
+    return convertVouchers(xml);
   }
 
   private _collectVouchers(

@@ -194,6 +194,16 @@ export default function PendingOrders() {
 
   const priceList = useMemo(() => data ? getPriceList(data, tallyEntries) : new Map<string, number>(), [data, tallyEntries]);
 
+  // Pre-compute readiness for all notes once — avoids per-row recomputation during render
+  const readinessMap = useMemo(() => {
+    if (!data) return new Map<string, ReturnType<typeof computeReadiness>>();
+    const map = new Map<string, ReturnType<typeof computeReadiness>>();
+    for (const note of deliveryNotes) {
+      map.set(note.voucherId, computeReadiness(note, data, voucherIndex, priceList));
+    }
+    return map;
+  }, [deliveryNotes, data, voucherIndex, priceList]);
+
   // Close modal on Escape
   useEffect(() => {
     if (!selected) return;
@@ -222,8 +232,8 @@ export default function PendingOrders() {
         </div>
 
         {isMobile
-          ? <MobileList notes={deliveryNotes} data={data!} voucherIndex={voucherIndex} priceList={priceList} onSelect={setSelected} />
-          : <DesktopTable notes={deliveryNotes} data={data!} voucherIndex={voucherIndex} priceList={priceList} onSelect={setSelected} />}
+          ? <MobileList notes={deliveryNotes} data={data!} voucherIndex={voucherIndex} priceList={priceList} readinessMap={readinessMap} onSelect={setSelected} />
+          : <DesktopTable notes={deliveryNotes} data={data!} voucherIndex={voucherIndex} priceList={priceList} readinessMap={readinessMap} onSelect={setSelected} />}
       </div>
 
       {/* Modal */}
@@ -254,7 +264,7 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
       role="dialog"
       aria-modal="true"
       aria-label={`Delivery Note ${voucher.voucherNumber}`}
@@ -448,11 +458,12 @@ function DNModal({ voucher, data, voucherIndex, priceList, onClose }: {
 }
 
 /* ─── Desktop table ───────────────────────────────────── */
-function DesktopTable({ notes, data, voucherIndex, priceList, onSelect }: {
+function DesktopTable({ notes, data: _data, voucherIndex: _vi, priceList: _pl, readinessMap, onSelect }: {
   notes: CanonicalVoucher[];
   data: ParsedData;
   voucherIndex: VoucherIndex;
   priceList: Map<string, number>;
+  readinessMap: Map<string, ReturnType<typeof computeReadiness>>;
   onSelect: (v: CanonicalVoucher) => void;
 }) {
   const COL = "90px 120px 1fr 140px 110px";
@@ -473,7 +484,7 @@ function DesktopTable({ notes, data, voucherIndex, priceList, onSelect }: {
           </div>
           <div className="overflow-y-auto max-h-[calc(100vh-240px)]" style={{ minWidth: 580 }}>
             {notes.map((v) => {
-              const { ready } = computeReadiness(v, data, voucherIndex, priceList);
+              const { ready } = readinessMap.get(v.voucherId) ?? { ready: false };
               return (
                 <div
                   key={v.voucherId}
@@ -515,11 +526,12 @@ function DesktopTable({ notes, data, voucherIndex, priceList, onSelect }: {
 }
 
 /* ─── Mobile card list ────────────────────────────────── */
-function MobileList({ notes, data, voucherIndex, priceList, onSelect }: {
+function MobileList({ notes, data: _data, voucherIndex: _vi, priceList: _pl, readinessMap, onSelect }: {
   notes: CanonicalVoucher[];
   data: ParsedData;
   voucherIndex: VoucherIndex;
   priceList: Map<string, number>;
+  readinessMap: Map<string, ReturnType<typeof computeReadiness>>;
   onSelect: (v: CanonicalVoucher) => void;
 }) {
   if (!notes.length) {
@@ -535,7 +547,7 @@ function MobileList({ notes, data, voucherIndex, priceList, onSelect }: {
     <div className="space-y-1.5">
       {notes.map((v) => {
         const itemCount = v.lines.filter((l) => l.type === "inventory").length;
-        const { ready } = computeReadiness(v, data, voucherIndex, priceList);
+        const { ready } = readinessMap.get(v.voucherId) ?? { ready: false };
         return (
           <div
             key={v.voucherId}
