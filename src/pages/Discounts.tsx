@@ -28,43 +28,32 @@ function GroupDetailsModal({
   if (!isOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white rounded-xl shadow-2xl w-96 max-h-96 overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-200 flex-shrink-0">
-          <h3 className="text-lg font-semibold text-neutral-900">{groupName}</h3>
-          <button
-            onClick={onClose}
-            className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-neutral-100"
-          >
-            <X size={20} />
+        <div className="modal-header border-b border-neutral-200">
+          <h3 className="card-title">{groupName}</h3>
+          <button onClick={onClose} className="btn-icon" aria-label="Close">
+            <X size={18} />
           </button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="modal-body space-y-4">
           {/* Total Packages */}
-          <div className="px-4 py-3 bg-blue-50 rounded-lg border border-blue-200">
-            <div className="text-sm text-blue-700 font-medium">Total Packages in Group</div>
-            <div className="text-2xl font-bold text-blue-900 mt-1">{totalPackages}</div>
+          <div className="px-4 py-3 bg-accent/[0.06] rounded-xl border border-accent/20">
+            <div className="label-text text-accent">Total Packages in Group</div>
+            <div className="metric-value text-accent mt-1">{totalPackages}</div>
           </div>
 
           {/* Items List */}
           <div>
-            <div className="text-xs font-semibold text-neutral-600 uppercase tracking-wide mb-3">
-              Items in This Group
-            </div>
+            <div className="label-text mb-3">Items in This Group</div>
             <div className="space-y-2">
               {items.map((item, idx) => (
                 <div key={idx} className="px-3 py-2 bg-neutral-50 rounded-lg border border-neutral-200">
                   <div className="text-sm font-medium text-neutral-900">{item.itemName}</div>
-                  <div className="text-xs text-neutral-600 mt-1">
+                  <div className="text-xs text-neutral-500 mt-1">
                     {fmtNum(item.qty, 0)} units = {item.packages} pkg{item.packages !== 1 ? 's' : ''}
                   </div>
                 </div>
@@ -74,13 +63,8 @@ function GroupDetailsModal({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-neutral-200 flex-shrink-0">
-          <button
-            onClick={onClose}
-            className="w-full px-4 py-2 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition-colors"
-          >
-            Close
-          </button>
+        <div className="modal-footer border-t border-neutral-200">
+          <button onClick={onClose} className="btn-primary w-full">Close</button>
         </div>
       </div>
     </div>
@@ -667,7 +651,7 @@ export default function Discounts() {
       <div className="empty-state">
         <div className="empty-state-icon text-5xl">%</div>
         <h2 className="empty-state-title">No Data Loaded</h2>
-        <p className="empty-state-desc">Import your Tally data to calculate discounts</p>
+        <p className="empty-state-description">Import your Tally data to calculate discounts</p>
         <button onClick={() => navigate("/import")} className="btn-primary mt-2">
           <Upload size={14} /> Import Data
         </button>
@@ -678,19 +662,16 @@ export default function Discounts() {
   return (
     <div className="page-section">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
-        <div>
-          <h1 className="page-title">Discounts</h1>
-          <p className="text-sm text-neutral-600 mt-2">
-            Group-wise automatic discounts for Sales invoices
-          </p>
+      <div className="page-header">
+        <div className="page-header-row">
+          <div>
+            <h1 className="page-title">Discounts</h1>
+            <p className="page-subtitle">Group-wise automatic discounts for Sales invoices</p>
+          </div>
+          <button onClick={() => navigate("/discount-rules")} className="btn-secondary">
+            <Pencil size={16} /> Edit Rules
+          </button>
         </div>
-        <button
-          onClick={() => navigate("/discount-rules")}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-white text-neutral-900 border border-neutral-200 hover:bg-neutral-50 transition-colors font-medium shadow-sm"
-        >
-          <Pencil size={16} /> Edit Rules
-        </button>
       </div>
 
       {/* Voucher Selector */}

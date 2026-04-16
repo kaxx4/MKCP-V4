@@ -28,11 +28,11 @@ export function Layout({ children }: { children: ReactNode }) {
       <main
         id="main-content"
         className={clsx(
-          "transition-[margin] duration-200 min-h-screen",
+          "min-h-screen",
           isMobile ? "ml-0 pb-16" : sidebarOpen ? "ml-[220px]" : "ml-14"
         )}
       >
-        <div className={clsx("mx-auto max-w-screen-2xl", isMobile ? "p-4 pt-5" : "p-8 lg:p-10")}>
+        <div className={clsx("mx-auto max-w-screen-2xl", isMobile ? "p-3 pt-4" : "p-4 lg:p-5")}>
           {children}
         </div>
       </main>

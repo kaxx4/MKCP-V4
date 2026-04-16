@@ -1,14 +1,51 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronRight, X, Plus, Trash2, RotateCcw, ArrowLeft } from "lucide-react";
+import { ChevronDown, ChevronRight, X, Plus, Trash2, RotateCcw, ArrowLeft, Download, Upload } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useDiscountStore } from "../store/discountStore";
 import {
   DEFAULT_ITEM_CATEGORY_MAP,
+  DEFAULT_GROUP_RULES,
   type DiscountCategory,
   type DiscountTier,
 } from "../engine/discounts";
+
+// Discount rules file version — bump when schema changes
+const FILE_VERSION = "1";
+
+interface DiscountRulesFile {
+  version: string;
+  exportedAt: string;
+  categories: DiscountCategory[];
+  itemCategoryOverrides: Record<string, string>;
+}
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      isElectron?: boolean;
+      discountRules?: {
+        load:   () => Promise<{ ok: boolean; data?: DiscountRulesFile; reason?: string }>;
+        save:   (p: DiscountRulesFile) => Promise<{ ok: boolean; reason?: string }>;
+        export: (p: DiscountRulesFile) => Promise<{ ok: boolean; filePath?: string; reason?: string }>;
+        import: () => Promise<{ ok: boolean; data?: DiscountRulesFile; reason?: string }>;
+      };
+    };
+  }
+}
+
+function buildPayload(
+  cats: DiscountCategory[],
+  overrides: Record<string, string>
+): DiscountRulesFile {
+  return {
+    version: FILE_VERSION,
+    exportedAt: new Date().toISOString(),
+    categories: cats,
+    itemCategoryOverrides: overrides,
+  };
+}
 
 export default function DiscountRules() {
   const navigate = useNavigate();
@@ -26,6 +63,13 @@ export default function DiscountRules() {
   const [itemSearch, setItemSearch] = useState("");
   const [expandedCatId, setExpandedCatId] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  const [fileMsg, setFileMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function showMsg(type: "ok" | "err", text: string) {
+    setFileMsg({ type, text });
+    setTimeout(() => setFileMsg(null), 4000);
+  }
 
   const mergedMap = useMemo(
     () => ({ ...DEFAULT_ITEM_CATEGORY_MAP, ...localOverrides }),
@@ -102,10 +146,18 @@ export default function DiscountRules() {
   }
 
   // ── Save & actions ────────────────────────────────────────────
-  function handleSave() {
+  async function handleSave() {
     setCategories(localCats);
     setItemCategoryOverrides(localOverrides);
     setHasChanges(false);
+
+    // Write to disk whenever Electron is available
+    const payload = buildPayload(localCats, localOverrides);
+    if (window.electronAPI?.discountRules) {
+      const res = await window.electronAPI.discountRules.save(payload);
+      if (!res.ok) showMsg("err", `Saved to store, but file write failed: ${res.reason}`);
+    }
+
     navigate("/discounts");
   }
 
@@ -114,6 +166,69 @@ export default function DiscountRules() {
     resetToDefaults();
     setHasChanges(false);
     navigate("/discounts");
+  }
+
+  async function handleExport() {
+    const payload = buildPayload(localCats, localOverrides);
+
+    if (window.electronAPI?.discountRules) {
+      // Electron: native save dialog
+      const res = await window.electronAPI.discountRules.export(payload);
+      if (res.ok) showMsg("ok", `Exported → ${res.filePath}`);
+      else if (res.reason !== "canceled") showMsg("err", `Export failed: ${res.reason}`);
+    } else {
+      // Browser fallback: trigger download
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `discount-rules-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showMsg("ok", "Exported discount rules JSON");
+    }
+  }
+
+  async function handleImport() {
+    if (window.electronAPI?.discountRules) {
+      // Electron: native open dialog
+      const res = await window.electronAPI.discountRules.import();
+      if (!res.ok) {
+        if (res.reason !== "canceled") showMsg("err", `Import failed: ${res.reason}`);
+        return;
+      }
+      applyImportedRules(res.data!);
+    } else {
+      // Browser fallback: file input
+      fileInputRef.current?.click();
+    }
+  }
+
+  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string) as DiscountRulesFile;
+        applyImportedRules(data);
+      } catch {
+        showMsg("err", "Invalid JSON file");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  function applyImportedRules(data: DiscountRulesFile) {
+    if (!data.categories || !Array.isArray(data.categories)) {
+      showMsg("err", "Invalid file: missing categories");
+      return;
+    }
+    setLocalCats(data.categories);
+    setLocalOverrides(data.itemCategoryOverrides ?? {});
+    setHasChanges(true);
+    showMsg("ok", `Imported ${data.categories.length} categories (unsaved — click Save to apply)`);
   }
 
   if (!data) {
@@ -128,32 +243,65 @@ export default function DiscountRules() {
 
   return (
     <div className="page-section">
+      {/* Hidden file input for browser-fallback import */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={handleFileInputChange}
+      />
+
       {/* Header with back button */}
-      <div className="flex items-center gap-4 mb-8">
-        <button
-          onClick={() => navigate("/discounts")}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-100 transition-colors font-medium"
-        >
-          <ArrowLeft size={18} /> Back to Discounts
-        </button>
-        <div>
-          <h1 className="page-title">Edit Discount Rules</h1>
-          <p className="text-sm text-neutral-600 mt-1">Configure discount tiers and item assignments</p>
+      <div className="page-header">
+        <div className="flex items-center gap-3 flex-wrap">
+          <button onClick={() => navigate("/discounts")} className="btn-secondary btn-sm">
+            <ArrowLeft size={14} /> Back
+          </button>
+          <div>
+            <h1 className="page-title">Edit Discount Rules</h1>
+            <p className="page-subtitle">Configure discount tiers and item assignments</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleImport}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors text-neutral-700 font-medium"
+            title="Import rules from a JSON file"
+          >
+            <Upload size={14} /> Import
+          </button>
+          <button
+            onClick={handleExport}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors text-neutral-700 font-medium"
+            title="Export rules to a JSON file"
+          >
+            <Download size={14} /> Export
+          </button>
         </div>
       </div>
 
+      {/* File operation status message */}
+      {fileMsg && (
+        <div
+          className={clsx(
+            "px-4 py-2.5 rounded-lg text-sm font-medium border",
+            fileMsg.type === "ok"
+              ? "bg-green-50 text-green-800 border-green-200"
+              : "bg-red-50 text-red-800 border-red-200"
+          )}
+        >
+          {fileMsg.text}
+        </div>
+      )}
+
       {/* Tabs */}
-      <div className="flex gap-0 border-b border-neutral-200 mb-8">
+      <div className="tab-list">
         {(["tiers", "items"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setActiveTab(t)}
-            className={clsx(
-              "px-6 py-3 text-sm font-medium border-b-2 transition-colors",
-              activeTab === t
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-neutral-600 hover:text-neutral-900"
-            )}
+            className={clsx("tab-item", activeTab === t && "tab-item-active")}
           >
             {t === "tiers" ? "Discount Tiers" : "Item Assignments"}
           </button>
@@ -162,7 +310,7 @@ export default function DiscountRules() {
 
       {/* Content */}
       {activeTab === "tiers" && (
-        <div className="space-y-4 mb-8">
+        <div className="space-y-4">
           {localCats.map((cat) => {
             const isExpanded = expandedCatId === cat.id;
             const isNoDisco = cat.id === "NO_DISCOUNT";

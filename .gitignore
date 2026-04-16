@@ -48,3 +48,8 @@ TALLY TEST*/
 TALLY_TEST*/
 *tally_test*
 *.tally
+
+# Electron build output (installers — do not commit binaries)
+release/
+release_new/
+release*/

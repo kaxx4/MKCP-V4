@@ -88,18 +88,12 @@ export const TRANSACTION_COLLECTIONS: CollectionDef[] = [
     fetch: [
       "Guid", "Date", "VoucherTypeName", "VoucherNumber", "Reference", "Narration",
       "PartyLedgerName", "IsCancelled", "IsOptional", "EffectiveDate",
-      // Ledger entries: fetch both AllLedgerEntries (Receipt/Payment/Journal) and LedgerEntries (Sales/Purchase)
-      "AllLedgerEntries", "AllLedgerEntries.*",
-      "AllLedgerEntries.BillAllocations", "AllLedgerEntries.BillAllocations.*",
-      "LedgerEntries", "LedgerEntries.*",
-      "LedgerEntries.BillAllocations", "LedgerEntries.BillAllocations.*",
-      // Inventory entries: fetch both variants; BatchAllocations not used in convert.ts
-      "AllInventoryEntries", "AllInventoryEntries.*",
-      "InventoryEntries", "InventoryEntries.*",
-    ],
-    filters: [
-      { name: "fltrNotCancelled", expression: "NOT $IsCancelled" },
-      { name: "fltrNotOptional", expression: "NOT $IsOptional" },
+      // Sub-lists WITHOUT .* wildcards — wildcards crash TallyPrime ("incorrect object type").
+      // Requesting the parent key is enough: TallyPrime returns all standard sub-fields automatically.
+      "AllLedgerEntries",
+      "LedgerEntries",
+      "AllInventoryEntries",
+      "InventoryEntries",
     ],
     timeout: 180_000,
     parallel: false,
