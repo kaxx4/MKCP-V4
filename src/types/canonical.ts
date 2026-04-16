@@ -5,7 +5,9 @@ export type UnitMode = "BASE" | "PKG";
 export type VoucherType =
   | "Sales" | "Purchase" | "Receipt" | "Payment"
   | "Journal" | "Contra" | "Debit Note" | "Credit Note"
-  | "Stock Journal" | "Delivery Note" | "Other";
+  | "Stock Journal" | "Delivery Note"
+  | "Sales Order" | "Quotation"
+  | "Other";
 
 export interface CompanyInfo {
   name: string;

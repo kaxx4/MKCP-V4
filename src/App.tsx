@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, HashRouter, Routes, Route, Navigate } from "react-router-dom";
+import { usePerfMonitor } from "./hooks/usePerfMonitor";
 import { Loader2 } from "lucide-react";
 import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -30,6 +31,8 @@ const DiscountRules = lazy(() => import("./pages/DiscountRules"));
 const PriceListCorrection = lazy(() => import("./pages/PriceListCorrection"));
 const ServerLogs = lazy(() => import("./pages/ServerLogs"));
 const Outreach = lazy(() => import("./pages/Outreach"));
+const CalendarPage = lazy(() => import("./pages/Calendar"));
+const PerfLog = lazy(() => import("./pages/PerfLog"));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -45,6 +48,9 @@ function AppRoutes() {
 
   // Enable Tally auto-sync
   useTallyAutoSync();
+
+  // Background performance monitoring (memory, long tasks, FPS, route timing)
+  usePerfMonitor();
 
   // Enable automatic data persistence and monitoring
   usePersistenceMonitor({ verbose: (import.meta as any).env?.DEV });
@@ -109,8 +115,10 @@ function AppRoutes() {
           <Route path="/discount-rules" element={<DiscountRules />} />
           <Route path="/price-correction" element={<PriceListCorrection />} />
           <Route path="/outreach" element={<Outreach />} />
+          <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/server-logs" element={<ServerLogs />} />
+          <Route path="/perf-log" element={<PerfLog />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>

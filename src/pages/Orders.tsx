@@ -20,7 +20,7 @@ import { useUIStore } from "../store/uiStore";
 import { useOrderStore } from "../store/orderStore";
 import { useOrderGroupStore, type OrderGroup } from "../store/orderGroupStore";
 import { getCurrentStock, getCurrentStockIndexed, computeMonthlyBuckets, computeMonthlyBucketsIndexed, suggestedReorder, suggestedReorderIndexed, avgMonthlyOutwardIndexed } from "../engine/inventory";
-import { getItemMovements, type MovementRecord, type MovementDirection } from "../engine/audit/movementTracer";
+import { getItemMovements, getItemOrderDocs, type MovementRecord, type MovementDirection } from "../engine/audit/movementTracer";
 import { toDisplay, fromDisplay } from "../engine/unitEngine";
 import { UnitToggle } from "../components/UnitToggle";
 import { fmtNum } from "../utils/format";
@@ -59,6 +59,12 @@ export default function Orders() {
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupDesc, setNewGroupDesc] = useState("");
   const [movementModal, setMovementModal] = useState<{ direction: MovementDirection; month?: string } | null>(null);
+  const [modalTab, setModalTab] = useState<"actual" | "orders">("actual");
+
+  function openMovementModal(direction: MovementDirection, month?: string) {
+    setModalTab("actual");
+    setMovementModal({ direction, month });
+  }
   const [mobileTab, setMobileTab] = useState<"list" | "detail" | "order">("list");
   const [monthSpan, setMonthSpan] = useState(8);
 
@@ -700,7 +706,7 @@ export default function Orders() {
                     {kpis.map(({ label, val, color, clickable, direction }) => (
                       <div
                         key={label}
-                        onClick={clickable && direction ? () => setMovementModal({ direction, month: last.yearMonth }) : undefined}
+                        onClick={clickable && direction ? () => openMovementModal(direction, last.yearMonth) : undefined}
                         className={clsx(
                           "bento-card !p-4 text-center transition-all duration-150",
                           clickable && "cursor-pointer hover:border-accent hover:bg-accent/10 hover:shadow-md"
@@ -745,7 +751,7 @@ export default function Orders() {
                                     inwardVal === 0 ? "text-neutral-300 hover:text-neutral-400" : "num-positive hover:text-success",
                                     dynamicPadding
                                   )}
-                                  onClick={() => inwardVal !== 0 && setMovementModal({ direction: "inward", month: b.yearMonth })}
+                                  onClick={() => inwardVal !== 0 && openMovementModal("inward", b.yearMonth)}
                                   title={inwardVal !== 0 ? "Click to view inward transactions" : "No inward movements"}
                                 >{toDisplay(item, b.inwardsBase, unitMode).formatted}</td>
                                 <td
@@ -753,7 +759,7 @@ export default function Orders() {
                                     outwardVal === 0 ? "text-neutral-300 hover:text-neutral-400" : "num-negative hover:text-danger",
                                     dynamicPadding
                                   )}
-                                  onClick={() => outwardVal !== 0 && setMovementModal({ direction: "outward", month: b.yearMonth })}
+                                  onClick={() => outwardVal !== 0 && openMovementModal("outward", b.yearMonth)}
                                   title={outwardVal !== 0 ? "Click to view outward transactions" : "No outward movements"}
                                 >{toDisplay(item, b.outwardsBase, unitMode).formatted}</td>
                                 <td className={clsx("table-cell-mono font-bold text-accent", dynamicPadding)}>{toDisplay(item, b.closingQtyBase, unitMode).formatted}</td>
@@ -829,60 +835,103 @@ export default function Orders() {
                   movementModal.direction,
                   movementModal.month,
                 );
+                const orderDocs = movementModal.direction === "outward"
+                  ? getItemOrderDocs(focusedItem, data?.vouchers ?? [], movementModal.month)
+                  : [];
                 const dirLabel = movementModal.direction === "inward" ? "Inward" : "Outward";
                 const monthLabel = movementModal.month
                   ? new Date(Number(movementModal.month.split("-")[0]), Number(movementModal.month.split("-")[1]) - 1, 1)
                       .toLocaleString("en-IN", { month: "short", year: "2-digit" })
                   : "All";
+                const activeRows: MovementRecord[] = modalTab === "actual" ? movements : orderDocs;
+
+                const MovementTable = ({ rows }: { rows: MovementRecord[] }) => rows.length === 0 ? (
+                  <div className="text-center text-neutral-500 text-sm py-8">
+                    {modalTab === "actual" ? `No ${dirLabel.toLowerCase()} transactions found` : "No sales orders or quotations found"}
+                  </div>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-white">
+                      <tr className="border-b border-neutral-200">
+                        <th className="table-header">Date</th>
+                        <th className="table-header">Voucher</th>
+                        <th className="table-header">Type</th>
+                        <th className="table-header">Party</th>
+                        <th className="table-header-sticky text-right">Qty</th>
+                        <th className="table-header-sticky text-right">Rate</th>
+                        <th className="table-header-sticky text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((m, i) => (
+                        <tr key={`${m.voucherId}-${i}`} className="responsive-table-row">
+                          <td className="table-cell-muted">{m.date}</td>
+                          <td className="table-cell-mono">{m.voucherNumber}</td>
+                          <td className={clsx("table-cell-muted", m.voucherType === "Sales Order" && "text-blue-600 font-medium", m.voucherType === "Quotation" && "text-amber-600 font-medium")}>{m.voucherType}</td>
+                          <td className="table-cell truncate max-w-[160px]" title={m.partyName}>{m.partyName}</td>
+                          <td className="table-cell-mono table-cell-right">{fmtNum(m.qty)}</td>
+                          <td className="table-cell-mono table-cell-right text-neutral-500">{m.rate > 0 ? fmtNum(m.rate) : "—"}</td>
+                          <td className="table-cell-mono table-cell-right font-semibold">{fmtNum(m.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-neutral-200 bg-neutral-100/10">
+                        <td colSpan={4} className="table-cell-emphasis">Total</td>
+                        <td className="table-cell-mono table-cell-right font-bold">{fmtNum(rows.reduce((s, m) => s + m.qty, 0))}</td>
+                        <td className="table-cell"></td>
+                        <td className="table-cell-mono table-cell-right font-bold">{fmtNum(rows.reduce((s, m) => s + m.amount, 0))}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                );
+
                 return (
                   <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={() => setMovementModal(null)}>
-                    <div className={clsx("bento-card shadow-2xl flex flex-col", isMobile ? "w-full h-full rounded-none" : "w-[700px] max-h-[80vh]")} onClick={e => e.stopPropagation()}>
+                    <div className={clsx("bento-card shadow-2xl flex flex-col", isMobile ? "w-full h-full rounded-none" : "w-[760px] max-h-[82vh]")} onClick={e => e.stopPropagation()}>
+                      {/* Header */}
                       <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200">
                         <div>
-                          <h3 className="card-title">{focusedItem.name} — {dirLabel} Transactions</h3>
-                          <p className="metric-label mt-0.5">Month: {monthLabel} · {movements.length} transactions</p>
+                          <h3 className="card-title">{focusedItem.name} — {dirLabel} Details</h3>
+                          <p className="metric-label mt-0.5">Month: {monthLabel}</p>
                         </div>
                         <button onClick={() => setMovementModal(null)} className="btn-icon"><X size={16} /></button>
                       </div>
+
+                      {/* Tabs (only for outward direction) */}
+                      {movementModal.direction === "outward" && (
+                        <div className="flex border-b border-neutral-200 px-4 pt-2 gap-0">
+                          <button
+                            onClick={() => setModalTab("actual")}
+                            className={clsx(
+                              "px-4 py-2 text-xs font-semibold border-b-2 transition-colors -mb-px",
+                              modalTab === "actual"
+                                ? "border-accent text-accent"
+                                : "border-transparent text-neutral-500 hover:text-neutral-800"
+                            )}
+                          >
+                            Dispatched / Billed
+                            <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-neutral-100 text-neutral-600 text-[10px] font-semibold">{movements.length}</span>
+                          </button>
+                          <button
+                            onClick={() => setModalTab("orders")}
+                            className={clsx(
+                              "px-4 py-2 text-xs font-semibold border-b-2 transition-colors -mb-px",
+                              modalTab === "orders"
+                                ? "border-accent text-accent"
+                                : "border-transparent text-neutral-500 hover:text-neutral-800"
+                            )}
+                          >
+                            Orders & Quotes
+                            {orderDocs.length > 0 && (
+                              <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-semibold">{orderDocs.length}</span>
+                            )}
+                          </button>
+                        </div>
+                      )}
+
                       <div className="overflow-y-auto flex-1">
-                        {movements.length === 0 ? (
-                          <div className="text-center text-neutral-500 text-sm py-8">No {dirLabel.toLowerCase()} transactions found</div>
-                        ) : (
-                          <table className="w-full text-xs">
-                            <thead className="sticky top-0 bg-white">
-                              <tr className="border-b border-neutral-200">
-                                <th className="table-header">Date</th>
-                                <th className="table-header">Voucher</th>
-                                <th className="table-header">Type</th>
-                                <th className="table-header">Party</th>
-                                <th className="table-header-sticky text-right">Qty</th>
-                                <th className="table-header-sticky text-right">Rate</th>
-                                <th className="table-header-sticky text-right">Amount</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {movements.map((m, i) => (
-                                <tr key={`${m.voucherId}-${i}`} className="responsive-table-row">
-                                  <td className="table-cell-muted">{m.date}</td>
-                                  <td className="table-cell-mono">{m.voucherNumber}</td>
-                                  <td className="table-cell-muted">{m.voucherType}</td>
-                                  <td className="table-cell truncate max-w-[160px]" title={m.partyName}>{m.partyName}</td>
-                                  <td className="table-cell-mono table-cell-right">{fmtNum(m.qty)}</td>
-                                  <td className="table-cell-mono table-cell-right text-neutral-500">{m.rate > 0 ? fmtNum(m.rate) : "—"}</td>
-                                  <td className="table-cell-mono table-cell-right font-semibold">{fmtNum(m.amount)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                            <tfoot>
-                              <tr className="border-t-2 border-neutral-200 bg-neutral-100/10">
-                                <td colSpan={4} className="table-cell-emphasis">Total</td>
-                                <td className="table-cell-mono table-cell-right font-bold">{fmtNum(movements.reduce((s, m) => s + m.qty, 0))}</td>
-                                <td className="table-cell"></td>
-                                <td className="table-cell-mono table-cell-right font-bold">{fmtNum(movements.reduce((s, m) => s + m.amount, 0))}</td>
-                              </tr>
-                            </tfoot>
-                          </table>
-                        )}
+                        <MovementTable rows={activeRows} />
                       </div>
                     </div>
                   </div>

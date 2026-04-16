@@ -4,7 +4,7 @@
   copyright: "Copyright © 2025 M.K. Cycles (P) Ltd.",
   directories: {
     buildResources: "public",
-    output: "release",            // Separate from dist/ so dist/**/* doesn't bundle previous builds
+    output: "release2",            // Separate from dist/ so dist/**/* doesn't bundle previous builds
   },
   files: [
     // React build (self-contained — no node_modules needed at runtime)

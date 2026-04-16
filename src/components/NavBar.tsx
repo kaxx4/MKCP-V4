@@ -23,6 +23,8 @@ import {
   Percent,
   Terminal,
   Phone,
+  CalendarDays,
+  Activity,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
@@ -58,10 +60,12 @@ const NAV_ITEMS = [
   { path: "/routes", icon: MapIcon, label: "Routes" },
   { path: "/reports", icon: BarChart2, label: "Reports" },
   { path: "/outreach", icon: Phone, label: "Outreach" },
+  { path: "/calendar", icon: CalendarDays, label: "Calendar" },
   { path: "/discounts", icon: Percent, label: "Discounts" },
   { path: "/edit", icon: Pencil, label: "Edit Units" },
   { path: "/settings", icon: Settings, label: "Settings" },
   { path: "/server-logs", icon: Terminal, label: "Server Logs" },
+  { path: "/perf-log", icon: Activity, label: "Perf Log" },
 ];
 
 const MOBILE_PRIMARY = NAV_ITEMS.slice(0, 5);

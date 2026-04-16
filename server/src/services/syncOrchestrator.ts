@@ -206,11 +206,28 @@ export class SyncOrchestrator {
       }
     };
 
-    // Process chunks in waves of CONCURRENCY
+    // Process chunks in waves of CONCURRENCY.
+    // Early-exit: if an entire wave yields 0 new vouchers (all deduped), Tally is ignoring the
+    // date filter and returning the same data every time. Stop — we already have everything.
+    let consecutiveEmptyWaves = 0;
     for (let i = 0; i < chunks.length; i += CONCURRENCY) {
       if (signal?.aborted) { console.log("[DAYBOOK] Aborted — stopping"); break; }
+      const prevCount = allVouchers.length;
       const wave = chunks.slice(i, i + CONCURRENCY);
       await Promise.all(wave.map((chunk, j) => processChunk(chunk, i + j)));
+      const newInWave = allVouchers.length - prevCount;
+      if (newInWave === 0 && allVouchers.length > 0) {
+        consecutiveEmptyWaves++;
+        if (consecutiveEmptyWaves >= 2) {
+          const remaining = chunks.length - (i + CONCURRENCY);
+          if (remaining > 0) {
+            console.log(`[DAYBOOK] ⚡ Tally date filter not working — got same data twice in a row. Skipping ${remaining} remaining chunks.`);
+          }
+          break;
+        }
+      } else {
+        consecutiveEmptyWaves = 0;
+      }
     }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -321,9 +338,29 @@ export class SyncOrchestrator {
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<ReturnType<typeof convertVouchers>> {
-    // Day Book only — collection queries with FETCH/NATIVEMETHOD wildcard paths
-    // (e.g., AllLedgerEntries.*) crash TallyPrime with "incorrect object type".
-    // Day Book is the official Tally export format for transactions and is stable.
+    // PRIMARY: Collection with TDL date formula filter — the only method that actually
+    // respects the date range. Day Book uses Tally's display period, not SVFROMDATE/SVTODATE,
+    // so it returns the same single day's data for every chunk request.
+    // NOTE: Wildcards (AllLedgerEntries.*) are intentionally omitted — they crash TallyPrime.
+    //       TallyPrime returns all standard sub-fields when the parent key is requested.
+    const voucherDef = TRANSACTION_COLLECTIONS[0];
+    try {
+      const collectionXml = buildCollectionXml(voucherDef, company, from, to);
+      const result = await tallyPostWithRetry(this.tallyUrl, collectionXml, timeoutMs, false, 1, signal);
+      const converted = convertVouchers(result);
+      if (converted.tallymessage.length > 0) {
+        console.log(`[DAYBOOK] Collection: ${converted.tallymessage.length} vouchers for ${label}`);
+        return converted;
+      }
+      // Collection returned 0 — could be genuinely empty or unsupported. Fall through to Day Book.
+      console.log(`[DAYBOOK] Collection returned 0 for ${label} — trying Day Book fallback`);
+    } catch (e: any) {
+      if (e.message?.includes("Aborted")) throw e;
+      console.log(`[DAYBOOK] Collection failed for ${label} (${e.message}) — trying Day Book fallback`);
+    }
+
+    // FALLBACK: Day Book — ignores date range but may return something if Collection fails.
+    // Results will be deduplicated by GUID across chunks so duplicates are safe.
     const xml = await tallyPostWithRetry(this.tallyUrl, buildDayBookXml(company, from, to), timeoutMs, false, 1, signal);
     return convertVouchers(xml);
   }

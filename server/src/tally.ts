@@ -41,6 +41,10 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
     const label = xml.match(/<ID[^>]*>([^<]+)/)?.[1] || "request";
     const t0 = Date.now();
     let settled = false;
+    // Stored so settle() can remove it — { once: true } only auto-removes when the event fires;
+    // for successful requests the signal is never aborted so the listener would leak, causing
+    // "MaxListenersExceededWarning: 11 abort listeners added to [AbortSignal]" after ~10 requests.
+    let abortHandler: (() => void) | undefined;
 
     const reqBody = Buffer.from(xml, "utf-8");
 
@@ -57,6 +61,8 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
       if (settled) return;
       settled = true;
       clearTimeout(hardDeadline);
+      // Remove the abort listener so it doesn't accumulate on the shared AbortSignal
+      if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
       fn();
     }
 
@@ -66,14 +72,16 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
         clearTimeout(hardDeadline);
         return reject(new Error(`Aborted: ${label}`));
       }
-      signal.addEventListener("abort", () => {
+      abortHandler = () => {
         if (!settled) {
           settled = true;
           clearTimeout(hardDeadline);
+          if (abortHandler) signal.removeEventListener("abort", abortHandler);
           req.destroy();
           reject(new Error(`Aborted: ${label}`));
         }
-      }, { once: true });
+      };
+      signal.addEventListener("abort", abortHandler);
     }
 
     const req = http.request(
