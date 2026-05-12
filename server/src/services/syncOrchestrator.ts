@@ -111,6 +111,7 @@ export class SyncOrchestrator {
         ledgers: ledgers.tallymessage.length,
         godowns: godowns.tallymessage.length,
         costCentres: costCentres.tallymessage.length,
+        dealerPriceLists: 0,
         elapsedSeconds: parseFloat(elapsed),
       },
     };

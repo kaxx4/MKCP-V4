@@ -26,7 +26,8 @@ interface AlertRow {
 
 export default function Alerts() {
   const navigate = useNavigate();
-  const { data, voucherIndex } = useDataStore();
+  const data = useDataStore((s) => s.data);
+  const voucherIndex = useDataStore((s) => s.voucherIndex);
   const { setLine } = useOrderStore();
   const { unitMode, isMobile } = useUIStore();
   const [search, setSearch] = useState("");

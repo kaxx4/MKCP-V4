@@ -22,7 +22,7 @@ interface PersistenceConfig {
  */
 export function usePersistenceMonitor(config: PersistenceConfig = {}) {
   const { autoBackupInterval = 5 * 60 * 1000, verbose = false } = config;
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
   // Use importedAt as a cheap change sentinel — O(1) vs O(n) JSON.stringify
   const lastSavedRef = useRef<string | null>(null);
   const backupTimeoutRef = useRef<NodeJS.Timeout | null>(null);

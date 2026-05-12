@@ -122,7 +122,7 @@ export interface InventoryEntry {
 }
 
 export interface VoucherPayload {
-  voucherType: "Sales" | "Purchase" | "Receipt" | "Payment" | "Credit Note" | "Debit Note" | "Journal";
+  voucherType: "Sales" | "Purchase" | "Receipt" | "Payment" | "Credit Note" | "Debit Note" | "Journal" | "Delivery Note" | "Receipt Note";
   date: string;               // YYYY-MM-DD
   voucherNumber?: string;
   reference?: string;

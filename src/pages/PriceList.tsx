@@ -6,6 +6,7 @@ import { useDataStore } from "../store/dataStore";
 import { fmtRate } from "../utils/format";
 import { useTallyPriceListStore } from "../store/tallyPriceListStore";
 import { parseTallyPriceListJson } from "../parser/tallyPriceListParser";
+import { inferGstRatesFromVouchers } from "../utils/gstInference";
 
 type SortKey = "name" | "group";
 type SortDir = "asc" | "desc";
@@ -14,6 +15,9 @@ interface PriceRow {
   itemId: string;
   name: string;
   group: string;
+  gstRate?: number;
+  gstRateInferred: boolean;
+  gstRateDefault: boolean;
   tallyRate?: number;
   tallyUnit?: string;
   tallyCostPrice?: number;
@@ -22,7 +26,7 @@ interface PriceRow {
 
 export default function PriceList() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
   const { entries: tallyEntries, importedAt, itemCount: tallyItemCount, setPriceList, clearPriceList } = useTallyPriceListStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -41,7 +45,12 @@ export default function PriceList() {
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
-        const text = ev.target?.result as string;
+        const buffer = ev.target?.result as ArrayBuffer;
+        const bytes = new Uint8Array(buffer);
+        let encoding = "UTF-8";
+        if (bytes[0] === 0xFF && bytes[1] === 0xFE) encoding = "UTF-16LE";
+        else if (bytes[0] === 0xFE && bytes[1] === 0xFF) encoding = "UTF-16BE";
+        const text = new TextDecoder(encoding).decode(buffer);
         const entries = parseTallyPriceListJson(text);
         if (entries.length === 0) {
           setImportError("No items with selling rates found in the file.");
@@ -59,17 +68,30 @@ export default function PriceList() {
       setImportError("Failed to read file.");
       setImporting(false);
     };
-    reader.readAsText(file, "UTF-8");
+    reader.readAsArrayBuffer(file);
   }
+
+  const inferredGstRates = useMemo(
+    () => (data ? inferGstRatesFromVouchers(data.vouchers) : new Map<string, number>()),
+    [data]
+  );
 
   const rows = useMemo<PriceRow[]>(() => {
     if (!data) return [];
     return Array.from(data.items.values()).map((item) => {
       const tallyEntry = tallyEntries[item.name.toUpperCase()];
+      const masterGst = item.gstRate;
+      const inferredGst = inferredGstRates.get(item.itemId);
+      const gstRate = masterGst ?? inferredGst ?? 5;
+      const gstRateInferred = masterGst === undefined && inferredGst !== undefined;
+      const gstRateDefault = masterGst === undefined && inferredGst === undefined;
       return {
         itemId: item.itemId,
         name: item.name,
         group: item.group,
+        gstRate,
+        gstRateInferred,
+        gstRateDefault,
         tallyRate: tallyEntry?.sellingRate,
         tallyUnit: tallyEntry?.unit,
         tallyCostPrice: tallyEntry?.costPrice,
@@ -80,7 +102,7 @@ export default function PriceList() {
         })),
       };
     });
-  }, [data, tallyEntries]);
+  }, [data, tallyEntries, inferredGstRates]);
 
   const groups = useMemo(() => {
     const gs = new Set(rows.map((r) => r.group));
@@ -122,7 +144,7 @@ export default function PriceList() {
     setExpandedItems(next);
   }
 
-  const cols = tallyItemCount > 0 ? "48px 1fr 160px 140px" : "48px 1fr 160px";
+  const cols = tallyItemCount > 0 ? "48px 1fr 160px 80px 140px 150px" : "48px 1fr 160px 80px";
 
   if (!data) {
     return (
@@ -258,9 +280,17 @@ export default function PriceList() {
           >
             Group {sortIcon("group")}
           </div>
+          <div className="px-4 py-4 text-right text-orange-600">
+            GST %
+          </div>
           {tallyItemCount > 0 && (
             <div className="px-4 py-4 text-right text-emerald-700">
               Tally Rate
+            </div>
+          )}
+          {tallyItemCount > 0 && (
+            <div className="px-4 py-4 text-right text-purple-700">
+              Price + GST
             </div>
           )}
         </div>
@@ -316,6 +346,28 @@ export default function PriceList() {
                       </span>
                     </div>
 
+                    {/* GST Rate */}
+                    <div className="px-2 text-right">
+                      <span
+                        title={
+                          row.gstRateDefault
+                            ? "Default 5% — no master or voucher data"
+                            : row.gstRateInferred
+                              ? "Rate inferred from past vouchers"
+                              : "Rate from Tally master"
+                        }
+                        className={`inline-block px-2 py-0.5 font-bold text-sm rounded-full tabular-nums ${
+                          row.gstRateDefault
+                            ? "bg-slate-100 text-slate-500 border border-slate-200"
+                            : row.gstRateInferred
+                              ? "bg-amber-50 text-amber-700 border border-amber-200"
+                              : "bg-orange-50 text-orange-700"
+                        }`}
+                      >
+                        {row.gstRateDefault ? "" : row.gstRateInferred ? "~" : ""}{row.gstRate}%
+                      </span>
+                    </div>
+
                     {/* Tally Rate */}
                     {tallyItemCount > 0 && (
                       <div className="px-2 text-right">
@@ -330,6 +382,19 @@ export default function PriceList() {
                               </div>
                             )}
                           </>
+                        ) : (
+                          <span className="text-slate-300 text-lg">—</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Price + GST */}
+                    {tallyItemCount > 0 && (
+                      <div className="px-2 text-right">
+                        {row.tallyRate !== undefined && row.gstRate !== undefined ? (
+                          <div className="text-lg font-bold tabular-nums text-purple-700">
+                            {fmtRate(row.tallyRate * (1 + row.gstRate / 100))}
+                          </div>
                         ) : (
                           <span className="text-slate-300 text-lg">—</span>
                         )}

@@ -681,7 +681,7 @@ function OppCard({
     <button
       onClick={onSelect}
       className={clsx(
-        "w-full text-left bento-card flex items-start gap-3 transition-all cursor-pointer",
+        "w-full text-left bento-card flex items-start gap-3 transition-[box-shadow,border-color] duration-150 cursor-pointer",
         isSelected
           ? "ring-1 ring-accent border-accent/30"
           : "hover:border-neutral-300"
@@ -904,7 +904,7 @@ type TabId = "opportunities" | "parties" | "churn" | "calendar";
 
 export default function Outreach() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
   const { isMobile } = useUIStore();
 
   const [activeTab, setActiveTab] = useState<TabId>("opportunities");

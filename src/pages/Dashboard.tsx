@@ -33,7 +33,8 @@ const CHART_TOOLTIP_STYLE = {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { data, voucherIndex } = useDataStore();
+  const data = useDataStore((s) => s.data);
+  const voucherIndex = useDataStore((s) => s.voucherIndex);
   const [salesPeriod, setSalesPeriod] = useState(6);
   const [topItemsPeriod, setTopItemsPeriod] = useState<"month" | "quarter" | "year">("month");
   const [periodFilter, setPeriodFilter] = useState<"all" | "month" | "quarter" | "ytd" | "custom">("all");
@@ -210,7 +211,7 @@ export default function Dashboard() {
               <button
                 key={p}
                 onClick={() => setPeriodFilter(p)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-[background-color,color,box-shadow,transform] duration-150 active:scale-[0.96] ${
                   periodFilter === p
                     ? "bg-white text-neutral-950 shadow-sm"
                     : "text-neutral-500 hover:text-neutral-700"

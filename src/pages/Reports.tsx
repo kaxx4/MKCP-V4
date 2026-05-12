@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, Fragment } from "react";
+import { useState, useMemo, useEffect, useRef, Fragment, startTransition } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line,
@@ -63,7 +63,8 @@ interface DayActivity {
 
 export default function Reports() {
   const navigate = useNavigate();
-  const { data, voucherIndex } = useDataStore();
+  const data = useDataStore((s) => s.data);
+  const voucherIndex = useDataStore((s) => s.voucherIndex);
   const { unitMode, isMobile } = useUIStore();
   const [tab, setTab] = useState<Tab>("Inventory");
   const [predictionType, setPredictionType] = useState<"Sales" | "Purchase">("Sales");
@@ -284,7 +285,7 @@ export default function Reports() {
 
   // ─── Purchase Orders data (Current FY) ───────────────────────
   const dailyPOs = useMemo(() => {
-    if (!data) return [];
+    if (!data || tab !== "Purchase Orders") return [];
 
     // Group Purchase vouchers by date (current FY only)
     const byDate = new Map<string, CanonicalVoucher[]>();
@@ -481,7 +482,7 @@ export default function Reports() {
 
   // ─── Calendar data (Task 4) ──────────────────────────────
   const calendarActivity = useMemo(() => {
-    if (!data || !calendarMonth) return new Map<string, DayActivity>();
+    if (!data || !calendarMonth || tab !== "Calendar") return new Map<string, DayActivity>();
     const map = new Map<string, DayActivity>();
     // Voucher activity
     for (const v of data.vouchers) {
@@ -620,9 +621,9 @@ export default function Reports() {
 
   // ─── Margins data ─────────────────────────────
   const marginData = useMemo(() => {
-    if (!data) return [];
+    if (!data || tab !== "Margins") return [];
     return computeItemMargins(data.items, data.vouchers, marginPeriod);
-  }, [data, marginPeriod]);
+  }, [data, tab, marginPeriod]);
 
   const marginGroups = useMemo(() => {
     const gs = new Set(marginData.map(d => d.group));
@@ -709,8 +710,8 @@ export default function Reports() {
       <div className="overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0 scrollbar-thin" role="tablist">
         <div className="flex gap-1 bento-card !p-1 w-max md:w-full md:flex-wrap">
           {TABS.map((t) => (
-            <button key={t} onClick={() => setTab(t)} role="tab" aria-selected={tab === t}
-              className={clsx("px-2.5 md:px-3 py-1.5 rounded-lg text-[11px] md:text-xs transition whitespace-nowrap cursor-pointer", tab === t ? "bg-accent text-white font-medium" : "text-muted hover:text-primary hover:bg-bg-border/50")}>
+            <button key={t} onClick={() => startTransition(() => setTab(t))} role="tab" aria-selected={tab === t}
+              className={clsx("px-2.5 md:px-3 py-1.5 rounded-lg text-[11px] md:text-xs transition-[background-color,color] duration-150 whitespace-nowrap cursor-pointer", tab === t ? "bg-accent text-white font-medium" : "text-muted hover:text-primary hover:bg-bg-border/50")}>
               {t}
             </button>
           ))}
@@ -1348,7 +1349,7 @@ export default function Reports() {
           <div className="flex items-center gap-2 bento-card">
             <h3 className="card-title mr-3">Profit Margins</h3>
             {[{l:"All Time",v:undefined},{l:"Last 12M",v:12},{l:"Last 6M",v:6},{l:"Last 3M",v:3}].map(p => (
-              <button key={p.l} onClick={() => setMarginPeriod(p.v)} className={clsx("px-3 py-1.5 rounded-lg text-sm transition", marginPeriod === p.v ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>{p.l}</button>
+              <button key={p.l} onClick={() => setMarginPeriod(p.v)} className={clsx("px-3 py-1.5 rounded-lg text-sm transition-[background-color,color] duration-150", marginPeriod === p.v ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>{p.l}</button>
             ))}
             <div className="ml-auto flex items-center gap-2">
               <select value={marginGroupFilter} onChange={e => setMarginGroupFilter(e.target.value)} className="form-select text-xs py-1 pl-2 min-h-0">
@@ -1466,7 +1467,7 @@ export default function Reports() {
             </select>
             <div className="flex gap-1">
               {(["GSTR1", "GSTR3B"] as const).map(v => (
-                <button key={v} onClick={() => setGstView(v)} className={clsx("px-3 py-1.5 rounded-lg text-sm transition", gstView === v ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>{v === "GSTR1" ? "GSTR-1 (Sales)" : "GSTR-3B (Net)"}</button>
+                <button key={v} onClick={() => setGstView(v)} className={clsx("px-3 py-1.5 rounded-lg text-sm transition-[background-color,color] duration-150", gstView === v ? "bg-accent text-white" : "bg-bg border border-bg-border text-muted hover:text-primary")}>{v === "GSTR1" ? "GSTR-1 (Sales)" : "GSTR-3B (Net)"}</button>
               ))}
             </div>
           </div>
@@ -2088,7 +2089,7 @@ function PredictionRow({ pred, isExpanded, dateColor, onToggle, items, unitMode 
         <td className="px-4 py-2">
           <div className="flex items-center gap-2">
             <div className="flex-1 h-2 bg-bg-border rounded-full overflow-hidden">
-              <div className="h-full bg-accent transition-all" style={{ width: `${pred.confidence * 100}%` }} />
+              <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${pred.confidence * 100}%` }} />
             </div>
             <span className="text-xs tabular-nums text-muted w-10">{(pred.confidence * 100).toFixed(0)}%</span>
           </div>
@@ -2418,11 +2419,11 @@ function CalendarTab({ calendarMonth, setCalendarMonth, calendarActivity, select
     <div className="space-y-4">
       {/* Navigation */}
       <div className="flex items-center justify-between bento-card">
-        <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-muted hover:text-primary transition text-sm">
+        <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-muted hover:text-primary transition-colors duration-150 text-sm">
           <ChevronLeft size={16} />Prev
         </button>
         <h3 className="subsection-header">{monthLabel}</h3>
-        <button onClick={() => navigate(1)} className="flex items-center gap-1 text-muted hover:text-primary transition text-sm">
+        <button onClick={() => navigate(1)} className="flex items-center gap-1 text-muted hover:text-primary transition-colors duration-150 text-sm">
           Next<ChevronRight size={16} />
         </button>
       </div>

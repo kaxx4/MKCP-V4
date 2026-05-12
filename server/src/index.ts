@@ -4,11 +4,11 @@ import { tallyPost, HEALTH_XML } from "./tally.js";
 import { convertCompanies } from "./converters/convert.js";
 import { SyncOrchestrator } from "./services/syncOrchestrator.js";
 import { ChangeDetector } from "./services/changeDetector.js";
-import { pushVoucherToTally, pushBatchToTally } from "./services/voucherPusher.js";
+import { pushVoucherToTally, pushBatchToTally, buildVoucherImportXml, parseImportResponse } from "./services/voucherPusher.js";
 import type { SyncPlan, PushVoucherRequest, PushBatchRequest } from "./types.js";
 
 const app = express();
-const PORT = 3100;
+const PORT = parseInt(process.env.PORT || "3100", 10);
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 
 // Singletons
@@ -189,6 +189,140 @@ app.post("/api/tally/push-batch", async (req: express.Request, res: express.Resp
   }
 });
 
+// ── Push-test: convenience endpoint that builds payload from simple inputs ───────
+// Accepts: { company, voucherType, date, partyName, ledgerName, items[], voucherNumber?, narration?, dryRun? }
+// Returns: push result + the exact XML sent (for debugging)
+app.post("/api/tally/push-test", async (req: express.Request, res: express.Response) => {
+  const {
+    company, voucherType = "Sales", date,
+    partyName, ledgerName,
+    items = [], voucherNumber, narration, dryRun = false,
+  } = req.body;
+
+  if (!company)   return res.status(400).json({ success: false, error: "company required" });
+  if (!partyName) return res.status(400).json({ success: false, error: "partyName required" });
+  if (!date)      return res.status(400).json({ success: false, error: "date required (YYYY-MM-DD)" });
+
+  const totalAmount = (items as any[]).reduce((s: number, i: any) => s + (Number(i.qty) * Number(i.rate)), 0);
+  // Normalize for branching — but preserve the ORIGINAL string so VCHTYPE/VOUCHERTYPENAME
+  // match exactly what Tally has configured in the open company (e.g. "SALES" not "Sales")
+  const vt = String(voucherType).trim().toUpperCase();
+  const isSales        = vt === "SALES" || vt.startsWith("SALES");
+  const isPurchase     = vt === "PURCHASE" || vt.startsWith("PURCHASE");
+  const isDeliveryNote = vt.includes("DELIVERY");
+
+  try {
+    let payload: any;
+
+    if (isSales) {
+      if (!ledgerName) return res.status(400).json({ success: false, error: "ledgerName (sales account) required for Sales" });
+      payload = {
+        voucherType: voucherType,   // exact name the company uses, e.g. "SALES"
+        date, voucherNumber, narration,
+        partyLedgerName: partyName,
+        isInvoice: true,
+        ledgerEntries: [
+          {
+            ledgerName: partyName,
+            amount: totalAmount,
+            isDeemedPositive: true,   // Dr customer
+            isPartyLedger: true,
+            billAllocations: voucherNumber
+              ? [{ name: voucherNumber, billType: "New Ref", amount: totalAmount }]
+              : [],
+          },
+          {
+            ledgerName,
+            amount: totalAmount,
+            isDeemedPositive: false,  // Cr sales account
+            isPartyLedger: false,
+          },
+        ],
+        inventoryEntries: (items as any[]).map((i: any) => ({
+          stockItemName: i.name,
+          quantity: Number(i.qty),
+          unit: i.unit || "Nos",
+          rate: Number(i.rate),
+          amount: Number(i.qty) * Number(i.rate),  // positive = outward
+          isDeemedPositive: false,                  // outward
+          salesLedgerName: ledgerName,
+        })),
+      };
+    } else if (isPurchase) {
+      if (!ledgerName) return res.status(400).json({ success: false, error: "ledgerName (purchase account) required for Purchase" });
+      payload = {
+        voucherType: voucherType,   // exact name the company uses, e.g. "Purchase"
+        date, voucherNumber, narration,
+        partyLedgerName: partyName,
+        isInvoice: true,
+        ledgerEntries: [
+          {
+            ledgerName,
+            amount: totalAmount,
+            isDeemedPositive: true,   // Dr purchase account
+            isPartyLedger: false,
+          },
+          {
+            ledgerName: partyName,
+            amount: totalAmount,
+            isDeemedPositive: false,  // Cr supplier
+            isPartyLedger: true,
+            billAllocations: voucherNumber
+              ? [{ name: voucherNumber, billType: "New Ref", amount: totalAmount }]
+              : [],
+          },
+        ],
+        inventoryEntries: (items as any[]).map((i: any) => ({
+          stockItemName: i.name,
+          quantity: Number(i.qty),
+          unit: i.unit || "Nos",
+          rate: Number(i.rate),
+          amount: -(Number(i.qty) * Number(i.rate)), // negative = inward
+          isDeemedPositive: true,                     // inward
+          salesLedgerName: ledgerName,
+        })),
+      };
+    } else if (isDeliveryNote) {
+      payload = {
+        voucherType: voucherType,   // exact name; defaults to "Delivery Note"
+        date, voucherNumber, narration,
+        partyLedgerName: partyName,
+        isInvoice: false,
+        ledgerEntries: [],  // inventory voucher — no accounting balance needed
+        inventoryEntries: (items as any[]).map((i: any) => ({
+          stockItemName: i.name,
+          quantity: Number(i.qty),
+          unit: i.unit || "Nos",
+          rate: Number(i.rate),
+          amount: Number(i.qty) * Number(i.rate), // positive = outward
+          isDeemedPositive: false,                 // outward
+          salesLedgerName: "",                     // no accounting allocation for pure delivery
+        })),
+      };
+    } else {
+      return res.status(400).json({ success: false, error: "voucherType must be Sales, Purchase, or Delivery Note" });
+    }
+
+    const sentXml = buildVoucherImportXml(company, payload);
+    console.log(`[PUSH-TEST] ${voucherType} | ${date} | party="${partyName}" | total=${totalAmount} | dryRun=${dryRun}`);
+
+    if (dryRun) {
+      return res.json({ success: true, dryRun: true, sentXml, payload, created: 0, errors: 0, lineErrors: [], rawResponse: "" });
+    }
+
+    const rawResponse = await tallyPost(TALLY, sentXml, 30_000, true);
+    const responseText = typeof rawResponse === "string" ? rawResponse : JSON.stringify(rawResponse);
+    const result = parseImportResponse(responseText);
+    console.log(`[PUSH-TEST] Result: created=${result.created} errors=${result.errors} success=${result.success}`);
+    if (result.lineErrors.length) console.error(`[PUSH-TEST] Errors: ${result.lineErrors.join("; ")}`);
+
+    res.json({ ...result, sentXml, payload });
+  } catch (e: any) {
+    console.error(`[PUSH-TEST] Exception: ${e.message}`);
+    res.status(500).json({ success: false, error: e.message, created: 0, errors: 1, lineErrors: [e.message], rawResponse: "" });
+  }
+});
+
 // ── Legacy raw import endpoint (backward compat) ───────────────────────────────
 app.post("/api/tally/import", express.text({ type: "application/xml" }), async (req, res) => {
   try {
@@ -219,6 +353,28 @@ app.post("/api/tally/debug", async (req, res) => {
 
 app.get("/api/tally/debug/raw", (_req, res) => {
   res.json(lastRawXml ?? { stored: false });
+});
+
+// ── NIC e-Waybill distance proxy ───────────────────────────────────────────────
+app.get("/api/distance", async (req, res) => {
+  const { from = "700001", to } = req.query as { from?: string; to?: string };
+  if (!to || !/^\d{6}$/.test(to)) return res.status(400).json({ error: "Valid 6-digit 'to' pincode required" });
+  if (!/^\d{6}$/.test(from)) return res.status(400).json({ error: "Valid 6-digit 'from' pincode required" });
+  try {
+    const url = `https://ewaybillgst.gov.in/apipre/api/v1.0/Distance/pincode?srcpincode=${from}&dstpincode=${to}`;
+    const response = await fetch(url, {
+      headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`NIC API ${response.status}`);
+    const data = await response.json() as any;
+    const distance: number | null = data?.data?.distance ?? data?.distance ?? null;
+    console.log(`[DISTANCE] ${from} → ${to}: ${distance} km`);
+    res.json({ distance, from, to });
+  } catch (e: any) {
+    console.error(`[DISTANCE] ${from} → ${to} failed: ${e.message}`);
+    res.status(502).json({ error: e.message });
+  }
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────────

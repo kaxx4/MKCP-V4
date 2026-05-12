@@ -7,6 +7,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/Toast";
 import { useDataStore } from "./store/dataStore";
 import { useOverrideStore } from "./store/overrideStore";
+import { useDiscountStore } from "./store/discountStore";
 import { loadData, loadFromStore } from "./db/idb";
 import { deserializeParsedData } from "./utils/serialize";
 import { useTallyAutoSync } from "./hooks/useTallyAutoSync";
@@ -33,6 +34,8 @@ const ServerLogs = lazy(() => import("./pages/ServerLogs"));
 const Outreach = lazy(() => import("./pages/Outreach"));
 const CalendarPage = lazy(() => import("./pages/Calendar"));
 const PerfLog = lazy(() => import("./pages/PerfLog"));
+const TallyPush = lazy(() => import("./pages/TallyPush"));
+const DistancePage = lazy(() => import("./pages/DistancePage"));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -44,7 +47,8 @@ function LoadingFallback() {
 }
 
 function AppRoutes() {
-  const { data, setData } = useDataStore();
+  const data = useDataStore((s) => s.data);
+  const setData = useDataStore((s) => s.setData);
 
   // Enable Tally auto-sync
   useTallyAutoSync();
@@ -54,6 +58,22 @@ function AppRoutes() {
 
   // Enable automatic data persistence and monitoring
   usePersistenceMonitor({ verbose: (import.meta as any).env?.DEV });
+
+  // Load saved discount rules from Electron file on startup.
+  // This ensures user edits survive even if localStorage is cleared (reinstall, cache wipe).
+  // Zustand persist already handles the normal cross-session case via localStorage.
+  useEffect(() => {
+    const api = (window as any).electronAPI?.discountRules;
+    if (!api) return;
+    api.load().then((res: { ok: boolean; data?: { categories: any[]; itemCategoryOverrides: Record<string, string> } }) => {
+      if (res.ok && res.data?.categories?.length) {
+        useDiscountStore.getState().hydrateFromFile({
+          categories: res.data.categories,
+          itemCategoryOverrides: res.data.itemCategoryOverrides ?? {},
+        });
+      }
+    }).catch(() => {});
+  }, []);
 
   // Restore from IndexedDB on first load with comprehensive error handling
   useEffect(() => {
@@ -119,6 +139,8 @@ function AppRoutes() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/server-logs" element={<ServerLogs />} />
           <Route path="/perf-log" element={<PerfLog />} />
+          <Route path="/tally-push" element={<TallyPush />} />
+          <Route path="/distance" element={<DistancePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>

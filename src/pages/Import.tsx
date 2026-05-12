@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, startTransition } from "react";
 import { useNavigate } from "react-router-dom";
 import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical, Calendar, Zap, Wifi, WifiOff, Package, RefreshCw } from "lucide-react";
 import clsx from "clsx";
@@ -40,7 +40,8 @@ function capToday(yyyymmdd: string): string {
 
 export default function ImportPage() {
   const navigate = useNavigate();
-  const { mergeData, data: existingData } = useDataStore();
+  const mergeData = useDataStore((s) => s.mergeData);
+  const existingData = useDataStore((s) => s.data);
   const { toast } = useToast();
 
   // Tab state
@@ -65,6 +66,7 @@ export default function ImportPage() {
     setFyDates,
     setSyncMode,
     resetToCurrentFY,
+    resetToPreviousFY,
     setLastVoucherDate,
     setLastMastersSync,
     setLastVouchersSync,
@@ -173,7 +175,7 @@ export default function ImportPage() {
       if (existing) {
         await createBackup(existingRaw, `pre-masters-sync`);
       }
-      mergeData(data);
+      startTransition(() => mergeData(data));
       await saveData("parsedData", serializeParsedData(data));
 
       setLastSync(new Date().toISOString());
@@ -206,7 +208,14 @@ export default function ImportPage() {
 
       if (!result.success || result.stats.vouchers === 0) {
         addLog(result.error || "Zero vouchers returned for this period.");
-        addLog("Try: 1) Shorter period 2) Check dates are within loaded company FY");
+        addLog(`Date range: ${fyFromDate} → ${capToday(fyToDate)}`);
+        const now = new Date();
+        const isEarlyInFY = now.getMonth() === 3 && now.getDate() <= 30; // April = month 3
+        if (isEarlyInFY) {
+          addLog("💡 Tip: It's early in the new Financial Year (Apr 2026–Mar 2027) — click 'Previous FY' to sync last year's data instead.");
+        } else {
+          addLog("Try: 1) Use 'Previous FY' button  2) Manually set date range  3) Check dates are within loaded company FY");
+        }
         toast("No vouchers found for this period", "warn");
         return;
       }
@@ -242,7 +251,7 @@ export default function ImportPage() {
       if (existing) {
         await createBackup(existingRaw, `pre-daybook-sync`);
       }
-      mergeData(data);
+      startTransition(() => mergeData(data));
 
       const merged = useDataStore.getState().data!;
       await saveData("parsedData", serializeParsedData(merged));
@@ -329,7 +338,7 @@ export default function ImportPage() {
       if (existing) {
         await createBackup(existingRaw, `pre-incremental-sync`);
       }
-      mergeData(data);
+      startTransition(() => mergeData(data));
 
       const merged = useDataStore.getState().data!;
       await saveData("parsedData", serializeParsedData(merged));
@@ -428,7 +437,7 @@ export default function ImportPage() {
       }
 
       // Save
-      mergeData(data);
+      startTransition(() => mergeData(data));
       const merged = useDataStore.getState().data!;
       await saveData("parsedData", serializeParsedData(merged));
 
@@ -733,7 +742,7 @@ export default function ImportPage() {
 
     const prevSnapshot = await loadFromStore<PredictionSnapshot>("predictions", "latest");
 
-    mergeData(pendingData);
+    startTransition(() => mergeData(pendingData));
     const merged = useDataStore.getState().data!;
     await saveData("parsedData", serializeParsedData(pendingData));
 
@@ -793,7 +802,7 @@ export default function ImportPage() {
         <button
           onClick={() => setTab("live")}
           className={clsx(
-            "flex items-center gap-2 flex-1 px-4 py-2.5 rounded-md font-medium transition",
+            "flex items-center gap-2 flex-1 px-4 py-2.5 rounded font-medium transition-[background-color,color] duration-150",
             tab === "live"
               ? "bg-accent text-white"
               : "text-muted hover:text-primary"
@@ -805,7 +814,7 @@ export default function ImportPage() {
         <button
           onClick={() => setTab("upload")}
           className={clsx(
-            "flex items-center gap-2 flex-1 px-4 py-2.5 rounded-md font-medium transition",
+            "flex items-center gap-2 flex-1 px-4 py-2.5 rounded font-medium transition-[background-color,color] duration-150",
             tab === "upload"
               ? "bg-accent text-white"
               : "text-muted hover:text-primary"
@@ -901,9 +910,10 @@ export default function ImportPage() {
           {/* Sync Form */}
           <div className="bento-card space-y-4">
             <div>
-              <label className="form-label">Company Name</label>
+              <label htmlFor="company-name" className="form-label">Company Name</label>
               <div className="flex gap-2">
                 <input
+                  id="company-name"
                   type="text"
                   value={companyName}
                   onChange={(e) => setCompanyName(e.target.value)}
@@ -938,32 +948,42 @@ export default function ImportPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="form-label">
+                <label htmlFor="fy-from" className="form-label">
                   FY From Date
                 </label>
                 <input
+                  id="fy-from"
                   type="date"
                   value={fmtDateForInput(fyFromDate)}
                   onChange={(e) => {
-                    const yyyymmdd = e.target.value.replace(/-/g, '');
-                    setFyDates(yyyymmdd, fyToDate);
+                    const raw = e.target.value; // always YYYY-MM-DD from type="date"
+                    const yyyymmdd = raw.replace(/-/g, '');
+                    if (yyyymmdd.length === 8 && /^\d{8}$/.test(yyyymmdd)) {
+                      setFyDates(yyyymmdd, fyToDate);
+                    }
                   }}
                   className="form-input"
                 />
+                <p className="text-xs text-muted mt-1">{fyFromDate.slice(6,8)}-{fyFromDate.slice(4,6)}-{fyFromDate.slice(0,4)}</p>
               </div>
               <div>
-                <label className="form-label">
+                <label htmlFor="fy-to" className="form-label">
                   FY To Date
                 </label>
                 <input
+                  id="fy-to"
                   type="date"
                   value={fmtDateForInput(fyToDate)}
                   onChange={(e) => {
-                    const yyyymmdd = e.target.value.replace(/-/g, '');
-                    setFyDates(fyFromDate, yyyymmdd);
+                    const raw = e.target.value;
+                    const yyyymmdd = raw.replace(/-/g, '');
+                    if (yyyymmdd.length === 8 && /^\d{8}$/.test(yyyymmdd)) {
+                      setFyDates(fyFromDate, yyyymmdd);
+                    }
                   }}
                   className="form-input"
                 />
+                <p className="text-xs text-muted mt-1">{fyToDate.slice(6,8)}-{fyToDate.slice(4,6)}-{fyToDate.slice(0,4)}</p>
               </div>
             </div>
             {/* Date range summary + Reset + Chunk mode */}
@@ -975,12 +995,21 @@ export default function ImportPage() {
               </div>
               <button
                 onClick={() => {
+                  resetToPreviousFY();
+                  addLog("✓ Dates reset to previous FY");
+                }}
+                className="btn-sm bg-accent/20 hover:bg-accent/30 text-accent font-semibold whitespace-nowrap"
+              >
+                Previous FY
+              </button>
+              <button
+                onClick={() => {
                   resetToCurrentFY();
                   addLog("✓ Dates reset to current FY");
                 }}
                 className="btn-sm bg-warn/20 hover:bg-warn/30 text-warn font-semibold whitespace-nowrap"
               >
-                Reset to Current FY
+                Current FY
               </button>
             </div>
 
@@ -1240,7 +1269,7 @@ function DropZoneCard({ zone, file, label, subtitle, dragOver, onDrop, onDragOve
   return (
     <label
       className={clsx(
-        "border-2 border-dashed rounded-xl p-6 flex flex-col items-center gap-3 cursor-pointer transition",
+        "border-2 border-dashed rounded-xl p-6 flex flex-col items-center gap-3 cursor-pointer transition-[border-color,background-color] duration-150",
         dragOver
           ? "border-accent bg-accent/10"
           : file
