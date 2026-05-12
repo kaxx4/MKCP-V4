@@ -312,6 +312,8 @@ function tallyRealLedgerToSimple(msg: any): any {
     openingBalance,
     gstin: msg?.gstin ? String(msg.gstin).trim() : undefined,
     creditDays: creditPeriod,
+    pincode: msg?.pincode ? String(msg.pincode).trim() : undefined,
+    state: msg?.statename ? String(msg.statename).trim() : undefined,
   };
 }
 
@@ -340,6 +342,8 @@ function tallyEnvelopeLedgerToSimple(t: any): any {
     openingBalance: parseNumber(t.OPENINGBALANCE),
     gstin: t.GSTIN,
     creditDays: parseNumber(t.CREDITPERIOD ?? "0"),
+    pincode: t.PINCODE ? String(t.PINCODE).trim() : undefined,
+    state: t.STATENAME ? String(t.STATENAME).trim() : undefined,
   };
 }
 
@@ -414,6 +418,8 @@ function parseOneLedger(raw: any, _warnings: ImportWarning[]): CanonicalLedger |
     openingBalance: parseNumber(raw.openingBalance ?? 0),
     gstin: raw.gstin ? String(raw.gstin) : undefined,
     creditDays: parseNumber(raw.creditDays ?? raw.creditPeriod ?? raw.creditperiod ?? 0),
+    pincode: raw.pincode ? String(raw.pincode).trim() : undefined,
+    state: raw.state ?? raw.statename ? String(raw.state ?? raw.statename).trim() : undefined,
   };
 }
 

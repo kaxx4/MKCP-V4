@@ -12,7 +12,6 @@ import {
   Truck,
   Tag,
   ChevronLeft,
-  ChevronRight,
   Bike,
   Wifi,
   WifiOff,
@@ -22,7 +21,6 @@ import {
   Map as MapIcon,
   Percent,
   Terminal,
-  Phone,
   CalendarDays,
   Activity,
 } from "lucide-react";
@@ -59,7 +57,6 @@ const NAV_ITEMS = [
   { path: "/price-list", icon: Tag, label: "Price List" },
   { path: "/routes", icon: MapIcon, label: "Routes" },
   { path: "/reports", icon: BarChart2, label: "Reports" },
-  { path: "/outreach", icon: Phone, label: "Outreach" },
   { path: "/calendar", icon: CalendarDays, label: "Calendar" },
   { path: "/discounts", icon: Percent, label: "Discounts" },
   { path: "/edit", icon: Pencil, label: "Edit Units" },
@@ -74,7 +71,7 @@ const MOBILE_OVERFLOW = NAV_ITEMS.slice(5);
 export function NavBar() {
   const { sidebarOpen, setSidebarOpen, isMobile } = useUIStore();
   const { isConnected, lastSyncAt, companyName, isSyncing, setSyncing, setLastSync, setLastVoucherDate, setLastVouchersSync } = useTallyStore();
-  const { mergeData } = useDataStore();
+  const mergeData = useDataStore((s) => s.mergeData);
   const { toast } = useToast();
   const [moreOpen, setMoreOpen] = useState(false);
   const [daybookSyncing, setDaybookSyncing] = useState(false);
@@ -163,7 +160,7 @@ export function NavBar() {
 
           <button
             onClick={() => setMoreOpen(true)}
-            className={clsx("flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[52px] transition-colors duration-150", COLORS.text.secondary, "hover:text-neutral-950")}
+            className={clsx("flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg min-w-[52px] transition-[color,transform] duration-150 active:scale-[0.96]", COLORS.text.secondary, "hover:text-neutral-950")}
             aria-label="More navigation options"
             aria-expanded={moreOpen}
           >
@@ -285,11 +282,11 @@ export function NavBar() {
           disabled={daybookSyncing || isSyncing || !isConnected}
           title={isConnected ? "Sync today's daybook from Tally" : "Tally not connected"}
           className={clsx(
-            "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors duration-150 text-sm border",
+            "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-[background-color,transform] duration-150 text-sm border",
             daybookSyncing || isSyncing
               ? "opacity-60 cursor-not-allowed border-neutral-200/80 text-neutral-400"
               : isConnected
-              ? "border-accent/30 text-accent hover:bg-accent/8 cursor-pointer"
+              ? "border-accent/30 text-accent hover:bg-accent/8 cursor-pointer active:scale-[0.96]"
               : "opacity-40 cursor-not-allowed border-neutral-200/80 text-neutral-400"
           )}
           aria-label="Sync today's daybook"
@@ -333,10 +330,14 @@ export function NavBar() {
       {/* Collapse toggle */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
-        className={clsx("flex items-center justify-center h-10 border-t transition-colors cursor-pointer", COLORS.border, COLORS.text.secondary, COLORS.hover)}
+        className={clsx("flex items-center justify-center h-10 border-t transition-[background-color,transform] duration-150 cursor-pointer active:scale-[0.96]", COLORS.border, COLORS.text.secondary, COLORS.hover)}
         aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
       >
-        {sidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+        <ChevronLeft
+          size={16}
+          className="transition-transform duration-200"
+          style={{ transform: sidebarOpen ? "rotate(0deg)" : "rotate(180deg)" }}
+        />
       </button>
     </nav>
   );

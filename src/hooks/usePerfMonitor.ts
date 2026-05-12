@@ -45,6 +45,20 @@ export function usePerfMonitor() {
     routeRef.current = location.pathname;
   }, [location.pathname]);
 
+  // ── Capture nav-start timestamp immediately on navigation ─────────────
+  // HashRouter fires "hashchange" before React re-renders, so stamping here
+  // means renderMs = time from click → page settled (not time spent on prev page).
+  useEffect(() => {
+    const handleNavStart = () => { navTs.current = performance.now(); };
+    window.addEventListener("hashchange", handleNavStart);
+    window.addEventListener("popstate", handleNavStart);
+    return () => {
+      window.removeEventListener("hashchange", handleNavStart);
+      window.removeEventListener("popstate", handleNavStart);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Route-change timing ─────────────────────────────────────────────────
   useEffect(() => {
     const nowMs  = performance.now();

@@ -13,7 +13,7 @@ export function UnitToggle() {
     >
       <span
         className={clsx(
-          "px-2 py-1 rounded-md transition-all duration-150",
+          "px-2 py-1 rounded-md transition-[background-color,color,box-shadow] duration-150",
           unitMode === "BASE" ? "bg-accent text-white shadow-xs font-medium" : "text-muted hover:text-primary"
         )}
       >
@@ -21,7 +21,7 @@ export function UnitToggle() {
       </span>
       <span
         className={clsx(
-          "px-2 py-1 rounded-md transition-all duration-150",
+          "px-2 py-1 rounded-md transition-[background-color,color,box-shadow] duration-150",
           unitMode === "PKG" ? "bg-accent text-white shadow-xs font-medium" : "text-muted hover:text-primary"
         )}
       >

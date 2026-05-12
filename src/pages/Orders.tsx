@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Minus, Trash2, Download, X, Upload, Package, Filter, FolderPlus, FolderOpen, Save, Copy, ChevronDown, ChevronUp, BarChart3 } from "lucide-react";
 import Fuse from "fuse.js";
-import * as XLSX from "xlsx";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ResponsiveContainer,
@@ -29,7 +28,8 @@ import clsx from "clsx";
 
 export default function Orders() {
   const navigate = useNavigate();
-  const { data, voucherIndex } = useDataStore();
+  const data = useDataStore((s) => s.data);
+  const voucherIndex = useDataStore((s) => s.voucherIndex);
   const { unitMode, coverMonths, setCoverMonths, isMobile } = useUIStore();
   const { lines: orderLines, setLine, removeLine, clearAll, getAllLines } = useOrderStore();
   const {
@@ -330,7 +330,8 @@ export default function Orders() {
     }
   }
 
-  function exportXLSX() {
+  async function exportXLSX() {
+    const XLSX = await import("xlsx");
     const lines = getAllLines();
     const ws = XLSX.utils.aoa_to_sheet([
       ["Item", "Qty", "Unit"],
@@ -397,7 +398,7 @@ export default function Orders() {
         <button
           onClick={() => setShowGroupPanel(!showGroupPanel)}
           className={clsx(
-            "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition duration-150",
+            "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-[background-color,color] duration-150",
             showGroupPanel ? "bg-accent text-white" : "bg-neutral-100 text-neutral-500 hover:text-neutral-900"
           )}
         >
@@ -411,7 +412,7 @@ export default function Orders() {
                 key={g.id}
                 onClick={() => handleLoadGroup(g)}
                 className={clsx(
-                  "flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition duration-150 whitespace-nowrap",
+                  "flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition-[background-color,border-color,color] duration-150 whitespace-nowrap",
                   activeGroupId === g.id
                     ? "border-accent bg-accent/10 text-accent font-medium"
                     : "border-neutral-200 text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100/50"
@@ -475,7 +476,7 @@ export default function Orders() {
                   <div
                     key={g.id}
                     className={clsx(
-                      "border rounded-lg p-3 transition duration-150",
+                      "border rounded-lg p-3 transition-[background-color,border-color] duration-150",
                       isActive ? "border-accent bg-accent/5" : "border-neutral-200 bg-neutral-50 hover:bg-neutral-100/20"
                     )}
                   >
@@ -521,7 +522,7 @@ export default function Orders() {
                       </button>
                       <button
                         onClick={() => { if (confirm(`Delete "${g.name}"?`)) deleteGroup(g.id); }}
-                        className="flex items-center gap-1 text-xs px-2 py-1 bg-danger/10 text-danger hover:bg-danger/20 rounded transition duration-150 ml-auto"
+                        className="flex items-center gap-1 text-xs px-2 py-1 bg-danger/10 text-danger hover:bg-danger/20 rounded transition-[background-color] duration-150 ml-auto"
                       >
                         <Trash2 size={11} />
                       </button>
@@ -546,7 +547,7 @@ export default function Orders() {
               key={tab}
               onClick={() => setMobileTab(tab)}
               className={clsx(
-                "flex-1 py-2 text-xs font-medium rounded-lg transition duration-150",
+                "flex-1 py-2 text-xs font-medium rounded-lg transition-[background-color,color] duration-150",
                 mobileTab === tab ? "bg-accent text-white" : "text-neutral-500 hover:text-neutral-900"
               )}
             >
@@ -579,7 +580,7 @@ export default function Orders() {
               <button
                 onClick={() => setStockFilterEnabled((v) => !v)}
                 className={clsx(
-                  "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition duration-150",
+                  "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition-[background-color,border-color,color] duration-150",
                   stockFilterEnabled
                     ? "bg-accent/15 border-accent text-accent font-medium"
                     : "bg-neutral-50border-neutral-200 text-neutral-500 hover:text-neutral-900"

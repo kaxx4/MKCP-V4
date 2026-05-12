@@ -20,7 +20,8 @@ interface EditRow {
 
 export default function Edit() {
   const navigate = useNavigate();
-  const { data, setData } = useDataStore();
+  const data = useDataStore((s) => s.data);
+  const setData = useDataStore((s) => s.setData);
   const { setUnitOverride } = useOverrideStore();
 
   const [search, setSearch] = useState("");

@@ -117,7 +117,7 @@ export default function Routes() {
   const [zoneFilter, setZoneFilter] = useState<Zone>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
 
   // Build map of stationId → pending delivery note count
   const pendingCountMap = useMemo<Map<string, number>>(() => {
@@ -147,6 +147,7 @@ export default function Routes() {
   const routeLinesRef = useRef<L.Polyline[]>([]);
   const onSelectRef = useRef<(id: string) => void>(() => {});
   const pendingIdsRef = useRef<Set<string>>(new Set());
+  const prevSelectedIdRef = useRef<string | null>(null);
 
   // Paired station IDs for the currently selected station
   const pairedIds = useMemo<Set<string>>(() => {
@@ -238,7 +239,9 @@ export default function Routes() {
     };
   }, []);
 
-  // Update marker icons + popups; draw route polylines when selection changes
+  // Update marker icons + popups; draw route polylines when selection changes.
+  // Only touches markers whose state changed (prev/new selected + their pairs)
+  // instead of iterating all 400 markers on every click.
   useEffect(() => {
     const map = leafletMap.current;
 
@@ -263,12 +266,26 @@ export default function Routes() {
       }
     }
 
-    markersRef.current.forEach((marker, id) => {
-      const station = STATIONS.find((s) => s.id === id)!;
+    // Determine which markers need a visual update: only those that changed state
+    const prevId = prevSelectedIdRef.current;
+    const prevPaired = new Set<string>(prevId ? (ROUTE_PAIRS[prevId] ?? []) : []);
+    const nextPaired = pairedIds; // already computed above
+
+    const toUpdate = new Set<string>();
+    if (prevId) toUpdate.add(prevId);
+    prevPaired.forEach((id) => toUpdate.add(id));
+    if (selectedId) toUpdate.add(selectedId);
+    nextPaired.forEach((id) => toUpdate.add(id));
+
+    toUpdate.forEach((id) => {
+      const marker = markersRef.current.get(id);
+      const station = STATIONS.find((s) => s.id === id);
+      if (!marker || !station) return;
+
       const zone = getDistanceZone(station.distanceKm);
       const color = ZONE_COLORS[zone];
       const isSelected = id === selectedId;
-      const isPaired = pairedIds.has(id);
+      const isPaired = nextPaired.has(id);
       const count = pendingCountMap.get(id) ?? 0;
       const hasPending = count > 0;
 
@@ -299,6 +316,8 @@ export default function Routes() {
           <a href="${mapsDirectionsUrl(station)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:6px;color:#2563eb;font-size:11px;">Get directions ↗</a>
         </div>`);
     });
+
+    prevSelectedIdRef.current = selectedId;
   }, [selectedId, pendingCountMap, pairedIds]);
 
   // Fly to selected station

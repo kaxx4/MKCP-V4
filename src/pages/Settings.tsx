@@ -13,7 +13,10 @@ import { checkTallyHealth } from "../api/tallyApi";
 
 export default function Settings() {
   const { unitMode, toggleUnitMode, fyYear, setFyYear, coverMonths, setCoverMonths, leadTimeMonths, setLeadTimeMonths, defaultCreditDays, setDefaultCreditDays } = useUIStore();
-  const { clearData, data, refreshOverrides, voucherIndex } = useDataStore();
+  const clearData = useDataStore((s) => s.clearData);
+  const data = useDataStore((s) => s.data);
+  const refreshOverrides = useDataStore((s) => s.refreshOverrides);
+  const voucherIndex = useDataStore((s) => s.voucherIndex);
   const { exportAuditLog, units, setUnitOverride } = useOverrideStore();
   const { toast } = useToast();
   const [confirmClear, setConfirmClear] = useState(false);
@@ -145,13 +148,13 @@ export default function Settings() {
     toast("Audit log exported", "success");
   }
 
-  function handleExportUnits() {
+  async function handleExportUnits() {
     if (!data) {
       toast("No data loaded. Import data first.", "error");
       return;
     }
     try {
-      exportUnitsToExcel(data.items, units);
+      await exportUnitsToExcel(data.items, units);
       toast("Unit configuration exported successfully", "success");
     } catch (err) {
       toast(`Export failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
@@ -573,14 +576,14 @@ export default function Settings() {
                       className={clsx("btn-sm text-xs px-2 py-1", confirmRestore === backup.key ? "btn-primary" : "btn-secondary")}
                       title="Restore this backup"
                     >
-                      <RotateCcw size={11} />
+                      <RotateCcw size={12} />
                       {confirmRestore === backup.key ? "Confirm?" : "Restore"}
                     </button>
                     <button onClick={() => handleDownloadBackup(backup.key)} className="btn-secondary btn-sm text-xs px-2 py-1" title="Download as JSON">
-                      <Download size={11} />
+                      <Download size={12} />
                     </button>
                     <button onClick={() => handleDeleteBackup(backup.key)} className="btn-danger btn-sm text-xs px-2 py-1" title="Delete backup">
-                      <Trash2 size={11} />
+                      <Trash2 size={12} />
                     </button>
                   </div>
                 </div>

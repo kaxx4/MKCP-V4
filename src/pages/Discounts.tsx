@@ -1,15 +1,55 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useDeferredValue } from "react";
 import { useNavigate } from "react-router-dom";
 import { Pencil, Upload, X, RotateCcw, ChevronDown } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useDiscountStore } from "../store/discountStore";
 import { calculateVoucherDiscount } from "../engine/discounts";
+import type { DiscountCategory } from "../engine/discounts";
 import { fmtINR, fmtNum, fmtDate } from "../utils/format";
 import type { CanonicalVoucher } from "../types/canonical";
 
 const PAGE_SIZE = 20;
 type VoucherTab = "Sales" | "Delivery Note";
+
+// ── Category color palette ────────────────────────────────────────────────────
+// Each non-NO_DISCOUNT category gets a distinct color by index.
+// Strings must be complete class names (Tailwind purge safety).
+const CAT_PALETTE = [
+  { card: "border-blue-400 bg-blue-50",       row: "bg-blue-50 hover:bg-blue-100",         badge: "bg-blue-100 text-blue-800",       pct: "text-blue-700"    },
+  { card: "border-indigo-400 bg-indigo-50",   row: "bg-indigo-50 hover:bg-indigo-100",     badge: "bg-indigo-100 text-indigo-800",   pct: "text-indigo-700"  },
+  { card: "border-violet-400 bg-violet-50",   row: "bg-violet-50 hover:bg-violet-100",     badge: "bg-violet-100 text-violet-800",   pct: "text-violet-700"  },
+  { card: "border-amber-400 bg-amber-50",     row: "bg-amber-50 hover:bg-amber-100",       badge: "bg-amber-100 text-amber-800",     pct: "text-amber-700"   },
+  { card: "border-orange-400 bg-orange-50",   row: "bg-orange-50 hover:bg-orange-100",     badge: "bg-orange-100 text-orange-800",   pct: "text-orange-700"  },
+  { card: "border-cyan-400 bg-cyan-50",       row: "bg-cyan-50 hover:bg-cyan-100",         badge: "bg-cyan-100 text-cyan-800",       pct: "text-cyan-700"    },
+  { card: "border-teal-400 bg-teal-50",       row: "bg-teal-50 hover:bg-teal-100",         badge: "bg-teal-100 text-teal-800",       pct: "text-teal-700"    },
+  { card: "border-rose-400 bg-rose-50",       row: "bg-rose-50 hover:bg-rose-100",         badge: "bg-rose-100 text-rose-800",       pct: "text-rose-700"    },
+  { card: "border-fuchsia-400 bg-fuchsia-50", row: "bg-fuchsia-50 hover:bg-fuchsia-100",   badge: "bg-fuchsia-100 text-fuchsia-800", pct: "text-fuchsia-700" },
+  { card: "border-lime-400 bg-lime-50",       row: "bg-lime-50 hover:bg-lime-100",         badge: "bg-lime-100 text-lime-800",       pct: "text-lime-700"    },
+] as const;
+
+const NEUTRAL_COLOR = {
+  card:  "border-neutral-200 bg-white",
+  row:   "bg-white hover:bg-neutral-50",
+  badge: "bg-neutral-100 text-neutral-700",
+  pct:   "text-neutral-400",
+} as const;
+
+type PaletteEntry = typeof CAT_PALETTE[number] | typeof NEUTRAL_COLOR;
+
+function buildColorMap(categories: DiscountCategory[]): Map<string, PaletteEntry> {
+  const map = new Map<string, PaletteEntry>();
+  let idx = 0;
+  for (const cat of categories) {
+    if (cat.id === "NO_DISCOUNT") {
+      map.set(cat.id, NEUTRAL_COLOR);
+    } else {
+      map.set(cat.id, CAT_PALETTE[idx % CAT_PALETTE.length]);
+      idx++;
+    }
+  }
+  return map;
+}
 
 // ── Group Breakdown Modal ─────────────────────────────────────────────────────
 function GroupDetailsModal({
@@ -123,7 +163,7 @@ function VoucherSelector({
             key={t}
             onClick={() => handleTabChange(t)}
             className={clsx(
-              "px-4 py-2.5 rounded-lg text-sm font-medium transition-all border-b-2",
+              "px-4 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150 border-b-2",
               tab === t
                 ? "border-blue-500 text-blue-600 bg-blue-50"
                 : "border-transparent text-neutral-600 hover:text-neutral-900"
@@ -262,12 +302,14 @@ function DiscountBreakdown({
   manualOverrides,
   onSetOverride,
   onClearOverride,
+  categories,
 }: {
   voucher: CanonicalVoucher;
   result: any;
   manualOverrides: Record<string, number>;
   onSetOverride: (itemName: string, pct: number) => void;
   onClearOverride: (itemName: string) => void;
+  categories: DiscountCategory[];
 }) {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [groupsOpen, setGroupsOpen] = useState(true);
@@ -275,6 +317,9 @@ function DiscountBreakdown({
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Build categoryId → color mapping
+  const colorMap = useMemo(() => buildColorMap(categories), [categories]);
 
   useEffect(() => {
     if (editingItem && inputRef.current) inputRef.current.select();
@@ -352,78 +397,81 @@ function DiscountBreakdown({
                 className={clsx("text-neutral-400 transition-transform duration-200", groupsOpen ? "rotate-0" : "-rotate-90")}
               />
             </button>
-            {groupsOpen && <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {result.groupSummaries.map((group: any) => (
-                <div
-                  key={group.categoryId}
-                  onClick={() => setSelectedGroup(group.categoryId)}
-                  className={clsx(
-                    "p-5 rounded-xl border-2 cursor-pointer hover:shadow-lg transition-all",
-                    group.groupRuleApplied
-                      ? "border-blue-400 bg-blue-50 hover:bg-blue-100"
-                      : "border-neutral-200 bg-white hover:shadow-md"
-                  )}
-                >
-                  {/* Card Header */}
-                  <div className="flex items-start justify-between gap-4 mb-4">
-                    <div>
-                      <div className="font-bold text-base text-neutral-900">{group.categoryName}</div>
-                      <div className="text-xs text-neutral-500 mt-1.5 font-medium">
-                        {group.totalPackages} package{group.totalPackages !== 1 ? 's' : ''} total
+            {groupsOpen && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {result.groupSummaries.map((group: any) => {
+                  const color = colorMap.get(group.categoryId) ?? NEUTRAL_COLOR;
+                  return (
+                    <div
+                      key={group.categoryId}
+                      onClick={() => setSelectedGroup(group.categoryId)}
+                      className={clsx(
+                        "p-5 rounded-xl border-2 cursor-pointer hover:shadow-lg transition-[box-shadow,border-color] duration-150",
+                        color.card
+                      )}
+                    >
+                      {/* Card Header */}
+                      <div className="flex items-start justify-between gap-4 mb-4">
+                        <div>
+                          <div className="font-bold text-base text-neutral-900">{group.categoryName}</div>
+                          <div className="text-xs text-neutral-500 mt-1.5 font-medium">
+                            {group.totalPackages} package{group.totalPackages !== 1 ? 's' : ''} total
+                          </div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <div className={clsx(
+                            "text-2xl font-black leading-none",
+                            group.appliedDiscountPct > 0 ? color.pct : "text-neutral-400"
+                          )}>
+                            {group.appliedDiscountPct.toFixed(1)}%
+                          </div>
+                          <div className="text-xs text-neutral-500 mt-1">discount</div>
+                        </div>
                       </div>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <div className={clsx(
-                        "text-2xl font-black leading-none",
-                        group.appliedDiscountPct > 0 ? "text-green-600" : "text-neutral-400"
-                      )}>
-                        {group.appliedDiscountPct.toFixed(1)}%
-                      </div>
-                      <div className="text-xs text-neutral-500 mt-1">discount</div>
-                    </div>
-                  </div>
 
-                  {/* Amounts */}
-                  <div className="space-y-2 mb-4">
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="text-neutral-600">Subtotal</span>
-                      <span className="font-semibold text-neutral-900 tabular-nums">{fmtINR(group.totalAmount)}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-sm pt-2 border-t border-neutral-200">
-                      <span className="text-green-700 font-semibold">Discount</span>
-                      <span className="font-bold text-green-700 tabular-nums">−{fmtINR(group.totalDiscount)}</span>
-                    </div>
-                  </div>
-
-                  {/* Tier Badges */}
-                  <div className="space-y-2">
-                    {group.baseTierInfo && (
-                      <div className="px-3 py-2 bg-neutral-100 rounded-lg border border-neutral-200">
-                        <div className="text-xs text-neutral-500 font-semibold uppercase tracking-wide mb-0.5">Base Tier</div>
-                        <div className="text-sm font-semibold text-neutral-800">{group.baseTierInfo}</div>
+                      {/* Amounts */}
+                      <div className="space-y-2 mb-4">
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-neutral-600">Subtotal</span>
+                          <span className="font-semibold text-neutral-900 tabular-nums">{fmtINR(group.totalAmount)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm pt-2 border-t border-neutral-200">
+                          <span className={clsx("font-semibold", color.pct)}>Discount</span>
+                          <span className={clsx("font-bold tabular-nums", color.pct)}>−{fmtINR(group.totalDiscount)}</span>
+                        </div>
                       </div>
-                    )}
-                    {group.groupRuleApplied && (
-                      <div className="px-3 py-2 bg-blue-100 rounded-lg border border-blue-300">
-                        <div className="text-xs text-blue-700 font-bold uppercase tracking-wide mb-0.5">Group Rule Applied</div>
-                        <div className="text-sm font-bold text-blue-900">{group.groupRuleApplied}</div>
-                        <div className="text-xs text-blue-700 mt-0.5">Upgraded → {group.appliedDiscountPct}%</div>
-                      </div>
-                    )}
-                  </div>
 
-                  <button
-                    className="mt-4 w-full text-xs font-semibold text-blue-600 hover:text-blue-800 py-2 px-3 rounded-lg hover:bg-blue-50 border border-blue-200 transition-colors"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedGroup(group.categoryId);
-                    }}
-                  >
-                    View Items in Group →
-                  </button>
-                </div>
-              ))}
-            </div>}
+                      {/* Tier Badges */}
+                      <div className="space-y-2">
+                        {group.baseTierInfo && (
+                          <div className="px-3 py-2 bg-neutral-100 rounded-lg border border-neutral-200">
+                            <div className="text-xs text-neutral-500 font-semibold uppercase tracking-wide mb-0.5">Base Tier</div>
+                            <div className="text-sm font-semibold text-neutral-800">{group.baseTierInfo}</div>
+                          </div>
+                        )}
+                        {group.groupRuleApplied && (
+                          <div className="px-3 py-2 bg-blue-100 rounded-lg border border-blue-300">
+                            <div className="text-xs text-blue-700 font-bold uppercase tracking-wide mb-0.5">Group Rule Applied</div>
+                            <div className="text-sm font-bold text-blue-900">{group.groupRuleApplied}</div>
+                            <div className="text-xs text-blue-700 mt-0.5">Upgraded → {group.appliedDiscountPct}%</div>
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        className="mt-4 w-full text-xs font-semibold text-blue-600 hover:text-blue-800 py-2 px-3 rounded-lg hover:bg-blue-50 border border-blue-200 transition-colors"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedGroup(group.categoryId);
+                        }}
+                      >
+                        View Items in Group →
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Items Breakdown */}
@@ -441,105 +489,105 @@ function DiscountBreakdown({
                 className={clsx("text-neutral-400 transition-transform duration-200", itemsOpen ? "rotate-0" : "-rotate-90")}
               />
             </button>
-            {itemsOpen && <div className="border border-neutral-200 rounded-lg overflow-hidden bg-white">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-neutral-200 bg-neutral-50">
-                    <th className="text-left px-5 py-4 font-bold text-neutral-800">Item</th>
-                    <th className="text-right px-5 py-4 font-bold text-neutral-800">Qty</th>
-                    <th className="text-left px-5 py-4 font-bold text-neutral-800">Category</th>
-                    <th className="text-right px-5 py-4 font-bold text-neutral-800">Amount</th>
-                    <th className="text-center px-5 py-4 font-bold text-neutral-800">Disc%</th>
-                    <th className="text-right px-5 py-4 font-bold text-neutral-800">Discount</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-100">
-                  {result.lines.map((line: any, idx: number) => (
-                    <tr
-                      key={idx}
-                      className={clsx(
-                        "transition-colors",
-                        line.discountPct > 0 ? "bg-green-50 hover:bg-green-100" : "bg-white hover:bg-neutral-50"
-                      )}
-                    >
-                      <td className="px-5 py-4 text-neutral-900 font-semibold">{line.itemName}</td>
-                      <td className="px-5 py-4 text-right text-neutral-700">
-                        <div className="font-semibold tabular-nums">{fmtNum(line.qtyBase, 0)}</div>
-                        <div className="text-xs text-neutral-500 mt-1">
-                          {line.packages} pkg{line.packages !== 1 ? 's' : ''}
-                        </div>
-                      </td>
-                      <td className="px-5 py-4">
-                        <span className={clsx(
-                          "inline-block px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap",
-                          line.categoryId === "NO_DISCOUNT"
-                            ? "bg-neutral-100 text-neutral-700"
-                            : "bg-blue-100 text-blue-800"
-                        )}>
-                          {line.categoryName}
-                        </span>
-                      </td>
-                      <td className="px-5 py-4 text-right font-bold text-neutral-900 tabular-nums">
-                        {fmtINR(line.lineAmount)}
-                      </td>
-                      <td className="px-5 py-4 text-center">
-                        {editingItem === line.itemName ? (
-                          <input
-                            ref={inputRef}
-                            type="number"
-                            min="0"
-                            max="100"
-                            step="0.5"
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            onBlur={() => commitEdit(line.itemName)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") commitEdit(line.itemName);
-                              if (e.key === "Escape") setEditingItem(null);
-                            }}
-                            className="w-16 text-center font-bold border-2 border-blue-400 rounded-md px-1 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-                          />
-                        ) : (
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              onClick={() => startEdit(line.itemName, line.discountPct)}
-                              className={clsx(
-                                "font-bold tabular-nums px-2 py-0.5 rounded hover:ring-2 hover:ring-blue-300 transition-all",
-                                manualOverrides[line.itemName] !== undefined
-                                  ? "text-amber-700 bg-amber-50 ring-1 ring-amber-300"
-                                  : line.discountPct > 0
-                                  ? "text-green-700 hover:bg-green-50"
-                                  : "text-neutral-400 hover:bg-neutral-50"
-                              )}
-                              title="Click to override"
-                            >
-                              {line.discountPct > 0 ? `${line.discountPct}%` : "—"}
-                            </button>
-                            {manualOverrides[line.itemName] !== undefined && (
-                              <button
-                                onClick={() => onClearOverride(line.itemName)}
-                                className="text-neutral-400 hover:text-red-500 transition-colors"
-                                title="Clear override"
-                              >
-                                <RotateCcw size={11} />
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                      <td className={clsx(
-                        "px-5 py-4 text-right font-bold tabular-nums",
-                        manualOverrides[line.itemName] !== undefined
-                          ? "text-amber-700"
-                          : line.discountPct > 0 ? "text-green-700" : "text-neutral-400"
-                      )}>
-                        {line.discountPct > 0 ? fmtINR(line.discountAmount) : "—"}
-                      </td>
+            {itemsOpen && (
+              <div className="border border-neutral-200 rounded-lg overflow-hidden bg-white">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-neutral-200 bg-neutral-50">
+                      <th className="text-left px-5 py-4 font-bold text-neutral-800">Item</th>
+                      <th className="text-right px-5 py-4 font-bold text-neutral-800">Qty</th>
+                      <th className="text-left px-5 py-4 font-bold text-neutral-800">Category</th>
+                      <th className="text-right px-5 py-4 font-bold text-neutral-800">Amount</th>
+                      <th className="text-center px-5 py-4 font-bold text-neutral-800">Disc%</th>
+                      <th className="text-right px-5 py-4 font-bold text-neutral-800">Discount</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>}
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100">
+                    {result.lines.map((line: any, idx: number) => {
+                      const lineColor = colorMap.get(line.categoryId) ?? NEUTRAL_COLOR;
+                      return (
+                        <tr
+                          key={idx}
+                          className={clsx("transition-colors", lineColor.row)}
+                        >
+                          <td className="px-5 py-4 text-neutral-900 font-semibold">{line.itemName}</td>
+                          <td className="px-5 py-4 text-right text-neutral-700">
+                            <div className="font-semibold tabular-nums">{fmtNum(line.qtyBase, 0)}</div>
+                            <div className="text-xs text-neutral-500 mt-1">
+                              {line.packages} pkg{line.packages !== 1 ? 's' : ''}
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <span className={clsx(
+                              "inline-block px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap",
+                              lineColor.badge
+                            )}>
+                              {line.categoryName}
+                            </span>
+                          </td>
+                          <td className="px-5 py-4 text-right font-bold text-neutral-900 tabular-nums">
+                            {fmtINR(line.lineAmount)}
+                          </td>
+                          <td className="px-5 py-4 text-center">
+                            {editingItem === line.itemName ? (
+                              <input
+                                ref={inputRef}
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="0.5"
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                onBlur={() => commitEdit(line.itemName)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") commitEdit(line.itemName);
+                                  if (e.key === "Escape") setEditingItem(null);
+                                }}
+                                className="w-16 text-center font-bold border-2 border-blue-400 rounded-md px-1 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                              />
+                            ) : (
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  onClick={() => startEdit(line.itemName, line.discountPct)}
+                                  className={clsx(
+                                    "font-bold tabular-nums px-2 py-0.5 rounded hover:ring-2 hover:ring-blue-300 transition-[box-shadow] duration-150",
+                                    manualOverrides[line.itemName] !== undefined
+                                      ? "text-amber-700 bg-amber-50 ring-1 ring-amber-300"
+                                      : line.discountPct > 0
+                                      ? clsx(lineColor.pct, "hover:bg-white/60")
+                                      : "text-neutral-400 hover:bg-neutral-50"
+                                  )}
+                                  title="Click to override"
+                                >
+                                  {line.discountPct > 0 ? `${line.discountPct}%` : "—"}
+                                </button>
+                                {manualOverrides[line.itemName] !== undefined && (
+                                  <button
+                                    onClick={() => onClearOverride(line.itemName)}
+                                    className="text-neutral-400 hover:text-red-500 transition-colors"
+                                    title="Clear override"
+                                  >
+                                    <RotateCcw size={11} />
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td className={clsx(
+                            "px-5 py-4 text-right font-bold tabular-nums",
+                            manualOverrides[line.itemName] !== undefined
+                              ? "text-amber-700"
+                              : line.discountPct > 0 ? lineColor.pct : "text-neutral-400"
+                          )}>
+                            {line.discountPct > 0 ? fmtINR(line.discountAmount) : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
         </>
@@ -572,11 +620,14 @@ function DiscountBreakdown({
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function Discounts() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
   const { categories, itemCategoryOverrides } = useDiscountStore();
 
   const [selectedVoucherId, setSelectedVoucherId] = useState<string | null>(null);
   const [manualOverrides, setManualOverrides] = useState<Record<string, number>>({});
+
+  // Defer the heavy discount computation so UI selection feedback is immediate
+  const deferredVoucherId = useDeferredValue(selectedVoucherId);
 
   const vouchers = useMemo(
     () => (data?.vouchers ?? []).filter((v) => !v.isCancelled && !v.isOptional),
@@ -584,14 +635,14 @@ export default function Discounts() {
   );
 
   const selectedVoucher = useMemo(
-    () => (selectedVoucherId ? vouchers.find((v) => v.voucherId === selectedVoucherId) ?? null : null),
-    [vouchers, selectedVoucherId]
+    () => (deferredVoucherId ? vouchers.find((v) => v.voucherId === deferredVoucherId) ?? null : null),
+    [vouchers, deferredVoucherId]
   );
 
-  // Reset manual overrides when switching vouchers
+  // Reset manual overrides when the deferred voucher actually changes
   useEffect(() => {
     setManualOverrides({});
-  }, [selectedVoucherId]);
+  }, [deferredVoucherId]);
 
   const discountResult = useMemo(() => {
     if (!selectedVoucher || !data) return null;
@@ -619,9 +670,15 @@ export default function Discounts() {
       };
     });
 
-    // Recalculate group summary totals
+    // Group lines by categoryId first (O(n)) so each group lookup is O(1)
+    const linesByCategory = new Map<string, any[]>();
+    for (const line of lines) {
+      const arr = linesByCategory.get(line.categoryId);
+      if (arr) arr.push(line);
+      else linesByCategory.set(line.categoryId, [line]);
+    }
     const groupSummaries = discountResult.groupSummaries.map((g: any) => {
-      const groupLines = lines.filter((l: any) => l.categoryId === g.categoryId);
+      const groupLines = linesByCategory.get(g.categoryId) ?? [];
       const totalDiscount = groupLines.reduce((s: number, l: any) => s + l.discountAmount, 0);
       return { ...g, totalDiscount };
     });
@@ -692,6 +749,7 @@ export default function Discounts() {
             manualOverrides={manualOverrides}
             onSetOverride={handleSetOverride}
             onClearOverride={handleClearOverride}
+            categories={categories}
           />
         </div>
       )}

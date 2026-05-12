@@ -22,7 +22,7 @@ function todayStr(): string {
 export function useTallyAutoSync() {
   const { isConnected, isSyncing, companyName, setSyncing, setLastSync, setLastVoucherDate, setLastVouchersSync } =
     useTallyStore();
-  const { mergeData } = useDataStore();
+  const mergeData = useDataStore((s) => s.mergeData);
   const { toast } = useToast();
 
   const isSyncingRef = useRef(isSyncing);

@@ -9,7 +9,7 @@ import type { CanonicalLedger } from "../types/canonical";
 
 export default function Ledgers() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
   const { isMobile } = useUIStore();
   const [search, setSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("ALL");
@@ -112,7 +112,7 @@ export default function Ledgers() {
               <div className="text-center py-8 text-muted text-sm">No transactions</div>
             ) : (
               ledgerTransactions.map((tx, i) => (
-                <div key={i} className="px-3 py-2 border-b border-bg-border/50 text-xs">
+                <div key={`${tx.voucherNumber}-${i}`} className="px-3 py-2 border-b border-bg-border/50 text-xs">
                   <div className="flex items-center justify-between mb-0.5">
                     <span className="text-muted">{fmtDate(tx.date)} · {tx.type}</span>
                     <span className="tabular-nums text-primary">{tx.voucherNumber}</span>
@@ -193,7 +193,7 @@ export default function Ledgers() {
           {filtered.map((ledger) => (
             <div key={ledger.ledgerId}
               onClick={() => setSelectedLedgerId(ledger.ledgerId)}
-              className={clsx("px-3 py-2.5 cursor-pointer border-b border-bg-border/50 transition-colors",
+              className={clsx("px-3 py-2.5 cursor-pointer border-b border-bg-border/50 transition-colors duration-100 active:bg-bg-border/50",
                 selectedLedgerId === ledger.ledgerId ? "bg-accent/15 border-l-2 border-l-accent" : "hover:bg-bg-border/30")}>
               <div className="text-xs font-sans text-primary truncate">{ledger.name}</div>
               <div className="flex items-center justify-between mt-0.5">
@@ -262,7 +262,7 @@ export default function Ledgers() {
                       </td>
                     </tr>
                     {ledgerTransactions.map((tx, i) => (
-                      <tr key={i} className="responsive-table-row">
+                      <tr key={`${tx.voucherNumber}-${i}`} className="responsive-table-row">
                         <td className="table-cell text-muted whitespace-nowrap">{fmtDate(tx.date)}</td>
                         <td className="table-cell-mono">{tx.voucherNumber}</td>
                         <td className="table-cell text-muted whitespace-nowrap">{tx.type}</td>

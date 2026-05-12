@@ -5,11 +5,15 @@ import { useOverrideStore } from "./overrideStore";
 import { generatePredictions, scorePredictions, generateItemForecasts, type PredictionSnapshot } from "../engine/prediction";
 import { saveToStore, loadFromStore } from "../db/idb";
 import { buildVoucherIndex, type VoucherIndex } from "../engine/inventory";
+import { computeItemMargins, type ItemMarginData } from "../engine/financial";
 
 interface DataState {
   data: ParsedData | null;
   rawData: ParsedData | null; // Store original data without overrides
   voucherIndex: VoucherIndex;
+  /** Pre-computed item margins — populated in background after each data load.
+   *  Null until the first background computation finishes. */
+  itemMargins: Map<string, ItemMarginData> | null;
   setData: (d: ParsedData) => void;
   mergeData: (d: ParsedData) => void;
   clearData: () => void;
@@ -20,6 +24,7 @@ export const useDataStore = create<DataState>((set, get) => ({
   data: null,
   rawData: null,
   voucherIndex: new Map(),
+  itemMargins: null,
 
   setData: (rawData) => {
     // Store raw data and apply overrides
@@ -32,7 +37,20 @@ export const useDataStore = create<DataState>((set, get) => ({
       rawData,
       data: newData,
       voucherIndex,
+      itemMargins: null, // reset — will be re-populated below
     });
+
+    // Pre-compute item margins in background so PendingOrders can read them
+    // without running O(items × vouchers) on every navigation.
+    const computeMargins = () => {
+      const margins = computeItemMargins(newData.items, newData.vouchers);
+      set({ itemMargins: new Map(margins.map((m) => [m.itemId, m])) });
+    };
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(computeMargins);
+    } else {
+      setTimeout(computeMargins, 100);
+    }
 
     // Run audit in development mode (Phase 5.1)
     if ((import.meta as any).env?.DEV) {
@@ -62,7 +80,7 @@ export const useDataStore = create<DataState>((set, get) => ({
     }
   },
 
-  clearData: () => set({ data: null, rawData: null, voucherIndex: new Map() }),
+  clearData: () => set({ data: null, rawData: null, voucherIndex: new Map(), itemMargins: null }),
 
   refreshOverrides: () => {
     const { rawData } = get();

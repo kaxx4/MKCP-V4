@@ -22,7 +22,7 @@ interface CostPriceItem extends PriceAnomaly {
 }
 
 export default function PriceListCorrection() {
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
   const { toast } = useToast();
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
 

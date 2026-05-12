@@ -48,6 +48,8 @@ export interface CanonicalLedger {
   openingBalance: number;  // positive = Dr (receivable/asset), negative = Cr (payable/liability)
   gstin?: string;
   creditDays: number;
+  pincode?: string;
+  state?: string;
 }
 
 export interface CanonicalVoucherLine {
