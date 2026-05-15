@@ -134,6 +134,14 @@ export default function Orders() {
 
   const filteredItems = useMemo(() => {
     let result = allItems;
+
+    // Filter by active group if set
+    if (activeGroupId) {
+      const groupItems = getGroupItems(activeGroupId);
+      const groupItemSet = new Set(groupItems);
+      result = result.filter((i) => groupItemSet.has(i.itemId));
+    }
+
     if (groupFilter !== "ALL") result = result.filter((i) => i.group === groupFilter);
     if (debouncedSearch.trim()) {
       const searchResult = fuse.search(debouncedSearch.trim());
@@ -150,7 +158,7 @@ export default function Orders() {
       });
     }
     return result;
-  }, [allItems, debouncedSearch, groupFilter, fuse, stockFilterEnabled, stockFilterOp, stockFilterValue, stockCache]);
+  }, [allItems, debouncedSearch, groupFilter, fuse, stockFilterEnabled, stockFilterOp, stockFilterValue, stockCache, activeGroupId, getGroupItems]);
 
   const itemListVirtualizer = useVirtualizer({
     count: filteredItems.length,

@@ -66,7 +66,12 @@ const NAV_ITEMS = [
 ];
 
 const MOBILE_PRIMARY = NAV_ITEMS.slice(0, 5);
-const MOBILE_OVERFLOW = NAV_ITEMS.slice(5);
+const MOBILE_OVERFLOW = NAV_ITEMS.slice(5).sort((a, b) => {
+  // Keep Reports near top of overflow menu (after primary items)
+  if (a.path === "/reports") return -1;
+  if (b.path === "/reports") return 1;
+  return 0;
+});
 
 export function NavBar() {
   const { sidebarOpen, setSidebarOpen, isMobile } = useUIStore();
