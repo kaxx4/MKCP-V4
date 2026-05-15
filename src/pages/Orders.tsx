@@ -73,6 +73,7 @@ export default function Orders() {
   const orderInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
   const parentRef = useRef<HTMLDivElement>(null);
   const orderPanelRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Debounce search input
   useEffect(() => {
@@ -346,6 +347,64 @@ export default function Orders() {
     XLSX.writeFile(wb, `order_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
+  // ── Export/Import Order Groups ────────────────────────────────────────
+  function exportOrderGroups() {
+    const payload = {
+      version: "1.0",
+      exportedAt: new Date().toISOString(),
+      groups: orderGroups,
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `order-groups-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importOrderGroups() {
+    fileInputRef.current?.click();
+  }
+
+  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string) as {
+          version: string;
+          exportedAt: string;
+          groups: OrderGroup[];
+        };
+
+        if (!data.groups || !Array.isArray(data.groups)) {
+          alert("Invalid file: missing groups");
+          return;
+        }
+
+        // Import groups
+        for (const group of data.groups) {
+          const id = createGroup(group.name, group.description);
+          const lineMap: Record<string, any> = {};
+          for (const [itemId, line] of Object.entries(group.lines)) {
+            lineMap[itemId] = line;
+          }
+          setGroupLines(id, lineMap);
+        }
+
+        alert(`Imported ${data.groups.length} group(s)`);
+      } catch {
+        alert("Invalid JSON file");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
   function getStockColor(item: CanonicalItem, stock: number) {
     if (stock <= 0) return "text-danger";
     // Use item's own avg monthly outward to determine if stock is low
@@ -464,6 +523,35 @@ export default function Orders() {
               <FolderPlus size={14} />
               Create & Save Current Order
             </button>
+          </div>
+
+          {/* Export/Import groups */}
+          <div className="flex gap-2 pt-2 border-t border-neutral-200">
+            <button
+              onClick={exportOrderGroups}
+              disabled={orderGroups.length === 0}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors duration-150 border-neutral-200 text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Export all order groups to JSON file"
+            >
+              <Download size={13} />
+              Export Groups
+            </button>
+            <button
+              onClick={importOrderGroups}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors duration-150 border-neutral-200 text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50"
+              title="Import order groups from JSON file"
+            >
+              <Upload size={13} />
+              Import Groups
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              onChange={handleFileInputChange}
+              className="hidden"
+              aria-label="Import order groups file"
+            />
           </div>
 
           {/* Existing groups */}
@@ -667,30 +755,6 @@ export default function Orders() {
                 <h2 className="subsection-header leading-tight">{focusedItem.name}</h2>
                 <div className="metric-label mt-0.5">{focusedItem.group} · {focusedItem.baseUnit}{focusedItem.pkgUnit ? ` · ${focusedItem.unitsPerPkg}/${focusedItem.pkgUnit}` : ""}</div>
               </div>
-
-              {/* Mobile quick-add to order */}
-              {isMobile && selectedItem && (
-                <div className="flex items-center gap-2 bg-white border border-neutral-200 rounded-lg p-2">
-                  <span className="label-text flex-shrink-0">Order Qty:</span>
-                  <input
-                    ref={qtyRef}
-                    type="text"
-                    inputMode="decimal"
-                    value={orderQty}
-                    onChange={(e) => setOrderQty(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && addToOrder()}
-                    placeholder="0"
-                    className="flex-1 form-input tabular-nums text-sm text-center"
-                  />
-                  <button
-                    onClick={addToOrder}
-                    disabled={!orderQty}
-                    className="btn-primary btn-sm"
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-              )}
 
               {/* Mini KPIs - Redesigned for Accessibility */}
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {
