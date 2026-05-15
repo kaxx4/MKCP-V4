@@ -43,6 +43,10 @@ export default function Orders() {
     setGroupLines,
     addLinesToGroup,
     getAllGroups,
+    assignItemToGroup,
+    removeItemFromGroup,
+    getGroupItems,
+    getItemGroups,
   } = useOrderGroupStore();
 
   const [search, setSearch] = useState("");
@@ -58,6 +62,8 @@ export default function Orders() {
   const [showChart, setShowChart] = useState(true);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupDesc, setNewGroupDesc] = useState("");
+  const [groupPanelTab, setGroupPanelTab] = useState<"groups" | "items">("groups");
+  const [itemSearch, setItemSearch] = useState("");
   const [movementModal, setMovementModal] = useState<{ direction: MovementDirection; month?: string } | null>(null);
   const [modalTab, setModalTab] = useState<"actual" | "orders">("actual");
 
@@ -492,8 +498,38 @@ export default function Orders() {
 
       {/* Order Groups Expanded Panel */}
       {showGroupPanel && (
-        <div className="bg-white border-x border-b border-neutral-200 p-4 space-y-3 mb-0 page-section">
-          {/* Create new group */}
+        <div className="bg-white border-x border-b border-neutral-200 mb-0 page-section">
+          {/* Tabs */}
+          <div className="flex border-b border-neutral-200 px-4 pt-4 gap-0">
+            <button
+              onClick={() => setGroupPanelTab("groups")}
+              className={clsx(
+                "px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors -mb-px",
+                groupPanelTab === "groups"
+                  ? "border-accent text-accent"
+                  : "border-transparent text-neutral-500 hover:text-neutral-800"
+              )}
+            >
+              Manage Groups
+            </button>
+            <button
+              onClick={() => setGroupPanelTab("items")}
+              className={clsx(
+                "px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors -mb-px",
+                groupPanelTab === "items"
+                  ? "border-accent text-accent"
+                  : "border-transparent text-neutral-500 hover:text-neutral-800"
+              )}
+            >
+              Assign Items
+            </button>
+          </div>
+
+          {/* Tab Content */}
+          <div className="p-4 space-y-3">
+            {groupPanelTab === "groups" ? (
+              <>
+                {/* Create new group */}
           <div className="flex flex-col md:flex-row items-stretch md:items-end gap-2 md:gap-3">
             <div className="flex-1">
               <label className="label-text mb-1 block">Group Name</label>
@@ -624,6 +660,83 @@ export default function Orders() {
               No order groups yet. Create one to save your current order for reuse.
             </div>
           )}
+            </>
+            ) : (
+              <>
+                {/* Items Tab: Assign items to groups */}
+                <div className="space-y-3">
+                  <div>
+                    <input
+                      value={itemSearch}
+                      onChange={(e) => setItemSearch(e.target.value)}
+                      placeholder="Search items…"
+                      className="search-input w-full text-xs"
+                    />
+                  </div>
+
+                  {orderGroups.length === 0 ? (
+                    <div className="text-center py-8 text-sm text-neutral-500">
+                      Create groups first to assign items to them
+                    </div>
+                  ) : (
+                    <div className="border border-neutral-200 rounded-lg overflow-hidden">
+                      {/* Header */}
+                      <div className="grid grid-cols-[1fr_1fr] px-4 py-2.5 text-xs font-semibold text-neutral-600 border-b border-neutral-200 bg-neutral-50 sticky top-0 z-10">
+                        <span>Item</span>
+                        <span>Assigned Group</span>
+                      </div>
+                      {/* Items list */}
+                      <div className="divide-y divide-neutral-100 max-h-96 overflow-y-auto">
+                        {allItems
+                          .filter((item) =>
+                            itemSearch.trim() === ""
+                              ? true
+                              : item.name.toLowerCase().includes(itemSearch.toLowerCase()) ||
+                                item.itemId.toLowerCase().includes(itemSearch.toLowerCase())
+                          )
+                          .map((item) => {
+                            const itemGroupsMap = getItemGroups();
+                            const assignedGroupId = itemGroupsMap[item.itemId];
+                            const assignedGroup = assignedGroupId ? orderGroupsMap[assignedGroupId] : null;
+                            return (
+                              <div
+                                key={item.itemId}
+                                className="grid grid-cols-[1fr_1fr] px-4 py-2.5 items-center hover:bg-neutral-50 transition-colors"
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="text-xs text-neutral-700 truncate font-medium" title={item.name}>
+                                    {item.name}
+                                  </span>
+                                </div>
+                                <select
+                                  value={assignedGroup?.id ?? "unassigned"}
+                                  onChange={(e) => {
+                                    if (e.target.value === "unassigned") {
+                                      if (assignedGroup) removeItemFromGroup(assignedGroup.id, item.itemId);
+                                    } else {
+                                      if (assignedGroup) removeItemFromGroup(assignedGroup.id, item.itemId);
+                                      assignItemToGroup(e.target.value, item.itemId);
+                                    }
+                                  }}
+                                  className="form-select text-xs"
+                                >
+                                  <option value="unassigned">— Unassigned —</option>
+                                  {orderGroups.map((g) => (
+                                    <option key={g.id} value={g.id}>
+                                      {g.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
