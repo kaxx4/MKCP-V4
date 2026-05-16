@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, startTransition } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical, Calendar, Zap, Wifi, WifiOff, Package, RefreshCw } from "lucide-react";
+import { Upload, FileJson, CheckCircle, AlertTriangle, Info, Loader2, FlaskConical, Calendar, Zap, Wifi, WifiOff, Package, RefreshCw, Database } from "lucide-react";
 import clsx from "clsx";
 import { parseMasters } from "../parser/masterParser";
 import { parseTransactions } from "../parser/transactionParser";
@@ -76,6 +76,11 @@ export default function ImportPage() {
   const [mastersFile, setMastersFile] = useState<File | null>(null);
   const [txFile, setTxFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
+
+  // Supabase sync state
+  const [lastSupabaseSyncAt, setLastSupabaseSyncAt] = useState<string | null>(null);
+  const [supabaseSyncing, setSupabaseSyncing] = useState(false);
+  const [supabaseError, setSupabaseError] = useState<string | null>(null);
 
   // Shared state
   const [report, setReport] = useState<ImportReport | null>(null);
@@ -519,6 +524,54 @@ export default function ImportPage() {
     setDebugLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
   };
 
+  async function handleManualSupabaseSync() {
+    if (!existingData) {
+      toast("No data loaded — import from Tally first", "warn");
+      return;
+    }
+
+    setSupabaseSyncing(true);
+    setSupabaseError(null);
+    try {
+      addLog("[Supabase] Starting manual sync...");
+
+      const itemCount = Array.from(existingData.items.values()).length;
+      const ledgerCount = Array.from(existingData.ledgers.values()).length;
+      const voucherCount = existingData.vouchers.length;
+
+      addLog(`[Supabase] Pushing ${itemCount} items, ${ledgerCount} ledgers, ${voucherCount} vouchers to Supabase...`);
+
+      // Call server API to sync to Supabase
+      const response = await fetch("http://localhost:3100/api/supabase/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company: existingData.company?.name || "Unknown",
+          items: Array.from(existingData.items.values()),
+          ledgers: Array.from(existingData.ledgers.values()),
+          vouchers: existingData.vouchers,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(err || `Server error: ${response.status}`);
+      }
+
+      const result = await response.json();
+      setLastSupabaseSyncAt(new Date().toISOString());
+      addLog(`[Supabase] ✓ ${result.message || "Manual sync complete"}`);
+      toast("Data pushed to Supabase successfully", "success");
+    } catch (err: any) {
+      const errMsg = err.message || String(err);
+      setSupabaseError(errMsg);
+      addLog(`[Supabase] ❌ Sync failed: ${errMsg}`);
+      toast(`Supabase sync failed: ${errMsg}`, "error");
+    } finally {
+      setSupabaseSyncing(false);
+    }
+  }
+
   async function loadSampleData() {
     try {
       setImporting(true);
@@ -905,6 +958,60 @@ export default function ImportPage() {
                 {lastVoucherDate && ` (up to ${lastVoucherDate})`}
               </div>
             )}
+          </div>
+
+          {/* Supabase Sync Status */}
+          <div className={clsx(
+            "alert",
+            supabaseError ? "alert-warn" : "alert-info"
+          )}>
+            <div className="flex items-center gap-3 mb-3">
+              <Database size={20} className={supabaseError ? "text-warn" : "text-info"} />
+              <div className="flex-1">
+                <div className="font-semibold text-primary">
+                  Supabase Data Sync
+                </div>
+                <div className="text-xs text-muted">
+                  {supabaseError ? "Last sync encountered an error" : "Automatically synced with each Tally import"}
+                </div>
+              </div>
+              <button
+                onClick={handleManualSupabaseSync}
+                disabled={supabaseSyncing || !existingData}
+                className="btn-secondary btn-sm whitespace-nowrap"
+              >
+                {supabaseSyncing ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    Syncing...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={14} />
+                    Push to Supabase
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-4 text-xs">
+              <div>
+                {lastSupabaseSyncAt ? (
+                  <>
+                    <span className="text-muted">Last sync: </span>
+                    <span className="text-primary font-medium">
+                      {new Date(lastSupabaseSyncAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-muted">Never synced manually</span>
+                )}
+              </div>
+              {supabaseError && (
+                <div className="text-warn font-medium">
+                  {supabaseError}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Sync Form */}

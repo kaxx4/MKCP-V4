@@ -11,8 +11,11 @@ import {
 } from "../converters/convert.js";
 import { PARALLEL_MASTERS, SEQUENTIAL_MASTERS, TRANSACTION_COLLECTIONS } from "../config/collections.js";
 import type { ChangeDetector } from "./changeDetector.js";
+import { SupabaseSync } from "./supabaseSync.js";
 
 export class SyncOrchestrator {
+  private supabase = new SupabaseSync();
+
   constructor(
     private tallyUrl: string,
     private changeDetector: ChangeDetector
@@ -90,19 +93,25 @@ export class SyncOrchestrator {
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`[MASTERS] Done in ${elapsed}s`);
 
+    const mastersList = [
+      { metadata: { type: "Company", name: company }, name: company, fystart: 4 },
+      ...groups.tallymessage,
+      ...units.tallymessage,
+      ...stocks.tallymessage,
+      ...ledgers.tallymessage,
+      ...godowns.tallymessage,
+      ...costCentres.tallymessage,
+    ];
+
+    this.supabase.syncMasters(mastersList, company).catch(e =>
+      console.error(`[Supabase] Masters sync failed: ${e.message}`)
+    );
+
     return {
       success: stocks.tallymessage.length > 0 || ledgers.tallymessage.length > 0,
       errors: errors.length > 0 ? errors : undefined,
       data: {
-        tallymessage: [
-          { metadata: { type: "Company", name: company }, name: company, fystart: 4 },
-          ...groups.tallymessage,
-          ...units.tallymessage,
-          ...stocks.tallymessage,
-          ...ledgers.tallymessage,
-          ...godowns.tallymessage,
-          ...costCentres.tallymessage,
-        ],
+        tallymessage: mastersList,
       },
       stats: {
         stockGroups: groups.tallymessage.length,
@@ -233,6 +242,10 @@ export class SyncOrchestrator {
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`[DAYBOOK] ✓ Total: ${allVouchers.length} vouchers in ${elapsed}s (${chunksSucceeded}/${chunks.length} chunks succeeded)`);
+
+    this.supabase.syncVouchers(allVouchers, company).catch(e =>
+      console.error(`[Supabase] Vouchers sync failed: ${e.message}`)
+    );
 
     return {
       success: allVouchers.length > 0,

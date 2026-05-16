@@ -266,7 +266,7 @@ export function NavBar() {
             to={path}
             className={({ isActive }) =>
               clsx(
-                "flex items-center gap-3 px-2.5 py-2 rounded-lg transition-colors duration-150 text-sm",
+                "flex items-center gap-3 px-2.5 py-2 rounded-lg transition-[background-color,color,transform] duration-150 text-sm min-h-10 active:scale-[0.96]",
                 isActive
                   ? clsx(COLORS.accentBg, "text-accent font-medium")
                   : clsx(COLORS.text.secondary, "hover:text-neutral-950", COLORS.hover)
@@ -287,7 +287,7 @@ export function NavBar() {
           disabled={daybookSyncing || isSyncing || !isConnected}
           title={isConnected ? "Sync today's daybook from Tally" : "Tally not connected"}
           className={clsx(
-            "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-[background-color,transform] duration-150 text-sm border",
+            "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-[background-color,transform] duration-150 text-sm border min-h-10",
             daybookSyncing || isSyncing
               ? "opacity-60 cursor-not-allowed border-neutral-200/80 text-neutral-400"
               : isConnected
@@ -313,7 +313,7 @@ export function NavBar() {
       <div className="px-2 pb-2">
         <NavLink
           to="/import"
-          className={clsx("flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors border", COLORS.hover, COLORS.border)}
+          className={clsx("flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-[background-color,color,transform] duration-150 border min-h-10 active:scale-[0.96]", COLORS.hover, COLORS.border)}
           title={isConnected ? `Connected - Last sync: ${formatLastSync()}` : "Not connected - Click to connect"}
         >
           {isConnected ? (

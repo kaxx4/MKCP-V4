@@ -22,6 +22,9 @@ import { getCurrentStock, getCurrentStockIndexed, computeMonthlyBuckets, compute
 import { getItemMovements, getItemOrderDocs, type MovementRecord, type MovementDirection } from "../engine/audit/movementTracer";
 import { toDisplay, fromDisplay } from "../engine/unitEngine";
 import { UnitToggle } from "../components/UnitToggle";
+import { GroupTabs } from "../components/GroupTabs";
+import { VendorGroupsSummary } from "../components/VendorGroupsSummary";
+import { ExpandedGroupsView } from "../components/ExpandedGroupsView";
 import { fmtNum } from "../utils/format";
 import type { CanonicalItem } from "../types/canonical";
 import clsx from "clsx";
@@ -66,6 +69,9 @@ export default function Orders() {
   const [itemSearch, setItemSearch] = useState("");
   const [movementModal, setMovementModal] = useState<{ direction: MovementDirection; month?: string } | null>(null);
   const [modalTab, setModalTab] = useState<"actual" | "orders">("actual");
+  const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const [batchAssignGroupId, setBatchAssignGroupId] = useState<string | null>(null);
 
   function openMovementModal(direction: MovementDirection, month?: string) {
     setModalTab("actual");
@@ -212,6 +218,35 @@ export default function Orders() {
     } else {
       setTimeout(() => qtyRef.current?.focus(), 50);
     }
+  }
+
+  function toggleMultiSelect(itemId: string) {
+    const newSelection = new Set(selectedItemIds);
+    if (newSelection.has(itemId)) {
+      newSelection.delete(itemId);
+    } else {
+      newSelection.add(itemId);
+    }
+    setSelectedItemIds(newSelection);
+  }
+
+  function batchAssignToGroup() {
+    if (selectedItemIds.size === 0 || !batchAssignGroupId) return;
+    selectedItemIds.forEach((itemId) => {
+      const itemGroups = getItemGroups();
+      const currentGroupId = itemGroups[itemId];
+      if (currentGroupId && currentGroupId !== batchAssignGroupId) {
+        removeItemFromGroup(currentGroupId, itemId);
+      }
+      assignItemToGroup(batchAssignGroupId, itemId);
+    });
+    setSelectedItemIds(new Set());
+    setBatchAssignGroupId(null);
+  }
+
+  function clearBatchSelection() {
+    setSelectedItemIds(new Set());
+    setBatchAssignGroupId(null);
   }
 
   function addToOrder() {
@@ -479,25 +514,11 @@ export default function Orders() {
           Order Groups ({orderGroups.length})
         </button>
         {orderGroups.length > 0 && !showGroupPanel && (
-          <div className="flex gap-1.5 overflow-x-auto">
-            {orderGroups.slice(0, 5).map((g) => (
-              <button
-                key={g.id}
-                onClick={() => handleLoadGroup(g)}
-                className={clsx(
-                  "flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition-[background-color,border-color,color] duration-150 whitespace-nowrap",
-                  activeGroupId === g.id
-                    ? "border-accent bg-accent/10 text-accent font-medium"
-                    : "border-neutral-200 text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100/50"
-                )}
-                title={`${Object.keys(g.lines).length} items — ${g.description || "No description"}`}
-              >
-                <span className="w-2 h-2 rounded-full" style={{ background: g.color }} />
-                {g.name}
-                <span className="text-neutral-400 tabular-nums">({Object.keys(g.lines).length})</span>
-              </button>
-            ))}
-          </div>
+          <GroupTabs
+            activeGroupId={activeGroupId ?? undefined}
+            onGroupSelect={(groupId) => setActiveGroup(groupId ?? null)}
+            className="flex-1"
+          />
         )}
         <div className="ml-auto flex items-center gap-2 text-xs text-neutral-500">
           <span className="tabular-nums">{orderLinesList.length} items in order</span>
@@ -598,76 +619,28 @@ export default function Orders() {
             />
           </div>
 
-          {/* Existing groups */}
-          {orderGroups.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {orderGroups.map((g) => {
-                const lineCount = Object.keys(g.lines).length;
-                const isActive = activeGroupId === g.id;
-                return (
-                  <div
-                    key={g.id}
-                    className={clsx(
-                      "border rounded-lg p-3 transition-[background-color,border-color] duration-150",
-                      isActive ? "border-accent bg-accent/5" : "border-neutral-200 bg-neutral-50 hover:bg-neutral-100/20"
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: g.color }} />
-                        <span className="card-title truncate">{g.name}</span>
-                      </div>
-                      <span className="text-xs tabular-nums text-neutral-500 whitespace-nowrap">{lineCount} items</span>
-                    </div>
-                    {g.description && (
-                      <p className="text-xs text-neutral-500 mb-2 truncate">{g.description}</p>
-                    )}
-                    <div className="text-xs text-neutral-500 mb-2">
-                      Updated: {new Date(g.updatedAt).toLocaleDateString("en-IN", { dateStyle: "medium" })}
-                    </div>
-                    <div className="flex gap-1.5">
-                      <button
-                        onClick={() => handleLoadGroup(g)}
-                        className="btn-accent-ghost btn-sm"
-                      >
-                        <FolderOpen size={11} /> Load
-                      </button>
-                      <button
-                        onClick={() => handleAddGroupToOrder(g)}
-                        className="btn-ghost btn-sm"
-                        title="Add group items to current order"
-                      >
-                        <Plus size={11} /> Merge
-                      </button>
-                      <button
-                        onClick={() => handleSaveToGroup(g.id)}
-                        className="btn-ghost btn-sm"
-                        title="Overwrite group with current order"
-                      >
-                        <Save size={11} /> Save
-                      </button>
-                      <button
-                        onClick={() => duplicateGroup(g.id)}
-                        className="btn-ghost btn-sm"
-                      >
-                        <Copy size={11} />
-                      </button>
-                      <button
-                        onClick={() => { if (confirm(`Delete "${g.name}"?`)) deleteGroup(g.id); }}
-                        className="flex items-center gap-1 text-xs px-2 py-1 bg-danger/10 text-danger hover:bg-danger/20 rounded transition-[background-color] duration-150 ml-auto"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="text-center py-4 text-sm text-neutral-500">
-              No order groups yet. Create one to save your current order for reuse.
-            </div>
-          )}
+          {/* Vendor Groups Summary */}
+          <div className="pt-2 border-t border-neutral-200">
+            <VendorGroupsSummary />
+          </div>
+
+          {/* Existing groups - Expanded view */}
+          <div className="pt-4 border-t border-neutral-200">
+            <h3 className="text-xs font-semibold text-neutral-700 mb-3">All Order Groups</h3>
+            <ExpandedGroupsView
+              activeGroupId={activeGroupId}
+              onGroupSelect={(groupId) => {
+                setActiveGroup(groupId);
+              }}
+              onLoadGroup={(groupId) => {
+                const g = orderGroups.find((x) => x.id === groupId);
+                if (g) handleLoadGroup(g);
+              }}
+              onDeleteGroup={(groupId) => {
+                deleteGroup(groupId);
+              }}
+            />
+          </div>
             </>
             ) : (
               <>
@@ -818,7 +791,54 @@ export default function Orders() {
                   />
                 </>
               )}
+              <button
+                onClick={() => {
+                  setMultiSelectEnabled(!multiSelectEnabled);
+                  if (multiSelectEnabled) {
+                    clearBatchSelection();
+                  }
+                }}
+                className={clsx(
+                  "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition-[background-color,border-color,color] duration-150 ml-auto",
+                  multiSelectEnabled
+                    ? "bg-accent/15 border-accent text-accent font-medium"
+                    : "bg-neutral-50 border-neutral-200 text-neutral-500 hover:text-neutral-900"
+                )}
+                title="Enable multi-select to assign items to groups in bulk"
+              >
+                <Package size={12} />
+                Multi-Select {multiSelectEnabled && `(${selectedItemIds.size})`}
+              </button>
             </div>
+            {multiSelectEnabled && selectedItemIds.size > 0 && (
+              <div className="flex items-center gap-2 pt-1.5">
+                <select
+                  value={batchAssignGroupId ?? ""}
+                  onChange={(e) => setBatchAssignGroupId(e.target.value || null)}
+                  className="form-select text-xs flex-1"
+                >
+                  <option value="">Select group to assign {selectedItemIds.size} items…</option>
+                  {getAllGroups().map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={batchAssignToGroup}
+                  disabled={!batchAssignGroupId}
+                  className="btn-accent text-xs disabled:opacity-50"
+                >
+                  Assign
+                </button>
+                <button
+                  onClick={clearBatchSelection}
+                  className="btn-ghost text-xs"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
           </div>
           <div ref={parentRef} className="flex-1 overflow-y-auto">
                 <div style={{ height: `${itemListVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
@@ -826,12 +846,19 @@ export default function Orders() {
                     const item = filteredItems[virtualRow.index];
                     const stock = stockCache.get(item.itemId) ?? 0;
                     const isSelected = item.itemId === selectedItemId;
+                    const isMultiSelected = selectedItemIds.has(item.itemId);
                     const inOrder = !!orderLines[item.itemId];
                     const stockDisp = toDisplay(item, stock, unitMode);
                     return (
                       <div
                         key={item.itemId}
-                        onClick={() => selectItem(item)}
+                        onClick={() => {
+                          if (multiSelectEnabled) {
+                            toggleMultiSelect(item.itemId);
+                          } else {
+                            selectItem(item);
+                          }
+                        }}
                         style={{
                           position: 'absolute',
                           top: 0,
@@ -841,12 +868,21 @@ export default function Orders() {
                         }}
                         className={clsx(
                           "flex items-center gap-2 px-3 py-1.5 cursor-pointer border-b border-neutral-100 transition-colors duration-100",
-                          isSelected ? "bg-accent/10 border-l-2 border-l-accent" : "hover:bg-neutral-50"
+                          isMultiSelected ? "bg-accent/20 border-l-2 border-l-accent" : isSelected ? "bg-accent/10 border-l-2 border-l-accent" : "hover:bg-neutral-50"
                         )}
                       >
+                        {multiSelectEnabled && (
+                          <input
+                            type="checkbox"
+                            checked={isMultiSelected}
+                            onChange={() => toggleMultiSelect(item.itemId)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="form-checkbox w-4 h-4 flex-shrink-0"
+                          />
+                        )}
                         <span className={clsx(
                           "text-xs truncate flex-1 min-w-0 leading-none",
-                          isSelected ? "text-accent font-semibold" : "text-neutral-800"
+                          isMultiSelected ? "text-accent font-semibold" : isSelected ? "text-accent font-semibold" : "text-neutral-800"
                         )}>
                           {item.name}
                         </span>
