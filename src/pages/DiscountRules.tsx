@@ -1,9 +1,10 @@
 import { useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronRight, X, Plus, Trash2, RotateCcw, ArrowLeft, Download, Upload } from "lucide-react";
+import { ChevronDown, ChevronRight, X, Plus, Trash2, RotateCcw, ArrowLeft, Download, Upload, Palette } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useDiscountStore } from "../store/discountStore";
+import { ColorPicker } from "../components/ColorPicker";
 import {
   DEFAULT_ITEM_CATEGORY_MAP,
   DEFAULT_GROUP_RULES,
@@ -141,7 +142,7 @@ function AddCategoryModal({
 export default function DiscountRules() {
   const navigate = useNavigate();
   const data = useDataStore((s) => s.data);
-  const { categories, itemCategoryOverrides, setCategories, setItemCategoryOverrides, resetToDefaults } =
+  const { categories, itemCategoryOverrides, categoryColors, setCategories, setItemCategoryOverrides, setCategoryColor, resetToDefaults } =
     useDiscountStore();
 
   const [localCats, setLocalCats] = useState<DiscountCategory[]>(() =>
@@ -156,6 +157,7 @@ export default function DiscountRules() {
   const [hasChanges, setHasChanges] = useState(false);
   const [fileMsg, setFileMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [addCatOpen, setAddCatOpen] = useState(false);
+  const [colorCatId, setColorCatId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function showMsg(type: "ok" | "err", text: string) {
@@ -354,6 +356,35 @@ export default function DiscountRules() {
         onConfirm={handleAddCategory}
       />
 
+      {/* Color Picker Modal */}
+      {colorCatId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setColorCatId(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-bold text-neutral-900 mb-4">
+              Edit Color: {localCats.find((c) => c.id === colorCatId)?.name}
+            </h3>
+            <ColorPicker
+              value={categoryColors[colorCatId] || ""}
+              onChange={(color) => {
+                setCategoryColor(colorCatId, color);
+              }}
+            />
+            <button
+              onClick={() => setColorCatId(null)}
+              className="w-full mt-4 px-4 py-2 bg-accent text-white rounded-lg font-medium hover:bg-accent-700 transition-colors"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header with back button */}
       <div className="page-header">
         <div className="flex items-center gap-3 flex-wrap">
@@ -436,6 +467,13 @@ export default function DiscountRules() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={() => setColorCatId(cat.id)}
+                      className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors text-neutral-600 font-medium min-h-10"
+                      title="Edit category color"
+                    >
+                      <Palette size={14} /> Color
+                    </button>
                     <button
                       onClick={() => addTier(cat.id)}
                       className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors text-neutral-600 font-medium"
