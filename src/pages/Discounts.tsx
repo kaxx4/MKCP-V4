@@ -163,7 +163,7 @@ function VoucherSelector({
             key={t}
             onClick={() => handleTabChange(t)}
             className={clsx(
-              "px-4 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150 border-b-2",
+              "px-4 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150 border-b-2 min-h-10",
               tab === t
                 ? "border-blue-500 text-blue-600 bg-blue-50"
                 : "border-transparent text-neutral-600 hover:text-neutral-900"
@@ -237,7 +237,7 @@ function VoucherSelector({
                       <td className="px-4 py-3 text-sm text-neutral-900 truncate max-w-xs">
                         {v.partyName ?? v.partyLedgerId ?? "—"}
                       </td>
-                      <td className="px-4 py-3 text-right text-sm font-semibold text-neutral-900">
+                      <td className="px-4 py-3 text-right text-sm font-semibold text-neutral-900 tabular-nums">
                         {fmtINR(v.totalAmount)}
                       </td>
                     </tr>
@@ -252,7 +252,7 @@ function VoucherSelector({
               <button
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0}
-                className="px-3 py-2 text-sm rounded-lg border border-neutral-200 disabled:opacity-40 hover:bg-neutral-100 font-medium"
+                className="px-3 py-2 text-sm rounded-lg border border-neutral-200 disabled:opacity-40 hover:bg-neutral-100 font-medium min-h-10"
               >
                 ‹
               </button>
@@ -270,7 +270,7 @@ function VoucherSelector({
                     key={pageNum}
                     onClick={() => setPage(pageNum)}
                     className={clsx(
-                      "px-3 py-2 text-sm rounded-lg font-medium transition-colors",
+                      "px-3 py-2 text-sm rounded-lg font-medium transition-colors min-h-10",
                       page === pageNum
                         ? "bg-blue-500 text-white shadow-sm"
                         : "border border-neutral-200 hover:bg-neutral-100"
@@ -283,7 +283,7 @@ function VoucherSelector({
               <button
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={page === totalPages - 1}
-                className="px-3 py-2 text-sm rounded-lg border border-neutral-200 disabled:opacity-40 hover:bg-neutral-100 font-medium"
+                className="px-3 py-2 text-sm rounded-lg border border-neutral-200 disabled:opacity-40 hover:bg-neutral-100 font-medium min-h-10"
               >
                 ›
               </button>
@@ -420,7 +420,7 @@ function DiscountBreakdown({
                         </div>
                         <div className="text-right flex-shrink-0">
                           <div className={clsx(
-                            "text-2xl font-black leading-none",
+                            "text-2xl font-black leading-none tabular-nums",
                             group.appliedDiscountPct > 0 ? color.pct : "text-neutral-400"
                           )}>
                             {group.appliedDiscountPct.toFixed(1)}%
@@ -494,12 +494,12 @@ function DiscountBreakdown({
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-neutral-200 bg-neutral-50">
-                      <th className="text-left px-5 py-4 font-bold text-neutral-800">Item</th>
-                      <th className="text-right px-5 py-4 font-bold text-neutral-800">Qty</th>
-                      <th className="text-left px-5 py-4 font-bold text-neutral-800">Category</th>
-                      <th className="text-right px-5 py-4 font-bold text-neutral-800">Amount</th>
-                      <th className="text-center px-5 py-4 font-bold text-neutral-800">Disc%</th>
-                      <th className="text-right px-5 py-4 font-bold text-neutral-800">Discount</th>
+                      <th className="text-left px-4 py-3 font-bold text-neutral-800">Item</th>
+                      <th className="text-right px-4 py-3 font-bold text-neutral-800">Qty</th>
+                      <th className="text-left px-4 py-3 font-bold text-neutral-800">Category</th>
+                      <th className="text-right px-4 py-3 font-bold text-neutral-800">Amount</th>
+                      <th className="text-center px-4 py-3 font-bold text-neutral-800">Disc%</th>
+                      <th className="text-right px-4 py-3 font-bold text-neutral-800">Discount</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-100">
@@ -510,14 +510,14 @@ function DiscountBreakdown({
                           key={idx}
                           className={clsx("transition-colors", lineColor.row)}
                         >
-                          <td className="px-5 py-4 text-neutral-900 font-semibold">{line.itemName}</td>
-                          <td className="px-5 py-4 text-right text-neutral-700">
+                          <td className="px-4 py-3 text-neutral-900 font-semibold">{line.itemName}</td>
+                          <td className="px-4 py-3 text-right text-neutral-700">
                             <div className="font-semibold tabular-nums">{fmtNum(line.qtyBase, 0)}</div>
                             <div className="text-xs text-neutral-500 mt-1">
                               {line.packages} pkg{line.packages !== 1 ? 's' : ''}
                             </div>
                           </td>
-                          <td className="px-5 py-4">
+                          <td className="px-4 py-3">
                             <span className={clsx(
                               "inline-block px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap",
                               lineColor.badge
@@ -550,7 +550,7 @@ function DiscountBreakdown({
                                 <button
                                   onClick={() => startEdit(line.itemName, line.discountPct)}
                                   className={clsx(
-                                    "font-bold tabular-nums px-2 py-0.5 rounded hover:ring-2 hover:ring-blue-300 transition-[box-shadow] duration-150",
+                                    "font-bold tabular-nums px-2 py-0.5 rounded hover:ring-2 hover:ring-blue-300 transition-[box-shadow] duration-150 min-h-9 min-w-[3.5rem]",
                                     manualOverrides[line.itemName] !== undefined
                                       ? "text-amber-700 bg-amber-50 ring-1 ring-amber-300"
                                       : line.discountPct > 0
@@ -564,7 +564,7 @@ function DiscountBreakdown({
                                 {manualOverrides[line.itemName] !== undefined && (
                                   <button
                                     onClick={() => onClearOverride(line.itemName)}
-                                    className="text-neutral-400 hover:text-red-500 transition-colors"
+                                    className="w-10 h-10 flex items-center justify-center text-neutral-400 hover:text-red-500 transition-colors rounded"
                                     title="Clear override"
                                   >
                                     <RotateCcw size={11} />

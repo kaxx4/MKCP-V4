@@ -1,9 +1,11 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { tallyPost, HEALTH_XML } from "./tally.js";
 import { convertCompanies } from "./converters/convert.js";
 import { SyncOrchestrator } from "./services/syncOrchestrator.js";
 import { ChangeDetector } from "./services/changeDetector.js";
+import { SupabaseSync } from "./services/supabaseSync.js";
 import { pushVoucherToTally, pushBatchToTally, buildVoucherImportXml, parseImportResponse } from "./services/voucherPusher.js";
 import type { SyncPlan, PushVoucherRequest, PushBatchRequest } from "./types.js";
 
@@ -185,6 +187,127 @@ app.post("/api/tally/push-batch", async (req: express.Request, res: express.Resp
     const result = await pushBatchToTally(TALLY, company, vouchers);
     res.json(result);
   } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── Supabase sync endpoint ─────────────────────────────────────────────────────
+app.post("/api/supabase/sync", async (req: express.Request, res: express.Response) => {
+  const { company, items = [], ledgers = [], vouchers = [] } = req.body;
+  if (!company) return res.status(400).json({ success: false, error: "company required" });
+
+  try {
+    console.log(`[Supabase] Manual sync initiated: ${items.length} items, ${ledgers.length} ledgers, ${vouchers.length} vouchers`);
+    const supabase = new SupabaseSync();
+
+    // Build master messages from frontend data
+    const masterMessages = [
+      ...items.map((item: any) => ({
+        name: item.name,
+        guid: item.itemId,
+        metadata: { type: "Stock Item" },
+        parent: item.group || "Primary",
+        gstapplicable: item.gstRate ?? 0,
+      })),
+      ...ledgers.map((ledger: any) => ({
+        name: ledger.name,
+        guid: ledger.ledgerId,
+        metadata: { type: "Ledger" },
+        parent: ledger.parent || "Unsorted",
+      })),
+    ];
+
+    // Sync masters
+    if (masterMessages.length > 0) {
+      await supabase.syncMasters(masterMessages, company);
+    }
+
+    // Build voucher messages from frontend data
+    const voucherMessages = vouchers.map((v: any) => ({
+      guid: v.voucherId,
+      metadata: { type: "Voucher" },
+      vouchertypename: v.voucherType,
+      vouchernumber: v.voucherNumber,
+      date: v.date,
+      partyledgername: v.partyName,
+      allledgerentries: v.lines
+        .filter((l: any) => l.type === "ledger")
+        .map((l: any) => ({
+          ledgername: l.name,
+          isdeemedpositive: l.isDebit,
+          ispartyledger: false,
+          amount: l.amount,
+        })),
+      allinventoryentries: v.lines
+        .filter((l: any) => l.type === "stock")
+        .map((l: any) => ({
+          stockitemname: l.name,
+          actualqty: l.qty,
+          billedqty: l.qty,
+          rate: l.rate,
+          amount: l.amount,
+          isdeemedpositive: l.isDebit ?? false,
+        })),
+    }));
+
+    // Sync vouchers
+    if (voucherMessages.length > 0) {
+      await supabase.syncVouchers(voucherMessages, company);
+    }
+
+    console.log(`[Supabase] Manual sync completed successfully`);
+    res.json({
+      success: true,
+      message: `Synced ${masterMessages.length} masters and ${voucherMessages.length} vouchers to Supabase`,
+      itemsCount: items.length,
+      ledgersCount: ledgers.length,
+      vouchersCount: vouchers.length,
+    });
+  } catch (e: any) {
+    console.error(`[Supabase] Manual sync failed: ${e.message}`);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── Supabase config sync (discount rules, order groups, unit overrides) ──────────
+app.post("/api/supabase/sync-config", async (req: express.Request, res: express.Response) => {
+  const {
+    company = "M.K.CYCLES (P) LTD.",
+    discountRules = [],
+    orderGroups = [],
+    unitOverrides = {},
+    rateOverrides = []
+  } = req.body;
+
+  try {
+    console.log(`[Supabase] Config sync initiated: ${discountRules.length} rules, ${orderGroups.length} groups, ${Object.keys(unitOverrides).length} unit overrides, ${rateOverrides.length} rate overrides`);
+    const supabase = new SupabaseSync();
+
+    // Sync all config data in parallel
+    const results = await Promise.allSettled([
+      discountRules.length > 0 ? supabase.syncDiscountRules(discountRules, company) : Promise.resolve(),
+      orderGroups.length > 0 ? supabase.syncOrderGroups(orderGroups, company) : Promise.resolve(),
+      Object.keys(unitOverrides).length > 0 ? supabase.syncUnitOverrides(unitOverrides, company) : Promise.resolve(),
+      rateOverrides.length > 0 ? supabase.syncRateOverrides(rateOverrides, company) : Promise.resolve(),
+    ]);
+
+    // Check for errors
+    const errors = results
+      .filter((r) => r.status === "rejected")
+      .map((r: any) => r.reason?.message || String(r.reason));
+
+    console.log(`[Supabase] Config sync completed successfully`);
+    res.json({
+      success: true,
+      message: "Configuration data synced to Supabase",
+      discountRulesCount: discountRules.length,
+      orderGroupsCount: orderGroups.length,
+      unitOverridesCount: Object.keys(unitOverrides).length,
+      rateOverridesCount: rateOverrides.length,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } catch (e: any) {
+    console.error(`[Supabase] Config sync failed: ${e.message}`);
     res.status(500).json({ success: false, error: e.message });
   }
 });

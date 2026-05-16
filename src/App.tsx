@@ -12,6 +12,9 @@ import { loadData, loadFromStore } from "./db/idb";
 import { deserializeParsedData } from "./utils/serialize";
 import { useTallyAutoSync } from "./hooks/useTallyAutoSync";
 import { usePersistenceMonitor } from "./hooks/usePersistenceMonitor";
+import { useSupabaseConfigSync } from "./hooks/useSupabaseConfigSync";
+import { initializeVendorGroups } from "./services/vendorGroupInitService";
+import { initializeOrderGroups } from "./services/orderGroupInitService";
 import "./utils/dataDebug"; // Initialize data persistence debug utilities
 
 // Lazy load pages
@@ -58,6 +61,9 @@ function AppRoutes() {
 
   // Enable automatic data persistence and monitoring
   usePersistenceMonitor({ verbose: (import.meta as any).env?.DEV });
+
+  // Enable automatic syncing of config data (discounts, order groups, unit overrides) to Supabase
+  useSupabaseConfigSync();
 
   // Load saved discount rules from Electron file on startup.
   // This ensures user edits survive even if localStorage is cleared (reinstall, cache wipe).
@@ -114,6 +120,15 @@ function AppRoutes() {
       }
     })();
   }, [setData]);
+
+  // Initialize vendor groups and order groups when data loads
+  useEffect(() => {
+    if (data && data.items && data.items.size > 0) {
+      const itemsArray = Array.from(data.items.values());
+      initializeVendorGroups(itemsArray);
+      initializeOrderGroups(itemsArray);
+    }
+  }, [data?.vouchers?.length]); // Trigger when data updates (vouchers.length is a stable indicator)
 
   return (
     <Layout>

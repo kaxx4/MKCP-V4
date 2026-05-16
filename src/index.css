@@ -357,26 +357,26 @@
   }
 
   .btn-secondary {
-    @apply btn-base min-h-9 px-4 py-2
+    @apply btn-base min-h-10 px-4 py-2
            bg-white text-neutral-900 border border-neutral-200
            hover:bg-neutral-50 active:bg-neutral-100 active:scale-[0.96]
            shadow-xs;
   }
 
   .btn-ghost {
-    @apply btn-base px-3 py-2 text-neutral-600
+    @apply btn-base min-h-10 px-3 py-2 text-neutral-600
            hover:text-neutral-900 hover:bg-neutral-100
            active:bg-neutral-200 active:scale-[0.96];
   }
 
   .btn-danger {
-    @apply btn-base min-h-9 px-4 py-2
+    @apply btn-base min-h-10 px-4 py-2
            bg-danger text-white font-semibold
            hover:bg-danger-600 active:bg-danger-700 active:scale-[0.96];
   }
 
   .btn-accent-ghost {
-    @apply btn-base px-3 py-2 text-accent
+    @apply btn-base min-h-10 px-3 py-2 text-accent
            hover:text-accent-700 hover:bg-accent/10
            active:bg-accent/20 active:scale-[0.96];
   }
@@ -688,10 +688,10 @@
      NUMBER HIGHLIGHTS
      ═══════════════════════════════════════════════════════════ */
 
-  .num-positive  { @apply text-success-600 font-medium; }
-  .num-negative  { @apply text-danger-600 font-medium; }
-  .num-highlight { @apply text-accent font-semibold; }
-  .num-muted     { @apply text-neutral-500 font-normal; }
+  .num-positive  { @apply text-success-600 font-medium tabular-nums; }
+  .num-negative  { @apply text-danger-600 font-medium tabular-nums; }
+  .num-highlight { @apply text-accent font-semibold tabular-nums; }
+  .num-muted     { @apply text-neutral-500 font-normal tabular-nums; }
 }
 
 /* ═══════════════════════════════════════════════════════════════

@@ -167,7 +167,7 @@ export default function PriceList() {
       {/* Page Header */}
       <div className="mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
-          <h1 className="text-4xl font-bold text-slate-900 mb-1">Dealer Price List</h1>
+          <h1 className="page-title mb-1">Dealer Price List</h1>
           <p className="text-slate-600">Manage and view all item pricing across dealer price lists</p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -190,7 +190,7 @@ export default function PriceList() {
             {tallyItemCount > 0 && (
               <button
                 onClick={clearPriceList}
-                className="flex items-center gap-2 px-3 py-2 bg-red-100 text-red-700 font-semibold rounded-lg hover:bg-red-200 transition-colors text-sm"
+                className="flex items-center gap-2 px-3 py-2 bg-red-100 text-red-700 font-semibold rounded-lg hover:bg-red-200 transition-colors text-sm min-h-10"
                 title="Clear imported rates"
               >
                 <Trash2 size={15} />
@@ -319,7 +319,7 @@ export default function PriceList() {
                       {hasDealerPrices && (
                         <button
                           onClick={() => toggleExpanded(row.itemId)}
-                          className="p-2 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                          className="min-h-10 min-w-10 flex items-center justify-center hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
                           title={expanded ? "Collapse dealer prices" : "Expand to view dealer prices"}
                           aria-expanded={expanded}
                           aria-label={`${expanded ? "Collapse" : "Expand"} dealer prices for ${row.name}`}
