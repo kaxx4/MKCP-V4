@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Pencil, Upload, X, RotateCcw, ChevronDown } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
-import { useDiscountStore } from "../store/discountStore";
+import { useDiscountStore, getCategoryColorByIndex } from "../store/discountStore";
 import { calculateVoucherDiscount } from "../engine/discounts";
 import type { DiscountCategory } from "../engine/discounts";
 import { fmtINR, fmtNum, fmtDate } from "../utils/format";
@@ -35,20 +35,48 @@ const NEUTRAL_COLOR = {
   pct:   "text-neutral-400",
 } as const;
 
-type PaletteEntry = typeof CAT_PALETTE[number] | typeof NEUTRAL_COLOR;
+type PaletteEntry = {
+  card: string;
+  row: string;
+  badge: string;
+  pct: string;
+  customHex?: string;
+};
 
-function buildColorMap(categories: DiscountCategory[]): Map<string, PaletteEntry> {
+function buildColorMap(categories: DiscountCategory[], customColors: Record<string, string> = {}): Map<string, PaletteEntry> {
   const map = new Map<string, PaletteEntry>();
   let idx = 0;
   for (const cat of categories) {
     if (cat.id === "NO_DISCOUNT") {
-      map.set(cat.id, NEUTRAL_COLOR);
+      map.set(cat.id, NEUTRAL_COLOR as PaletteEntry);
     } else {
-      map.set(cat.id, CAT_PALETTE[idx % CAT_PALETTE.length]);
+      const baseColor = CAT_PALETTE[idx % CAT_PALETTE.length];
+      const customHex = customColors[cat.id];
+      const entry: PaletteEntry = { ...baseColor, customHex };
+      map.set(cat.id, entry);
       idx++;
     }
   }
   return map;
+}
+
+function hexToRGB(hex: string): { r: number; g: number; b: number } | null {
+  const match = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+  if (!match) return null;
+  return {
+    r: parseInt(match[1], 16),
+    g: parseInt(match[2], 16),
+    b: parseInt(match[3], 16),
+  };
+}
+
+function getCustomColorStyles(hex: string): { bg: string; text: string } | null {
+  const rgb = hexToRGB(hex);
+  if (!rgb) return null;
+  return {
+    bg: `rgb(${rgb.r} ${rgb.g} ${rgb.b} / 0.05)`,
+    text: hex,
+  };
 }
 
 // ── Group Breakdown Modal ─────────────────────────────────────────────────────
@@ -311,6 +339,7 @@ function DiscountBreakdown({
   onClearOverride: (itemName: string) => void;
   categories: DiscountCategory[];
 }) {
+  const { categoryColors } = useDiscountStore();
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [groupsOpen, setGroupsOpen] = useState(true);
   const [itemsOpen, setItemsOpen] = useState(true);
@@ -319,7 +348,7 @@ function DiscountBreakdown({
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Build categoryId → color mapping
-  const colorMap = useMemo(() => buildColorMap(categories), [categories]);
+  const colorMap = useMemo(() => buildColorMap(categories, categoryColors), [categories, categoryColors]);
 
   useEffect(() => {
     if (editingItem && inputRef.current) inputRef.current.select();
@@ -400,15 +429,24 @@ function DiscountBreakdown({
             {groupsOpen && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 {result.groupSummaries.map((group: any) => {
-                  const color = colorMap.get(group.categoryId) ?? NEUTRAL_COLOR;
+                  const color = colorMap.get(group.categoryId) ?? (NEUTRAL_COLOR as PaletteEntry);
+                  const customStyles = (color as any).customHex ? getCustomColorStyles((color as any).customHex) : null;
                   return (
                     <div
                       key={group.categoryId}
                       onClick={() => setSelectedGroup(group.categoryId)}
                       className={clsx(
                         "p-5 rounded-xl border-2 cursor-pointer hover:shadow-lg transition-[box-shadow,border-color] duration-150",
-                        color.card
+                        !customStyles && color.card
                       )}
+                      style={
+                        customStyles
+                          ? {
+                              backgroundColor: customStyles.bg,
+                              borderColor: customStyles.text,
+                            }
+                          : undefined
+                      }
                     >
                       {/* Card Header */}
                       <div className="flex items-start justify-between gap-4 mb-4">
@@ -419,10 +457,14 @@ function DiscountBreakdown({
                           </div>
                         </div>
                         <div className="text-right flex-shrink-0">
-                          <div className={clsx(
-                            "text-2xl font-black leading-none tabular-nums",
-                            group.appliedDiscountPct > 0 ? color.pct : "text-neutral-400"
-                          )}>
+                          <div
+                            className="text-2xl font-black leading-none tabular-nums"
+                            style={
+                              group.appliedDiscountPct > 0
+                                ? { color: customStyles?.text || undefined }
+                                : { color: "rgb(107 114 128)" }
+                            }
+                          >
                             {group.appliedDiscountPct.toFixed(1)}%
                           </div>
                           <div className="text-xs text-neutral-500 mt-1">discount</div>
@@ -436,8 +478,18 @@ function DiscountBreakdown({
                           <span className="font-semibold text-neutral-900 tabular-nums">{fmtINR(group.totalAmount)}</span>
                         </div>
                         <div className="flex justify-between items-center text-sm pt-2 border-t border-neutral-200">
-                          <span className={clsx("font-semibold", color.pct)}>Discount</span>
-                          <span className={clsx("font-bold tabular-nums", color.pct)}>−{fmtINR(group.totalDiscount)}</span>
+                          <span
+                            className={clsx("font-semibold", !customStyles && color.pct)}
+                            style={customStyles ? { color: customStyles.text } : undefined}
+                          >
+                            Discount
+                          </span>
+                          <span
+                            className={clsx("font-bold tabular-nums", !customStyles && color.pct)}
+                            style={customStyles ? { color: customStyles.text } : undefined}
+                          >
+                            −{fmtINR(group.totalDiscount)}
+                          </span>
                         </div>
                       </div>
 
@@ -504,11 +556,17 @@ function DiscountBreakdown({
                   </thead>
                   <tbody className="divide-y divide-neutral-100">
                     {result.lines.map((line: any, idx: number) => {
-                      const lineColor = colorMap.get(line.categoryId) ?? NEUTRAL_COLOR;
+                      const lineColor = colorMap.get(line.categoryId) ?? (NEUTRAL_COLOR as PaletteEntry);
+                      const lineCustomStyles = (lineColor as any).customHex ? getCustomColorStyles((lineColor as any).customHex) : null;
                       return (
                         <tr
                           key={idx}
-                          className={clsx("transition-colors", lineColor.row)}
+                          className={clsx("transition-colors", !lineCustomStyles && lineColor.row)}
+                          style={
+                            lineCustomStyles
+                              ? { backgroundColor: lineCustomStyles.bg }
+                              : undefined
+                          }
                         >
                           <td className="px-4 py-3 text-neutral-900 font-semibold">{line.itemName}</td>
                           <td className="px-4 py-3 text-right text-neutral-700">
@@ -518,10 +576,20 @@ function DiscountBreakdown({
                             </div>
                           </td>
                           <td className="px-4 py-3">
-                            <span className={clsx(
-                              "inline-block px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap",
-                              lineColor.badge
-                            )}>
+                            <span
+                              className={clsx(
+                                "inline-block px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap",
+                                !lineCustomStyles && lineColor.badge
+                              )}
+                              style={
+                                lineCustomStyles
+                                  ? {
+                                      backgroundColor: `${lineCustomStyles.text}20`,
+                                      color: lineCustomStyles.text,
+                                    }
+                                  : undefined
+                              }
+                            >
                               {line.categoryName}
                             </span>
                           </td>
@@ -550,13 +618,20 @@ function DiscountBreakdown({
                                 <button
                                   onClick={() => startEdit(line.itemName, line.discountPct)}
                                   className={clsx(
-                                    "font-bold tabular-nums px-2 py-0.5 rounded hover:ring-2 hover:ring-blue-300 transition-[box-shadow] duration-150 min-h-9 min-w-[3.5rem]",
+                                    "font-bold tabular-nums px-2 py-0.5 rounded hover:ring-2 transition-[box-shadow] duration-150 min-h-9 min-w-[3.5rem]",
                                     manualOverrides[line.itemName] !== undefined
-                                      ? "text-amber-700 bg-amber-50 ring-1 ring-amber-300"
+                                      ? "text-amber-700 bg-amber-50 ring-1 ring-amber-300 hover:ring-amber-400"
                                       : line.discountPct > 0
-                                      ? clsx(lineColor.pct, "hover:bg-white/60")
-                                      : "text-neutral-400 hover:bg-neutral-50"
+                                      ? clsx(!lineCustomStyles && lineColor.pct, "hover:bg-white/60")
+                                      : "text-neutral-400 hover:bg-neutral-50 hover:ring-neutral-300"
                                   )}
+                                  style={
+                                    lineCustomStyles && line.discountPct > 0 && manualOverrides[line.itemName] === undefined
+                                      ? {
+                                          color: lineCustomStyles.text,
+                                        }
+                                      : undefined
+                                  }
                                   title="Click to override"
                                 >
                                   {line.discountPct > 0 ? `${line.discountPct}%` : "—"}
@@ -573,12 +648,20 @@ function DiscountBreakdown({
                               </div>
                             )}
                           </td>
-                          <td className={clsx(
-                            "px-5 py-4 text-right font-bold tabular-nums",
-                            manualOverrides[line.itemName] !== undefined
-                              ? "text-amber-700"
-                              : line.discountPct > 0 ? lineColor.pct : "text-neutral-400"
-                          )}>
+                          <td
+                            className={clsx(
+                              "px-5 py-4 text-right font-bold tabular-nums",
+                              manualOverrides[line.itemName] !== undefined
+                                ? "text-amber-700"
+                                : line.discountPct > 0 && !lineCustomStyles ? lineColor.pct : undefined,
+                              line.discountPct === 0 && !lineCustomStyles && "text-neutral-400"
+                            )}
+                            style={
+                              lineCustomStyles && line.discountPct > 0 && manualOverrides[line.itemName] === undefined
+                                ? { color: lineCustomStyles.text }
+                                : undefined
+                            }
+                          >
                             {line.discountPct > 0 ? fmtINR(line.discountAmount) : "—"}
                           </td>
                         </tr>
