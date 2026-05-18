@@ -557,4 +557,182 @@ export class SupabaseSync {
       console.error(`[Supabase] Rate overrides sync failed: ${e.message}`);
     }
   }
+
+  async syncItemCategoryOverrides(overrides: Record<string, string>, company: string): Promise<void> {
+    if (!this.client) return;
+    if (!overrides || Object.keys(overrides).length === 0) return;
+
+    const t0 = Date.now();
+    try {
+      const mapped = Object.entries(overrides).map(([itemId, categoryId]) => ({
+        item_id: itemId,
+        company,
+        category_id: categoryId,
+        updated_at: new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      }));
+
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        const { error } = await this.client.from("item_category_overrides").upsert(batch, {
+          onConflict: "company,item_id",
+        });
+        if (error) throw new Error(error.message);
+      }
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[Supabase] ✓ Synced ${mapped.length} item category overrides (${elapsed}s)`);
+    } catch (e: any) {
+      console.error(`[Supabase] Item category overrides sync failed: ${e.message}`);
+    }
+  }
+
+  async syncCategoryColors(colors: Record<string, string>, company: string): Promise<void> {
+    if (!this.client) return;
+    if (!colors || Object.keys(colors).length === 0) return;
+
+    const t0 = Date.now();
+    try {
+      const mapped = Object.entries(colors).map(([categoryId, color]) => ({
+        category_id: categoryId,
+        company,
+        color,
+        updated_at: new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      }));
+
+      const { error } = await this.client.from("category_colors").upsert(mapped, {
+        onConflict: "company,category_id",
+      });
+      if (error) throw new Error(error.message);
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[Supabase] ✓ Synced ${mapped.length} category colors (${elapsed}s)`);
+    } catch (e: any) {
+      console.error(`[Supabase] Category colors sync failed: ${e.message}`);
+    }
+  }
+
+  async syncVendorGroupAssignments(assignments: Record<string, string>, company: string): Promise<void> {
+    if (!this.client) return;
+    if (!assignments || Object.keys(assignments).length === 0) return;
+
+    const t0 = Date.now();
+    try {
+      const mapped = Object.entries(assignments).map(([itemId, vendorGroupId]) => ({
+        item_id: itemId,
+        company,
+        vendor_group_id: vendorGroupId,
+        updated_at: new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      }));
+
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        const { error } = await this.client.from("vendor_group_assignments").upsert(batch, {
+          onConflict: "company,item_id",
+        });
+        if (error) throw new Error(error.message);
+      }
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[Supabase] ✓ Synced ${mapped.length} vendor group assignments (${elapsed}s)`);
+    } catch (e: any) {
+      console.error(`[Supabase] Vendor group assignments sync failed: ${e.message}`);
+    }
+  }
+
+  async syncItemNotes(notes: Record<string, { itemId: string; note: string; updatedAt: string }>, company: string): Promise<void> {
+    if (!this.client) return;
+    if (!notes || Object.keys(notes).length === 0) return;
+
+    const t0 = Date.now();
+    try {
+      const mapped = Object.values(notes)
+        .filter((n) => n.note && n.note.trim())
+        .map((n) => ({
+          item_id: n.itemId,
+          company,
+          note: n.note,
+          updated_at: n.updatedAt || new Date().toISOString(),
+          synced_at: new Date().toISOString(),
+        }));
+
+      if (mapped.length === 0) return;
+
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        const { error } = await this.client.from("item_notes").upsert(batch, {
+          onConflict: "company,item_id",
+        });
+        if (error) throw new Error(error.message);
+      }
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[Supabase] ✓ Synced ${mapped.length} item notes (${elapsed}s)`);
+    } catch (e: any) {
+      console.error(`[Supabase] Item notes sync failed: ${e.message}`);
+    }
+  }
+
+  async syncCallingList(entries: any[], company: string): Promise<void> {
+    if (!this.client) return;
+    if (!entries || entries.length === 0) return;
+
+    const t0 = Date.now();
+    try {
+      const mapped = entries.map((e) => ({
+        party_ledger_id: e.partyLedgerId,
+        company,
+        party_name: e.partyName,
+        phone: e.phone || null,
+        email: e.email || null,
+        items: e.items || [],
+        note: e.note || null,
+        called: e.called === true,
+        called_at: e.calledAt || null,
+        added_at: e.addedAt || new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      }));
+
+      const { error } = await this.client.from("calling_list_entries").upsert(mapped, {
+        onConflict: "company,party_ledger_id",
+      });
+      if (error) throw new Error(error.message);
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[Supabase] ✓ Synced ${mapped.length} calling list entries (${elapsed}s)`);
+    } catch (e: any) {
+      console.error(`[Supabase] Calling list sync failed: ${e.message}`);
+    }
+  }
+
+  async syncTallyPriceListImports(entries: Record<string, any>, importedAt: string | null, company: string): Promise<void> {
+    if (!this.client) return;
+    if (!entries || Object.keys(entries).length === 0) return;
+
+    const t0 = Date.now();
+    try {
+      const mapped = Object.values(entries).map((e: any) => ({
+        item_name: e.itemName,
+        company,
+        selling_rate: e.sellingRate,
+        cost_price: e.costPrice || null,
+        unit: e.unit,
+        imported_at: importedAt || new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      }));
+
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        const { error } = await this.client.from("tally_price_list_imports").upsert(batch, {
+          onConflict: "company,item_name",
+        });
+        if (error) throw new Error(error.message);
+      }
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[Supabase] ✓ Synced ${mapped.length} tally price list imports (${elapsed}s)`);
+    } catch (e: any) {
+      console.error(`[Supabase] Tally price list imports sync failed: ${e.message}`);
+    }
+  }
 }
