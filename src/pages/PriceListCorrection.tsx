@@ -314,9 +314,9 @@ export default function PriceListCorrection() {
                           <span className="text-primary font-semibold">
                             ₹{item.recommendedRate.toFixed(2)}
                           </span>
-                          {item.recentSalesRate && (
+                          {item.recentSalesRate && item.openingRate > 0 && (
                             <div className="text-2xs text-success mt-0.5 flex items-center justify-end gap-1">
-                              <TrendingUp size={10} /> {Math.round((item.recommendedRate - item.openingRate) / item.openingRate * 100)}x
+                              <TrendingUp size={10} /> {Math.round((item.recommendedRate - item.openingRate) / item.openingRate * 100)}%
                             </div>
                           )}
                         </div>

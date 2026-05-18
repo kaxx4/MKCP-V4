@@ -474,7 +474,8 @@ export class SupabaseSync {
         synced_at: new Date().toISOString(),
       }));
 
-      await this.upsertBatch("discount_rules", mapped);
+      // discount_rules has PRIMARY KEY (id) — onConflict must match a unique constraint
+      await this.upsertBatch("discount_rules", mapped, "id");
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} discount rules (${elapsed}s)`);
     } catch (e: any) {
@@ -502,7 +503,12 @@ export class SupabaseSync {
         synced_at: new Date().toISOString(),
       }));
 
-      await this.upsertBatch("order_groups", mapped);
+      // order_groups has PRIMARY KEY (id); batch to stay under REST payload limits
+      const BATCH = 50; // smaller batch since `lines` JSONB can be large
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        await this.upsertBatch("order_groups", batch, "id");
+      }
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} order groups (${elapsed}s)`);
     } catch (e: any) {
@@ -510,7 +516,7 @@ export class SupabaseSync {
     }
   }
 
-  async syncUnitOverrides(overrides: any[], company: string): Promise<void> {
+  async syncUnitOverrides(overrides: Record<string, any>, company: string): Promise<void> {
     if (!this.client) return;
     if (!overrides || Object.keys(overrides).length === 0) return;
 
@@ -527,7 +533,12 @@ export class SupabaseSync {
         synced_at: new Date().toISOString(),
       }));
 
-      await this.upsertBatch("unit_overrides", mapped);
+      // unit_overrides has UNIQUE(company, item_id); SERIAL id is just for PK
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        await this.upsertBatch("unit_overrides", batch, "company,item_id");
+      }
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} unit overrides (${elapsed}s)`);
     } catch (e: any) {
@@ -550,7 +561,12 @@ export class SupabaseSync {
         synced_at: new Date().toISOString(),
       }));
 
-      await this.upsertBatch("rate_overrides", mapped);
+      // rate_overrides has UNIQUE(company, item_id)
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        await this.upsertBatch("rate_overrides", batch, "company,item_id");
+      }
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} rate overrides (${elapsed}s)`);
     } catch (e: any) {
@@ -601,10 +617,14 @@ export class SupabaseSync {
         synced_at: new Date().toISOString(),
       }));
 
-      const { error } = await this.client.from("category_colors").upsert(mapped, {
-        onConflict: "company,category_id",
-      });
-      if (error) throw new Error(error.message);
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        const { error } = await this.client.from("category_colors").upsert(batch, {
+          onConflict: "company,category_id",
+        });
+        if (error) throw new Error(error.message);
+      }
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} category colors (${elapsed}s)`);
     } catch (e: any) {
@@ -694,10 +714,14 @@ export class SupabaseSync {
         synced_at: new Date().toISOString(),
       }));
 
-      const { error } = await this.client.from("calling_list_entries").upsert(mapped, {
-        onConflict: "company,party_ledger_id",
-      });
-      if (error) throw new Error(error.message);
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        const { error } = await this.client.from("calling_list_entries").upsert(batch, {
+          onConflict: "company,party_ledger_id",
+        });
+        if (error) throw new Error(error.message);
+      }
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} calling list entries (${elapsed}s)`);
     } catch (e: any) {
@@ -711,8 +735,9 @@ export class SupabaseSync {
 
     const t0 = Date.now();
     try {
+      // Store keys by .toUpperCase() — normalize to prevent case-insensitive duplicates
       const mapped = Object.values(entries).map((e: any) => ({
-        item_name: e.itemName,
+        item_name: (e.itemName || "").toUpperCase(),
         company,
         selling_rate: e.sellingRate,
         cost_price: e.costPrice || null,

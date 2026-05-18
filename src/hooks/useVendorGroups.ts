@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import { useVendorGroupStore } from '../store/vendorGroupStore';
 import { getAllVendorGroups, getVendorGroupById } from '../data/vendorGroups';
 import {
@@ -96,12 +96,13 @@ export function useVendorGroups(items: CanonicalItem[]) {
 export function useInitializeVendorGroups(items: CanonicalItem[]) {
   const { autoAssignItems, assignments } = useVendorGroupStore();
 
-  // Auto-assign on first load
-  const needsInitialization = Object.keys(assignments).length === 0;
-
-  if (needsInitialization && items.length > 0) {
-    autoAssignItems(items);
-  }
+  // Auto-assign on first load — must run in useEffect to avoid mutating store mid-render
+  useEffect(() => {
+    const needsInitialization = Object.keys(assignments).length === 0;
+    if (needsInitialization && items.length > 0) {
+      autoAssignItems(items);
+    }
+  }, [items, assignments, autoAssignItems]);
 }
 
 /**

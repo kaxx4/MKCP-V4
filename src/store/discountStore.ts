@@ -55,12 +55,29 @@ export const useDiscountStore = create<DiscountStore>()(
     {
       name: "mk_discount_rules",
       onRehydrateStorage: () => (state) => {
-        // Migrate to new defaults if schema version is stale or missing
-        if (!state || state._schemaVersion !== SCHEMA_VERSION) {
+        // Migrate to new defaults — preserve user overrides/colors across schema bumps.
+        // Only categories are re-seeded; itemCategoryOverrides and categoryColors keep
+        // user data so SCHEMA_VERSION bumps don't wipe customization.
+        if (!state) {
           useDiscountStore.setState({
             _schemaVersion: SCHEMA_VERSION,
             categories: DEFAULT_DISCOUNT_CATEGORIES,
             itemCategoryOverrides: {},
+            categoryColors: {},
+          });
+          return;
+        }
+        if (state._schemaVersion !== SCHEMA_VERSION) {
+          // Prune categoryColors that reference categories no longer in defaults
+          const validCategoryIds = new Set(DEFAULT_DISCOUNT_CATEGORIES.map((c) => c.id));
+          const prunedColors = Object.fromEntries(
+            Object.entries(state.categoryColors || {}).filter(([id]) => validCategoryIds.has(id))
+          );
+          useDiscountStore.setState({
+            _schemaVersion: SCHEMA_VERSION,
+            categories: DEFAULT_DISCOUNT_CATEGORIES,
+            itemCategoryOverrides: state.itemCategoryOverrides || {},
+            categoryColors: prunedColors,
           });
         }
       },

@@ -605,8 +605,8 @@ function PartyPanel({
           className={clsx(
             "bento-card border",
             party.predictedConfidence >= 70
-              ? "border-accent/30 bg-accent/3"
-              : "border-warn/30 bg-warn/3"
+              ? "border-accent/30 bg-accent/5"
+              : "border-warn/30 bg-warn/5"
           )}
         >
           <div className="flex items-center gap-1.5 mb-1">
