@@ -47,16 +47,17 @@ export function useSupabaseConfigSync(company: string = 'M.K.CYCLES (P) LTD.') {
     // Debounce sync by 2 seconds to avoid hammering the server
     debounceTimerRef.current = setTimeout(async () => {
       try {
-        // Convert discount categories to API format
-        const discountRulesArray = Object.entries(discountRules).map(([key, category]: [string, any]) => ({
-          id: key,
-          name: category.name || key,
-          category: key,
-          discountType: category.type || 'percentage',
-          discountValue: category.value || 0,
-          conditions: category.conditions || {},
-          priority: category.priority || 0,
-          enabled: category.enabled !== false,
+        // discountStore.categories is DiscountCategory[] = Array<{id, name, tiers}>
+        // Map tiers to JSONB conditions field. Use category.id as both id and category.
+        const discountRulesArray = (discountRules as any[]).map((category: any, idx: number) => ({
+          id: category.id || `cat_${idx}`,
+          name: category.name || category.id || `Category ${idx}`,
+          category: category.id || `cat_${idx}`,
+          discountType: 'tiered',
+          discountValue: 0,
+          conditions: { tiers: category.tiers || [] },
+          priority: idx,
+          enabled: true,
         }));
 
         const orderGroupsArray = Object.values(orderGroups);

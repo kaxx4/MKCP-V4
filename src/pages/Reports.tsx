@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { Link } from "react-router-dom";
 import {
   BarChart,
   Bar,
@@ -225,6 +226,37 @@ function FinancialHealthTab({
 }) {
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
 
+  // Hoisted from JSX prop: useMemo must run at top level (Rules of Hooks)
+  const monthlyChartData = useMemo(() => {
+    const months = new Map<
+      string,
+      { sales: number; purchases: number; label: string }
+    >();
+
+    filteredVouchers.forEach((v) => {
+      const month = v.date.substring(0, 7);
+      const curr = months.get(month) || {
+        sales: 0,
+        purchases: 0,
+        label: new Date(month + "-01").toLocaleDateString("en-IN", {
+          month: "short",
+          year: "2-digit",
+        }),
+      };
+
+      if (v.voucherType === "Sales") curr.sales += v.totalAmount;
+      if (v.voucherType === "Purchase") curr.purchases += v.totalAmount;
+
+      months.set(month, curr);
+    });
+
+    return Array.from(months.values()).sort((a, b) => {
+      const aDate = new Date(a.label);
+      const bDate = new Date(b.label);
+      return aDate.getTime() - bDate.getTime();
+    });
+  }, [filteredVouchers]);
+
   const financials = useMemo(() => {
     const sales = filteredVouchers
       .filter((v) => v.voucherType === "Sales")
@@ -327,37 +359,7 @@ function FinancialHealthTab({
       <div className="card p-6">
         <h3 className="text-sm font-semibold mb-4">Monthly Revenue vs Purchases</h3>
         <ResponsiveContainer width="100%" height={300}>
-          <ComposedChart
-            data={useMemo(() => {
-              const months = new Map<
-                string,
-                { sales: number; purchases: number; label: string }
-              >();
-
-              filteredVouchers.forEach((v) => {
-                const month = v.date.substring(0, 7);
-                const curr = months.get(month) || {
-                  sales: 0,
-                  purchases: 0,
-                  label: new Date(month + "-01").toLocaleDateString("en-IN", {
-                    month: "short",
-                    year: "2-digit",
-                  }),
-                };
-
-                if (v.voucherType === "Sales") curr.sales += v.totalAmount;
-                if (v.voucherType === "Purchase") curr.purchases += v.totalAmount;
-
-                months.set(month, curr);
-              });
-
-              return Array.from(months.values()).sort((a, b) => {
-                const aDate = new Date(a.label);
-                const bDate = new Date(b.label);
-                return aDate.getTime() - bDate.getTime();
-              });
-            }, [filteredVouchers])}
-          >
+          <ComposedChart data={monthlyChartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis dataKey="label" tick={{ fontSize: 12 }} />
             <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
@@ -931,9 +933,9 @@ export default function Reports() {
         <p className="text-neutral-600 mb-4">
           No data loaded. Please sync from Tally on the Import page.
         </p>
-        <a href="/#/import" className="text-accent hover:underline font-medium">
+        <Link to="/import" className="text-accent hover:underline font-medium">
           Go to Import
-        </a>
+        </Link>
       </div>
     );
   }

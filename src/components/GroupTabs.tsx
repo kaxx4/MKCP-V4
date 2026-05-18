@@ -3,7 +3,7 @@
  * Shows all order groups as clickable tabs
  */
 
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useOrderGroupStore } from '../store/orderGroupStore';
 import clsx from 'clsx';
@@ -15,12 +15,17 @@ interface GroupTabsProps {
 }
 
 export function GroupTabs({ activeGroupId, onGroupSelect, className }: GroupTabsProps) {
-  const { getAllGroups } = useOrderGroupStore();
+  // Subscribe to the underlying groups record directly. getAllGroups() returns a new
+  // sorted array each call, which previously caused infinite useEffect re-runs.
+  const groupsRecord = useOrderGroupStore((s) => s.groups);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(true);
 
-  const groups = getAllGroups();
+  const groups = useMemo(
+    () => Object.values(groupsRecord).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    [groupsRecord]
+  );
 
   // Check scroll position
   const checkScroll = () => {

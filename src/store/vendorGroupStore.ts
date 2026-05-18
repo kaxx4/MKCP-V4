@@ -60,13 +60,16 @@ export const useVendorGroupStore = create<VendorGroupStore>()(
       },
 
       autoAssignItems: (items: Array<{ itemId: string; name: string }>) => {
-        const newAssignments: VendorGroupAssignment = {};
-        items.forEach(({ itemId, name }) => {
-          newAssignments[itemId] = categorizeItemToGroup(name);
+        // Preserve any existing manual assignments — auto-assign only fills gaps.
+        set((state) => {
+          const next: VendorGroupAssignment = { ...state.assignments };
+          items.forEach(({ itemId, name }) => {
+            if (next[itemId] === undefined) {
+              next[itemId] = categorizeItemToGroup(name);
+            }
+          });
+          return { assignments: next };
         });
-        set(() => ({
-          assignments: newAssignments,
-        }));
       },
 
       getItemsInGroup: (groupId: string) => {

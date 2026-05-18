@@ -765,7 +765,7 @@ export default function Orders() {
                   "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition-[background-color,border-color,color] duration-150",
                   stockFilterEnabled
                     ? "bg-accent/15 border-accent text-accent font-medium"
-                    : "bg-neutral-50border-neutral-200 text-neutral-500 hover:text-neutral-900"
+                    : "bg-neutral-50 border-neutral-200 text-neutral-500 hover:text-neutral-900"
                 )}
                 title="Filter by closing stock"
               >
