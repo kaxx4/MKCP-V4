@@ -269,34 +269,52 @@ app.post("/api/supabase/sync", async (req: express.Request, res: express.Respons
   }
 });
 
-// ── Supabase config sync (discount rules, order groups, unit overrides) ──────────
+// ── Supabase config sync (all dashboard-edited data) ────────────────────────────
 app.post("/api/supabase/sync-config", async (req: express.Request, res: express.Response) => {
   const {
     company = "M.K.CYCLES (P) LTD.",
     discountRules = [],
     orderGroups = [],
     unitOverrides = {},
-    rateOverrides = []
+    rateOverrides = [],
+    itemCategoryOverrides = {},
+    categoryColors = {},
+    vendorGroupAssignments = {},
+    itemNotes = {},
+    callingList = [],
+    tallyPriceListImports = {},
+    tallyPriceListImportedAt = null,
   } = req.body;
 
   try {
-    console.log(`[Supabase] Config sync initiated: ${discountRules.length} rules, ${orderGroups.length} groups, ${Object.keys(unitOverrides).length} unit overrides, ${rateOverrides.length} rate overrides`);
+    console.log(
+      `[Supabase] Config sync initiated: ${discountRules.length} rules, ${orderGroups.length} groups, ` +
+      `${Object.keys(unitOverrides).length} units, ${rateOverrides.length} rates, ` +
+      `${Object.keys(itemCategoryOverrides).length} cat overrides, ${Object.keys(categoryColors).length} colors, ` +
+      `${Object.keys(vendorGroupAssignments).length} vendor assignments, ${Object.keys(itemNotes).length} notes, ` +
+      `${callingList.length} calling entries, ${Object.keys(tallyPriceListImports).length} tally prices`
+    );
     const supabase = new SupabaseSync();
 
-    // Sync all config data in parallel
+    // Sync all config data in parallel — Promise.allSettled means one failure doesn't break others
     const results = await Promise.allSettled([
       discountRules.length > 0 ? supabase.syncDiscountRules(discountRules, company) : Promise.resolve(),
       orderGroups.length > 0 ? supabase.syncOrderGroups(orderGroups, company) : Promise.resolve(),
       Object.keys(unitOverrides).length > 0 ? supabase.syncUnitOverrides(unitOverrides, company) : Promise.resolve(),
       rateOverrides.length > 0 ? supabase.syncRateOverrides(rateOverrides, company) : Promise.resolve(),
+      Object.keys(itemCategoryOverrides).length > 0 ? supabase.syncItemCategoryOverrides(itemCategoryOverrides, company) : Promise.resolve(),
+      Object.keys(categoryColors).length > 0 ? supabase.syncCategoryColors(categoryColors, company) : Promise.resolve(),
+      Object.keys(vendorGroupAssignments).length > 0 ? supabase.syncVendorGroupAssignments(vendorGroupAssignments, company) : Promise.resolve(),
+      Object.keys(itemNotes).length > 0 ? supabase.syncItemNotes(itemNotes, company) : Promise.resolve(),
+      callingList.length > 0 ? supabase.syncCallingList(callingList, company) : Promise.resolve(),
+      Object.keys(tallyPriceListImports).length > 0 ? supabase.syncTallyPriceListImports(tallyPriceListImports, tallyPriceListImportedAt, company) : Promise.resolve(),
     ]);
 
-    // Check for errors
     const errors = results
       .filter((r) => r.status === "rejected")
       .map((r: any) => r.reason?.message || String(r.reason));
 
-    console.log(`[Supabase] Config sync completed successfully`);
+    console.log(`[Supabase] Config sync completed (${errors.length} errors)`);
     res.json({
       success: true,
       message: "Configuration data synced to Supabase",
@@ -304,6 +322,12 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
       orderGroupsCount: orderGroups.length,
       unitOverridesCount: Object.keys(unitOverrides).length,
       rateOverridesCount: rateOverrides.length,
+      itemCategoryOverridesCount: Object.keys(itemCategoryOverrides).length,
+      categoryColorsCount: Object.keys(categoryColors).length,
+      vendorGroupAssignmentsCount: Object.keys(vendorGroupAssignments).length,
+      itemNotesCount: Object.keys(itemNotes).length,
+      callingListCount: callingList.length,
+      tallyPriceListImportsCount: Object.keys(tallyPriceListImports).length,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (e: any) {
