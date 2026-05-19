@@ -238,14 +238,18 @@ app.post("/api/supabase/sync", async (req: express.Request, res: express.Respons
           ispartyledger: false,
           amount: l.amount,
         })),
+      // BUGFIX (2026-05-19): canonical line type is "inventory", not "stock".
+      // Before this fix, every voucher pushed via /api/supabase/sync was stripped
+      // of its inventory entries — that's why Delivery Notes and most older
+      // vouchers showed up in the web dashboard with no item lines.
       allinventoryentries: v.lines
-        .filter((l: any) => l.type === "stock")
+        .filter((l: any) => l.type === "inventory")
         .map((l: any) => ({
-          stockitemname: l.name,
-          actualqty: l.qty,
-          billedqty: l.qty,
-          rate: l.rate,
-          amount: l.amount,
+          stockitemname: l.itemId ?? l.name,
+          actualqty: l.qtyBase ?? l.qty,
+          billedqty: l.qtyBase ?? l.qty,
+          rate: l.ratePerBase ?? l.rate,
+          amount: l.lineAmount ?? l.amount,
           isdeemedpositive: l.isDebit ?? false,
         })),
     }));

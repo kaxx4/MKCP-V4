@@ -35,7 +35,46 @@ export default function Settings() {
   const [syncingSupabase, setSyncingSupabase] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [pushingVouchers, setPushingVouchers] = useState(false);
+  const [voucherPushResult, setVoucherPushResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handlePushLocalVouchersToSupabase() {
+    if (pushingVouchers) return;
+    if (!data) {
+      toast("No local data to push. Import from Tally first.", "warn");
+      return;
+    }
+    setPushingVouchers(true);
+    setVoucherPushResult(null);
+    try {
+      const items = Array.from(data.items.values());
+      const ledgers = Array.from(data.ledgers.values());
+      const vouchers = data.vouchers;
+      const company = data.company?.name || "M.K.CYCLES (P) LTD.";
+
+      const response = await fetch("http://localhost:3100/api/supabase/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company, items, ledgers, vouchers }),
+      });
+      const result = await response.json();
+      if (response.ok && result.success) {
+        const msg = `Pushed ${result.itemsCount} items, ${result.ledgersCount} ledgers, ${result.vouchersCount} vouchers to Supabase`;
+        toast(msg, "success");
+        setVoucherPushResult({ ok: true, msg });
+      } else {
+        const msg = `Push failed: ${result.error || "Unknown error"}`;
+        toast(msg, "error");
+        setVoucherPushResult({ ok: false, msg });
+      }
+    } catch (e: any) {
+      toast(`Push failed: ${e.message}`, "error");
+      setVoucherPushResult({ ok: false, msg: e.message });
+    } finally {
+      setPushingVouchers(false);
+    }
+  }
 
   async function handlePushToSupabase() {
     if (syncingSupabase) return;
@@ -359,15 +398,50 @@ export default function Settings() {
             {syncingSupabase ? (
               <>
                 <RefreshCw size={14} className="animate-spin" />
-                Pushing to Supabase…
+                Pushing config…
               </>
             ) : (
               <>
                 <Cloud size={14} />
-                Push All to Supabase Now
+                Push Config to Supabase (rules, groups, prices, notes)
               </>
             )}
           </button>
+
+          <button
+            onClick={handlePushLocalVouchersToSupabase}
+            disabled={pushingVouchers || !data}
+            className="btn-secondary w-full"
+            title={!data ? "Import data from Tally first" : "Re-push all local items + ledgers + vouchers (with inventory lines) to Supabase"}
+          >
+            {pushingVouchers ? (
+              <>
+                <RefreshCw size={14} className="animate-spin" />
+                Pushing vouchers + masters…
+              </>
+            ) : (
+              <>
+                <Cloud size={14} />
+                {data
+                  ? `Push Local Data (${data.items.size} items · ${data.ledgers.size} ledgers · ${data.vouchers.length} vouchers)`
+                  : "Push Local Data (no data loaded)"}
+              </>
+            )}
+          </button>
+
+          {voucherPushResult && (
+            <div className={clsx(
+              "rounded-lg border p-3 text-xs",
+              voucherPushResult.ok
+                ? "border-success/30 bg-success/[0.04] text-success-700"
+                : "border-danger/30 bg-danger/[0.04] text-danger-700"
+            )}>
+              <div className="flex items-center gap-2 font-semibold">
+                {voucherPushResult.ok ? <Cloud size={12} /> : <CloudOff size={12} />}
+                <span>{voucherPushResult.msg}</span>
+              </div>
+            </div>
+          )}
 
           {lastSyncAt && lastSyncResult && (
             <div className={clsx(
