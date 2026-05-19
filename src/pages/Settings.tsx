@@ -24,6 +24,7 @@ export default function Settings() {
   const [isImporting, setIsImporting] = useState(false);
   const [backups, setBackups] = useState<Array<{ key: string; label: string; createdAt: string }>>([]);
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [eraseStep, setEraseStep] = useState<"idle" | "confirm" | "downloading" | "done">("idle");
   const [jsonUploads, setJsonUploads] = useState<string[]>([]);
   const [auditResults, setAuditResults] = useState<any>(null);
@@ -123,6 +124,25 @@ export default function Settings() {
       toast("Backup deleted", "info");
     } catch (err) {
       toast(`Delete failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    }
+  }
+
+  async function handleDeleteAllBackups() {
+    if (backups.length === 0) return;
+    if (!confirmDeleteAll) {
+      setConfirmDeleteAll(true);
+      return;
+    }
+    try {
+      for (const b of backups) {
+        await deleteBackup(b.key);
+      }
+      await loadBackupsList();
+      toast(`Deleted ${backups.length} backup(s)`, "info");
+    } catch (err) {
+      toast(`Delete all failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    } finally {
+      setConfirmDeleteAll(false);
     }
   }
 
@@ -703,6 +723,33 @@ export default function Settings() {
           )}
           {backups.length > 15 && (
             <p className="text-xs text-warn">{backups.length} backups stored — consider deleting old ones.</p>
+          )}
+          {backups.length > 0 && (
+            <div className="flex items-center justify-between pt-2 border-t border-bg-border">
+              {confirmDeleteAll && (
+                <p className="text-xs text-danger font-medium">
+                  Delete all {backups.length} backups? This cannot be undone.
+                </p>
+              )}
+              <div className={clsx("flex items-center gap-2", !confirmDeleteAll && "ml-auto")}>
+                {confirmDeleteAll && (
+                  <button
+                    onClick={() => setConfirmDeleteAll(false)}
+                    className="btn-secondary btn-sm text-xs px-3 py-1"
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button
+                  onClick={handleDeleteAllBackups}
+                  className="btn-danger btn-sm text-xs px-3 py-1"
+                  title={confirmDeleteAll ? "Click again to confirm" : `Delete all ${backups.length} backups`}
+                >
+                  <Trash2 size={12} />
+                  {confirmDeleteAll ? `Confirm delete ${backups.length}` : "Delete All Backups"}
+                </button>
+              </div>
+            </div>
           )}
         </div>
       </Section>

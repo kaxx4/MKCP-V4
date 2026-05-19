@@ -6,6 +6,40 @@ if (typeof globalThis !== 'undefined' && !globalThis.WebSocket) {
   (globalThis as any).WebSocket = ws;
 }
 
+/**
+ * Normalize Tally XML→JSON entry arrays.
+ *
+ * Tally's XML→JSON conversion is inconsistent across voucher types:
+ *   • Old format / multiple rows: m.allinventoryentries is the array directly
+ *   • New format / nested:        m.allinventoryentries.inventoryentries is the array
+ *   • Single row (nested):        m.allinventoryentries.inventoryentries is a single object
+ *   • Single row (flat):          m.allinventoryentries itself is a single object
+ *   • Empty:                       null / undefined
+ *
+ * This normalizer returns a consistent array so downstream `Array.isArray(...)`
+ * checks always succeed and entries actually get pushed to the denormalized
+ * tally_voucher_inventory_entries / tally_voucher_ledger_entries tables.
+ *
+ * NOTE: this lives in the Supabase sync layer — it does NOT modify how Tally
+ * XML is parsed, fetched, or imported. The Tally import path is untouched.
+ */
+function normalizeTallyEntries(raw: any, innerKey: string): any[] {
+  if (raw == null) return [];
+  // Already an array (old format / multiple rows)
+  if (Array.isArray(raw)) return raw;
+  // Wrapped: { inventoryentries: ... }
+  if (typeof raw === "object" && innerKey in raw) {
+    const inner = raw[innerKey];
+    if (inner == null) return [];
+    if (Array.isArray(inner)) return inner;
+    if (typeof inner === "object") return [inner]; // single nested entry
+    return [];
+  }
+  // Single entry object passed directly (no wrapper)
+  if (typeof raw === "object") return [raw];
+  return [];
+}
+
 export class SupabaseSync {
   private client: SupabaseClient | null;
 
@@ -436,6 +470,14 @@ export class SupabaseSync {
       .filter(Boolean)
       .join("|");
 
+    // Normalize entry shapes. Tally's XML→JSON wraps rows inside an inner key
+    // for newer voucher types (e.g. allinventoryentries.inventoryentries), but
+    // older types return the array directly. Without normalization, the
+    // downstream Array.isArray(...) check in syncVouchers fails and zero
+    // entries get pushed to the denormalized table.
+    const ledgerArr = normalizeTallyEntries(m.allledgerentries, "ledgerentries");
+    const inventoryArr = normalizeTallyEntries(m.allinventoryentries, "inventoryentries");
+
     return {
       guid: this.safeGuid(m.guid, company, fallbackKey),
       company,
@@ -447,8 +489,8 @@ export class SupabaseSync {
       narration: m.narration,
       is_cancelled: m.iscancelled === true,
       is_optional: m.isoptional === true,
-      ledger_entries: m.allledgerentries || null,
-      inventory_entries: m.allinventoryentries || null,
+      ledger_entries: ledgerArr.length > 0 ? ledgerArr : null,
+      inventory_entries: inventoryArr.length > 0 ? inventoryArr : null,
       synced_at: new Date().toISOString(),
     };
   }
