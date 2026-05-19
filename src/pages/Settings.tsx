@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive, Activity, Wifi, RefreshCw } from "lucide-react";
+import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive, Activity, Wifi, RefreshCw, Cloud, CloudOff } from "lucide-react";
 import clsx from "clsx";
 import { useUIStore } from "../store/uiStore";
 import { useDataStore } from "../store/dataStore";
@@ -10,6 +10,7 @@ import { useToast } from "../components/Toast";
 import { exportUnitsToExcel, importUnitsFromExcel } from "../utils/unitExcelHandler";
 import { deserializeParsedData } from "../utils/serialize";
 import { checkTallyHealth } from "../api/tallyApi";
+import { syncConfigToSupabase, type SyncResult } from "../hooks/useSupabaseConfigSync";
 
 export default function Settings() {
   const { unitMode, toggleUnitMode, fyYear, setFyYear, coverMonths, setCoverMonths, leadTimeMonths, setLeadTimeMonths, defaultCreditDays, setDefaultCreditDays } = useUIStore();
@@ -30,7 +31,37 @@ export default function Settings() {
   const [showDiscrepancies, setShowDiscrepancies] = useState(false);
   const [showNegativeStock, setShowNegativeStock] = useState(false);
   const [showNoGstItems, setShowNoGstItems] = useState(false);
+  const [syncingSupabase, setSyncingSupabase] = useState(false);
+  const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handlePushToSupabase() {
+    if (syncingSupabase) return;
+    setSyncingSupabase(true);
+    try {
+      const result = await syncConfigToSupabase();
+      setLastSyncResult(result);
+      setLastSyncAt(new Date().toISOString());
+      if (result.success) {
+        const total = Object.values(result.counts).reduce((s, n) => s + n, 0);
+        toast(
+          `Pushed ${total} records to Supabase: ${result.counts.discountRules} rules, ${result.counts.orderGroups} groups, ${result.counts.itemCategoryOverrides} item assignments, ${result.counts.tallyPriceListImports} prices, ${result.counts.rateOverrides} rate overrides`,
+          "success"
+        );
+        if (result.errors && result.errors.length > 0) {
+          toast(`Partial sync: ${result.errors.length} table(s) had errors. Check console.`, "warn");
+          console.warn("[Push to Supabase] Per-table errors:", result.errors);
+        }
+      } else {
+        toast(`Push failed: ${result.errors?.[0] || "Unknown error"}`, "error");
+      }
+    } catch (e: any) {
+      toast(`Push failed: ${e.message}`, "error");
+    } finally {
+      setSyncingSupabase(false);
+    }
+  }
 
   // Load backups and json uploads on mount
   useEffect(() => {
@@ -286,6 +317,86 @@ export default function Settings() {
             </>
           ) : (
             <p className="text-sm text-muted italic">No data loaded</p>
+          )}
+        </div>
+      </Section>
+
+      {/* Supabase Sync */}
+      <Section title="Supabase Cloud Sync">
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Cloud size={14} className="text-accent" />
+            <span className="text-xs text-muted">
+              Discount rules, item assignments, price list, order groups, vendor groups, notes, calling list and more auto-push to Supabase on edit (debounced 2s). Use the button below to force-push everything immediately.
+            </span>
+          </div>
+
+          <button
+            onClick={handlePushToSupabase}
+            disabled={syncingSupabase}
+            className="btn-primary w-full"
+          >
+            {syncingSupabase ? (
+              <>
+                <RefreshCw size={14} className="animate-spin" />
+                Pushing to Supabase…
+              </>
+            ) : (
+              <>
+                <Cloud size={14} />
+                Push All to Supabase Now
+              </>
+            )}
+          </button>
+
+          {lastSyncAt && lastSyncResult && (
+            <div className={clsx(
+              "rounded-lg border p-3 text-xs space-y-1.5",
+              lastSyncResult.success
+                ? "border-success/30 bg-success/[0.04]"
+                : "border-danger/30 bg-danger/[0.04]"
+            )}>
+              <div className="flex items-center gap-2 font-semibold">
+                {lastSyncResult.success ? (
+                  <>
+                    <Cloud size={12} className="text-success-600" />
+                    <span className="text-success-700">Last push succeeded</span>
+                  </>
+                ) : (
+                  <>
+                    <CloudOff size={12} className="text-danger-600" />
+                    <span className="text-danger-700">Last push failed</span>
+                  </>
+                )}
+                <span className="text-muted font-normal ml-auto">
+                  {new Date(lastSyncAt).toLocaleString()}
+                </span>
+              </div>
+              {lastSyncResult.success && (
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-muted">
+                  <span>Discount rules: <b className="text-primary tabular-nums">{lastSyncResult.counts.discountRules}</b></span>
+                  <span>Item assignments: <b className="text-primary tabular-nums">{lastSyncResult.counts.itemCategoryOverrides}</b></span>
+                  <span>Order groups: <b className="text-primary tabular-nums">{lastSyncResult.counts.orderGroups}</b></span>
+                  <span>Category colors: <b className="text-primary tabular-nums">{lastSyncResult.counts.categoryColors}</b></span>
+                  <span>Vendor assignments: <b className="text-primary tabular-nums">{lastSyncResult.counts.vendorGroupAssignments}</b></span>
+                  <span>Unit overrides: <b className="text-primary tabular-nums">{lastSyncResult.counts.unitOverrides}</b></span>
+                  <span>Rate overrides: <b className="text-primary tabular-nums">{lastSyncResult.counts.rateOverrides}</b></span>
+                  <span>Price list imports: <b className="text-primary tabular-nums">{lastSyncResult.counts.tallyPriceListImports}</b></span>
+                  <span>Item notes: <b className="text-primary tabular-nums">{lastSyncResult.counts.itemNotes}</b></span>
+                  <span>Calling list: <b className="text-primary tabular-nums">{lastSyncResult.counts.callingList}</b></span>
+                </div>
+              )}
+              {lastSyncResult.errors && lastSyncResult.errors.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-danger/20">
+                  <div className="text-danger-700 font-semibold mb-1">Errors:</div>
+                  <ul className="space-y-0.5 text-danger-600">
+                    {lastSyncResult.errors.slice(0, 5).map((err, i) => (
+                      <li key={i} className="font-mono text-2xs break-all">• {err}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </Section>
