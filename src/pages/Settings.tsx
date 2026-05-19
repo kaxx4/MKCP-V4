@@ -53,20 +53,52 @@ export default function Settings() {
       const vouchers = data.vouchers;
       const company = data.company?.name || "M.K.CYCLES (P) LTD.";
 
-      const response = await fetch("http://localhost:3100/api/supabase/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company, items, ledgers, vouchers }),
-      });
-      const result = await response.json();
-      if (response.ok && result.success) {
-        const msg = `Pushed ${result.itemsCount} items, ${result.ledgersCount} ledgers, ${result.vouchersCount} vouchers to Supabase`;
+      // Run config sync and voucher sync in parallel so a single button-click
+      // pushes EVERYTHING: discount rules, order groups, vendor groups,
+      // item assignments, category colors, notes, prices, items, ledgers, vouchers.
+      const [configResult, voucherResp] = await Promise.allSettled([
+        syncConfigToSupabase(company),
+        fetch("http://localhost:3100/api/supabase/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ company, items, ledgers, vouchers }),
+        }).then(async (r) => {
+          const j = await r.json();
+          if (!r.ok || !j.success) throw new Error(j.error || `HTTP ${r.status}`);
+          return j;
+        }),
+      ]);
+
+      const configOk = configResult.status === "fulfilled" && configResult.value.success;
+      const voucherOk = voucherResp.status === "fulfilled";
+
+      if (configResult.status === "fulfilled") {
+        setLastSyncResult(configResult.value);
+        setLastSyncAt(new Date().toISOString());
+      }
+
+      const counts = configResult.status === "fulfilled" ? configResult.value.counts : null;
+      const voucherCounts = voucherResp.status === "fulfilled" ? voucherResp.value : null;
+
+      if (configOk && voucherOk && counts && voucherCounts) {
+        const msg =
+          `Pushed ${voucherCounts.vouchersCount} vouchers · ${voucherCounts.itemsCount} items · ` +
+          `${voucherCounts.ledgersCount} ledgers · ${counts.orderGroups} order groups · ` +
+          `${counts.discountRules} discount rules · ${counts.itemCategoryOverrides} item assignments · ` +
+          `${counts.categoryColors} colors · ${counts.vendorGroupAssignments} vendor assignments · ` +
+          `${counts.tallyPriceListImports} prices · ${counts.rateOverrides} rate overrides · ` +
+          `${counts.unitOverrides} unit overrides · ${counts.itemNotes} notes · ${counts.callingList} calls`;
         toast(msg, "success");
         setVoucherPushResult({ ok: true, msg });
       } else {
-        const msg = `Push failed: ${result.error || "Unknown error"}`;
-        toast(msg, "error");
-        setVoucherPushResult({ ok: false, msg });
+        const errs: string[] = [];
+        if (configResult.status === "rejected") errs.push(`config: ${configResult.reason?.message || configResult.reason}`);
+        else if (!configOk && configResult.value.errors) errs.push(...configResult.value.errors);
+        if (voucherResp.status === "rejected") errs.push(`vouchers: ${voucherResp.reason?.message || voucherResp.reason}`);
+        const msg = `Partial push (${errs.length} error${errs.length === 1 ? "" : "s"}): ${errs.slice(0, 2).join(" | ")}${errs.length > 2 ? ` …+${errs.length - 2} more` : ""}`;
+        toast(msg, errs.length === 0 ? "success" : "warn");
+        setVoucherPushResult({ ok: errs.length === 0, msg });
+        if (errs.length > 0) console.warn("[Push All] Errors:", errs);
       }
     } catch (e: any) {
       toast(`Push failed: ${e.message}`, "error");
@@ -393,17 +425,18 @@ export default function Settings() {
           <button
             onClick={handlePushToSupabase}
             disabled={syncingSupabase}
-            className="btn-primary w-full"
+            className="btn-secondary w-full"
+            title="Push only config (rules, groups, prices, notes) — does NOT push items/ledgers/vouchers"
           >
             {syncingSupabase ? (
               <>
                 <RefreshCw size={14} className="animate-spin" />
-                Pushing config…
+                Pushing config only…
               </>
             ) : (
               <>
                 <Cloud size={14} />
-                Push Config to Supabase (rules, groups, prices, notes)
+                Push Config Only (rules, groups, prices, notes)
               </>
             )}
           </button>
@@ -411,20 +444,20 @@ export default function Settings() {
           <button
             onClick={handlePushLocalVouchersToSupabase}
             disabled={pushingVouchers || !data}
-            className="btn-secondary w-full"
-            title={!data ? "Import data from Tally first" : "Re-push all local items + ledgers + vouchers (with inventory lines) to Supabase"}
+            className="btn-primary w-full"
+            title={!data ? "Import data from Tally first" : "Push everything to Supabase: items, ledgers, vouchers, order groups, discount rules, item assignments, vendor groups, notes, prices, all overrides"}
           >
             {pushingVouchers ? (
               <>
                 <RefreshCw size={14} className="animate-spin" />
-                Pushing vouchers + masters…
+                Pushing everything to Supabase…
               </>
             ) : (
               <>
                 <Cloud size={14} />
                 {data
-                  ? `Push Local Data (${data.items.size} items · ${data.ledgers.size} ledgers · ${data.vouchers.length} vouchers)`
-                  : "Push Local Data (no data loaded)"}
+                  ? `Push EVERYTHING to Supabase (${data.items.size} items · ${data.ledgers.size} ledgers · ${data.vouchers.length} vouchers · all config)`
+                  : "Push EVERYTHING to Supabase (no data loaded)"}
               </>
             )}
           </button>
