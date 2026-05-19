@@ -13,6 +13,7 @@ import { deserializeParsedData } from "./utils/serialize";
 import { useTallyAutoSync } from "./hooks/useTallyAutoSync";
 import { usePersistenceMonitor } from "./hooks/usePersistenceMonitor";
 import { useSupabaseConfigSync } from "./hooks/useSupabaseConfigSync";
+import { useSupabaseAutoPushAfterTally } from "./hooks/useSupabaseAutoPushAfterTally";
 import { initializeVendorGroups } from "./services/vendorGroupInitService";
 import { initializeOrderGroups } from "./services/orderGroupInitService";
 import "./utils/dataDebug"; // Initialize data persistence debug utilities
@@ -64,6 +65,10 @@ function AppRoutes() {
 
   // Enable automatic syncing of config data (discounts, order groups, unit overrides) to Supabase
   useSupabaseConfigSync();
+
+  // 5 minutes after every Tally sync completes, push EVERYTHING to Supabase
+  // (config + items + ledgers + vouchers with full inventory lines)
+  useSupabaseAutoPushAfterTally();
 
   // Load saved discount rules from Electron file on startup.
   // This ensures user edits survive even if localStorage is cleared (reinstall, cache wipe).
