@@ -480,6 +480,7 @@ export class SupabaseSync {
       console.log(`[Supabase] ✓ Synced ${mapped.length} discount rules (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Discount rules sync failed: ${e.message}`);
+      throw e;
     }
   }
 
@@ -513,6 +514,7 @@ export class SupabaseSync {
       console.log(`[Supabase] ✓ Synced ${mapped.length} order groups (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Order groups sync failed: ${e.message}`);
+      throw e;
     }
   }
 
@@ -543,6 +545,7 @@ export class SupabaseSync {
       console.log(`[Supabase] ✓ Synced ${mapped.length} unit overrides (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Unit overrides sync failed: ${e.message}`);
+      throw e;
     }
   }
 
@@ -571,6 +574,7 @@ export class SupabaseSync {
       console.log(`[Supabase] ✓ Synced ${mapped.length} rate overrides (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Rate overrides sync failed: ${e.message}`);
+      throw e;
     }
   }
 
@@ -600,6 +604,7 @@ export class SupabaseSync {
       console.log(`[Supabase] ✓ Synced ${mapped.length} item category overrides (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Item category overrides sync failed: ${e.message}`);
+      throw e;
     }
   }
 
@@ -629,6 +634,7 @@ export class SupabaseSync {
       console.log(`[Supabase] ✓ Synced ${mapped.length} category colors (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Category colors sync failed: ${e.message}`);
+      throw e;
     }
   }
 
@@ -658,6 +664,7 @@ export class SupabaseSync {
       console.log(`[Supabase] ✓ Synced ${mapped.length} vendor group assignments (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Vendor group assignments sync failed: ${e.message}`);
+      throw e;
     }
   }
 
@@ -691,6 +698,7 @@ export class SupabaseSync {
       console.log(`[Supabase] ✓ Synced ${mapped.length} item notes (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Item notes sync failed: ${e.message}`);
+      throw e;
     }
   }
 
@@ -726,6 +734,7 @@ export class SupabaseSync {
       console.log(`[Supabase] ✓ Synced ${mapped.length} calling list entries (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Calling list sync failed: ${e.message}`);
+      throw e;
     }
   }
 
@@ -758,6 +767,7 @@ export class SupabaseSync {
       console.log(`[Supabase] ✓ Synced ${mapped.length} tally price list imports (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Tally price list imports sync failed: ${e.message}`);
+      throw e;
     }
   }
 }

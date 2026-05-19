@@ -296,23 +296,27 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
     );
     const supabase = new SupabaseSync();
 
-    // Sync all config data in parallel — Promise.allSettled means one failure doesn't break others
-    const results = await Promise.allSettled([
-      discountRules.length > 0 ? supabase.syncDiscountRules(discountRules, company) : Promise.resolve(),
-      orderGroups.length > 0 ? supabase.syncOrderGroups(orderGroups, company) : Promise.resolve(),
-      Object.keys(unitOverrides).length > 0 ? supabase.syncUnitOverrides(unitOverrides, company) : Promise.resolve(),
-      rateOverrides.length > 0 ? supabase.syncRateOverrides(rateOverrides, company) : Promise.resolve(),
-      Object.keys(itemCategoryOverrides).length > 0 ? supabase.syncItemCategoryOverrides(itemCategoryOverrides, company) : Promise.resolve(),
-      Object.keys(categoryColors).length > 0 ? supabase.syncCategoryColors(categoryColors, company) : Promise.resolve(),
-      Object.keys(vendorGroupAssignments).length > 0 ? supabase.syncVendorGroupAssignments(vendorGroupAssignments, company) : Promise.resolve(),
-      Object.keys(itemNotes).length > 0 ? supabase.syncItemNotes(itemNotes, company) : Promise.resolve(),
-      callingList.length > 0 ? supabase.syncCallingList(callingList, company) : Promise.resolve(),
-      Object.keys(tallyPriceListImports).length > 0 ? supabase.syncTallyPriceListImports(tallyPriceListImports, tallyPriceListImportedAt, company) : Promise.resolve(),
-    ]);
+    // Sync each table in parallel — Promise.allSettled means one failure doesn't break others.
+    // Each entry is labeled so we can report exactly which table failed.
+    const syncTasks: Array<{ label: string; promise: Promise<void> }> = [
+      { label: "discount_rules", promise: discountRules.length > 0 ? supabase.syncDiscountRules(discountRules, company) : Promise.resolve() },
+      { label: "order_groups", promise: orderGroups.length > 0 ? supabase.syncOrderGroups(orderGroups, company) : Promise.resolve() },
+      { label: "unit_overrides", promise: Object.keys(unitOverrides).length > 0 ? supabase.syncUnitOverrides(unitOverrides, company) : Promise.resolve() },
+      { label: "rate_overrides", promise: rateOverrides.length > 0 ? supabase.syncRateOverrides(rateOverrides, company) : Promise.resolve() },
+      { label: "item_category_overrides", promise: Object.keys(itemCategoryOverrides).length > 0 ? supabase.syncItemCategoryOverrides(itemCategoryOverrides, company) : Promise.resolve() },
+      { label: "category_colors", promise: Object.keys(categoryColors).length > 0 ? supabase.syncCategoryColors(categoryColors, company) : Promise.resolve() },
+      { label: "vendor_group_assignments", promise: Object.keys(vendorGroupAssignments).length > 0 ? supabase.syncVendorGroupAssignments(vendorGroupAssignments, company) : Promise.resolve() },
+      { label: "item_notes", promise: Object.keys(itemNotes).length > 0 ? supabase.syncItemNotes(itemNotes, company) : Promise.resolve() },
+      { label: "calling_list_entries", promise: callingList.length > 0 ? supabase.syncCallingList(callingList, company) : Promise.resolve() },
+      { label: "tally_price_list_imports", promise: Object.keys(tallyPriceListImports).length > 0 ? supabase.syncTallyPriceListImports(tallyPriceListImports, tallyPriceListImportedAt, company) : Promise.resolve() },
+    ];
+
+    const results = await Promise.allSettled(syncTasks.map(t => t.promise));
 
     const errors = results
-      .filter((r) => r.status === "rejected")
-      .map((r: any) => r.reason?.message || String(r.reason));
+      .map((r, i) => ({ r, label: syncTasks[i].label }))
+      .filter(({ r }) => r.status === "rejected")
+      .map(({ r, label }) => `${label}: ${(r as PromiseRejectedResult).reason?.message || String((r as PromiseRejectedResult).reason)}`);
 
     console.log(`[Supabase] Config sync completed (${errors.length} errors)`);
     res.json({
