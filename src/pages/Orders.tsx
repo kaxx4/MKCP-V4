@@ -33,6 +33,7 @@ export default function Orders() {
   const navigate = useNavigate();
   const data = useDataStore((s) => s.data);
   const voucherIndex = useDataStore((s) => s.voucherIndex);
+  const stockMap = useDataStore((s) => s.stockMap);
   const { unitMode, coverMonths, setCoverMonths, isMobile } = useUIStore();
   const { lines: orderLines, setLine, removeLine, clearAll, getAllLines } = useOrderStore();
   const {
@@ -128,15 +129,9 @@ export default function Orders() {
     [allItems]
   );
 
-  // Cache stock calculations for all items (using indexed lookup)
-  const stockCache = useMemo(() => {
-    if (!data) return new Map<string, number>();
-    const cache = new Map<string, number>();
-    for (const item of allItems) {
-      cache.set(item.itemId, getCurrentStockIndexed(item, voucherIndex));
-    }
-    return cache;
-  }, [data, allItems, voucherIndex]);
+  // Use pre-computed stockMap from dataStore (single pass after data load).
+  // Eliminates the 559 × 5000 voucher scans that previously ran per keystroke.
+  const stockCache = stockMap;
 
   const filteredItems = useMemo(() => {
     let result = allItems;
@@ -186,9 +181,9 @@ export default function Orders() {
   );
 
   const currentStock = useMemo(() => {
-    if (!selectedItem || !data) return 0;
-    return getCurrentStockIndexed(selectedItem, voucherIndex);
-  }, [selectedItem, data, voucherIndex]);
+    if (!selectedItem) return 0;
+    return stockMap.get(selectedItem.itemId) ?? 0;
+  }, [selectedItem, stockMap]);
 
   const monthlyBuckets = useMemo(() => {
     if (!selectedItem || !data) return [];

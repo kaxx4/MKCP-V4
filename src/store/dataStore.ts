@@ -4,8 +4,18 @@ import { applyOverridesToItems } from "../utils/applyOverrides";
 import { useOverrideStore } from "./overrideStore";
 import { generatePredictions, scorePredictions, generateItemForecasts, type PredictionSnapshot } from "../engine/prediction";
 import { saveToStore, loadFromStore } from "../db/idb";
-import { buildVoucherIndex, type VoucherIndex } from "../engine/inventory";
+import { buildVoucherIndex, getCurrentStockIndexed, type VoucherIndex } from "../engine/inventory";
 import { computeItemMargins, type ItemMarginData } from "../engine/financial";
+
+/** Pre-computed running-balance row for a single ledger. */
+export interface LedgerTxn {
+  date: string;
+  voucherNumber: string;
+  type: string;
+  debit: number;
+  credit: number;
+  running: number;
+}
 
 interface DataState {
   data: ParsedData | null;
@@ -14,10 +24,75 @@ interface DataState {
   /** Pre-computed item margins — populated in background after each data load.
    *  Null until the first background computation finishes. */
   itemMargins: Map<string, ItemMarginData> | null;
+  /** Current stock per itemId — populated synchronously after every setData/mergeData.
+   *  Replaces O(items × vouchers) loops in Dashboard/Orders/Alerts/Reports pages. */
+  stockMap: Map<string, number>;
+  /** Sorted transaction history with running balance per ledgerId — populated
+   *  in idle callback. Replaces O(vouchers × lines) recompute per ledger click. */
+  ledgerTransactionMap: Map<string, LedgerTxn[]>;
   setData: (d: ParsedData) => void;
   mergeData: (d: ParsedData) => void;
   clearData: () => void;
   refreshOverrides: () => void; // Apply current overrides to raw data
+}
+
+/** Build a stock map for every item in one pass.
+ *  Calls the existing `getCurrentStockIndexed` engine function (untouched). */
+function buildStockMap(items: Map<string, any>, voucherIndex: VoucherIndex): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const item of items.values()) {
+    map.set(item.itemId, getCurrentStockIndexed(item, voucherIndex));
+  }
+  return map;
+}
+
+/** Build per-ledger transaction history with running balance.
+ *  Single pass through all vouchers: O(vouchers × lines) once total,
+ *  vs the previous per-ledger-click recompute. */
+function buildLedgerTransactionMap(
+  vouchers: CanonicalVoucher[],
+  ledgers: Map<string, any>
+): Map<string, LedgerTxn[]> {
+  // Bucket lines by ledgerId in date order
+  const buckets = new Map<string, Array<{ v: CanonicalVoucher; debit: number; credit: number }>>();
+
+  // Pre-sort vouchers once
+  const sorted = [...vouchers]
+    .filter((v) => !v.isCancelled)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  for (const v of sorted) {
+    for (const line of v.lines) {
+      if (line.type !== "ledger" || !line.ledgerId) continue;
+      const debit = line.isDebit ? (line.amount ?? 0) : 0;
+      const credit = !line.isDebit ? (line.amount ?? 0) : 0;
+      const arr = buckets.get(line.ledgerId);
+      if (arr) arr.push({ v, debit, credit });
+      else buckets.set(line.ledgerId, [{ v, debit, credit }]);
+    }
+  }
+
+  // Compute running balance per bucket
+  const result = new Map<string, LedgerTxn[]>();
+  for (const [ledgerId, rows] of buckets) {
+    const ledger = ledgers.get(ledgerId);
+    let running = ledger?.openingBalance ?? 0;
+    const txns: LedgerTxn[] = new Array(rows.length);
+    for (let i = 0; i < rows.length; i++) {
+      const { v, debit, credit } = rows[i];
+      running += debit - credit;
+      txns[i] = {
+        date: v.date,
+        voucherNumber: v.voucherNumber,
+        type: v.voucherType,
+        debit,
+        credit,
+        running,
+      };
+    }
+    result.set(ledgerId, txns);
+  }
+  return result;
 }
 
 export const useDataStore = create<DataState>((set, get) => ({
@@ -25,6 +100,8 @@ export const useDataStore = create<DataState>((set, get) => ({
   rawData: null,
   voucherIndex: new Map(),
   itemMargins: null,
+  stockMap: new Map(),
+  ledgerTransactionMap: new Map(),
 
   setData: (rawData) => {
     // Store raw data and apply overrides
@@ -32,13 +109,29 @@ export const useDataStore = create<DataState>((set, get) => ({
     const itemsWithOverrides = applyOverridesToItems(rawData.items, units, rates);
     const newData = { ...rawData, items: itemsWithOverrides };
     const voucherIndex = buildVoucherIndex(newData.vouchers);
+    // Pre-compute stock map synchronously (cheap with voucherIndex — ~559 lookups)
+    const stockMap = buildStockMap(itemsWithOverrides, voucherIndex);
 
     set({
       rawData,
       data: newData,
       voucherIndex,
+      stockMap,
       itemMargins: null, // reset — will be re-populated below
+      ledgerTransactionMap: new Map(), // reset — populated in idle callback below
     });
+
+    // Pre-compute ledger transaction map in idle callback — heavy single pass,
+    // but eliminates the 1-2s freeze per ledger click on Ledgers page.
+    const computeLedgerTxns = () => {
+      const map = buildLedgerTransactionMap(newData.vouchers, newData.ledgers);
+      set({ ledgerTransactionMap: map });
+    };
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(computeLedgerTxns);
+    } else {
+      setTimeout(computeLedgerTxns, 100);
+    }
 
     // Pre-compute item margins in background so PendingOrders can read them
     // without running O(items × vouchers) on every navigation.
@@ -80,14 +173,24 @@ export const useDataStore = create<DataState>((set, get) => ({
     }
   },
 
-  clearData: () => set({ data: null, rawData: null, voucherIndex: new Map(), itemMargins: null }),
+  clearData: () => set({
+    data: null,
+    rawData: null,
+    voucherIndex: new Map(),
+    itemMargins: null,
+    stockMap: new Map(),
+    ledgerTransactionMap: new Map(),
+  }),
 
   refreshOverrides: () => {
-    const { rawData } = get();
+    const { rawData, voucherIndex } = get();
     if (!rawData) return;
     const { units, rates } = useOverrideStore.getState();
     const itemsWithOverrides = applyOverridesToItems(rawData.items, units, rates);
-    set({ data: { ...rawData, items: itemsWithOverrides } });
+    // Stock depends on item units/rates only via display conversion (stock is qtyBase),
+    // but rebuild for correctness so any consumer reading from cache stays consistent.
+    const stockMap = buildStockMap(itemsWithOverrides, voucherIndex);
+    set({ data: { ...rawData, items: itemsWithOverrides }, stockMap });
   },
 
   mergeData: (newData) => {

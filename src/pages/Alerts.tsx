@@ -28,6 +28,7 @@ export default function Alerts() {
   const navigate = useNavigate();
   const data = useDataStore((s) => s.data);
   const voucherIndex = useDataStore((s) => s.voucherIndex);
+  const stockMap = useDataStore((s) => s.stockMap);
   const { setLine } = useOrderStore();
   const { unitMode, isMobile } = useUIStore();
   const [search, setSearch] = useState("");
@@ -36,12 +37,14 @@ export default function Alerts() {
   const [addedItems, setAddedItems] = useState<Set<string>>(new Set());
   const parentRef = useRef<HTMLDivElement>(null);
 
-  // Compute alert data for all items
+  // Compute alert data for all items.
+  // Stock is pre-computed in dataStore.stockMap (single pass after data load),
+  // eliminating the 559 × 5000 voucher scans that used to run on every render.
   const alertData = useMemo(() => {
     if (!data) return [];
     return Array.from(data.items.values())
       .map((item): AlertRow => {
-        const stock = getCurrentStockIndexed(item, voucherIndex);
+        const stock = stockMap.get(item.itemId) ?? 0;
         const avgOut = avgMonthlyOutwardIndexed(item, voucherIndex, 3);
         const suggested = suggestedReorderIndexed(item, voucherIndex, stock);
         const monthsRemaining = avgOut > 0 ? stock / avgOut : Infinity;
@@ -52,7 +55,7 @@ export default function Alerts() {
         return { item, stock, avgOut, suggested, monthsRemaining, severity };
       })
       .filter((d) => d.severity !== "OK");
-  }, [data, voucherIndex]);
+  }, [data?.items, stockMap, voucherIndex]);
 
   // Apply filters
   const filtered = useMemo(() => {

@@ -10,6 +10,7 @@ import type { CanonicalLedger } from "../types/canonical";
 export default function Ledgers() {
   const navigate = useNavigate();
   const data = useDataStore((s) => s.data);
+  const ledgerTransactionMap = useDataStore((s) => s.ledgerTransactionMap);
   const { isMobile } = useUIStore();
   const [search, setSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("ALL");
@@ -18,7 +19,7 @@ export default function Ledgers() {
   const allLedgers = useMemo(() => {
     if (!data) return [];
     return Array.from(data.ledgers.values());
-  }, [data]);
+  }, [data?.ledgers]);
 
   const groups = useMemo(() => {
     const gs = new Set(allLedgers.map((l) => l.group));
@@ -38,25 +39,13 @@ export default function Ledgers() {
     [selectedLedgerId, data]
   );
 
+  // Pre-computed in dataStore (idle callback after every data load).
+  // Falls back to empty array if cache hasn't populated yet — UI shows
+  // "loading" naturally because the array is empty.
   const ledgerTransactions = useMemo(() => {
-    if (!selectedLedger || !data) return [];
-    const txns: Array<{ date: string; voucherNumber: string; type: string; debit: number; credit: number; running: number }> = [];
-    let running = selectedLedger.openingBalance;
-    const relevant = data.vouchers
-      .filter((v) => !v.isCancelled && v.lines.some((l) => l.type === "ledger" && l.ledgerId === selectedLedger.ledgerId))
-      .sort((a, b) => a.date.localeCompare(b.date));
-
-    for (const v of relevant) {
-      for (const line of v.lines) {
-        if (line.type !== "ledger" || line.ledgerId !== selectedLedger.ledgerId) continue;
-        const debit = line.isDebit ? (line.amount ?? 0) : 0;
-        const credit = !line.isDebit ? (line.amount ?? 0) : 0;
-        running += debit - credit;
-        txns.push({ date: v.date, voucherNumber: v.voucherNumber, type: v.voucherType, debit, credit, running });
-      }
-    }
-    return txns;
-  }, [selectedLedger, data]);
+    if (!selectedLedger) return [];
+    return ledgerTransactionMap.get(selectedLedger.ledgerId) ?? [];
+  }, [selectedLedger, ledgerTransactionMap]);
 
   if (!data) {
     return (
