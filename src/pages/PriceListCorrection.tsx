@@ -26,51 +26,56 @@ export default function PriceListCorrection() {
   const { toast } = useToast();
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
 
-  // Analyze items with cost prices and recent sales
+  // Analyze items with cost prices and recent sales.
+  //
+  // Previously O(anomalies × vouchers × lines) — 50 × 5000 × 3 = 750k ops per render.
+  // Now: single O(vouchers × lines) pre-pass builds itemId → rates map,
+  //      then O(anomalies) lookup. 750k → ~15k ops + Map.get per anomaly.
+  // Dep narrowed to data?.vouchers + data?.items so unrelated data fields
+  // (importedAt, sourceFiles, warnings) don't trigger recompute.
   const costPriceItems = useMemo<CostPriceItem[]>(() => {
     if (!data) return [];
 
     const auditResult = auditPriceList(data);
 
-    // Filter to cost price + baby items only
     const items = auditResult.anomalies.filter(
       (a) =>
         a.flags.includes("BABY_ITEM_COST_PRICE") ||
         a.flags.includes("SUSPICIOUSLY_LOW_RATE")
     );
 
-    // For each item, find recent sales rates
-    const itemsWithRates = items.map((anom) => {
-      const item = data.items.get(anom.itemId);
-      const recentRates: number[] = [];
-
-      // Search sales/delivery notes for this item
-      for (const voucher of data.vouchers) {
-        if (voucher.voucherType !== "Sales" &&
-            !voucher.voucherType.toLowerCase().includes("delivery")) continue;
-        if (voucher.isCancelled) continue;
-
-        for (const line of voucher.lines) {
-          if (line.type === "inventory" && line.itemId === anom.itemId && line.ratePerBase && line.ratePerBase > 0) {
-            recentRates.push(line.ratePerBase);
-          }
-        }
+    // Build itemId -> rates[] map in a single pass through vouchers.
+    const ratesByItem = new Map<string, number[]>();
+    const anomalyItemIds = new Set(items.map((a) => a.itemId));
+    for (const voucher of data.vouchers) {
+      if (voucher.voucherType !== "Sales" &&
+          !voucher.voucherType.toLowerCase().includes("delivery")) continue;
+      if (voucher.isCancelled) continue;
+      for (const line of voucher.lines) {
+        if (line.type !== "inventory" || !line.itemId || !line.ratePerBase || line.ratePerBase <= 0) continue;
+        // Only collect rates for items we'll actually surface — skip the rest.
+        if (!anomalyItemIds.has(line.itemId)) continue;
+        const arr = ratesByItem.get(line.itemId);
+        if (arr) arr.push(line.ratePerBase);
+        else ratesByItem.set(line.itemId, [line.ratePerBase]);
       }
+    }
+
+    const itemsWithRates = items.map((anom) => {
+      const recentRates = ratesByItem.get(anom.itemId);
 
       let recommendedRate: number | null = null;
       let recentSalesRate: number | null = null;
-
-      if (recentRates.length > 0) {
-        // Use median of recent rates (more robust than average)
-        const sorted = recentRates.sort((a, b) => a - b);
+      if (recentRates && recentRates.length > 0) {
+        // Median of recent rates (more robust than average)
+        const sorted = [...recentRates].sort((a, b) => a - b);
         recentSalesRate = sorted[Math.floor(sorted.length / 2)];
         recommendedRate = recentSalesRate;
       }
 
-      // Determine priority
       let priority: "critical" | "high" | "medium" = "medium";
-      if (anom.itemName.toLowerCase().includes("baby") ||
-          anom.itemName.toLowerCase().includes("tricycle")) {
+      const nameLower = anom.itemName.toLowerCase();
+      if (nameLower.includes("baby") || nameLower.includes("tricycle")) {
         priority = "critical";
       } else if (anom.openingRate === 0) {
         priority = "high";
@@ -84,7 +89,6 @@ export default function PriceListCorrection() {
       };
     });
 
-    // Sort by priority: critical → high → medium, then by opening value (highest first)
     return itemsWithRates.sort((a, b) => {
       const priorityOrder = { critical: 0, high: 1, medium: 2 };
       if (priorityOrder[a.priority] !== priorityOrder[b.priority]) {
@@ -92,7 +96,7 @@ export default function PriceListCorrection() {
       }
       return (b.openingValue || 0) - (a.openingValue || 0);
     });
-  }, [data]);
+  }, [data?.vouchers, data?.items]);
 
   function toggleSelection(itemId: string) {
     const next = new Set(selectedItems);

@@ -4,7 +4,14 @@ import { useUIStore } from "../store/uiStore";
 import clsx from "clsx";
 
 export function Layout({ children }: { children: ReactNode }) {
-  const { sidebarOpen, isMobile, setIsMobile, setSidebarOpen } = useUIStore();
+  // Granular selectors — Layout only re-renders when sidebarOpen / isMobile change.
+  // Previously `const { ... } = useUIStore()` returned the whole store object on every
+  // uiStore mutation (fyYear, coverMonths edits in Settings) triggering Layout +
+  // NavBar + main content re-renders even when their props were unchanged.
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const isMobile = useUIStore((s) => s.isMobile);
+  const setIsMobile = useUIStore((s) => s.setIsMobile);
+  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 767px)");
