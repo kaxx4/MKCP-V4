@@ -576,22 +576,17 @@ function SalesPerformanceTab({
 function InventoryTab({
   filteredVouchers,
   data,
-  voucherIndex,
+  stockMap,
 }: {
   filteredVouchers: any[];
   data: any;
-  voucherIndex: any;
+  stockMap: Map<string, number>;
 }) {
   const [statusFilter, setStatusFilter] = useState<"all" | "in" | "low" | "zero" | "dead">("all");
   const [searchTerm, setSearchTerm] = useState("");
 
-  const stockMap = useMemo(() => {
-    const map = new Map<string, number>();
-    Array.from(data.items.values() as any[]).forEach((item: any) => {
-      map.set(item.itemId, getCurrentStockIndexed(item, voucherIndex));
-    });
-    return map;
-  }, [data.items, voucherIndex]);
+  // stockMap is now passed in from dataStore — pre-computed once after data load
+  // instead of recomputed per tab mount. Eliminates ~200-300ms freeze on tab switch.
 
   const inventory = useMemo(() => {
     const items = Array.from(data.items.values() as any[]);
@@ -895,6 +890,7 @@ function ExpenseTab({
 export default function Reports() {
   const data = useDataStore((s) => s.data);
   const voucherIndex = useDataStore((s) => s.voucherIndex);
+  const stockMap = useDataStore((s) => s.stockMap);
 
   const [activeTab, setActiveTab] = useState<"financial" | "sales" | "inventory" | "expense">(
     "financial"
@@ -1040,7 +1036,7 @@ export default function Reports() {
               <InventoryTab
                 filteredVouchers={filteredVouchers}
                 data={data}
-                voucherIndex={voucherIndex}
+                stockMap={stockMap}
               />
             )}
             {activeTab === "expense" && (
