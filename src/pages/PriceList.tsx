@@ -71,9 +71,12 @@ export default function PriceList() {
     reader.readAsArrayBuffer(file);
   }
 
+  // Dep narrowed to data?.vouchers so unrelated data field changes
+  // (importedAt, sourceFiles, items map mutations from override edits)
+  // don't trigger a full voucher scan to rebuild the GST inference map.
   const inferredGstRates = useMemo(
     () => (data ? inferGstRatesFromVouchers(data.vouchers) : new Map<string, number>()),
-    [data]
+    [data?.vouchers]
   );
 
   const rows = useMemo<PriceRow[]>(() => {

@@ -166,7 +166,11 @@ function emptyCounts() {
 export function useSupabaseConfigSync(company: string = DEFAULT_COMPANY) {
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Subscribe to all relevant stores so the effect re-fires on any change
+  // Subscribe to all 11 store slices that contribute to the sync payload.
+  // Each is its own selector so we only subscribe to specific slices (not
+  // entire stores). Zustand returns stable references when the slice is
+  // unchanged, so the useEffect deps array below only flips when at least
+  // one slice actually mutates.
   const discountRules = useDiscountStore((s) => s.categories);
   const itemCategoryOverrides = useDiscountStore((s) => s.itemCategoryOverrides);
   const categoryColors = useDiscountStore((s) => s.categoryColors);
