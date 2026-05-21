@@ -6,6 +6,7 @@ import { generatePredictions, scorePredictions, generateItemForecasts, type Pred
 import { saveToStore, loadFromStore } from "../db/idb";
 import { buildVoucherIndex, getCurrentStockIndexed, type VoucherIndex } from "../engine/inventory";
 import { computeItemMargins, type ItemMarginData } from "../engine/financial";
+import { computePartyStats, type PartyStats } from "../utils/partyStats";
 
 /** Pre-computed running-balance row for a single ledger. */
 export interface LedgerTxn {
@@ -30,6 +31,9 @@ interface DataState {
   /** Sorted transaction history with running balance per ledgerId — populated
    *  in idle callback. Replaces O(vouchers × lines) recompute per ledger click. */
   ledgerTransactionMap: Map<string, LedgerTxn[]>;
+  /** Pre-computed party RFM/churn/prediction stats — populated in idle callback.
+   *  Null until first compute finishes. Eliminates Outreach page's 1-2s mount freeze. */
+  partyStats: PartyStats[] | null;
   setData: (d: ParsedData) => void;
   mergeData: (d: ParsedData) => void;
   clearData: () => void;
@@ -102,6 +106,7 @@ export const useDataStore = create<DataState>((set, get) => ({
   itemMargins: null,
   stockMap: new Map(),
   ledgerTransactionMap: new Map(),
+  partyStats: null,
 
   setData: (rawData) => {
     // Store raw data and apply overrides
@@ -119,6 +124,7 @@ export const useDataStore = create<DataState>((set, get) => ({
       stockMap,
       itemMargins: null, // reset — will be re-populated below
       ledgerTransactionMap: new Map(), // reset — populated in idle callback below
+      partyStats: null, // reset — populated in idle callback below
     });
 
     // Pre-compute ledger transaction map in idle callback — heavy single pass,
@@ -131,6 +137,18 @@ export const useDataStore = create<DataState>((set, get) => ({
       requestIdleCallback(computeLedgerTxns);
     } else {
       setTimeout(computeLedgerTxns, 100);
+    }
+
+    // Pre-compute party RFM/churn stats in idle callback — eliminates Outreach
+    // page's 1-2s freeze on mount.
+    const computePartyStatsAsync = () => {
+      const stats = computePartyStats(newData.vouchers, newData.ledgers);
+      set({ partyStats: stats });
+    };
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(computePartyStatsAsync);
+    } else {
+      setTimeout(computePartyStatsAsync, 150);
     }
 
     // Pre-compute item margins in background so PendingOrders can read them
@@ -180,6 +198,7 @@ export const useDataStore = create<DataState>((set, get) => ({
     itemMargins: null,
     stockMap: new Map(),
     ledgerTransactionMap: new Map(),
+    partyStats: null,
   }),
 
   refreshOverrides: () => {
