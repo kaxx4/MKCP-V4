@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, memo } from "react";
 import {
   CalendarDays,
   Rows3,
@@ -145,7 +145,7 @@ function StatusBadge({ status }: { status: KanbanStatus }) {
 
 // ─── VOUCHER CARD (shared by Kanban + other views) ────────────────────────────
 
-function VoucherCard({
+const VoucherCard = memo(function VoucherCard({
   dv,
   isSelected,
   onSelect,
@@ -231,12 +231,12 @@ function VoucherCard({
       </div>
     </div>
   );
-}
+});
 
 // ─── DAY ROWS VIEW (daily kanban) ────────────────────────────────────────────
 
 /** Compact horizontal card used inside day rows */
-function DayCard({
+const DayCard = memo(function DayCard({
   dv,
   isSelected,
   onSelect,
@@ -291,7 +291,7 @@ function DayCard({
       </div>
     </div>
   );
-}
+});
 
 function DayRowsView({
   items,

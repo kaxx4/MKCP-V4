@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -448,7 +448,7 @@ function PartyPanel({
 // OPPORTUNITY CARD
 // ═══════════════════════════════════════════════════════════════════
 
-function OppCard({
+const OppCard = memo(function OppCard({
   opp,
   isSelected,
   onSelect,
@@ -518,13 +518,13 @@ function OppCard({
       </div>
     </button>
   );
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // CHURN ROW
 // ═══════════════════════════════════════════════════════════════════
 
-function ChurnRow({
+const ChurnRow = memo(function ChurnRow({
   party,
   onSelect,
 }: {
@@ -596,13 +596,13 @@ function ChurnRow({
       <ChevronRight size={13} className="text-muted flex-shrink-0" />
     </button>
   );
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // CALENDAR ITEM
 // ═══════════════════════════════════════════════════════════════════
 
-function CalendarItem({
+const CalendarItem = memo(function CalendarItem({
   party,
   onSelect,
 }: {
@@ -677,7 +677,7 @@ function CalendarItem({
       </div>
     </button>
   );
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // MAIN PAGE COMPONENT
