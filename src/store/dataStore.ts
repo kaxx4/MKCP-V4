@@ -219,11 +219,15 @@ export const useDataStore = create<DataState>((set, get) => ({
       return;
     }
 
-    // Merge items (new overwrites old for same key)
-    const items = new Map([...cur.items, ...newData.items]);
+    // Merge items (new overwrites old for same key).
+    // Iterate-and-set is ~2x faster than [...spread, ...spread] which
+    // allocates intermediate arrays of size 2×N before constructing Map.
+    const items = new Map(cur.items);
+    for (const [k, v] of newData.items) items.set(k, v);
 
     // Merge ledgers (new overwrites old for same key)
-    const ledgers = new Map([...cur.ledgers, ...newData.ledgers]);
+    const ledgers = new Map(cur.ledgers);
+    for (const [k, v] of newData.ledgers) ledgers.set(k, v);
 
     // Merge vouchers with deduplication tracking
     const vMap = new Map<string, CanonicalVoucher>();

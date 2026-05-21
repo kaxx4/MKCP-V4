@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, startTransition } from "react";
 import { BrowserRouter, HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { usePerfMonitor } from "./hooks/usePerfMonitor";
 import { Loader2 } from "lucide-react";
@@ -90,11 +90,16 @@ function AppRoutes() {
   useEffect(() => {
     (async () => {
       try {
-        // Always attempt to restore data, don't skip if data exists
+        // Always attempt to restore data, don't skip if data exists.
+        // Use startTransition so React keeps the UI interactive while
+        // hydration runs — paints the empty Dashboard skeleton first,
+        // then upgrades to full data without blocking input/scroll.
         const raw = await loadData<unknown>("parsedData");
         if (raw) {
           const parsed = deserializeParsedData(raw);
-          setData(parsed);
+          startTransition(() => {
+            setData(parsed);
+          });
           console.log(`[RESTORE] ✓ Loaded persisted data: ${parsed.vouchers?.length ?? 0} vouchers, ${parsed.items?.size ?? 0} items`);
         } else {
           console.log("[RESTORE] ℹ No persisted data found in IndexedDB");
