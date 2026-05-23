@@ -289,6 +289,8 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
     tallyPriceListImports = {},
     tallyPriceListImportedAt = null,
     voucherOverrides = {},
+    appSettings = {},
+    orderDraftLines = [],
   } = req.body;
 
   try {
@@ -315,6 +317,9 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
       { label: "calling_list_entries", promise: callingList.length > 0 ? supabase.syncCallingList(callingList, company) : Promise.resolve() },
       { label: "tally_price_list_imports", promise: Object.keys(tallyPriceListImports).length > 0 ? supabase.syncTallyPriceListImports(tallyPriceListImports, tallyPriceListImportedAt, company) : Promise.resolve() },
       { label: "voucher_overrides", promise: Object.keys(voucherOverrides).length > 0 ? supabase.syncVoucherOverrides(voucherOverrides, company) : Promise.resolve() },
+      { label: "app_settings", promise: Object.keys(appSettings).length > 0 ? supabase.syncAppSettings(appSettings, company) : Promise.resolve() },
+      // order_draft_lines always fires — empty array means "clear the cloud draft"
+      { label: "order_draft_lines", promise: supabase.syncOrderDraftLines(orderDraftLines, company) },
     ];
 
     const results = await Promise.allSettled(syncTasks.map(t => t.promise));
@@ -339,6 +344,8 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
       callingListCount: callingList.length,
       tallyPriceListImportsCount: Object.keys(tallyPriceListImports).length,
       voucherOverridesCount: Object.keys(voucherOverrides).length,
+      appSettingsCount: Object.keys(appSettings).length,
+      orderDraftLinesCount: orderDraftLines.length,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (e: any) {

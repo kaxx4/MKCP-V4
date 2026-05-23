@@ -813,6 +813,74 @@ export class SupabaseSync {
     }
   }
 
+  async syncAppSettings(settings: Record<string, any>, company: string): Promise<void> {
+    if (!this.client) return;
+    if (!settings || Object.keys(settings).length === 0) return;
+
+    const t0 = Date.now();
+    try {
+      const mapped = Object.entries(settings).map(([key, value]) => ({
+        company,
+        key,
+        value: value === undefined ? null : value,
+        updated_at: new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      }));
+
+      const { error } = await this.client.from("app_settings").upsert(mapped, {
+        onConflict: "company,key",
+      });
+      if (error) throw new Error(error.message);
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[Supabase] ✓ Synced ${mapped.length} app settings (${elapsed}s)`);
+    } catch (e: any) {
+      console.error(`[Supabase] App settings sync failed: ${e.message}`);
+      throw e;
+    }
+  }
+
+  async syncOrderDraftLines(lines: any[], company: string): Promise<void> {
+    if (!this.client) return;
+    if (!lines || lines.length === 0) {
+      // If draft is empty, wipe any old rows so the cloud reflects local truth.
+      try {
+        await this.client.from("order_draft_lines").delete().eq("company", company);
+      } catch { /* swallow — clean-slate is best-effort */ }
+      return;
+    }
+
+    const t0 = Date.now();
+    try {
+      const mapped = lines.map((l) => ({
+        company,
+        item_id: l.itemId,
+        item_name: l.itemName,
+        base_unit: l.baseUnit,
+        pkg_unit: l.pkgUnit,
+        units_per_pkg: l.unitsPerPkg,
+        qty_base: l.qtyBase,
+        rate_per_base: l.ratePerBase,
+        updated_at: new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      }));
+
+      // Replace strategy: delete all existing rows for company then insert current draft.
+      // Simpler than tracking deletes (user could remove a line; upsert alone would leave stale rows).
+      await this.client.from("order_draft_lines").delete().eq("company", company);
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        const { error } = await this.client.from("order_draft_lines").insert(batch);
+        if (error) throw new Error(error.message);
+      }
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[Supabase] ✓ Synced ${mapped.length} order draft lines (${elapsed}s)`);
+    } catch (e: any) {
+      console.error(`[Supabase] Order draft lines sync failed: ${e.message}`);
+      throw e;
+    }
+  }
+
   async syncVoucherOverrides(overrides: Record<string, any>, company: string): Promise<void> {
     if (!this.client) return;
     if (!overrides || Object.keys(overrides).length === 0) return;
