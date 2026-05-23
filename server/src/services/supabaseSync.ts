@@ -812,4 +812,37 @@ export class SupabaseSync {
       throw e;
     }
   }
+
+  async syncVoucherOverrides(overrides: Record<string, any>, company: string): Promise<void> {
+    if (!this.client) return;
+    if (!overrides || Object.keys(overrides).length === 0) return;
+
+    const t0 = Date.now();
+    try {
+      const mapped = Object.entries(overrides).map(([voucherId, override]: [string, any]) => ({
+        voucher_id: voucherId,
+        company,
+        status: override.status || null,
+        scheduled_date: override.scheduledDate || null,
+        notes: override.notes || null,
+        follow_ups: override.followUps || [],
+        updated_at: new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      }));
+
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        const { error } = await this.client.from("voucher_overrides").upsert(batch, {
+          onConflict: "company,voucher_id",
+        });
+        if (error) throw new Error(error.message);
+      }
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[Supabase] ✓ Synced ${mapped.length} voucher overrides (${elapsed}s)`);
+    } catch (e: any) {
+      console.error(`[Supabase] Voucher overrides sync failed: ${e.message}`);
+      throw e;
+    }
+  }
 }

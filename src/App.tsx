@@ -14,6 +14,7 @@ import { useTallyAutoSync } from "./hooks/useTallyAutoSync";
 import { usePersistenceMonitor } from "./hooks/usePersistenceMonitor";
 import { useSupabaseConfigSync } from "./hooks/useSupabaseConfigSync";
 import { useSupabaseAutoPushAfterTally } from "./hooks/useSupabaseAutoPushAfterTally";
+import { useSupabaseAutoPushInterval } from "./hooks/useSupabaseAutoPushInterval";
 import { initializeVendorGroups } from "./services/vendorGroupInitService";
 import { initializeOrderGroups } from "./services/orderGroupInitService";
 import "./utils/dataDebug"; // Initialize data persistence debug utilities
@@ -69,6 +70,11 @@ function AppRoutes() {
   // 5 minutes after every Tally sync completes, push EVERYTHING to Supabase
   // (config + items + ledgers + vouchers with full inventory lines)
   useSupabaseAutoPushAfterTally();
+
+  // Every 15 minutes (regardless of Tally sync), push EVERYTHING to Supabase.
+  // Belt-and-suspenders: guarantees user-edited data lands in Supabase even
+  // for sessions where the user only edits config and never triggers a Tally sync.
+  useSupabaseAutoPushInterval();
 
   // Load saved discount rules from Electron file on startup.
   // This ensures user edits survive even if localStorage is cleared (reinstall, cache wipe).

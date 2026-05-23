@@ -6,6 +6,7 @@ import { useVendorGroupStore } from '../store/vendorGroupStore';
 import { useNotesStore } from '../store/notesStore';
 import { useCallingListStore } from '../store/callingListStore';
 import { useTallyPriceListStore } from '../store/tallyPriceListStore';
+import { useCalendarStore } from '../store/calendarStore';
 
 const DEFAULT_COMPANY = 'M.K.CYCLES (P) LTD.';
 const SERVER_URL = 'http://localhost:3100/api/supabase/sync-config';
@@ -23,6 +24,7 @@ export interface SyncResult {
     itemNotes: number;
     callingList: number;
     tallyPriceListImports: number;
+    voucherOverrides: number;
   };
   errors?: string[];
   message?: string;
@@ -44,6 +46,7 @@ function buildSyncPayload(company: string = DEFAULT_COMPANY) {
   const callingList = useCallingListStore.getState().entries;
   const tallyPriceList = useTallyPriceListStore.getState().entries;
   const tallyPriceListImportedAt = useTallyPriceListStore.getState().importedAt;
+  const voucherOverrides = useCalendarStore.getState().overrides;
 
   // discountStore.categories is DiscountCategory[] = Array<{id, name, tiers}>
   // Map tiers to JSONB conditions field. Use category.id as both id and category.
@@ -80,6 +83,7 @@ function buildSyncPayload(company: string = DEFAULT_COMPANY) {
     callingList: callingList || [],
     tallyPriceListImports: tallyPriceList || {},
     tallyPriceListImportedAt: tallyPriceListImportedAt,
+    voucherOverrides: voucherOverrides || {},
   };
 }
 
@@ -119,6 +123,7 @@ export async function syncConfigToSupabase(company: string = DEFAULT_COMPANY): P
         itemNotes: result.itemNotesCount || 0,
         callingList: result.callingListCount || 0,
         tallyPriceListImports: result.tallyPriceListImportsCount || 0,
+        voucherOverrides: result.voucherOverridesCount || 0,
       },
       errors: result.errors,
       message: result.message,
@@ -144,6 +149,7 @@ function emptyCounts() {
     itemNotes: 0,
     callingList: 0,
     tallyPriceListImports: 0,
+    voucherOverrides: 0,
   };
 }
 
@@ -182,6 +188,7 @@ export function useSupabaseConfigSync(company: string = DEFAULT_COMPANY) {
   const callingList = useCallingListStore((s) => s.entries);
   const tallyPriceList = useTallyPriceListStore((s) => s.entries);
   const tallyPriceListImportedAt = useTallyPriceListStore((s) => s.importedAt);
+  const voucherOverrides = useCalendarStore((s) => s.overrides);
 
   useEffect(() => {
     if (debounceTimerRef.current) {
@@ -214,6 +221,7 @@ export function useSupabaseConfigSync(company: string = DEFAULT_COMPANY) {
     callingList,
     tallyPriceList,
     tallyPriceListImportedAt,
+    voucherOverrides,
     company,
   ]);
 
