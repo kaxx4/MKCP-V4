@@ -288,6 +288,7 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
     callingList = [],
     tallyPriceListImports = {},
     tallyPriceListImportedAt = null,
+    voucherOverrides = {},
   } = req.body;
 
   try {
@@ -313,6 +314,7 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
       { label: "item_notes", promise: Object.keys(itemNotes).length > 0 ? supabase.syncItemNotes(itemNotes, company) : Promise.resolve() },
       { label: "calling_list_entries", promise: callingList.length > 0 ? supabase.syncCallingList(callingList, company) : Promise.resolve() },
       { label: "tally_price_list_imports", promise: Object.keys(tallyPriceListImports).length > 0 ? supabase.syncTallyPriceListImports(tallyPriceListImports, tallyPriceListImportedAt, company) : Promise.resolve() },
+      { label: "voucher_overrides", promise: Object.keys(voucherOverrides).length > 0 ? supabase.syncVoucherOverrides(voucherOverrides, company) : Promise.resolve() },
     ];
 
     const results = await Promise.allSettled(syncTasks.map(t => t.promise));
@@ -336,6 +338,7 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
       itemNotesCount: Object.keys(itemNotes).length,
       callingListCount: callingList.length,
       tallyPriceListImportsCount: Object.keys(tallyPriceListImports).length,
+      voucherOverridesCount: Object.keys(voucherOverrides).length,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (e: any) {
