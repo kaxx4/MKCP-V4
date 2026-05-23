@@ -7,6 +7,9 @@ import { useNotesStore } from '../store/notesStore';
 import { useCallingListStore } from '../store/callingListStore';
 import { useTallyPriceListStore } from '../store/tallyPriceListStore';
 import { useCalendarStore } from '../store/calendarStore';
+import { useUIStore } from '../store/uiStore';
+import { useTallyStore } from '../store/tallyStore';
+import { useOrderStore } from '../store/orderStore';
 
 const DEFAULT_COMPANY = 'M.K.CYCLES (P) LTD.';
 const SERVER_URL = 'http://localhost:3100/api/supabase/sync-config';
@@ -25,6 +28,8 @@ export interface SyncResult {
     callingList: number;
     tallyPriceListImports: number;
     voucherOverrides: number;
+    appSettings: number;
+    orderDraftLines: number;
   };
   errors?: string[];
   message?: string;
@@ -47,6 +52,34 @@ function buildSyncPayload(company: string = DEFAULT_COMPANY) {
   const tallyPriceList = useTallyPriceListStore.getState().entries;
   const tallyPriceListImportedAt = useTallyPriceListStore.getState().importedAt;
   const voucherOverrides = useCalendarStore.getState().overrides;
+
+  // User preferences (uiStore) + Tally connection config (tallyStore).
+  // Flattened into a single app_settings key/value bag so the schema doesn't
+  // need to change every time a new pref is added.
+  const ui = useUIStore.getState();
+  const tally = useTallyStore.getState();
+  const appSettings: Record<string, any> = {
+    unitMode: ui.unitMode,
+    fyYear: ui.fyYear,
+    coverMonths: ui.coverMonths,
+    leadTimeMonths: ui.leadTimeMonths,
+    defaultCreditDays: ui.defaultCreditDays,
+    sidebarOpen: ui.sidebarOpen,
+    tallyProxyUrl: tally.proxyUrl,
+    tallyCompanyName: tally.companyName,
+    tallyAutoSyncMinutes: tally.autoSyncMinutes,
+    tallyFyFromDate: tally.fyFromDate,
+    tallyFyToDate: tally.fyToDate,
+    tallySyncMode: tally.syncMode,
+    tallyLastSyncAt: tally.lastSyncAt,
+    tallyLastMastersSyncAt: tally.lastMastersSyncAt,
+    tallyLastVouchersSyncAt: tally.lastVouchersSyncAt,
+    tallyLastVoucherDate: tally.lastVoucherDate,
+  };
+
+  // Current order draft (orderStore.lines) — user-typed quantities not yet
+  // saved as a named order group. Replace strategy on the cloud side.
+  const orderDraftLines = Object.values(useOrderStore.getState().lines);
 
   // discountStore.categories is DiscountCategory[] = Array<{id, name, tiers}>
   // Map tiers to JSONB conditions field. Use category.id as both id and category.
@@ -84,6 +117,8 @@ function buildSyncPayload(company: string = DEFAULT_COMPANY) {
     tallyPriceListImports: tallyPriceList || {},
     tallyPriceListImportedAt: tallyPriceListImportedAt,
     voucherOverrides: voucherOverrides || {},
+    appSettings,
+    orderDraftLines,
   };
 }
 
@@ -124,6 +159,8 @@ export async function syncConfigToSupabase(company: string = DEFAULT_COMPANY): P
         callingList: result.callingListCount || 0,
         tallyPriceListImports: result.tallyPriceListImportsCount || 0,
         voucherOverrides: result.voucherOverridesCount || 0,
+        appSettings: result.appSettingsCount || 0,
+        orderDraftLines: result.orderDraftLinesCount || 0,
       },
       errors: result.errors,
       message: result.message,
@@ -150,6 +187,8 @@ function emptyCounts() {
     callingList: 0,
     tallyPriceListImports: 0,
     voucherOverrides: 0,
+    appSettings: 0,
+    orderDraftLines: 0,
   };
 }
 
@@ -190,6 +229,22 @@ export function useSupabaseConfigSync(company: string = DEFAULT_COMPANY) {
   const tallyPriceListImportedAt = useTallyPriceListStore((s) => s.importedAt);
   const voucherOverrides = useCalendarStore((s) => s.overrides);
 
+  // uiStore prefs — these are user-edited via Settings page
+  const unitMode = useUIStore((s) => s.unitMode);
+  const fyYear = useUIStore((s) => s.fyYear);
+  const coverMonths = useUIStore((s) => s.coverMonths);
+  const leadTimeMonths = useUIStore((s) => s.leadTimeMonths);
+  const defaultCreditDays = useUIStore((s) => s.defaultCreditDays);
+
+  // tallyStore prefs — proxy URL, FY dates, sync mode (user-edited in Settings)
+  const tallyProxyUrl = useTallyStore((s) => s.proxyUrl);
+  const tallyFyFromDate = useTallyStore((s) => s.fyFromDate);
+  const tallyFyToDate = useTallyStore((s) => s.fyToDate);
+  const tallySyncMode = useTallyStore((s) => s.syncMode);
+
+  // orderStore — current order draft lines
+  const orderDraftLines = useOrderStore((s) => s.lines);
+
   useEffect(() => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
@@ -222,6 +277,16 @@ export function useSupabaseConfigSync(company: string = DEFAULT_COMPANY) {
     tallyPriceList,
     tallyPriceListImportedAt,
     voucherOverrides,
+    unitMode,
+    fyYear,
+    coverMonths,
+    leadTimeMonths,
+    defaultCreditDays,
+    tallyProxyUrl,
+    tallyFyFromDate,
+    tallyFyToDate,
+    tallySyncMode,
+    orderDraftLines,
     company,
   ]);
 
