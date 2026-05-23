@@ -511,6 +511,9 @@ export default function Settings() {
                   <span>Price list imports: <b className="text-primary tabular-nums">{lastSyncResult.counts.tallyPriceListImports}</b></span>
                   <span>Item notes: <b className="text-primary tabular-nums">{lastSyncResult.counts.itemNotes}</b></span>
                   <span>Calling list: <b className="text-primary tabular-nums">{lastSyncResult.counts.callingList}</b></span>
+                  <span>Voucher overrides: <b className="text-primary tabular-nums">{lastSyncResult.counts.voucherOverrides}</b></span>
+                  <span>App settings: <b className="text-primary tabular-nums">{lastSyncResult.counts.appSettings}</b></span>
+                  <span>Order draft lines: <b className="text-primary tabular-nums">{lastSyncResult.counts.orderDraftLines}</b></span>
                 </div>
               )}
               {lastSyncResult.errors && lastSyncResult.errors.length > 0 && (
