@@ -1,12 +1,22 @@
 /**
- * Service to initialize order groups from vendor groups on app startup
- * Creates 16 order groups (one per vendor group) and assigns items to them
+ * Service to initialize order groups on app startup.
+ *
+ * On first run (or after a full reset), seeds order groups from
+ * `src/data/defaultOrderGroups.json` — 19 groups with their itemIds,
+ * originally exported from the dashboard's Order Groups → Export on 2026-05-23.
+ *
+ * Once any groups exist, this is a no-op. The user retains full CRUD
+ * (create / rename / delete / add items / remove items) via the Orders page
+ * and the Import / Export JSON flow.
+ *
+ * To change defaults: re-export from the UI and overwrite the JSON.
  */
 
 import { useOrderGroupStore } from '../store/orderGroupStore';
 import { useVendorGroupStore } from '../store/vendorGroupStore';
 import { getAllVendorGroups } from '../data/vendorGroups';
 import type { CanonicalItem } from '../types/canonical';
+import defaultOrderGroupsJson from '../data/defaultOrderGroups.json';
 
 // Color mapping for order groups (matches vendor groups theme)
 const VENDOR_GROUP_COLORS: Record<string, string> = {
@@ -50,40 +60,42 @@ export function initializeOrderGroups(items: CanonicalItem[] | undefined): void 
     return;
   }
 
-  // Get vendor groups
-  const vendorGroups = getAllVendorGroups();
-  const vendorGroupAssignments = vendorGroupStore.assignments;
+  // Build a set of imported itemIds so we only assign items that actually exist
+  // in the current Tally dataset (avoids cluttering groups with stale names).
+  const knownItemIds = new Set(items.map((i) => i.itemId));
 
-  // Create order group for each vendor group
-  const groupIds: Record<string, string> = {};
-
-  vendorGroups.forEach((vendorGroup) => {
+  // Seed from defaultOrderGroups.json. Each group entry has a stable
+  // grp_default_* id, name, description, color, tags, and a list of itemIds.
+  // We use createGroup so the store generates a fresh runtime id; the JSON's
+  // `id` field is just for traceability in the source file.
+  for (const seed of defaultOrderGroupsJson.groups) {
     const groupId = orderGroupStore.createGroup(
-      vendorGroup.name,
-      vendorGroup.description,
-      VENDOR_GROUP_COLORS[vendorGroup.id],
-      [vendorGroup.id] // Tag with vendor group ID
+      seed.name,
+      seed.description,
+      seed.color,
+      seed.tags ?? []
     );
-    groupIds[vendorGroup.id] = groupId;
-  });
-
-  // Assign items to order groups
-  items.forEach((item) => {
-    const vendorGroupId = vendorGroupAssignments[item.itemId];
-    if (vendorGroupId && groupIds[vendorGroupId]) {
-      const orderGroupId = groupIds[vendorGroupId];
-      orderGroupStore.assignItemToGroup(orderGroupId, item.itemId);
+    for (const itemId of seed.itemIds ?? []) {
+      // Skip items that don't exist in current Tally dataset (defensive)
+      if (knownItemIds.has(itemId)) {
+        orderGroupStore.assignItemToGroup(groupId, itemId);
+      }
     }
-  });
+  }
 
   // Log summary
   const allGroups = orderGroupStore.getAllGroups();
   const groupsWithItems = allGroups.filter((g) => (g.itemIds?.length ?? 0) > 0);
 
-  console.log(`[OrderGroups] ✓ Created ${allGroups.length} order groups`);
+  console.log(`[OrderGroups] ✓ Seeded ${allGroups.length} default order groups`);
   groupsWithItems.forEach((group) => {
     console.log(`  - ${group.name}: ${group.itemIds?.length ?? 0} items`);
   });
+
+  // Silence unused-warning for legacy color map + vendor groups
+  void VENDOR_GROUP_COLORS;
+  void getAllVendorGroups;
+  void vendorGroupStore;
 }
 
 /**

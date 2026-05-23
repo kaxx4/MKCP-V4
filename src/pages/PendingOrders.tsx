@@ -67,7 +67,10 @@ function computeReadiness(
     const ref = line.itemId ? (priceList.get(line.itemId) ?? 0) : 0;
     if (ref > 0 && !priceMatches(rate, ref)) allPricesMatch = false;
   }
-  return { allInStock, allPricesMatch, ready: allInStock && allPricesMatch };
+  // Ready-to-deliver criterion: ALL items in stock. Price-match is informational
+  // only — a DN can ship even if billed rates differ from the price list.
+  // (Was: ready = allInStock && allPricesMatch — relaxed 2026-05-23 per user.)
+  return { allInStock, allPricesMatch, ready: allInStock };
 }
 
 export default function PendingOrders() {
@@ -217,15 +220,19 @@ function DNModal({ voucher, data, voucherIndex, priceList, stockCache, onClose }
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-success/10 text-success-600 text-xs font-semibold border border-success/20">
                 <PackageCheck size={14} className="flex-shrink-0" />
                 <span>Ready to Deliver</span>
+                {!allPricesMatch && (
+                  <span
+                    className="ml-1 px-1.5 py-0.5 rounded bg-warn/10 text-warn-700 text-[10px] font-medium"
+                    title="All items in stock — but billed rates differ from the price list"
+                  >
+                    rate Δ
+                  </span>
+                )}
               </div>
             ) : (
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-100 text-neutral-700 text-xs font-medium border border-neutral-200">
                 <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-warn-500" />
-                <span>
-                  {!allInStock && "Stock issues"}
-                  {!allInStock && !allPricesMatch && " · "}
-                  {!allPricesMatch && "Price mismatch"}
-                </span>
+                <span>Stock issues</span>
               </div>
             )}
             <button onClick={onClose} className="btn-icon flex-shrink-0" aria-label="Close delivery note">

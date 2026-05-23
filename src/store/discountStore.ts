@@ -9,7 +9,10 @@ import {
 
 // Bump this whenever DEFAULT_DISCOUNT_CATEGORIES or DEFAULT_ITEM_CATEGORY_MAP change
 // so existing persisted data is automatically migrated to the new defaults.
-const SCHEMA_VERSION = 2;
+// Bumped to 3 on 2026-05-23 when DEFAULT_DISCOUNT_CATEGORIES + ITEM_CATEGORY_MAP
+// were re-seeded from src/data/discountDefaults.json. The onRehydrateStorage
+// migration preserves user overrides (itemCategoryOverrides + categoryColors).
+const SCHEMA_VERSION = 3;
 
 interface DiscountStore {
   _schemaVersion: number;
