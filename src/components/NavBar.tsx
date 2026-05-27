@@ -23,10 +23,13 @@ import {
   Terminal,
   CalendarDays,
   Activity,
+  Cloud,
+  CloudOff,
 } from "lucide-react";
 import { useUIStore } from "../store/uiStore";
 import { useTallyStore } from "../store/tallyStore";
 import { useDataStore } from "../store/dataStore";
+import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
 import { syncDayBook } from "../api/tallyApi";
 import { parseTransactions } from "../parser/transactionParser";
 import { saveData, loadData, createBackup } from "../db/idb";
@@ -72,6 +75,97 @@ const MOBILE_OVERFLOW = NAV_ITEMS.slice(5).sort((a, b) => {
   if (b.path === "/reports") return 1;
   return 0;
 });
+
+/**
+ * Surfaces the rollup state of the three Supabase push channels (config,
+ * masters, vouchers). Click → /settings.
+ *
+ *   • Green Cloud — all three last attempts succeeded (or never attempted yet)
+ *   • Amber Cloud — a retry is currently scheduled (transient failure, will retry in <60s)
+ *   • Red CloudOff — last attempt of at least one channel failed and no retry queued
+ *
+ * Reads via granular selectors so the component only re-renders when the rollup
+ * actually changes, not on every status mutation.
+ */
+function CloudSyncIndicator({ compact = false }: { compact?: boolean }) {
+  const config = useSupabaseSyncStatusStore((s) => s.config);
+  const masters = useSupabaseSyncStatusStore((s) => s.masters);
+  const vouchers = useSupabaseSyncStatusStore((s) => s.vouchers);
+
+  const anyFailed = config.success === false || masters.success === false || vouchers.success === false;
+  const anyRetrying = config.retryScheduled || masters.retryScheduled || vouchers.retryScheduled;
+  const everAttempted = !!(config.lastAt || masters.lastAt || vouchers.lastAt);
+
+  // Pick the most recent attempt timestamp for the tooltip
+  const latestAt = [config.lastAt, masters.lastAt, vouchers.lastAt]
+    .filter(Boolean)
+    .sort()
+    .pop();
+  const latestRelative = latestAt ? formatRelative(latestAt) : "never";
+
+  const failedChannels = [
+    config.success === false ? `config (${config.error ?? "failed"})` : null,
+    masters.success === false ? `masters (${masters.error ?? "failed"})` : null,
+    vouchers.success === false ? `vouchers (${vouchers.error ?? "failed"})` : null,
+  ].filter(Boolean) as string[];
+
+  const state: "ok" | "retry" | "fail" | "idle" =
+    anyRetrying ? "retry" : anyFailed ? "fail" : everAttempted ? "ok" : "idle";
+
+  const tone =
+    state === "ok" ? "text-success-600"
+    : state === "retry" ? "text-warn-600"
+    : state === "fail" ? "text-danger-600"
+    : "text-neutral-400";
+
+  const label =
+    state === "ok" ? "Cloud sync OK"
+    : state === "retry" ? "Cloud retry pending"
+    : state === "fail" ? "Cloud sync failed"
+    : "Not synced yet";
+
+  const Icon = state === "fail" ? CloudOff : Cloud;
+
+  const title =
+    state === "fail"
+      ? `Last push had errors:\n${failedChannels.join("\n")}\nLast attempt: ${latestRelative}`
+      : state === "retry"
+      ? `Retry scheduled within 60s. Last attempt: ${latestRelative}`
+      : state === "ok"
+      ? `All three channels OK. Last push: ${latestRelative}`
+      : "Auto-push has not run yet";
+
+  return (
+    <NavLink
+      to="/settings"
+      title={title}
+      aria-label={label}
+      className={clsx(
+        "flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-[background-color,color,transform] duration-150 border min-h-10 active:scale-[0.96]",
+        COLORS.hover,
+        COLORS.border,
+        compact && "w-full"
+      )}
+    >
+      <Icon size={14} className={clsx("flex-shrink-0", tone, state === "retry" && "animate-pulse")} />
+      <div className="flex flex-col min-w-0">
+        <span className={clsx("text-xs font-medium truncate", tone)}>{label}</span>
+        <span className={clsx("text-2xs truncate", COLORS.text.secondary)}>{latestRelative}</span>
+      </div>
+    </NavLink>
+  );
+}
+
+function formatRelative(iso: string | null): string {
+  if (!iso) return "never";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return "just now";
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
 
 export function NavBar() {
   const { sidebarOpen, setSidebarOpen, isMobile } = useUIStore();
@@ -229,6 +323,8 @@ export function NavBar() {
                   {lastSyncAt && <span className={clsx("text-2xs", COLORS.text.secondary)}>Last sync: {formatLastSync()}</span>}
                 </div>
               </div>
+
+              <CloudSyncIndicator compact />
             </div>
           </div>
         )}
@@ -310,7 +406,7 @@ export function NavBar() {
       </div>
 
       {/* Tally Connection Status */}
-      <div className="px-2 pb-2">
+      <div className="px-2 pb-1">
         <NavLink
           to="/import"
           className={clsx("flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-[background-color,color,transform] duration-150 border min-h-10 active:scale-[0.96]", COLORS.hover, COLORS.border)}
@@ -331,6 +427,13 @@ export function NavBar() {
           )}
         </NavLink>
       </div>
+
+      {/* Cloud Sync (Supabase auto-push health) */}
+      {sidebarOpen && (
+        <div className="px-2 pb-2">
+          <CloudSyncIndicator />
+        </div>
+      )}
 
       {/* Collapse toggle */}
       <button

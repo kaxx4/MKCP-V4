@@ -11,6 +11,7 @@ import { exportUnitsToExcel, importUnitsFromExcel } from "../utils/unitExcelHand
 import { deserializeParsedData } from "../utils/serialize";
 import { checkTallyHealth } from "../api/tallyApi";
 import { syncConfigToSupabase, type SyncResult } from "../hooks/useSupabaseConfigSync";
+import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
 
 export default function Settings() {
   const { unitMode, toggleUnitMode, fyYear, setFyYear, coverMonths, setCoverMonths, leadTimeMonths, setLeadTimeMonths, defaultCreditDays, setDefaultCreditDays } = useUIStore();
@@ -71,6 +72,21 @@ export default function Settings() {
 
       const configOk = configResult.status === "fulfilled" && configResult.value.success;
       const voucherOk = voucherResp.status === "fulfilled";
+
+      // Record masters/vouchers status so the NavBar Cloud Sync pill reflects
+      // a manual Push EVERYTHING the same way auto-pushes do. config status is
+      // already recorded inside syncConfigToSupabase().
+      const statusStore = useSupabaseSyncStatusStore.getState();
+      if (voucherOk) {
+        statusStore.recordResult("masters", true);
+        statusStore.recordResult("vouchers", true);
+      } else {
+        const errMsg = voucherResp.status === "rejected"
+          ? (voucherResp.reason?.message || String(voucherResp.reason))
+          : "Unknown voucher push error";
+        statusStore.recordResult("masters", false, errMsg);
+        statusStore.recordResult("vouchers", false, errMsg);
+      }
 
       if (configResult.status === "fulfilled") {
         setLastSyncResult(configResult.value);
@@ -508,6 +524,7 @@ export default function Settings() {
                   <span>Vendor assignments: <b className="text-primary tabular-nums">{lastSyncResult.counts.vendorGroupAssignments}</b></span>
                   <span>Unit overrides: <b className="text-primary tabular-nums">{lastSyncResult.counts.unitOverrides}</b></span>
                   <span>Rate overrides: <b className="text-primary tabular-nums">{lastSyncResult.counts.rateOverrides}</b></span>
+                  <span>GST overrides: <b className="text-primary tabular-nums">{lastSyncResult.counts.gstOverrides}</b></span>
                   <span>Price list imports: <b className="text-primary tabular-nums">{lastSyncResult.counts.tallyPriceListImports}</b></span>
                   <span>Item notes: <b className="text-primary tabular-nums">{lastSyncResult.counts.itemNotes}</b></span>
                   <span>Calling list: <b className="text-primary tabular-nums">{lastSyncResult.counts.callingList}</b></span>

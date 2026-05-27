@@ -149,6 +149,7 @@ export class SupabaseSync {
       const msg = `[Supabase] Masters sync error: ${e.message}`;
       console.error(msg);
       await this.logSyncHistory(company, "masters", t0, null, [msg], false);
+      throw e;
     }
   }
 
@@ -266,6 +267,7 @@ export class SupabaseSync {
       const msg = `[Supabase] Vouchers sync error: ${e.message}`;
       console.error(msg);
       await this.logSyncHistory(company, "vouchers", t0, null, [msg], false);
+      throw e;
     }
   }
 
@@ -294,6 +296,47 @@ export class SupabaseSync {
       });
     } catch (e: any) {
       console.error(`[Supabase] Failed to log sync history: ${e.message}`);
+    }
+  }
+
+  /**
+   * Propagate local deletes to Supabase by removing cloud rows whose unique
+   * key is NOT in the list the client just pushed.
+   *
+   * Safety:
+   *   • Empty `validKeys` is a no-op — protects against a partially-hydrated
+   *     store accidentally wiping a populated cloud.
+   *   • Database function additionally allowlists (table, keyCol) — see
+   *     migration 010_orphan_cleanup_function.sql.
+   *   • Failures are logged but never thrown — orphan cleanup is best-effort.
+   *     The push itself has already succeeded; stale cloud rows are a smaller
+   *     problem than a 500 on the whole sync.
+   */
+  private async deleteOrphans(
+    table: string,
+    company: string,
+    keyCol: string,
+    validKeys: string[]
+  ): Promise<void> {
+    if (!this.client) return;
+    if (!validKeys || validKeys.length === 0) return;
+    try {
+      const { data, error } = await this.client.rpc("delete_orphans", {
+        p_table: table,
+        p_company: company,
+        p_key_col: keyCol,
+        p_valid_keys: validKeys,
+      });
+      if (error) {
+        // Most likely cause: migration 010 not applied yet. Log + continue.
+        console.warn(`[Supabase] Orphan cleanup skipped for ${table}: ${error.message}`);
+        return;
+      }
+      if (typeof data === "number" && data > 0) {
+        console.log(`[Supabase] ⌫ Cleaned ${data} orphan rows from ${table}`);
+      }
+    } catch (e: any) {
+      console.warn(`[Supabase] Orphan cleanup error in ${table}: ${e?.message || e}`);
     }
   }
 
@@ -518,6 +561,7 @@ export class SupabaseSync {
 
       // discount_rules has PRIMARY KEY (id) — onConflict must match a unique constraint
       await this.upsertBatch("discount_rules", mapped, "id");
+      await this.deleteOrphans("discount_rules", company, "id", mapped.map(r => r.id));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} discount rules (${elapsed}s)`);
     } catch (e: any) {
@@ -552,6 +596,7 @@ export class SupabaseSync {
         const batch = mapped.slice(i, i + BATCH);
         await this.upsertBatch("order_groups", batch, "id");
       }
+      await this.deleteOrphans("order_groups", company, "id", mapped.map(r => r.id));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} order groups (${elapsed}s)`);
     } catch (e: any) {
@@ -583,10 +628,40 @@ export class SupabaseSync {
         const batch = mapped.slice(i, i + BATCH);
         await this.upsertBatch("unit_overrides", batch, "company,item_id");
       }
+      await this.deleteOrphans("unit_overrides", company, "item_id", mapped.map(r => r.item_id));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} unit overrides (${elapsed}s)`);
     } catch (e: any) {
       console.error(`[Supabase] Unit overrides sync failed: ${e.message}`);
+      throw e;
+    }
+  }
+
+  async syncGstOverrides(overrides: Record<string, any>, company: string): Promise<void> {
+    if (!this.client) return;
+    if (!overrides || Object.keys(overrides).length === 0) return;
+
+    const t0 = Date.now();
+    try {
+      const mapped = Object.values(overrides).map((ov: any) => ({
+        item_id: ov.itemId,
+        company,
+        gst_pct: ov.gstPct,
+        updated_at: ov.updatedAt || new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      }));
+
+      // gst_overrides has UNIQUE(company, item_id)
+      const BATCH = 200;
+      for (let i = 0; i < mapped.length; i += BATCH) {
+        const batch = mapped.slice(i, i + BATCH);
+        await this.upsertBatch("gst_overrides", batch, "company,item_id");
+      }
+      await this.deleteOrphans("gst_overrides", company, "item_id", mapped.map(r => r.item_id));
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[Supabase] ✓ Synced ${mapped.length} GST overrides (${elapsed}s)`);
+    } catch (e: any) {
+      console.error(`[Supabase] GST overrides sync failed: ${e.message}`);
       throw e;
     }
   }
@@ -612,6 +687,7 @@ export class SupabaseSync {
         const batch = mapped.slice(i, i + BATCH);
         await this.upsertBatch("rate_overrides", batch, "company,item_id");
       }
+      await this.deleteOrphans("rate_overrides", company, "item_id", mapped.map(r => r.item_id));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} rate overrides (${elapsed}s)`);
     } catch (e: any) {
@@ -642,6 +718,7 @@ export class SupabaseSync {
         });
         if (error) throw new Error(error.message);
       }
+      await this.deleteOrphans("item_category_overrides", company, "item_id", mapped.map(r => r.item_id));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} item category overrides (${elapsed}s)`);
     } catch (e: any) {
@@ -672,6 +749,7 @@ export class SupabaseSync {
         });
         if (error) throw new Error(error.message);
       }
+      await this.deleteOrphans("category_colors", company, "category_id", mapped.map(r => r.category_id));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} category colors (${elapsed}s)`);
     } catch (e: any) {
@@ -702,6 +780,7 @@ export class SupabaseSync {
         });
         if (error) throw new Error(error.message);
       }
+      await this.deleteOrphans("vendor_group_assignments", company, "item_id", mapped.map(r => r.item_id));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} vendor group assignments (${elapsed}s)`);
     } catch (e: any) {
@@ -736,6 +815,7 @@ export class SupabaseSync {
         });
         if (error) throw new Error(error.message);
       }
+      await this.deleteOrphans("item_notes", company, "item_id", mapped.map(r => r.item_id));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} item notes (${elapsed}s)`);
     } catch (e: any) {
@@ -772,6 +852,7 @@ export class SupabaseSync {
         });
         if (error) throw new Error(error.message);
       }
+      await this.deleteOrphans("calling_list_entries", company, "party_ledger_id", mapped.map(r => r.party_ledger_id));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} calling list entries (${elapsed}s)`);
     } catch (e: any) {
@@ -805,6 +886,7 @@ export class SupabaseSync {
         });
         if (error) throw new Error(error.message);
       }
+      await this.deleteOrphans("tally_price_list_imports", company, "item_name", mapped.map(r => r.item_name));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} tally price list imports (${elapsed}s)`);
     } catch (e: any) {
@@ -906,6 +988,7 @@ export class SupabaseSync {
         });
         if (error) throw new Error(error.message);
       }
+      await this.deleteOrphans("voucher_overrides", company, "voucher_id", mapped.map(r => r.voucher_id));
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} voucher overrides (${elapsed}s)`);
     } catch (e: any) {
