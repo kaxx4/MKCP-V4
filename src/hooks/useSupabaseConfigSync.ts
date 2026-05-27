@@ -10,6 +10,7 @@ import { useCalendarStore } from '../store/calendarStore';
 import { useUIStore } from '../store/uiStore';
 import { useTallyStore } from '../store/tallyStore';
 import { useOrderStore } from '../store/orderStore';
+import { useSupabaseSyncStatusStore } from '../store/supabaseSyncStatusStore';
 
 const DEFAULT_COMPANY = 'M.K.CYCLES (P) LTD.';
 const SERVER_URL = 'http://localhost:3100/api/supabase/sync-config';
@@ -21,6 +22,7 @@ export interface SyncResult {
     orderGroups: number;
     unitOverrides: number;
     rateOverrides: number;
+    gstOverrides: number;
     itemCategoryOverrides: number;
     categoryColors: number;
     vendorGroupAssignments: number;
@@ -46,6 +48,7 @@ function buildSyncPayload(company: string = DEFAULT_COMPANY) {
   const orderGroups = useOrderGroupStore.getState().groups;
   const unitOverrides = useOverrideStore.getState().units;
   const rateOverrides = useOverrideStore.getState().rates;
+  const gstOverrides = useOverrideStore.getState().gstRates;
   const vendorGroupAssignments = useVendorGroupStore.getState().assignments;
   const itemNotes = useNotesStore.getState().notes;
   const callingList = useCallingListStore.getState().entries;
@@ -109,6 +112,7 @@ function buildSyncPayload(company: string = DEFAULT_COMPANY) {
     orderGroups: orderGroupsArray,
     unitOverrides: unitOverrides || {},
     rateOverrides: rateOverridesArray,
+    gstOverrides: gstOverrides || {},
     itemCategoryOverrides: itemCategoryOverrides || {},
     categoryColors: categoryColors || {},
     vendorGroupAssignments: vendorGroupAssignments || {},
@@ -127,6 +131,7 @@ function buildSyncPayload(company: string = DEFAULT_COMPANY) {
  * Used by the "Push to Supabase Now" button in Settings.
  */
 export async function syncConfigToSupabase(company: string = DEFAULT_COMPANY): Promise<SyncResult> {
+  const status = useSupabaseSyncStatusStore.getState();
   try {
     const payload = buildSyncPayload(company);
     const response = await fetch(SERVER_URL, {
@@ -137,14 +142,25 @@ export async function syncConfigToSupabase(company: string = DEFAULT_COMPANY): P
 
     if (!response.ok) {
       const err = await response.text();
+      const errMsg = err || `HTTP ${response.status}`;
+      status.recordResult('config', false, errMsg);
       return {
         success: false,
         counts: emptyCounts(),
-        errors: [err || `HTTP ${response.status}`],
+        errors: [errMsg],
       };
     }
 
     const result = await response.json();
+    // Per-table errors from /api/supabase/sync-config are surfaced in result.errors.
+    // If any table failed, mark the channel as failed so the NavBar indicator + retry
+    // schedule kick in.
+    const hadPerTableErrors = Array.isArray(result.errors) && result.errors.length > 0;
+    status.recordResult(
+      'config',
+      !hadPerTableErrors,
+      hadPerTableErrors ? result.errors.join(' | ') : null,
+    );
     return {
       success: true,
       counts: {
@@ -152,6 +168,7 @@ export async function syncConfigToSupabase(company: string = DEFAULT_COMPANY): P
         orderGroups: result.orderGroupsCount || 0,
         unitOverrides: result.unitOverridesCount || 0,
         rateOverrides: result.rateOverridesCount || 0,
+        gstOverrides: result.gstOverridesCount || 0,
         itemCategoryOverrides: result.itemCategoryOverridesCount || 0,
         categoryColors: result.categoryColorsCount || 0,
         vendorGroupAssignments: result.vendorGroupAssignmentsCount || 0,
@@ -166,10 +183,12 @@ export async function syncConfigToSupabase(company: string = DEFAULT_COMPANY): P
       message: result.message,
     };
   } catch (err: any) {
+    const errMsg = err?.message || String(err);
+    status.recordResult('config', false, errMsg);
     return {
       success: false,
       counts: emptyCounts(),
-      errors: [err?.message || String(err)],
+      errors: [errMsg],
     };
   }
 }
@@ -180,6 +199,7 @@ function emptyCounts() {
     orderGroups: 0,
     unitOverrides: 0,
     rateOverrides: 0,
+    gstOverrides: 0,
     itemCategoryOverrides: 0,
     categoryColors: 0,
     vendorGroupAssignments: 0,
@@ -222,6 +242,7 @@ export function useSupabaseConfigSync(company: string = DEFAULT_COMPANY) {
   const orderGroups = useOrderGroupStore((s) => s.groups);
   const unitOverrides = useOverrideStore((s) => s.units);
   const rateOverrides = useOverrideStore((s) => s.rates);
+  const gstOverrides = useOverrideStore((s) => s.gstRates);
   const vendorGroupAssignments = useVendorGroupStore((s) => s.assignments);
   const itemNotes = useNotesStore((s) => s.notes);
   const callingList = useCallingListStore((s) => s.entries);
@@ -271,6 +292,7 @@ export function useSupabaseConfigSync(company: string = DEFAULT_COMPANY) {
     orderGroups,
     unitOverrides,
     rateOverrides,
+    gstOverrides,
     vendorGroupAssignments,
     itemNotes,
     callingList,

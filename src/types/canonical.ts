@@ -146,8 +146,14 @@ export interface RateOverride {
   updatedAt: string;
 }
 
+export interface GstOverride {
+  itemId: string;
+  gstPct: number;       // user-set GST % (0..28 typical); overrides master + inference
+  updatedAt: string;
+}
+
 export interface AuditEntry {
-  type: "rate_update" | "unit_override" | "master_edit" | "import" | "system";
+  type: "rate_update" | "unit_override" | "gst_override" | "master_edit" | "import" | "system";
   itemId?: string;
   ledgerId?: string;
   oldValue?: unknown;
