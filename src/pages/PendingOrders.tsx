@@ -231,7 +231,7 @@ function DNModal({ voucher, data, voucherIndex, priceList, stockCache, onClose }
               </div>
             ) : (
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-100 text-neutral-700 text-xs font-medium border border-neutral-200">
-                <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-warn-500" />
+                <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-warn" />
                 <span>Stock issues</span>
               </div>
             )}

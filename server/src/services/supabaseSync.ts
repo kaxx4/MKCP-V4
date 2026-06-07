@@ -319,13 +319,19 @@ export class SupabaseSync {
     validKeys: string[]
   ): Promise<void> {
     if (!this.client) return;
-    if (!validKeys || validKeys.length === 0) return;
+    // Defensive filter: a single null/undefined/empty key in the array would
+    // poison the DB-side `<>ALL($2)` comparison (NULL propagation) and quietly
+    // skip the cleanup. Strip them client-side so the cleanup is reliable.
+    const clean = (validKeys || []).filter(
+      (k): k is string => typeof k === "string" && k.length > 0
+    );
+    if (clean.length === 0) return;
     try {
       const { data, error } = await this.client.rpc("delete_orphans", {
         p_table: table,
         p_company: company,
         p_key_col: keyCol,
-        p_valid_keys: validKeys,
+        p_valid_keys: clean,
       });
       if (error) {
         // Most likely cause: migration 010 not applied yet. Log + continue.

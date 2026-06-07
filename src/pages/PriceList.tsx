@@ -415,7 +415,7 @@ export default function PriceList() {
                             }}
                             onBlur={commitGstEdit}
                             onClick={(e) => e.stopPropagation()}
-                            className="w-16 px-2 py-0.5 text-sm font-bold tabular-nums text-right border-2 border-accent-500 rounded-md focus:outline-none focus:ring-2 focus:ring-accent-500/30 bg-white"
+                            className="w-16 px-2 py-0.5 text-sm font-bold tabular-nums text-right border-2 border-accent rounded-md focus:outline-none focus:ring-2 focus:ring-accent/30 bg-white"
                             aria-label={`Edit GST rate for ${row.name}`}
                           />
                           <span className="text-sm font-bold text-slate-600">%</span>
