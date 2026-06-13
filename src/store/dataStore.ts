@@ -36,6 +36,13 @@ interface DataState {
   partyStats: PartyStats[] | null;
   setData: (d: ParsedData) => void;
   mergeData: (d: ParsedData) => void;
+  /** Replace the Delivery Note vouchers in [fromISO, toISO] with the freshly-pulled set:
+   *  drop every existing in-window DN, then re-add only the Delivery Notes from
+   *  `freshVouchers` (other voucher types in the pull are ignored — full/day-book syncs
+   *  own those). Used by the DN refresh so fulfilled/cancelled DNs that vanished from
+   *  Tally drop off Pending Orders (plain mergeData never removes stale vouchers).
+   *  Falls back to a merge if no data exists yet. */
+  replaceDeliveryNotesInRange: (freshVouchers: CanonicalVoucher[], fromISO: string, toISO: string) => void;
   clearData: () => void;
   refreshOverrides: () => void; // Apply current overrides to raw data
 }
@@ -342,5 +349,62 @@ export const useDataStore = create<DataState>((set, get) => ({
     } else {
       setTimeout(deferredPredictions, 100);
     }
+  },
+
+  replaceDeliveryNotesInRange: (freshVouchers, fromISO, toISO) => {
+    const cur = get().rawData;
+    // No existing dataset — fall back to a plain merge (nothing to "replace" against).
+    if (!cur) {
+      get().mergeData({
+        company: null,
+        items: new Map(),
+        ledgers: new Map(),
+        vouchers: freshVouchers,
+        importedAt: new Date().toISOString(),
+        sourceFiles: ["delivery-note-refresh"],
+        warnings: [],
+      });
+      return;
+    }
+
+    const vMap = new Map<string, CanonicalVoucher>();
+    let droppedInRange = 0;
+    for (const v of cur.vouchers) {
+      // Drop existing in-window Delivery Notes — the fresh pull is authoritative for
+      // this window, so any DN no longer present in Tally must disappear here.
+      if (v.voucherType === "Delivery Note" && v.date >= fromISO && v.date <= toISO) {
+        droppedInRange++;
+        continue;
+      }
+      vMap.set(v.voucherId, v);
+    }
+    // Re-add ONLY the freshly pulled Delivery Notes, overwriting by voucherId. We
+    // deliberately ignore other voucher types in the pull: this is a DN-scoped refresh,
+    // and the full/day-book syncs own Sales/Purchase/Receipt/Payment — overwriting those
+    // here with a 90-day day-book chunk could clobber more-complete data.
+    let freshDN = 0;
+    for (const v of freshVouchers) {
+      if (v.voucherType !== "Delivery Note") continue;
+      freshDN++;
+      vMap.set(v.voucherId, v);
+    }
+
+    const allVouchers = Array.from(vMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+    const rebuilt: ParsedData = {
+      ...cur,
+      vouchers: allVouchers,
+      importedAt: new Date().toISOString(),
+      sourceFiles: [...new Set([...cur.sourceFiles, "delivery-note-refresh"])],
+      warnings: [
+        ...cur.warnings,
+        {
+          severity: "info",
+          context: "dn-refresh",
+          message: `Delivery-note refresh: replaced ${droppedInRange} in-window DN(s) with ${freshDN} from Tally`,
+        },
+      ],
+    };
+    get().setData(rebuilt);
   },
 }));
