@@ -322,8 +322,17 @@ export default function DiscountRules() {
       showMsg("err", "Invalid file: missing categories");
       return;
     }
-    setLocalCats(data.categories);
-    setLocalOverrides(data.itemCategoryOverrides ?? {});
+    // Merge by category id — overwrite existing, append new, keep local-only ones
+    setLocalCats((prev) => {
+      const incomingById = new Map(data.categories.map((c) => [c.id, c]));
+      const merged = prev.map((c) => incomingById.has(c.id) ? incomingById.get(c.id)! : c);
+      for (const cat of data.categories) {
+        if (!prev.some((c) => c.id === cat.id)) merged.push(cat);
+      }
+      return merged;
+    });
+    // Merge overrides — imported values overwrite same keys, local-only keys kept
+    setLocalOverrides((prev) => ({ ...prev, ...(data.itemCategoryOverrides ?? {}) }));
     setHasChanges(true);
     showMsg("ok", `Imported ${data.categories.length} categories (unsaved — click Save to apply)`);
   }

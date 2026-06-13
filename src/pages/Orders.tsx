@@ -430,17 +430,33 @@ export default function Orders() {
           return;
         }
 
-        // Import groups
+        // Import groups — overwrite existing by name, create only if new
+        const existingGroups = getAllGroups();
+        const nameToId = new Map(existingGroups.map((g) => [g.name, g.id]));
+        let created = 0, updated = 0;
+
         for (const group of data.groups) {
-          const id = createGroup(group.name, group.description);
           const lineMap: Record<string, any> = {};
           for (const [itemId, line] of Object.entries(group.lines)) {
             lineMap[itemId] = line;
           }
-          setGroupLines(id, lineMap);
+          const existingId = nameToId.get(group.name);
+          if (existingId) {
+            updateGroup(existingId, {
+              description: group.description,
+              color: group.color,
+              tags: group.tags,
+            });
+            setGroupLines(existingId, lineMap);
+            updated++;
+          } else {
+            const id = createGroup(group.name, group.description, group.color, group.tags);
+            setGroupLines(id, lineMap);
+            created++;
+          }
         }
 
-        alert(`Imported ${data.groups.length} group(s)`);
+        alert(`Imported ${data.groups.length} group(s): ${updated} updated, ${created} created`);
       } catch {
         alert("Invalid JSON file");
       }
