@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, FileText, X, CheckCircle2, XCircle } from "lucide-react";
+import { Upload, FileText, X, CheckCircle2, XCircle, PackageCheck, Download } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
@@ -10,6 +10,8 @@ import { fmtINR, fmtDate } from "../utils/format";
 import type { CanonicalVoucher, ParsedData } from "../types/canonical";
 import { useTallyPriceListStore, type TallyPriceEntry } from "../store/tallyPriceListStore";
 import { RatePill, AmountPill, priceMatches } from "../components/PriceVerification";
+import { buildPackingList } from "../utils/packingList";
+import { generatePackingListPDF } from "../utils/packingListPDF";
 
 type FilterType = "All" | "Sales" | "Purchase" | "Receipt" | "Payment";
 
@@ -118,6 +120,20 @@ export default function Invoices() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  // ── Packing-list multi-select (Sales invoices only) ──
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showPackingList, setShowPackingList] = useState(false);
+
+  const toggleSelect = (voucherId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(voucherId)) next.delete(voucherId);
+      else next.add(voucherId);
+      return next;
+    });
+  };
+
   const invoices = useMemo(() => {
     if (!data) return [];
     return computeOutstandingInvoices(data.vouchers, data.ledgers, 30);
@@ -161,6 +177,17 @@ export default function Invoices() {
     () => data ? getInvoicePriceList(data, tallyEntries) : new Map<string, number>(),
     [data, tallyEntries]
   );
+
+  // Full voucher objects for the current packing-list selection.
+  const selectedVouchers = useMemo(() => {
+    if (!data || selectedIds.size === 0) return [];
+    return data.vouchers.filter((v) => selectedIds.has(v.voucherId));
+  }, [data, selectedIds]);
+
+  const exitSelection = () => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  };
 
   // Look up full voucher for the selected row
   const selectedVoucher = useMemo(() => {
@@ -240,13 +267,67 @@ export default function Invoices() {
           <div className="text-xs text-muted self-center ml-auto">{filtered.length} rows</div>
         </div>
 
+        {/* Packing-list controls */}
+        <div className="flex flex-wrap items-center gap-2">
+          {!selectionMode ? (
+            <button
+              onClick={() => setSelectionMode(true)}
+              className="btn-secondary btn-sm"
+              title="Select multiple sales invoices to generate a packing list"
+            >
+              <PackageCheck size={14} />
+              Select for Packing List
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => setShowPackingList(true)}
+                disabled={selectedIds.size === 0}
+                className="btn-primary btn-sm"
+              >
+                <PackageCheck size={14} />
+                Packing List ({selectedIds.size})
+              </button>
+              <button onClick={exitSelection} className="btn-secondary btn-sm">
+                <X size={14} />
+                Cancel
+              </button>
+              <span className="text-xs text-muted self-center">
+                Tick the sales invoices to include, then generate.
+              </span>
+            </>
+          )}
+        </div>
+
         {/* Table / Cards */}
         {isMobile ? (
-          <MobileCards filtered={filtered} onSelect={setSelectedRow} />
+          <MobileCards
+            filtered={filtered}
+            onSelect={setSelectedRow}
+            selectionMode={selectionMode}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+          />
         ) : (
-          <TxTable filtered={filtered} onSelect={setSelectedRow} />
+          <TxTable
+            filtered={filtered}
+            onSelect={setSelectedRow}
+            selectionMode={selectionMode}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+          />
         )}
       </div>
+
+      {/* Packing list preview + PDF */}
+      {showPackingList && data && (
+        <PackingListModal
+          vouchers={selectedVouchers}
+          items={data.items}
+          companyName={data.company?.name ?? "Packing List"}
+          onClose={() => setShowPackingList(false)}
+        />
+      )}
 
       {/* Modal */}
       {selectedRow && selectedVoucher && (
@@ -532,12 +613,17 @@ function VoucherModal({ row, voucher, data, priceList, onClose }: {
 }
 
 /* ─── Desktop table ───────────────────────────────────── */
-function TxTable({ filtered, onSelect }: {
+function TxTable({ filtered, onSelect, selectionMode, selectedIds, onToggleSelect }: {
   filtered: TxRow[];
   onSelect: (row: TxRow) => void;
+  selectionMode: boolean;
+  selectedIds: Set<string>;
+  onToggleSelect: (voucherId: string) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
-  const COL_TEMPLATE = "100px 130px 90px 1fr 120px 100px";
+  const COL_TEMPLATE = selectionMode
+    ? "44px 100px 130px 90px 1fr 120px 100px"
+    : "100px 130px 90px 1fr 120px 100px";
 
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -548,25 +634,54 @@ function TxTable({ filtered, onSelect }: {
 
   return (
     <div className="section-card overflow-hidden">
-      <div className="table-scroll" style={{ minWidth: "720px" }}>
+      <div className="table-scroll" style={{ minWidth: selectionMode ? "764px" : "720px" }}>
         <div className="grid table-header" style={{ gridTemplateColumns: COL_TEMPLATE }}>
+          {selectionMode && <div className="px-4 py-3" />}
           {["Date", "Voucher#", "Type", "Party", "Amount", "Outstanding"].map((h) => (
             <div key={h} className="px-4 py-3">{h}</div>
           ))}
         </div>
 
-        <div ref={parentRef} className="overflow-auto max-h-[60vh]" style={{ minWidth: "720px" }}>
+        <div ref={parentRef} className="overflow-auto max-h-[60vh]" style={{ minWidth: selectionMode ? "764px" : "720px" }}>
           <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const row = filtered[virtualRow.index];
               if (!row) return null;
+              const selectable = row.txType === "Sales";
+              const checked = selectedIds.has(row.voucherId);
+              const handleRowClick = () => {
+                if (selectionMode) {
+                  if (selectable) onToggleSelect(row.voucherId);
+                } else {
+                  onSelect(row);
+                }
+              };
               return (
                 <div
                   key={row.voucherId}
                   style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start}px)`, gridTemplateColumns: COL_TEMPLATE }}
-                  className="grid responsive-table-row cursor-pointer hover:bg-neutral-50 bg-bg-card"
-                  onClick={() => onSelect(row)}
+                  className={clsx(
+                    "grid responsive-table-row hover:bg-neutral-50 bg-bg-card",
+                    selectionMode && !selectable ? "cursor-default opacity-60" : "cursor-pointer",
+                    selectionMode && checked && "bg-blue-50"
+                  )}
+                  onClick={handleRowClick}
                 >
+                  {selectionMode && (
+                    <div className="table-cell flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                      {selectable ? (
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => onToggleSelect(row.voucherId)}
+                          className="h-4 w-4 cursor-pointer accent-blue-600"
+                          aria-label={`Select invoice ${row.voucherNumber}`}
+                        />
+                      ) : (
+                        <span className="text-neutral-300 text-xs">—</span>
+                      )}
+                    </div>
+                  )}
                   <div className="table-cell text-muted whitespace-nowrap">{fmtDate(row.date)}</div>
                   <div className="table-cell-mono truncate">{row.voucherNumber}</div>
                   <div className="table-cell">{typeBadge(row.txType)}</div>
@@ -596,9 +711,12 @@ function TxTable({ filtered, onSelect }: {
 }
 
 /* ─── Mobile cards ────────────────────────────────────── */
-function MobileCards({ filtered, onSelect }: {
+function MobileCards({ filtered, onSelect, selectionMode, selectedIds, onToggleSelect }: {
   filtered: TxRow[];
   onSelect: (row: TxRow) => void;
+  selectionMode: boolean;
+  selectedIds: Set<string>;
+  onToggleSelect: (voucherId: string) => void;
 }) {
   return (
     <div className="space-y-2">
@@ -607,14 +725,40 @@ function MobileCards({ filtered, onSelect }: {
           <span className="empty-state-description">No records found</span>
         </div>
       )}
-      {filtered.slice(0, 100).map((row) => (
+      {filtered.slice(0, 100).map((row) => {
+        const selectable = row.txType === "Sales";
+        const checked = selectedIds.has(row.voucherId);
+        const handleClick = () => {
+          if (selectionMode) {
+            if (selectable) onToggleSelect(row.voucherId);
+          } else {
+            onSelect(row);
+          }
+        };
+        return (
         <div
           key={row.voucherId}
-          className="bento-card overflow-hidden p-3 cursor-pointer active:bg-bg-border/20"
-          onClick={() => onSelect(row)}
+          className={clsx(
+            "bento-card overflow-hidden p-3 active:bg-bg-border/20",
+            selectionMode && !selectable ? "cursor-default opacity-60" : "cursor-pointer",
+            selectionMode && checked && "ring-2 ring-blue-400"
+          )}
+          onClick={handleClick}
         >
           <div className="flex items-center justify-between mb-1">
-            <span className="text-sm font-medium text-primary truncate mr-2">{row.partyName}</span>
+            <div className="flex items-center gap-2 min-w-0">
+              {selectionMode && selectable && (
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => onToggleSelect(row.voucherId)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="h-4 w-4 flex-shrink-0 cursor-pointer accent-blue-600"
+                  aria-label={`Select invoice ${row.voucherNumber}`}
+                />
+              )}
+              <span className="text-sm font-medium text-primary truncate mr-2">{row.partyName}</span>
+            </div>
             {typeBadge(row.txType)}
           </div>
           <div className="flex items-center justify-between text-xs">
@@ -628,10 +772,121 @@ function MobileCards({ filtered, onSelect }: {
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
       {filtered.length > 100 && (
         <div className="caption-text text-center py-2">Showing first 100 of {filtered.length} rows</div>
       )}
+    </div>
+  );
+}
+
+/* ─── Packing list preview modal ──────────────────────── */
+function PackingListModal({ vouchers, items, companyName, onClose }: {
+  vouchers: CanonicalVoucher[];
+  items: ParsedData["items"];
+  companyName: string;
+  onClose: () => void;
+}) {
+  const groups = useMemo(() => buildPackingList(vouchers, items), [vouchers, items]);
+  const totalLines = groups.reduce((s, g) => s + g.itemCount, 0);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const handleDownload = () => {
+    generatePackingListPDF(groups, companyName, new Date().toISOString());
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 animate-fade-in"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Packing List"
+      onClick={onClose}
+    >
+      <div
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden animate-modal-pop"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between px-6 py-5 border-b border-neutral-200 bg-gradient-to-r from-neutral-50 to-white">
+          <div>
+            <h2 className="text-lg font-bold text-neutral-950 flex items-center gap-2">
+              <PackageCheck size={18} className="text-blue-600" />
+              Packing List
+            </h2>
+            <p className="text-sm text-neutral-600 mt-1">
+              {groups.length} invoice(s) · {totalLines} item line(s) · quantities in package units
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={handleDownload} disabled={groups.length === 0} className="btn-primary btn-sm">
+              <Download size={14} />
+              Download PDF
+            </button>
+            <button onClick={onClose} className="btn-icon flex-shrink-0" aria-label="Close packing list">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Body — per-invoice sections */}
+        <div className="overflow-y-auto flex-1 px-6 py-5 space-y-6">
+          {groups.length === 0 && (
+            <div className="text-center py-8">
+              <PackageCheck size={32} className="text-neutral-300 mx-auto mb-3" />
+              <p className="text-neutral-500 text-sm">No stock items found in the selected invoices.</p>
+            </div>
+          )}
+          {groups.map((g) => (
+            <div key={g.voucherId}>
+              <div className="flex items-baseline justify-between mb-2 flex-wrap gap-x-3">
+                <h3 className="text-sm font-bold text-neutral-900 truncate">{g.partyName}</h3>
+                <span className="text-xs font-mono text-neutral-500">
+                  {g.voucherNumber} · {fmtDate(g.date)}
+                </span>
+              </div>
+              <div className="overflow-x-auto border border-neutral-200 rounded-xl">
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-neutral-50 border-b border-neutral-200">
+                      <th className="px-4 py-2.5 text-left font-semibold text-neutral-700 text-xs uppercase tracking-wide">Item</th>
+                      <th className="px-4 py-2.5 text-right font-semibold text-neutral-700 text-xs uppercase tracking-wide whitespace-nowrap">Pick Qty</th>
+                      <th className="px-4 py-2.5 text-right font-semibold text-neutral-500 text-xs uppercase tracking-wide whitespace-nowrap">Base Qty</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.lines.map((l) => (
+                      <tr key={l.itemId} className="border-b border-neutral-100 last:border-0">
+                        <td className="px-4 py-2.5 text-neutral-900 font-medium max-w-xs">
+                          <span title={l.itemName} className="block truncate">{l.itemName}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums font-bold text-neutral-900 whitespace-nowrap">
+                          {l.formatted}
+                          {!l.hasPkgUnit && (
+                            <span className="ml-1 text-2xs text-amber-600" title="No package unit configured — showing base unit">*</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-neutral-500 whitespace-nowrap">
+                          {l.baseQty} {l.baseUnit}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+          {groups.some((g) => g.lines.some((l) => !l.hasPkgUnit)) && (
+            <p className="text-xs text-amber-600">* No package unit configured — quantity shown in base unit.</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

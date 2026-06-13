@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Truck,
   Tag,
+  Boxes,
   ChevronLeft,
   Bike,
   Wifi,
@@ -32,6 +33,7 @@ import { useDataStore } from "../store/dataStore";
 import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
 import { syncDayBook } from "../api/tallyApi";
 import { parseTransactions } from "../parser/transactionParser";
+import { refreshDeliveryNotes } from "../services/deliveryNoteRefresh";
 import { saveData, loadData, createBackup } from "../db/idb";
 import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
 import { useToast } from "./Toast";
@@ -58,6 +60,7 @@ const NAV_ITEMS = [
   { path: "/invoices", icon: FileText, label: "Invoices" },
   { path: "/pending-orders", icon: Truck, label: "Pending Orders" },
   { path: "/price-list", icon: Tag, label: "Price List" },
+  { path: "/items-analytics", icon: Boxes, label: "Items & Analytics" },
   { path: "/routes", icon: MapIcon, label: "Routes" },
   { path: "/reports", icon: BarChart2, label: "Reports" },
   { path: "/calendar", icon: CalendarDays, label: "Calendar" },
@@ -211,7 +214,19 @@ export function NavBar() {
         const dates = parsed.vouchers.map(v => v.date).filter(Boolean).sort();
         if (dates.length) setLastVoucherDate(dates[dates.length - 1]);
       }
-      toast(`Today's daybook synced: ${parsed.vouchers.length} voucher(s) added.`, "success");
+
+      // Also refresh delivery notes (rolling window) so fulfilled/cancelled DNs drop
+      // off Pending Orders — today-only sync never removes older stale delivery notes.
+      let dnMsg = "";
+      try {
+        const { dnCount } = await refreshDeliveryNotes(companyName);
+        dnMsg = ` · ${dnCount} delivery note(s) refreshed`;
+      } catch (dnErr: any) {
+        console.warn("[today-sync] Delivery-note refresh failed:", dnErr?.message ?? dnErr);
+        dnMsg = " · delivery-note refresh failed";
+      }
+
+      toast(`Today's daybook synced: ${parsed.vouchers.length} voucher(s) added.${dnMsg}`, "success");
     } catch (e: any) {
       toast(`Sync failed: ${e.message}`, "error");
     } finally {

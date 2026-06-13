@@ -11,6 +11,7 @@ import { useDiscountStore } from "./store/discountStore";
 import { loadData, loadFromStore } from "./db/idb";
 import { deserializeParsedData } from "./utils/serialize";
 import { useTallyAutoSync } from "./hooks/useTallyAutoSync";
+import { useDeliveryNoteAutoSync } from "./hooks/useDeliveryNoteAutoSync";
 import { usePersistenceMonitor } from "./hooks/usePersistenceMonitor";
 import { useSupabaseConfigSync } from "./hooks/useSupabaseConfigSync";
 import { useSupabaseAutoPushAfterTally } from "./hooks/useSupabaseAutoPushAfterTally";
@@ -41,6 +42,7 @@ const CalendarPage = lazy(() => import("./pages/Calendar"));
 const PerfLog = lazy(() => import("./pages/PerfLog"));
 const TallyPush = lazy(() => import("./pages/TallyPush"));
 const DistancePage = lazy(() => import("./pages/DistancePage"));
+const ItemsAnalytics = lazy(() => import("./pages/ItemsAnalytics"));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -55,8 +57,12 @@ function AppRoutes() {
   const data = useDataStore((s) => s.data);
   const setData = useDataStore((s) => s.setData);
 
-  // Enable Tally auto-sync
+  // Enable Tally auto-sync (today's vouchers, every 30 min)
   useTallyAutoSync();
+
+  // Hourly delivery-note refresh (rolling 90-day window) — keeps Pending Orders in
+  // sync with Tally by dropping fulfilled/cancelled DNs the today-only sync can't remove.
+  useDeliveryNoteAutoSync();
 
   // Background performance monitoring (memory, long tasks, FPS, route timing)
   usePerfMonitor();
@@ -161,6 +167,7 @@ function AppRoutes() {
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/pending-orders" element={<PendingOrders />} />
           <Route path="/price-list" element={<PriceList />} />
+          <Route path="/items-analytics" element={<ItemsAnalytics />} />
           <Route path="/routes" element={<RoutesPage />} />
           <Route path="/discounts" element={<Discounts />} />
           <Route path="/discount-rules" element={<DiscountRules />} />
