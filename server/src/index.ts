@@ -7,7 +7,7 @@ import { SyncOrchestrator } from "./services/syncOrchestrator.js";
 import { ChangeDetector } from "./services/changeDetector.js";
 import { SupabaseSync } from "./services/supabaseSync.js";
 import { pushVoucherToTally, pushBatchToTally, buildVoucherImportXml, parseImportResponse } from "./services/voucherPusher.js";
-import { startPushAgent, getPushAgentStatus, drainNow } from "./services/pushAgent.js";
+import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
 import type { SyncPlan, PushVoucherRequest, PushBatchRequest } from "./types.js";
 
 const app = express();
@@ -570,6 +570,23 @@ app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()))
 app.post("/api/push-agent/drain", (_req, res) => {
   drainNow();
   res.json({ ok: true, drainedAt: new Date().toISOString() });
+});
+
+// Re-queue a failed push_queue row so it can be retried immediately.
+// Only requeues rows with status='failed' — succeeded rows are immutable.
+app.post("/api/push-agent/requeue", async (req: express.Request, res: express.Response) => {
+  const { id } = req.body as { id?: string };
+  if (!id) return res.status(400).json({ error: "id required" });
+  const client = getAgentClient();
+  if (!client) return res.status(503).json({ error: "Push agent not running (no Supabase client)" });
+  const { error } = await client
+    .from("push_queue")
+    .update({ status: "pending", attempts: 0, not_before: new Date().toISOString(), last_error: null })
+    .eq("id", id)
+    .eq("status", "failed");
+  if (error) return res.status(500).json({ error: error.message });
+  drainNow();
+  res.json({ ok: true });
 });
 
 // Start the drain loop only when explicitly enabled, so it can be turned off without
