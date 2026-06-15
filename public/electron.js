@@ -1,4 +1,14 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog, globalShortcut } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, globalShortcut } = require('electron');
+
+// ── Crash auto-restart ────────────────────────────────────────────────────────
+// Uncaught exceptions in the main process should relaunch rather than silently
+// leaving the sync agent dead. The renderer's own uncaught exceptions are caught
+// by the 'render-process-crashed' / 'child-process-gone' events separately.
+process.on('uncaughtException', (err) => {
+  console.error('[electron] uncaughtException — relaunching:', err);
+  app.relaunch();
+  app.exit(0);
+});
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -29,6 +39,8 @@ if (!app.requestSingleInstanceLock()) {
 const isDev = !app.isPackaged;
 
 let mainWindow = null;
+let tray = null;
+let appQuitting = false;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const configPath = path.join(app.getPath('userData'), 'config.json');
@@ -169,8 +181,56 @@ function createWindow() {
 
   mainWindow.loadURL(startUrl).catch((err) => console.error('loadURL failed:', err));
   mainWindow.once('ready-to-show', () => mainWindow.show());
-  mainWindow.on('close', () => { if (mainWindow) setConfig('windowBounds', mainWindow.getBounds()); });
+  mainWindow.on('close', (e) => {
+    if (mainWindow) setConfig('windowBounds', mainWindow.getBounds());
+    if (!appQuitting) {
+      // Hide to tray instead of closing — keeps sync agent alive.
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
+}
+
+// ── System tray ───────────────────────────────────────────────────────────────
+function createTray() {
+  // Use the existing app icon, scaled to 16x16 for the tray.
+  const iconPath = path.join(__dirname, 'icon.png');
+  const icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+
+  tray = new Tray(icon);
+  tray.setToolTip('MKCP Sync Agent');
+
+  const buildMenu = () => Menu.buildFromTemplate([
+    {
+      label: 'Show Status',
+      click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } },
+    },
+    { type: 'separator' },
+    {
+      label: 'Sync Now',
+      click: () => {
+        const company = readConfig().companyName || 'M.K.CYCLES (P) LTD.';
+        fetch('http://localhost:3100/api/tally/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ company, mode: 'smart' }),
+        }).catch(() => {});
+      },
+    },
+    {
+      label: 'Drain Queue',
+      click: () => fetch('http://localhost:3100/api/push-agent/drain', { method: 'POST' }).catch(() => {}),
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit Agent',
+      click: () => { appQuitting = true; tray?.destroy(); app.quit(); },
+    },
+  ]);
+
+  tray.setContextMenu(buildMenu());
+  tray.on('double-click', () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } });
 }
 
 // Remove the native menu bar entirely
@@ -250,6 +310,7 @@ app.whenReady().then(async () => {
       `The local server could not start.\n\n${err.message}\n\nTally sync will not work.`);
   }
   createWindow();
+  createTray();
 
   // Dev-only keyboard shortcuts (menu bar is hidden in all builds)
   if (isDev) {
@@ -261,8 +322,15 @@ app.whenReady().then(async () => {
   });
 });
 
+app.on('before-quit', () => { appQuitting = true; });
 app.on('window-all-closed', () => {
   globalShortcut.unregisterAll();
-  if (process.platform !== 'darwin') app.quit();
+  // Do NOT quit on window-all-closed. The push agent and pull sync must keep
+  // running headlessly. Explicit quit is via the tray "Quit Agent" menu item.
+  // On macOS the Dock already keeps the app alive; on Windows/Linux we do the same.
 });
-app.on('activate', () => { if (mainWindow === null) createWindow(); });
+app.on('activate', () => {
+  // macOS: re-show the window when clicking the Dock icon.
+  if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
+  else createWindow();
+});
