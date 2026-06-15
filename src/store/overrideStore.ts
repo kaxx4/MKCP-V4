@@ -1,17 +1,20 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { UnitOverride, RateOverride, AuditEntry } from "../types/canonical";
+import type { UnitOverride, RateOverride, GstOverride, AuditEntry } from "../types/canonical";
 import { saveToStore } from "../db/idb";
 
 interface OverrideState {
   units: Record<string, UnitOverride>;
   rates: Record<string, RateOverride>;
+  gstRates: Record<string, GstOverride>;
   auditLog: AuditEntry[];
   initialized: boolean;
   setUnitOverride: (itemId: string, ov: UnitOverride) => void;
   setRateOverride: (itemId: string, ov: RateOverride) => void;
+  setGstOverride: (itemId: string, pct: number) => void;
   removeUnitOverride: (itemId: string) => void;
   removeRateOverride: (itemId: string) => void;
+  removeGstOverride: (itemId: string) => void;
   addAudit: (entry: AuditEntry) => void;
   exportAuditLog: () => string;
   loadDefaults: () => Promise<void>;
@@ -35,6 +38,7 @@ export const useOverrideStore = create<OverrideState>()(
     (set, get) => ({
       units: {},
       rates: {},
+      gstRates: {},
       auditLog: [],
       initialized: false,
       setUnitOverride: (itemId, ov) => {
@@ -48,6 +52,11 @@ export const useOverrideStore = create<OverrideState>()(
         set((s) => ({ rates: { ...s.rates, [itemId]: ov } }));
         get().addAudit({ type: "rate_update", itemId, newValue: ov, at: new Date().toISOString(), by: "user" });
       },
+      setGstOverride: (itemId, pct) => {
+        const ov: GstOverride = { itemId, gstPct: pct, updatedAt: new Date().toISOString() };
+        set((s) => ({ gstRates: { ...s.gstRates, [itemId]: ov } }));
+        get().addAudit({ type: "gst_override", itemId, newValue: ov, at: ov.updatedAt, by: "user" });
+      },
       removeUnitOverride: (itemId) =>
         set((s) => {
           const { [itemId]: _, ...rest } = s.units;
@@ -58,6 +67,13 @@ export const useOverrideStore = create<OverrideState>()(
           const { [itemId]: _, ...rest } = s.rates;
           return { rates: rest };
         }),
+      removeGstOverride: (itemId) => {
+        set((s) => {
+          const { [itemId]: _, ...rest } = s.gstRates;
+          return { gstRates: rest };
+        });
+        get().addAudit({ type: "gst_override", itemId, newValue: null, at: new Date().toISOString(), by: "user" });
+      },
       addAudit: (entry) => set((s) => ({ auditLog: [...s.auditLog.slice(-999), entry] })),
       exportAuditLog: () => JSON.stringify(get().auditLog, null, 2),
       loadDefaults: async () => {

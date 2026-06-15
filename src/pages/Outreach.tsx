@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -32,36 +32,13 @@ import {
 import { useDataStore } from "../store/dataStore";
 import { useUIStore } from "../store/uiStore";
 import { fmtINR, fmtNum } from "../utils/format";
+import { computePartyStats, type PartyStats } from "../utils/partyStats";
 import clsx from "clsx";
-import type { CanonicalVoucher, CanonicalLedger } from "../types/canonical";
 
 // ═══════════════════════════════════════════════════════════════════
 // TYPES
+// (PartyStats moved to ../utils/partyStats.ts so dataStore can pre-compute it)
 // ═══════════════════════════════════════════════════════════════════
-
-interface PartyStats {
-  ledgerId: string;
-  name: string;
-  totalRevenue: number;
-  orderCount: number;
-  avgOrderValue: number;
-  lastOrderDate: string;
-  daysSinceLast: number;
-  ordersPerMonth: number;
-  trend: "growing" | "stable" | "declining";
-  trendPct: number;
-  churnRisk: number;
-  rfmR: number;
-  rfmF: number;
-  rfmM: number;
-  tier: "anchor" | "secondary" | "longtail";
-  predictedNextOrder: string | null;
-  predictedConfidence: number;
-  predictedValue: number;
-  avgInterval: number;
-  monthlyRevenue: { label: string; amount: number }[];
-  topItems: { itemId: string; name: string; revenue: number }[];
-}
 
 interface OutreachOpp {
   id: string;
@@ -80,200 +57,6 @@ interface OutreachOpp {
 // ANALYTICS ENGINE  (pure functions — no side effects)
 // ═══════════════════════════════════════════════════════════════════
 
-function computePartyStats(
-  vouchers: CanonicalVoucher[],
-  ledgers: Map<string, CanonicalLedger>
-): PartyStats[] {
-  const now = new Date();
-
-  // Only completed sales vouchers
-  const sales = vouchers.filter(
-    (v) =>
-      v.voucherType === "Sales" &&
-      !v.isCancelled &&
-      !v.isOptional &&
-      v.partyLedgerId
-  );
-
-  // Group by party
-  const byParty = new Map<string, CanonicalVoucher[]>();
-  for (const v of sales) {
-    const pid = v.partyLedgerId!;
-    if (!byParty.has(pid)) byParty.set(pid, []);
-    byParty.get(pid)!.push(v);
-  }
-
-  const results: PartyStats[] = [];
-
-  for (const [ledgerId, pvouchers] of byParty) {
-    if (pvouchers.length === 0) continue;
-    const sorted = [...pvouchers].sort((a, b) => a.date.localeCompare(b.date));
-    const ledger = ledgers.get(ledgerId);
-    const name = ledger?.name ?? ledgerId;
-
-    // ── Revenue & basic stats ─────────────────────────────────────
-    const totalRevenue = sorted.reduce((s, v) => s + v.totalAmount, 0);
-    const orderCount = sorted.length;
-    const avgOrderValue = orderCount > 0 ? totalRevenue / orderCount : 0;
-    const lastOrderDate = sorted[sorted.length - 1].date;
-    const lastDate = new Date(lastOrderDate);
-    const daysSinceLast = Math.max(
-      0,
-      Math.floor((now.getTime() - lastDate.getTime()) / 864e5)
-    );
-
-    // ── Frequency ─────────────────────────────────────────────────
-    const firstDate = new Date(sorted[0].date);
-    const monthsActive = Math.max(
-      1,
-      (now.getTime() - firstDate.getTime()) / (864e5 * 30)
-    );
-    const ordersPerMonth = orderCount / monthsActive;
-
-    // ── Revenue trend: last 3mo vs prev 3mo ──────────────────────
-    const d3ago = new Date(now);
-    d3ago.setMonth(d3ago.getMonth() - 3);
-    const d6ago = new Date(now);
-    d6ago.setMonth(d6ago.getMonth() - 6);
-    const d3str = d3ago.toISOString().slice(0, 10);
-    const d6str = d6ago.toISOString().slice(0, 10);
-
-    const recentRev = sorted
-      .filter((v) => v.date >= d3str)
-      .reduce((s, v) => s + v.totalAmount, 0);
-    const prevRev = sorted
-      .filter((v) => v.date >= d6str && v.date < d3str)
-      .reduce((s, v) => s + v.totalAmount, 0);
-
-    let trend: PartyStats["trend"] = "stable";
-    let trendPct = 0;
-    if (prevRev > 0) {
-      trendPct = ((recentRev - prevRev) / prevRev) * 100;
-      if (trendPct > 10) trend = "growing";
-      else if (trendPct < -10) trend = "declining";
-    } else if (recentRev > 0) {
-      trend = "growing";
-      trendPct = 100;
-    }
-
-    // ── RFM Scoring ───────────────────────────────────────────────
-    const rfmR =
-      daysSinceLast < 10 ? 100 :
-      daysSinceLast < 20 ? 80 :
-      daysSinceLast < 30 ? 60 :
-      daysSinceLast < 60 ? 40 :
-      daysSinceLast < 90 ? 20 : 0;
-    const rfmF = Math.min(100, (ordersPerMonth / 2) * 100);
-    const rfmM = Math.min(100, (avgOrderValue / 200000) * 100); // ₹2L = 100
-    const rfmScore = rfmR * 0.4 + rfmF * 0.3 + rfmM * 0.3;
-    const churnRisk = Math.round(Math.max(0, 100 - rfmScore));
-
-    // ── Tier classification ───────────────────────────────────────
-    let tier: PartyStats["tier"] = "longtail";
-    if (totalRevenue >= 5_00_00_000) tier = "anchor";      // ≥₹5Cr
-    else if (totalRevenue >= 20_00_000) tier = "secondary"; // ≥₹20L
-
-    // ── Purchase interval prediction ──────────────────────────────
-    let predictedNextOrder: string | null = null;
-    let predictedConfidence = 0;
-    let predictedValue = 0;
-    let avgInterval = 0;
-
-    if (sorted.length >= 2) {
-      const intervals: number[] = [];
-      for (let i = 1; i < sorted.length; i++) {
-        const prev = new Date(sorted[i - 1].date);
-        const curr = new Date(sorted[i].date);
-        intervals.push((curr.getTime() - prev.getTime()) / 864e5);
-      }
-      avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-      const variance =
-        intervals.reduce((s, x) => s + (x - avgInterval) ** 2, 0) /
-        intervals.length;
-      const stdDev = Math.sqrt(variance);
-      const cv = avgInterval > 0 ? stdDev / avgInterval : 1;
-
-      const predictedDate = new Date(lastDate);
-      predictedDate.setDate(predictedDate.getDate() + Math.round(avgInterval));
-      predictedNextOrder = predictedDate.toISOString().slice(0, 10);
-
-      const consistency = Math.max(0, 1 - Math.min(cv, 1));
-      const recencyFactor =
-        daysSinceLast < 30 ? 1.0 :
-        daysSinceLast < 60 ? 0.8 : 0.6;
-      const countFactor = Math.min(1.0, sorted.length / 12);
-      predictedConfidence = Math.round(
-        consistency * recencyFactor * countFactor * 100
-      );
-      predictedValue = avgOrderValue;
-    }
-
-    // ── Monthly revenue chart — last 6 months ─────────────────────
-    const monthlyRevenue: PartyStats["monthlyRevenue"] = [];
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now);
-      d.setMonth(d.getMonth() - i);
-      const ym = d.toISOString().slice(0, 7);
-      const label = d.toLocaleDateString("en-IN", {
-        month: "short",
-        year: "2-digit",
-      });
-      const amount = sorted
-        .filter((v) => v.date.startsWith(ym))
-        .reduce((s, v) => s + v.totalAmount, 0);
-      monthlyRevenue.push({ label, amount });
-    }
-
-    // ── Top items by line revenue ──────────────────────────────────
-    const itemRevMap = new Map<string, { revenue: number }>();
-    for (const v of sorted) {
-      for (const line of v.lines) {
-        if (
-          line.type === "inventory" &&
-          line.itemId &&
-          line.lineAmount != null
-        ) {
-          const existing = itemRevMap.get(line.itemId);
-          if (existing) {
-            existing.revenue += line.lineAmount;
-          } else {
-            itemRevMap.set(line.itemId, { revenue: line.lineAmount });
-          }
-        }
-      }
-    }
-    const topItems = Array.from(itemRevMap.entries())
-      .map(([itemId, d]) => ({ itemId, name: itemId, revenue: d.revenue }))
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 5);
-
-    results.push({
-      ledgerId,
-      name,
-      totalRevenue,
-      orderCount,
-      avgOrderValue,
-      lastOrderDate,
-      daysSinceLast,
-      ordersPerMonth,
-      trend,
-      trendPct,
-      churnRisk,
-      rfmR,
-      rfmF,
-      rfmM,
-      tier,
-      predictedNextOrder,
-      predictedConfidence,
-      predictedValue,
-      avgInterval,
-      monthlyRevenue,
-      topItems,
-    });
-  }
-
-  return results.sort((a, b) => b.totalRevenue - a.totalRevenue);
-}
 
 function generateOpportunities(parties: PartyStats[]): OutreachOpp[] {
   const opps: OutreachOpp[] = [];
@@ -605,8 +388,8 @@ function PartyPanel({
           className={clsx(
             "bento-card border",
             party.predictedConfidence >= 70
-              ? "border-accent/30 bg-accent/3"
-              : "border-warn/30 bg-warn/3"
+              ? "border-accent/30 bg-accent/5"
+              : "border-warn/30 bg-warn/5"
           )}
         >
           <div className="flex items-center gap-1.5 mb-1">
@@ -665,7 +448,7 @@ function PartyPanel({
 // OPPORTUNITY CARD
 // ═══════════════════════════════════════════════════════════════════
 
-function OppCard({
+const OppCard = memo(function OppCard({
   opp,
   isSelected,
   onSelect,
@@ -681,7 +464,7 @@ function OppCard({
     <button
       onClick={onSelect}
       className={clsx(
-        "w-full text-left bento-card flex items-start gap-3 transition-all cursor-pointer",
+        "w-full text-left bento-card flex items-start gap-3 transition-[box-shadow,border-color] duration-150 cursor-pointer",
         isSelected
           ? "ring-1 ring-accent border-accent/30"
           : "hover:border-neutral-300"
@@ -735,13 +518,13 @@ function OppCard({
       </div>
     </button>
   );
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // CHURN ROW
 // ═══════════════════════════════════════════════════════════════════
 
-function ChurnRow({
+const ChurnRow = memo(function ChurnRow({
   party,
   onSelect,
 }: {
@@ -813,13 +596,13 @@ function ChurnRow({
       <ChevronRight size={13} className="text-muted flex-shrink-0" />
     </button>
   );
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // CALENDAR ITEM
 // ═══════════════════════════════════════════════════════════════════
 
-function CalendarItem({
+const CalendarItem = memo(function CalendarItem({
   party,
   onSelect,
 }: {
@@ -894,7 +677,7 @@ function CalendarItem({
       </div>
     </button>
   );
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // MAIN PAGE COMPONENT
@@ -904,7 +687,8 @@ type TabId = "opportunities" | "parties" | "churn" | "calendar";
 
 export default function Outreach() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
+  const cachedPartyStats = useDataStore((s) => s.partyStats);
   const { isMobile } = useUIStore();
 
   const [activeTab, setActiveTab] = useState<TabId>("opportunities");
@@ -915,12 +699,18 @@ export default function Outreach() {
   );
 
   // ── Analytics (all from Tally data) ───────────────────────────────
+  // partyStats is pre-computed once in dataStore via requestIdleCallback after
+  // every setData(). Eliminates the 1-2s freeze that used to happen on every
+  // Outreach mount. Falls back to local computation if cache hasn't populated
+  // yet (e.g. user navigates here before idle callback fires).
   const { parties, opportunities } = useMemo(() => {
     if (!data) return { parties: [], opportunities: [] };
 
-    const parties = computePartyStats(data.vouchers, data.ledgers);
+    const parties = cachedPartyStats ?? computePartyStats(data.vouchers, data.ledgers);
 
-    // Enrich item names from items map
+    // Enrich item names from items map. Note: when reading from cache, mutating
+    // topItems[i].name still works because parties returned from store is a
+    // reference. Re-running enrichment is cheap (top 5 items per party).
     for (const party of parties) {
       for (const item of party.topItems) {
         const canonical = data.items.get(item.itemId);
@@ -930,7 +720,7 @@ export default function Outreach() {
 
     const opportunities = generateOpportunities(parties);
     return { parties, opportunities };
-  }, [data]);
+  }, [data, cachedPartyStats]);
 
   // ── Filtered views ────────────────────────────────────────────────
   const filteredOpps = useMemo(() => {

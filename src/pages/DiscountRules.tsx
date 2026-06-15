@@ -1,24 +1,28 @@
 import { useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronRight, X, Plus, Trash2, RotateCcw, ArrowLeft, Download, Upload } from "lucide-react";
+import { ChevronDown, ChevronRight, X, Plus, Trash2, RotateCcw, ArrowLeft, Download, Upload, Palette } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { useDiscountStore } from "../store/discountStore";
+import { ColorPicker } from "../components/ColorPicker";
 import {
   DEFAULT_ITEM_CATEGORY_MAP,
   DEFAULT_GROUP_RULES,
   type DiscountCategory,
   type DiscountTier,
+  type GroupRule,
 } from "../engine/discounts";
 
 // Discount rules file version — bump when schema changes
-const FILE_VERSION = "1";
+const FILE_VERSION = "2";
 
 interface DiscountRulesFile {
   version: string;
   exportedAt: string;
   categories: DiscountCategory[];
+  groupRules: GroupRule[];
   itemCategoryOverrides: Record<string, string>;
+  allItemAssignments: Record<string, string>;
 }
 
 declare global {
@@ -43,14 +47,102 @@ function buildPayload(
     version: FILE_VERSION,
     exportedAt: new Date().toISOString(),
     categories: cats,
+    groupRules: DEFAULT_GROUP_RULES,
     itemCategoryOverrides: overrides,
+    allItemAssignments: { ...DEFAULT_ITEM_CATEGORY_MAP, ...overrides },
   };
+}
+
+// ── Add Category Modal ────────────────────────────────────────────────────────
+function AddCategoryModal({
+  isOpen,
+  onClose,
+  onConfirm,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+
+  function handleConfirm() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    onConfirm(trimmed);
+    setName("");
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter") handleConfirm();
+    if (e.key === "Escape") { setName(""); onClose(); }
+  }
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={() => { setName(""); onClose(); }}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-200">
+          <h3 className="text-base font-bold text-neutral-900">New Category</h3>
+          <button
+            onClick={() => { setName(""); onClose(); }}
+            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-neutral-100 text-neutral-500 transition-colors"
+            aria-label="Close"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-neutral-600 uppercase tracking-wide mb-1.5">
+              Category Name
+            </label>
+            <input
+              autoFocus
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="e.g. PUMP TOGO ALL TYPES"
+              className="form-input w-full"
+            />
+            {name.trim() && (
+              <div className="text-xs text-neutral-400 mt-1.5">
+                ID: <span className="font-mono">{name.trim().toUpperCase().replace(/[^A-Z0-9]/g, "_")}</span>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex gap-3 px-6 py-4 border-t border-neutral-200 bg-neutral-50">
+          <button
+            onClick={() => { setName(""); onClose(); }}
+            className="flex-1 px-4 py-2 text-sm rounded-lg border border-neutral-200 text-neutral-700 hover:bg-neutral-100 transition-colors font-medium"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={!name.trim()}
+            className="flex-1 px-4 py-2 text-sm rounded-lg bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
+          >
+            Add Category
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function DiscountRules() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
-  const { categories, itemCategoryOverrides, setCategories, setItemCategoryOverrides, resetToDefaults } =
+  const data = useDataStore((s) => s.data);
+  const { categories, itemCategoryOverrides, categoryColors, setCategories, setItemCategoryOverrides, setCategoryColor, resetToDefaults } =
     useDiscountStore();
 
   const [localCats, setLocalCats] = useState<DiscountCategory[]>(() =>
@@ -64,6 +156,8 @@ export default function DiscountRules() {
   const [expandedCatId, setExpandedCatId] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const [fileMsg, setFileMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [addCatOpen, setAddCatOpen] = useState(false);
+  const [colorCatId, setColorCatId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function showMsg(type: "ok" | "err", text: string) {
@@ -110,6 +204,7 @@ export default function DiscountRules() {
 
   function addTier(catId: string) {
     setHasChanges(true);
+    setExpandedCatId(catId);
     setLocalCats((cats) =>
       cats.map((c) => {
         if (c.id !== catId) return c;
@@ -137,12 +232,13 @@ export default function DiscountRules() {
     setLocalCats((cats) => cats.filter((c) => c.id !== catId));
   }
 
-  function addCategory() {
-    const name = window.prompt("Category name:")?.trim();
-    if (!name) return;
+  function handleAddCategory(name: string) {
     const id = name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
     setHasChanges(true);
     setLocalCats((cats) => [...cats, { id, name, tiers: [] }]);
+    setAddCatOpen(false);
+    // Auto-expand the new category
+    setExpandedCatId(id);
   }
 
   // ── Save & actions ────────────────────────────────────────────
@@ -185,7 +281,8 @@ export default function DiscountRules() {
       a.download = `discount-rules-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      showMsg("ok", "Exported discount rules JSON");
+      const itemCount = Object.keys(payload.allItemAssignments).length;
+      showMsg("ok", `Exported ${localCats.length} categories, ${DEFAULT_GROUP_RULES.length} group rules, ${itemCount} item assignments`);
     }
   }
 
@@ -225,8 +322,17 @@ export default function DiscountRules() {
       showMsg("err", "Invalid file: missing categories");
       return;
     }
-    setLocalCats(data.categories);
-    setLocalOverrides(data.itemCategoryOverrides ?? {});
+    // Merge by category id — overwrite existing, append new, keep local-only ones
+    setLocalCats((prev) => {
+      const incomingById = new Map(data.categories.map((c) => [c.id, c]));
+      const merged = prev.map((c) => incomingById.has(c.id) ? incomingById.get(c.id)! : c);
+      for (const cat of data.categories) {
+        if (!prev.some((c) => c.id === cat.id)) merged.push(cat);
+      }
+      return merged;
+    });
+    // Merge overrides — imported values overwrite same keys, local-only keys kept
+    setLocalOverrides((prev) => ({ ...prev, ...(data.itemCategoryOverrides ?? {}) }));
     setHasChanges(true);
     showMsg("ok", `Imported ${data.categories.length} categories (unsaved — click Save to apply)`);
   }
@@ -252,6 +358,42 @@ export default function DiscountRules() {
         onChange={handleFileInputChange}
       />
 
+      {/* Add Category Modal */}
+      <AddCategoryModal
+        isOpen={addCatOpen}
+        onClose={() => setAddCatOpen(false)}
+        onConfirm={handleAddCategory}
+      />
+
+      {/* Color Picker Modal */}
+      {colorCatId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setColorCatId(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-bold text-neutral-900 mb-4">
+              Edit Color: {localCats.find((c) => c.id === colorCatId)?.name}
+            </h3>
+            <ColorPicker
+              value={categoryColors[colorCatId] || ""}
+              onChange={(color) => {
+                setCategoryColor(colorCatId, color);
+              }}
+            />
+            <button
+              onClick={() => setColorCatId(null)}
+              className="w-full mt-4 px-4 py-2 bg-accent text-white rounded-lg font-medium hover:bg-accent-700 transition-colors"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header with back button */}
       <div className="page-header">
         <div className="flex items-center gap-3 flex-wrap">
@@ -274,7 +416,7 @@ export default function DiscountRules() {
           <button
             onClick={handleExport}
             className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors text-neutral-700 font-medium"
-            title="Export rules to a JSON file"
+            title="Export categories, group rules, and all item assignments to JSON"
           >
             <Download size={14} /> Export
           </button>
@@ -334,6 +476,13 @@ export default function DiscountRules() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={() => setColorCatId(cat.id)}
+                      className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors text-neutral-600 font-medium min-h-10"
+                      title="Edit category color"
+                    >
+                      <Palette size={14} /> Color
+                    </button>
                     <button
                       onClick={() => addTier(cat.id)}
                       className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg border border-neutral-200 hover:bg-neutral-100 transition-colors text-neutral-600 font-medium"
@@ -414,7 +563,7 @@ export default function DiscountRules() {
           })}
 
           <button
-            onClick={addCategory}
+            onClick={() => setAddCatOpen(true)}
             className="flex items-center justify-center gap-2 w-full py-4 rounded-lg border-2 border-dashed border-neutral-300 text-neutral-600 hover:text-neutral-900 hover:border-blue-400 transition-colors text-sm font-medium"
           >
             <Plus size={20} /> Add New Category

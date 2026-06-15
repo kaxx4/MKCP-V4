@@ -1,4 +1,3 @@
-import * as XLSX from "xlsx";
 import type { CanonicalItem, UnitOverride } from "../types/canonical";
 
 export interface UnitExcelRow {
@@ -12,16 +11,14 @@ export interface UnitExcelRow {
 /**
  * Export current items to Excel template for editing units
  */
-export function exportUnitsToExcel(items: Map<string, CanonicalItem>, unitOverrides: Record<string, UnitOverride>): void {
+export async function exportUnitsToExcel(items: Map<string, CanonicalItem>, unitOverrides: Record<string, UnitOverride>): Promise<void> {
+  const XLSX = await import("xlsx");
   const rows: UnitExcelRow[] = [];
 
-  // Sort items by name for easier editing
   const sortedItems = Array.from(items.values()).sort((a, b) => a.name.localeCompare(b.name));
 
   for (const item of sortedItems) {
-    // Check if there's an override
     const override = unitOverrides[item.itemId];
-
     rows.push({
       "Item Name": item.name,
       "Item ID": item.itemId,
@@ -31,22 +28,18 @@ export function exportUnitsToExcel(items: Map<string, CanonicalItem>, unitOverri
     });
   }
 
-  // Create workbook
   const ws = XLSX.utils.json_to_sheet(rows);
-
-  // Set column widths for better readability
   ws["!cols"] = [
-    { wch: 40 }, // Item Name
-    { wch: 40 }, // Item ID
-    { wch: 12 }, // Base Unit
-    { wch: 15 }, // Package Unit
-    { wch: 18 }, // Units Per Package
+    { wch: 40 },
+    { wch: 40 },
+    { wch: 12 },
+    { wch: 15 },
+    { wch: 18 },
   ];
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Items Unit Configuration");
 
-  // Add instructions sheet
   const instructions = [
     ["MK Cycles - Unit Configuration Template"],
     [""],
@@ -77,7 +70,6 @@ export function exportUnitsToExcel(items: Map<string, CanonicalItem>, unitOverri
   wsInstructions["!cols"] = [{ wch: 80 }];
   XLSX.utils.book_append_sheet(wb, wsInstructions, "Instructions");
 
-  // Download file
   const fileName = `unit_configuration_${new Date().toISOString().slice(0, 10)}.xlsx`;
   XLSX.writeFile(wb, fileName);
 }
@@ -89,15 +81,14 @@ export async function importUnitsFromExcel(
   file: File,
   items: Map<string, CanonicalItem>
 ): Promise<{ overrides: UnitOverride[]; errors: string[] }> {
+  const XLSX = await import("xlsx");
   const errors: string[] = [];
   const overrides: UnitOverride[] = [];
 
   try {
-    // Read file
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array" });
 
-    // Get first sheet (Items Unit Configuration)
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) {
       errors.push("No sheet found in Excel file");
@@ -110,21 +101,17 @@ export async function importUnitsFromExcel(
       return { overrides, errors };
     }
 
-    // Parse to JSON
     const rows = XLSX.utils.sheet_to_json<UnitExcelRow>(sheet);
 
-    // Validate and process each row
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const rowNum = i + 2; // Excel row number (accounting for header)
+      const rowNum = i + 2;
 
-      // Validate required fields
       if (!row["Item ID"] || !row["Item Name"]) {
         errors.push(`Row ${rowNum}: Missing Item ID or Item Name`);
         continue;
       }
 
-      // Check if item exists
       const itemId = row["Item ID"].toString().toUpperCase().trim();
       const item = items.get(itemId);
       if (!item) {
@@ -132,18 +119,14 @@ export async function importUnitsFromExcel(
         continue;
       }
 
-      // Parse package unit and units per package
       const pkgUnit = row["Package Unit"]?.toString().trim() || "";
       const unitsPerPkg = parseFloat(row["Units Per Package"]?.toString() || "1");
 
-      // Validate units per package
       if (isNaN(unitsPerPkg) || unitsPerPkg <= 0) {
         errors.push(`Row ${rowNum}: Invalid 'Units Per Package' value for ${item.name}`);
         continue;
       }
 
-      // Skip if no change from current state
-      const currentPkgUnit = item.pkgUnit || "Not Applicable";
       const newPkgUnit = pkgUnit === "Not Applicable" || pkgUnit === "" ? null : pkgUnit;
       const newUnitsPerPkg = newPkgUnit ? unitsPerPkg : 1;
 
@@ -151,20 +134,17 @@ export async function importUnitsFromExcel(
         (item.pkgUnit === newPkgUnit || (!item.pkgUnit && !newPkgUnit)) &&
         item.unitsPerPkg === newUnitsPerPkg
       ) {
-        continue; // No change, skip
+        continue;
       }
 
-      // Create override
-      const override: UnitOverride = {
+      overrides.push({
         itemId: item.itemId,
         pkgUnit: newPkgUnit || "Not Applicable",
         unitsPerPkg: newUnitsPerPkg,
         source: "manual",
         confidence: 1.0,
         updatedAt: new Date().toISOString(),
-      };
-
-      overrides.push(override);
+      });
     }
 
     if (overrides.length === 0 && errors.length === 0) {

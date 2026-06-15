@@ -49,7 +49,7 @@ export const KPICard = memo(function KPICard({ title, value, sub, icon, trend, a
       {sub && (
         <p
           className={clsx(
-            "text-xs truncate font-medium",
+            "text-xs truncate font-medium tabular-nums",
             trend === "up" && "text-success-600",
             trend === "down" && "text-danger-600",
             trend !== "up" && trend !== "down" && "text-neutral-600"

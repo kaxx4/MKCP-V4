@@ -3,12 +3,21 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const net = require('net');
+const { execSync, execFileSync } = require('child_process');
 const { pathToFileURL } = require('url');
 
 // ── GPU crash fix (Windows STATUS_ACCESS_VIOLATION / c000005) ────────────────
 app.commandLine.appendSwitch('disable-gpu');
 app.commandLine.appendSwitch('disable-software-rasterizer');
 app.commandLine.appendSwitch('disable-gpu-sandbox');
+
+// ── RAM efficiency ────────────────────────────────────────────────────────────
+// Cap renderer V8 old-space at 2 GB (default is 4 GB on 64-bit).
+// Parsed Tally data is ~100–500 MB of JS objects; 2 GB gives 4–20× headroom
+// while triggering GC earlier and keeping memory pressure lower.
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=2048');
+// Stop Chromium from making background DNS prefetch / update-check requests.
+app.commandLine.appendSwitch('disable-background-networking', '');
 
 // ── Single-instance lock ──────────────────────────────────────────────────────
 if (!app.requestSingleInstanceLock()) {
@@ -63,10 +72,30 @@ function isPortFree(port) {
   });
 }
 
+// ── Kill stale process on a port (Windows only) ───────────────────────────────
+function killPortProcess(port) {
+  try {
+    const out = execSync(`netstat -ano`, { encoding: 'utf8', timeout: 3000, maxBuffer: 1024 * 1024 });
+    const lines = out.split('\n').filter(l => l.includes(`:${port} `) && l.includes('LISTENING'));
+    for (const line of lines) {
+      const pid = line.trim().split(/\s+/).pop();
+      if (pid && /^\d+$/.test(pid) && parseInt(pid) > 4) {
+        console.warn(`[server] Killing stale PID ${pid} on port ${port}`);
+        try { execFileSync('taskkill', ['/F', '/PID', pid], { timeout: 3000 }); } catch {}
+      }
+    }
+  } catch {}
+}
+
 // ── Start Express server ──────────────────────────────────────────────────────
 // Uses dynamic import() — loads the server ESM module directly into the Electron
 // main process; no child process, no Windows spawn API.
 async function startExpressServer() {
+  // Set Supabase env vars before the server loads (critical for production builds
+  // where dotenv won't find the .env file in the app package)
+  process.env.SUPABASE_URL = process.env.SUPABASE_URL || "https://vmkytsytxlofjyeotmgb.supabase.co";
+  process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZta3l0c3l0eGxvZmp5ZW90bWdiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODY0MjAyMCwiZXhwIjoyMDk0MjE4MDIwfQ.W-LfPU_GMCFafIWjHt0n5bs1oC08IX7IuXLj6TVY1BU";
+
   const serverDist = isDev
     ? path.join(__dirname, '../server/dist/index.js')
     : path.join(process.resourcesPath, 'server/dist/index.js');
@@ -76,19 +105,28 @@ async function startExpressServer() {
   }
 
   // If port is already occupied, check whether it's our own server responding.
-  // This happens when a previous instance left a dangling process.
+  // This happens when a previous instance crashed and left a dangling node process.
   const portFree = await isPortFree(3100);
   if (!portFree) {
     console.warn('[server] Port 3100 occupied — checking if existing server is responsive...');
     try {
-      await waitForServer(3100, 5000);
+      await waitForServer(3100, 3000);
       console.log('[server] Existing server on :3100 is up — skipping start');
       return; // already running, nothing to do
     } catch {
-      throw new Error(
-        'Port 3100 is occupied by another process and not responding.\n' +
-        'Please close any other app using port 3100 and restart.'
-      );
+      // Stale process — kill it and continue with normal startup
+      console.warn('[server] Port 3100 occupied by non-responsive process — killing it...');
+      killPortProcess(3100);
+      // Give OS a moment to release the port
+      await new Promise(r => setTimeout(r, 800));
+      const nowFree = await isPortFree(3100);
+      if (!nowFree) {
+        throw new Error(
+          'Port 3100 is occupied by another process and could not be released.\n' +
+          'Please restart your computer and try again.'
+        );
+      }
+      console.log('[server] Port 3100 freed — starting server...');
     }
   }
 
@@ -116,6 +154,11 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      v8CacheOptions: 'code',        // cache compiled JS bytecode → faster re-launches
+      // backgroundThrottling left at default (true): Chromium throttles inactive tabs to
+      // 1 Hz minimum. The 30-min Tally sync and 5-min backup timers are unaffected at
+      // those intervals; rAF-based FPS counting stops (correct — FPS when hidden is useless).
+      spellcheck: false,             // not needed in a business app, saves CPU/memory
     },
     show: false,
   });

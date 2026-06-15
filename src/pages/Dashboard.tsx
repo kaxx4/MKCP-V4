@@ -33,7 +33,9 @@ const CHART_TOOLTIP_STYLE = {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { data, voucherIndex } = useDataStore();
+  const data = useDataStore((s) => s.data);
+  const voucherIndex = useDataStore((s) => s.voucherIndex);
+  const stockMap = useDataStore((s) => s.stockMap);
   const [salesPeriod, setSalesPeriod] = useState(6);
   const [topItemsPeriod, setTopItemsPeriod] = useState<"month" | "quarter" | "year">("month");
   const [periodFilter, setPeriodFilter] = useState<"all" | "month" | "quarter" | "ytd" | "custom">("all");
@@ -111,12 +113,12 @@ export default function Dashboard() {
 
     let stockValue = 0;
     for (const [, item] of items) {
-      const stock = getCurrentStockIndexed(item, voucherIndex);
+      const stock = stockMap.get(item.itemId) ?? 0;
       stockValue += stock * item.openingRate;
     }
 
     return { latestDaySales, monthSales, ar, ap, bankBalance, stockValue, invoices };
-  }, [data, filteredVouchers, latestDate, latestMonth, voucherIndex]);
+  }, [data, filteredVouchers, latestDate, latestMonth, stockMap]);
 
   const salesTrend = useMemo(() => {
     if (!data) return [];
@@ -160,11 +162,11 @@ export default function Dashboard() {
 
   const lowStockItems = useMemo(() => {
     if (!data) return [];
-    const items = Array.from(data.items.values());
     const lowStock: Array<{ name: string; stock: number; reorder: number; avgOut: number }> = [];
 
-    for (const item of items) {
-      const stock = getCurrentStockIndexed(item, voucherIndex);
+    // Read pre-computed stock from store; only call engine for reorder/avgOut (lighter).
+    for (const item of data.items.values()) {
+      const stock = stockMap.get(item.itemId) ?? 0;
       const reorder = suggestedReorderIndexed(item, voucherIndex, stock);
       const avgOut = avgMonthlyOutwardIndexed(item, voucherIndex, 3);
 
@@ -176,7 +178,7 @@ export default function Dashboard() {
     return lowStock
       .sort((a, b) => b.reorder - a.reorder)
       .slice(0, 5);
-  }, [data, voucherIndex]);
+  }, [data?.items, stockMap, voucherIndex]);
 
   if (!data) {
     return (
@@ -210,7 +212,7 @@ export default function Dashboard() {
               <button
                 key={p}
                 onClick={() => setPeriodFilter(p)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-[background-color,color,box-shadow,transform] duration-150 active:scale-[0.96] ${
                   periodFilter === p
                     ? "bg-white text-neutral-950 shadow-sm"
                     : "text-neutral-500 hover:text-neutral-700"

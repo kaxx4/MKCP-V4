@@ -9,7 +9,8 @@ import type { CanonicalLedger } from "../types/canonical";
 
 export default function Ledgers() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
+  const ledgerTransactionMap = useDataStore((s) => s.ledgerTransactionMap);
   const { isMobile } = useUIStore();
   const [search, setSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("ALL");
@@ -18,7 +19,7 @@ export default function Ledgers() {
   const allLedgers = useMemo(() => {
     if (!data) return [];
     return Array.from(data.ledgers.values());
-  }, [data]);
+  }, [data?.ledgers]);
 
   const groups = useMemo(() => {
     const gs = new Set(allLedgers.map((l) => l.group));
@@ -38,25 +39,13 @@ export default function Ledgers() {
     [selectedLedgerId, data]
   );
 
+  // Pre-computed in dataStore (idle callback after every data load).
+  // Falls back to empty array if cache hasn't populated yet — UI shows
+  // "loading" naturally because the array is empty.
   const ledgerTransactions = useMemo(() => {
-    if (!selectedLedger || !data) return [];
-    const txns: Array<{ date: string; voucherNumber: string; type: string; debit: number; credit: number; running: number }> = [];
-    let running = selectedLedger.openingBalance;
-    const relevant = data.vouchers
-      .filter((v) => !v.isCancelled && v.lines.some((l) => l.type === "ledger" && l.ledgerId === selectedLedger.ledgerId))
-      .sort((a, b) => a.date.localeCompare(b.date));
-
-    for (const v of relevant) {
-      for (const line of v.lines) {
-        if (line.type !== "ledger" || line.ledgerId !== selectedLedger.ledgerId) continue;
-        const debit = line.isDebit ? (line.amount ?? 0) : 0;
-        const credit = !line.isDebit ? (line.amount ?? 0) : 0;
-        running += debit - credit;
-        txns.push({ date: v.date, voucherNumber: v.voucherNumber, type: v.voucherType, debit, credit, running });
-      }
-    }
-    return txns;
-  }, [selectedLedger, data]);
+    if (!selectedLedger) return [];
+    return ledgerTransactionMap.get(selectedLedger.ledgerId) ?? [];
+  }, [selectedLedger, ledgerTransactionMap]);
 
   if (!data) {
     return (
@@ -112,7 +101,7 @@ export default function Ledgers() {
               <div className="text-center py-8 text-muted text-sm">No transactions</div>
             ) : (
               ledgerTransactions.map((tx, i) => (
-                <div key={i} className="px-3 py-2 border-b border-bg-border/50 text-xs">
+                <div key={`${tx.voucherNumber}-${i}`} className="px-3 py-2 border-b border-bg-border/50 text-xs">
                   <div className="flex items-center justify-between mb-0.5">
                     <span className="text-muted">{fmtDate(tx.date)} · {tx.type}</span>
                     <span className="tabular-nums text-primary">{tx.voucherNumber}</span>
@@ -193,7 +182,7 @@ export default function Ledgers() {
           {filtered.map((ledger) => (
             <div key={ledger.ledgerId}
               onClick={() => setSelectedLedgerId(ledger.ledgerId)}
-              className={clsx("px-3 py-2.5 cursor-pointer border-b border-bg-border/50 transition-colors",
+              className={clsx("px-3 py-2.5 cursor-pointer border-b border-bg-border/50 transition-colors duration-100 active:bg-bg-border/50",
                 selectedLedgerId === ledger.ledgerId ? "bg-accent/15 border-l-2 border-l-accent" : "hover:bg-bg-border/30")}>
               <div className="text-xs font-sans text-primary truncate">{ledger.name}</div>
               <div className="flex items-center justify-between mt-0.5">
@@ -262,7 +251,7 @@ export default function Ledgers() {
                       </td>
                     </tr>
                     {ledgerTransactions.map((tx, i) => (
-                      <tr key={i} className="responsive-table-row">
+                      <tr key={`${tx.voucherNumber}-${i}`} className="responsive-table-row">
                         <td className="table-cell text-muted whitespace-nowrap">{fmtDate(tx.date)}</td>
                         <td className="table-cell-mono">{tx.voucherNumber}</td>
                         <td className="table-cell text-muted whitespace-nowrap">{tx.type}</td>

@@ -1,0 +1,391 @@
+{
+  "version": "1.0",
+  "exportedAt": "2026-05-23T06:40:07.396Z",
+  "groups": [
+    {
+      "id": "grp_default_dewan_rubber",
+      "name": "Dewan Rubber",
+      "description": "Dewan rubber products and components",
+      "color": "#ec4899",
+      "tags": ["dewan-rubber"],
+      "itemIds": [
+        "TUBE 2.75 - 17",
+        "TUBE 2.75 - 18",
+        "TUBE 3.00 - 18",
+        "TUBE 3.75-12",
+        "TUBE 90/90-12",
+        "TYRE 2.75-17 RIB",
+        "TYRE 2.75 X 17 HARIO",
+        "TYRE 2.75 X 18 HARIO",
+        "TYRE 2.75 X 18 TRACKER",
+        "TYRE 3.00 X 17 TRACKER",
+        "TYRE 3.00 X 18 TRACKER",
+        "TYRE 3.75-12 LUG VSD",
+        "TYRE 3.75 X 12 TRACKER",
+        "TYRE 90/90-12 TT"
+      ]
+    },
+    {
+      "id": "grp_default_togo_default",
+      "name": "Togo (Default)",
+      "description": "Default group for Togo and unclassified items",
+      "color": "#64748b",
+      "tags": ["togo-default"],
+      "itemIds": [
+        "BABY SEAT", "BACK FOOT REST PIPE", "BACK FOOT REST TOGO CP HD",
+        "BACK STAY TOGO 20\" RB", "BACK STAY TOGO 22\"",
+        "BALL 1/4 TOGO", "BALL 1/8 TOGO", "BALL 5/32 TOGO",
+        "BALL RACER TOGO 1/8", "BALL RACER TOGO 5\\32",
+        "B B AXLE & CUP PT TOGO", "B.B. AXLE & CUP RT TOGO", "B.B. AXLE LEE ( RANGER )",
+        "B B AXLE TOGO PT", "B B CUP TOGO PT", "B.B. FITT TOGO PT (ST OF 4)",
+        "BELL CROWN", "BELL CROWN GEAR TYPE", "BELL CROWN MINI",
+        "BELL DOLLAR", "BELL GEAR TYPE ( DLR )", "BELL GEAR TYPE FULL BLACK",
+        "BELL LADY DOLLAR", "BELL LADY TOGO", "BELL MACHINE LADY TOGO",
+        "BELL MACHINE TOGO", "BELL TOGO", "BELL TOGO COLOUR MIX", "BELL T/TONE",
+        "BRAKE CHIMTA BACK PT", "BRAKE CHIMTA FRONT 20\"", "BRAKE CHIMTA FRONT PT 22''",
+        "BRAKE CHIMTA HD", "BRAKE CLIP DOLLAR PT", "BRAKE CLIP RK HD",
+        "BRAKE CLIP TOGO PT", "BRAKE CLUTCH ALLOY", "BRAKE CLUTCH KID",
+        "BRAKE CLUTCH NYLON-427", "BRAKE CLUTCH SLR", "BRAKE DRAW BOLT PT",
+        "BRAKE GUCHHA HT", "BRAKE PANJA MTB", "BRAKE PANJA SLR",
+        "BRAKE PIPE 20''", "BRAKE PIPE BACK PH 22''", "BRAKE RUBBER PT",
+        "BRAKE SET SLR", "BRAKE SET V BRAKE", "BRAKE SHOE AXN", "BRAKE SHOE IMPEX",
+        "BRAKE SHOE MTB", "BRAKE SHOE  ( POWER )", "BRAKE SHOE +  RUBBER PT",
+        "BRAKE SHOE SLR TOGO", "BRAKE SHOE TOGO PT",
+        "BRAKE WIRE GENTS SLR", "BRAKE WIRE KID", "BRAKE WIRE LADY SLR",
+        "BRAKE WIRE LS PT", "BRAKE WIRE RANGER",
+        "CARRIER 20''", "CARRIER 4 PATTI DOLLAR", "CARRIER 4 PATTI TOGO", "CARRIER CLIP",
+        "CHAIN ADJUSTER TOGO", "CHAIN COVER 14X1.75", "CHAIN COVER 16X1.75",
+        "CHAIN COVER  20X1.75", "CHAIN COVER BRUTE MTB", "CHAIN COVER FITTING",
+        "CHAIN COVER LADY BIRD", "CHAIN COVER TOGO 20\" BLUE", "CHAIN COVER TOGO 20'' RB",
+        "CHAIN COVER TOGO BLK", "CHAIN COVER TOGO GR", "CHAIN DOLLAR CYCLE",
+        "CHAIN STAY BOLT", "CHAIN STAY TOGO 20\"", "CHAIN STAY TOGO PT",
+        "CHAIN TOGO CYCLE", "CHAIN TOGO CYCLE GOLD", "CHAIN TOGO SUPER CYCLE",
+        "CHAIN TOGO SUPER RK", "CLUTCH DANDI", "COTTER PIN DOLLAR ST",
+        "COTTER PIN TOGO OS", "COTTER PIN TOGO ST", "CYCLE DISC BRAKE MACHINE",
+        "FIVE NUT BOLT", "FORK FITTING TOGO HD", "FORK SUSPENSION 26T THREADLESS",
+        "FORK SUSPENSION TYPE 24T", "FORK ( SUSPENSION TYPE ) 26T", "FORK THREAD",
+        "FORK TOGO 20\" BLUE", "FORK  TOGO 20\" RB", "FORK TOGO 20 X 1.75",
+        "FORK TOGO FOTAN SLR", "FORK TOGO GREEN", "FORK TOGO LADYBIRD PINK",
+        "FORK TOGO MTB", "FRAME CUP HD",
+        "GEAR DOLLAR 40TH", "GEAR DOLLAR 40 W/O L. CRANK", "GEAR DOLLAR 44TH",
+        "GEAR DOLLAR 44T W/O L CRANK", "GEAR DOLLAR 44 W/O L. CRANK",
+        "GEAR TOGO 40TH", "GEAR TOGO 44 TH", "GEAR TOGO 48 TH",
+        "HANDLE GRIP 26 X 1.75", "HANDLE GRIP BLACK PT", "HANDLE HATHI PH. TYPE",
+        "HANDLE LEVER HT BACK", "HANDLE TOGO 20\"", "HANDLE TOGO 20 X 1.75",
+        "HANDLE TOGO 26 X 1.75", "HANDLE TOGO LADYBIRD", "HANDLE TOGO PT",
+        "HANDLE TOGO THREADLESS ( WITH STEM)", "HANDLE WIRE PT",
+        "HEAD RACER BRUTE", "HEADRACER MTB THREADLESS",
+        "HUB AXLE NUT BACK", "HUB AXLE TOGO HD", "HUB CONE TOGO BACK",
+        "HUB CUP TOGO BC", "HUB CUP TOGO B PLAIN",
+        "HUBS 28 HOLE", "HUBS 36 HOLE BACK", "HUBS 36 HOLE FRONT",
+        "HUBS DOLLAR 14G BACK", "HUBS DOLLAR 14G FRONT",
+        "HUBS MEGA BACK", "HUBS MEGA FRONT", "HUBS TOGO 10G BACK", "HUBS TOGO 12G BACK",
+        "HUBS TOGO BACK 14G", "HUBS TOGO PT PAIR",
+        "LITHIUM CHARGER 24V   3AMP", "LITHIUM ION BATTERY ( 36V 10AH )",
+        "MUDGUARD BACK PATTI DOLLAR", "MUDGUARD BACK PATTI TOGO", "MUDGUARD CLUMP RT",
+        "MUDGUARD DLR FRONT 20\" SQ RB", "MUDGUARD DLR LADYBIRD PINK",
+        "MUDGUARD DLR PAIR 20'' BLUE SQ", "MUDGUARD DLR PAIR 20'' RB SQ",
+        "MUDGUARD DLR PAIR GREEN",
+        "MUDGUARD PVC 20 X 1.75", "MUDGUARD PVC 26 X 1.75",
+        "MUDGUARD PVC FRONT BLACK", "MUDGUARD PVC FRONT BLUE",
+        "MUDGUARD PVC FRONT GREEN", "MUDGUARD PVC FRONT RB",
+        "MUDGUARD PVC PAIR 20\" BLUE", "MUDGUARD PVC PAIR BLACK",
+        "MUDGUARD PVC PAIR GREEN", "MUDGUARD PVC PAIR RB",
+        "MUDGUARD SCREW DLR MIX", "MUDGUARD SCREW TOGO 1\"",
+        "MUDGUARD SCREW TOGO 1/2\"", "MUDGUARD SCREW TOGO 3/4 \"",
+        "MUDGUARD SCREW TOGO MIX", "MUDGUARD STICK RANGER",
+        "MUDGUARD STICKS 20\" ( PCS )", "MUDGUARD STICKS HD ( PCS )",
+        "PADDLE AXLE 20'' PR", "PADDLE AXLE PT", "PADDLE BAR NUT PT",
+        "PADDLE CONE TOGO PT", "PADDLE DOLLAR", "PADDLE DOLLAR 20\"",
+        "PADDLE TOGO 20''", "PADDLE TOGO HD", "PADDLE TOGO PVC",
+        "PADDLE TOGO PVC KID", "PADDLE TOGO PVC LADYBIRD",
+        "PRIMIUM HORN ( DH-100 )",
+        "PUMP BOOM 35MM COLOUR", "PUMP CONNECTION BLACK TPR 12MM",
+        "PUMP DOLLAR BCP", "PUMP DOLLAR COLOUR", "PUMP DON2 PRIME BCP",
+        "PUMP DON2 PRIME BLACK HD", "PUMP TOGO NO 1 BCP",
+        "PUMP TOGO NO 1 BCP D/NOZZLE",
+        "REFLECTOR BLACK", "RIM ALLOY 26 X 1.75", "RIM ALLOY 29 X 1.75",
+        "RUBBER SOLUTION TOGO ( 113 ML )",
+        "SCREW RACER TOGO 1/8", "SCREW RACER TOGO 5/32",
+        "SEAT BACK PLATE 99", "SEAT BACK SPRING TOGO",
+        "SEAT CATCHER DLR", "SEAT CATCHER TOGO", "SEAT COMFO", "SEAT COMMANDO",
+        "SEAT DOLLAR FOTAN", "SEAT DOLLAR LADYBIRD", "SEAT DOLLAR P.U.",
+        "SEAT FOTAN", "SEAT FRONT SPRING DOLLAR", "SEAT FRONT SPRING TOGO",
+        "SEAT HOOK", "SEAT JOINT BOLT", "SEAT LADY BIRD", "SEAT LATTO TYPE",
+        "SEAT PILLER", "SEAT RELEASE DELUX", "SEAT RELEASE TYPE", "SEAT RIVIT",
+        "SEAT SLR BAPPI", "SEAT SLR DLR", "SEAT SLR PUFF", "SEAT SLR TOGO",
+        "SEAT TOGO GOLD", "SEAT TOGO KID T-103", "SEAT TOGO KID T-104",
+        "SEAT TOGO NO.2", "SEAT TOGO P.U.", "SEAT TOGO PU 106",
+        "SEAT TOGO P.U. JUNIOR", "SEAT TOGO PU MTB", "SEAT TOP PVC",
+        "SHARI GUARD SILVER",
+        "SIDE STAND 16 X 1.75", "SIDE STAND 20 X 1.75",
+        "SIDE STAND 26 X 1.75 ( SINGLE NUT )", "SIDE SUPPORT",
+        "TOOL- PLIER BOX JT. 10\"", "TOOL- PLIER BOX JT. 10\" ( 50 PCS )",
+        "BASKET KID",
+        "FREEWHEEL TOGO 18TH FB", "FREEWHEEL TOGO 18TH SUPER"
+      ]
+    },
+    {
+      "id": "grp_default_others",
+      "name": "OTHERS",
+      "description": "",
+      "color": "#f97316",
+      "tags": [],
+      "itemIds": [
+        "BALL TOGO SUPER 6.35MM",
+        "BATTERY CASE ( METAL HAILONG TYPE )",
+        "BICYCLE EPIC 24T IBC", "BICYCLE EPIC 26T IBC",
+        "BICYCLE TAIL LIGHT BK-1819",
+        "BICYCLE TOGO LADY 20\" RB", "BICYCLE TOGO LADY BLACK",
+        "BICYCLE ZIG ZAG 20T",
+        "TYRE 2.75 X 17 FS 183 FIRESTAR", "TYRE 2.75 X 18 FS 182 FIRESTAR",
+        "TYRE 3.75 X 12 FS 182 FIRESTAR"
+      ]
+    },
+    {
+      "id": "grp_default_spoke",
+      "name": "Spoke",
+      "description": "Spokes and spoke-related items",
+      "color": "#f97316",
+      "tags": ["spoke"],
+      "itemIds": [
+        "SPOKE DOLLAR 13G", "SPOKE DOLLAR 13G 26 1/2",
+        "SPOKE DOLLAR 14G", "SPOKE DOLLAR 14G 26 1/2",
+        "SPOKE TOGO 10G HD", "SPOKE TOGO 12G HD",
+        "SPOKE TOGO 13G 26 1/2 HD", "SPOKE TOGO 13G HD",
+        "SPOKE TOGO 14G 26 1/2 HD", "SPOKE TOGO 14G 26 1. 3/8 HD",
+        "SPOKE TOGO 14G HD", "SPOKE TOGO 14G RANGER"
+      ]
+    },
+    {
+      "id": "grp_default_veer_wheels",
+      "name": "Veer Wheels",
+      "description": "Veer brand wheels and related components",
+      "color": "#d946ef",
+      "tags": ["veer-wheels"],
+      "itemIds": [
+        "FORK GUARD DOLLAR 20\"", "FORKGUARD DOLLAR 22\"",
+        "FORKGUARD TOGO 20\"", "FORKGUARD TOGO 22\"",
+        "RIM DLR", "RIM TOGO 26 X 1.1/2  ( 36 HOLE )",
+        "RIM TOGO 26 X 1.1/2 BACK", "RIM TOGO 26 X 1.1/2 FRONT",
+        "RIM TOGO 26 X 1.3/8 (36 H)", "RIM TOGO 28 X 1.1/2 (36 H)",
+        "RIM TOGO 28 X 1.1/2 BACK", "RIM  TOGO 28 X 1.1/2 FRONT",
+        "RIM TOGO EX HD 10G", "RIM TOGO EX HD 12G",
+        "RIM TOGO RANGER ( 26X1.75 )", "RIM TOGO SUPER 2KG",
+        "ROD SPOKE TOGO"
+      ]
+    },
+    {
+      "id": "grp_default_bicycle_daman",
+      "name": "Bicycle Daman",
+      "description": "Daman bicycle parts and components",
+      "color": "#84cc16",
+      "tags": ["bicycle-daman"],
+      "itemIds": [
+        "BICYCLE TARZAN 16X1.75", "BICYCLE TARZAN 20X1.75",
+        "BICYCLE TREND 14X1.75", "BICYCLE TREND 16X1.75", "BICYCLE TREND 20X1.75"
+      ]
+    },
+    {
+      "id": "grp_default_tricycle_dash",
+      "name": "Tricycle Dash",
+      "description": "Dash brand tricycle parts",
+      "color": "#7c3aed",
+      "tags": ["tricycle-dash"],
+      "itemIds": [
+        "BABY CAR BUMBLE BEE DC 110", "BABY CAR TRANSFORMERS",
+        "BABY CAR  TWIST TC 100", "BABY MARSHAL",
+        "BABY RIDEON EVOK 3 IN 1", "BABY ROCKER MONKEY RIDE ON",
+        "BABY SCOOTER POWER RANGER", "BABY TRICYCLE DUNA 3 IN 1",
+        "BABYTRICYCLE HIMALAYAN", "BABY SCOOTER HECTOR",
+        "BABY TRICYCLE MUGAL 999 MUSIC", "BABY TRICYCLE NODDY DX",
+        "BABY TRICYCLE PUNCH 4 IN 1", "BABY TRICYCLE RACER 2 IN 1",
+        "BABY TRICYCLE RACER 3 IN 1", "BABY TRICYCLE REGAL",
+        "BABY TRICYCLE THUNDER 2 IN 1", "BABY TRICYCLE THUNDER THREE IN ONE",
+        "BABY TRICYCLE TT-110", "BABY TRICYCLE VEGA", "BABY TRICYCLE VEGA DX",
+        "BABY WALKER CRYSTAL DX", "BABY WALKER HERBY DX", "BABY WALKER KIKI ( TW-130 )",
+        "ELECTRIC BIKE CB 350 PRO EV", "ELECTRIC BIKE HIMALAYAN PRO EV",
+        "ELECTRIC BIKE MT 15 PRO EV", "ELECTRIC CAR WRAGLER PRO EV",
+        "BABY TRICYCLE HUNTER  ( TT 140 )"
+      ]
+    },
+    {
+      "id": "grp_default_bicycle_dawar",
+      "name": "BICYCLE DAWAR",
+      "description": "",
+      "color": "#84cc16",
+      "tags": [],
+      "itemIds": [
+        "BICYCLE AVIATOR 26T FS AR DD", "BICYCLE AVIATOR CARRIER 26T FS AR DD",
+        "BICYCLE DAISY LADYBIRD 26T PEACH", "BICYCLE DAISY LADYBIRD 26T PINK",
+        "BICYCLE FIREFLY 26T DD DIAMOND CUT AR"
+      ]
+    },
+    {
+      "id": "grp_default_bicycle_denvok",
+      "name": "Bicycle Denvok",
+      "description": "Denvok bicycle parts and components",
+      "color": "#10b981",
+      "tags": ["bicycle-denvok"],
+      "itemIds": [
+        "BICYCLE DENVOK 20T",
+        "BICYCLE ANN. EDITION 26T BLACK GOLD",
+        "BICYCLE ANN EDITION 26T MULTI SPEED BLACK",
+        "BICYCLE ANN EDITION 26T MULTI SPEED WHITE",
+        "BICYCLE ANN. EDITION 26T WHITE GOLD",
+        "BICYCLE MARCELLA 26T DD FS AR GREY",
+        "BICYCLE OSLO 26T DD FS AR MULTI SPEED",
+        "BICYCLE OSLO 26T DD FS AR SILVER",
+        "BICYCLE OSLO 26T FS DD AR GREEN",
+        "BICYCLE BERLIN 26T"
+      ]
+    },
+    {
+      "id": "grp_default_sunshine_auto",
+      "name": "Sunshine Auto",
+      "description": "Sunshine Auto components",
+      "color": "#ea580c",
+      "tags": ["sunshine-auto"],
+      "itemIds": [
+        "BALL FG 1/4", "BALL FG 5/32",
+        "RIM MOTOR CYCLE 2.75 X 18   ( 36 HOLE )",
+        "RIM MOTOR CYCLE 300 X 18   ( 36 HOLE )"
+      ]
+    },
+    {
+      "id": "grp_default_birdi",
+      "name": "Birdi",
+      "description": "Birdi brand components",
+      "color": "#8b5cf6",
+      "tags": ["birdi"],
+      "itemIds": [
+        "CHAIN BIRDI CYCLE", "FREE WHEEL BIRDI 18TH",
+        "FREE WHEEL BIRDI 18TH FB", "FREE WHEEL BIRDI 22TH",
+        "CHAIN JUMBO HD", "CHAIN TIGER CYCLE", "FREE WHEEL JAMBO 22TH"
+      ]
+    },
+    {
+      "id": "grp_default_bicycle_amrit",
+      "name": "Bicycle Amrit",
+      "description": "Amrit bicycle parts and components",
+      "color": "#f59e0b",
+      "tags": ["bicycle-amrit"],
+      "itemIds": [
+        "BICYCLE BERLIN 14T", "BICYCLE BERLIN 16T", "BICYCLE BERLIN 20T",
+        "BICYCLE BRAVO 14T X 2.80", "BICYCLE BRAVO 16T X 2.125", "BICYCLE BRAVO 20T X 2.125",
+        "BICYCLE DARK SMOKE 24T FS DD AR T/LESS NON IBC",
+        "BICYCLE DARK SMOKE 26T  FS DD AR T/LESS IBC",
+        "BICYCLE SAMSTAR SQUAD 20T",
+        "BICYCLE SHOTGUN 14T X 2.80", "BICYCLE SHOTGUN 16T X 2.125", "BICYCLE SHOTGUN 20T X 2.125",
+        "BICYCLE SNOOPY 14T X 2.80", "BICYCLE SNOOPY 16T X 2.125",
+        "BICYCLE SWAGGER 14T X 2.80", "BICYCLE SWAGGER 16T X 2.125", "BICYCLE SWAGGER 20T X 2.125"
+      ]
+    },
+    {
+      "id": "grp_default_tricycle_karni",
+      "name": "Tricycle Karni",
+      "description": "Karni brand tricycle parts",
+      "color": "#db2777",
+      "tags": ["tricycle-karni"],
+      "itemIds": [
+        "BABY TRICYCLE ACE", "BABY TRICYCLE ALVIN PARENTAL DLX",
+        "BABY TRICYCLE BOXER JADU BB MSC B/W", "BABY TRICYCLE DIRT BIKE",
+        "BABY TRICYCLE HUNTER", "BABY TRICYCLE MINI RAMBO",
+        "BABY TRICYCLE MUGHAL DLX RACER BB MSC AMPHA", "BABY TRICYCLE NEXON",
+        "BABY TRICYCLE ROUND RABBIT B/W", "BABY TRICYCLE WHEEL",
+        "BABY WALKER BUTTERFLY", "BABY WALKER D.H. ( M )",
+        "BABY WALKER KITTY CAPSULE HANDLE", "BABY WALKER S.H. ( M )",
+        "BABY WALKER S.H.  ( TIGER  )", "BABY WALKER ZOOM ( M )"
+      ]
+    },
+    {
+      "id": "grp_default_basket",
+      "name": "Basket",
+      "description": "Bicycle baskets and cargo carriers",
+      "color": "#6366f1",
+      "tags": ["basket"],
+      "itemIds": [
+        "BICYCLE BASKET ( BLACK )", "BICYCLE BASKET EHD",
+        "BICYCLE BASKET ROUND BLUE", "BICYCLE BASKET ROUND PINK", "BICYCLE BASKET ROUND SILVER",
+        "BICYCLE BASKET SQUARE BLUE", "BICYCLE BASKET SQUARE PINK"
+      ]
+    },
+    {
+      "id": "grp_default_kw_engineering",
+      "name": "KW Engineering",
+      "description": "KW Engineering components and parts",
+      "color": "#3b82f6",
+      "tags": ["kw-engineering"],
+      "itemIds": [
+        "BALL RACER KW 1/8", "BALL RACER KW 5/32", "CHECK NUT KW",
+        "FORK KW", "FORK KW 20\" BLACK", "FORK KW 20\" BLUE", "FORK KW 20\" RB",
+        "FORK KW EX STRONG", "FORK KW PT BLACK", "FORK KW PT GREEN",
+        "HANDLE KW", "HANDLE KW 20\"",
+        "MUDGUARD KW BACK CP", "MUDGUARD KW FRONT 20\" SQ BLUE",
+        "MUDGUARD KW FRONT 20\" SQ RB", "MUDGUARD KW FRONT BLACK",
+        "MUDGUARD KW FRONT CP", "MUDGUARD KW FRONT GREEN",
+        "MUDGUARD KW PAIR 20\" SQ BLACK", "MUDGUARD KW PAIR 20'' RB",
+        "MUDGUARD KW PAIR 20'' SQ RB", "MUDGUARD KW PAIR 20SQ BLUE",
+        "MUDGUARD KW PAIR BLACK", "MUDGUARD KW PAIR GREEN",
+        "SCREW RACER KW 1/8", "SCREW RACER KW 5/32"
+      ]
+    },
+    {
+      "id": "grp_default_kw_gears",
+      "name": "KW Gears",
+      "description": "KW Gears and related components",
+      "color": "#06b6d4",
+      "tags": ["kw-gears"],
+      "itemIds": ["GEAR KW 44TH", "GEAR KW 48TH"]
+    },
+    {
+      "id": "grp_default_wasan_engineering",
+      "name": "Wasan Engineering Works",
+      "description": "Wasan Engineering products and components",
+      "color": "#0891b2",
+      "tags": ["wasan-engineering"],
+      "itemIds": [
+        "FRAME KW CYCLE 22\"", "FRAME KW CYCLE 22'' GREEN",
+        "BACK STAY KW 20\" RB", "BACK STAY KW 22''", "BACK STAY KW 24\"",
+        "CHAIN COVER KW HALF BLACK", "CHAIN COVER KW HALF BLUE",
+        "CHAIN COVER KW HALF GREEN", "CHAIN COVER KW HALF RB",
+        "CHAIN STAY KW 20\" BLUE", "CHAIN STAY KW 20\" RB", "CHAIN STAY KW PT BLACK",
+        "FRAME KW 9 BAR", "FRAME KW 20'' GENTS",
+        "FRAME KW 20'' LADY BLUE", "FRAME KW 20'' LADY RB",
+        "FRAME KW CYCLE 22 (D/ BAR)", "FRAME KW CYCLE 24''", "FRAME KW DLX"
+      ]
+    },
+    {
+      "id": "grp_default_locks",
+      "name": "Locks",
+      "description": "Bicycle locks and locking mechanisms",
+      "color": "#ef4444",
+      "tags": ["locks"],
+      "itemIds": [
+        "CYCLE LOCK EURO BLACK", "CYCLE LOCK EURO BLUE",
+        "CYCLE LOCK EURO GREEN", "CYCLE LOCK EURO RED",
+        "CYCLE LOCK IMPEX CP",
+        "CYCLE LOCK JUMBO BCP", "CYCLE LOCK JUMBO BLACK",
+        "CYCLE LOCK JUMBO BLUE", "CYCLE LOCK JUMBO GREEN", "CYCLE LOCK JUMBO RB",
+        "CYCLE LOCK KIRAN BLACK", "CYCLE LOCK KIRAN GREEN",
+        "CYCLE LOCK KIRAN RANGER BLACK", "CYCLE LOCK KIRAN RED",
+        "CYCLE LOCK M.A. (GH) BLACK", "CYCLE LOCK M.A. (GH) GREEN",
+        "CYCLE LOCK M.A. (GH) RED",
+        "MULTIPURPOSE WIRE LOCK EURO KING", "MULTIPURPOSE WIRE LOCK- FLEX",
+        "MULTIPURPOSE WIRE LOCK JUMBO", "MULTIPURPOSE WIRE LOCK NOVA"
+      ]
+    },
+    {
+      "id": "grp_default_bhogal",
+      "name": "Bhogal",
+      "description": "Bhogal brand components",
+      "color": "#a855f7",
+      "tags": ["bhogal"],
+      "itemIds": [
+        "B.B. AXLE & CUP BHOGAL PT", "B.B. AXLE & CUP BHOGAL RT",
+        "HUB AXLE BHOGAL HD", "HUB CONE BHOGAL BACK",
+        "HUB CUP BHOGAL BACK COLLAR", "HUB CUP BHOGAL BACK PLAIN"
+      ]
+    }
+  ]
+}

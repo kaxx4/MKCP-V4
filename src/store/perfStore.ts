@@ -125,7 +125,7 @@ export const usePerfStore = create<PerfState>((set, get) => ({
   },
 
   addRouteChange: (change) => {
-    set((s) => ({ routeChanges: [...s.routeChanges, { ...change, id: uid() }] }));
+    set((s) => ({ routeChanges: [...s.routeChanges.slice(-400), { ...change, id: uid() }] }));
   },
 
   addMarker: (label, route) => {

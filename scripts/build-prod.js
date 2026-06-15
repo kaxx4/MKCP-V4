@@ -30,14 +30,13 @@ function run(cmd, opts = {}) {
   }
 }
 
-/** Read output dir from electron-builder.json5 (strips comments) */
+/** Read output dir from electron-builder.json5 using regex (avoids full JSON5 parse) */
 function getOutputDir() {
   try {
     const raw = readFileSync(join(ROOT, 'electron-builder.json5'), 'utf8');
-    // Strip // comments then parse
-    const stripped = raw.replace(/\/\/[^\n]*/g, '');
-    const cfg = JSON.parse(stripped);
-    return cfg?.directories?.output ?? 'release';
+    // Extract: output: "someValue" — works with or without quoted keys
+    const m = raw.match(/output\s*:\s*["']([^"']+)["']/);
+    return m ? m[1] : 'release';
   } catch {
     return 'release';
   }
@@ -117,9 +116,23 @@ async function main() {
   }
   ok('Express server built → server/dist/');
 
+  // Step 3.5: Strip server dev-dependencies before packaging.
+  // typescript (~70 MB), tsx + esbuild (~20 MB), @types/node (~12 MB) are only
+  // needed to compile the server — they have zero runtime use. Pruning them here
+  // cuts ~100 MB from server/node_modules before electron-builder bundles it into
+  // the asar, shrinking the installer and reducing RAM needed for module resolution.
+  step('Pruning server dev-dependencies (typescript, tsx, @types)...');
+  run('npm prune --omit=dev', { cwd: join(ROOT, 'server') });
+  ok('Server devDeps pruned — installer will be ~100 MB smaller');
+
   // Step 4: Run electron-builder
   step('Building Electron installer...');
   run('npx electron-builder --win --config electron-builder.json5');
+
+  // Step 4.5: Restore server devDependencies so the workspace stays usable for development.
+  step('Restoring server dev-dependencies for development...');
+  run('npm install', { cwd: join(ROOT, 'server') });
+  ok('Server devDeps restored');
 
   // Step 5: Verify output
   step('Verifying output...');

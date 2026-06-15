@@ -52,6 +52,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: auto;
+    text-wrap: pretty;
     overflow-x: hidden;
   }
 
@@ -96,13 +97,15 @@
   .card-elevated {
     @apply bg-white rounded-xl shadow-base
            p-4
-           transition-[box-shadow] duration-100;
+           transition-[box-shadow,transform] duration-150
+           hover:shadow-md hover:-translate-y-px;
   }
 
   .card-interactive {
     @apply card cursor-pointer
            hover:shadow-md hover:border-neutral-300
-           transition-[box-shadow,border-color] duration-100;
+           active:scale-[0.98]
+           transition-[box-shadow,border-color,transform] duration-100;
   }
 
   /* Bento grid */
@@ -138,6 +141,7 @@
     @apply text-2xl font-bold text-neutral-950;
     letter-spacing: -0.02em;
     font-weight: 700;
+    text-wrap: balance;
   }
 
   /* Page Subtitle — 13px/500 — below page title */
@@ -151,18 +155,21 @@
     @apply text-xl font-bold text-neutral-950;
     letter-spacing: -0.01em;
     font-weight: 700;
+    text-wrap: balance;
   }
 
   /* Subsection Header — 16px/700 */
   .subsection-header {
     @apply text-lg font-bold text-neutral-900;
     font-weight: 700;
+    text-wrap: balance;
   }
 
   /* Card Title — 16px/700 — inside cards */
   .card-title {
     @apply text-lg font-bold text-neutral-900;
     font-weight: 700;
+    text-wrap: balance;
   }
 
   /* Card Subtitle — 14px/500 */
@@ -218,6 +225,7 @@
 
   .table-scroll {
     @apply overflow-x-auto -mx-5 px-5 md:-mx-6 md:px-6;
+    overscroll-behavior-x: none;
   }
 
   .data-table {
@@ -295,11 +303,12 @@
            overflow-x-auto -mx-5 px-5 md:mx-0 md:px-0;
     -ms-overflow-style: none;
     scrollbar-width: none;
+    overscroll-behavior-x: none;
   }
   .tab-list::-webkit-scrollbar { display: none; }
 
   .tab-item {
-    @apply px-4 py-3 text-sm font-medium text-neutral-500
+    @apply px-4 py-3 text-sm font-semibold text-neutral-500
            border-b-2 border-transparent
            transition-colors duration-150 cursor-pointer
            hover:text-neutral-900
@@ -307,7 +316,7 @@
   }
 
   .tab-item-active {
-    @apply text-accent border-accent font-semibold;
+    @apply text-accent border-accent;
   }
 
   .tab-pills {
@@ -317,8 +326,9 @@
   .tab-pill {
     @apply px-3 py-1.5 text-xs font-medium text-neutral-600
            rounded-full border border-neutral-200
-           transition-colors duration-150 cursor-pointer
-           hover:text-neutral-900 hover:bg-neutral-50;
+           transition-[background-color,color,transform] duration-150 cursor-pointer
+           hover:text-neutral-900 hover:bg-neutral-50
+           active:scale-[0.96];
   }
 
   .tab-pill-active {
@@ -332,7 +342,7 @@
   .btn-base {
     @apply inline-flex items-center justify-center gap-2
            font-semibold text-sm rounded-lg
-           transition-all duration-200
+           transition-[background-color,border-color,box-shadow,color,transform] duration-150
            disabled:opacity-50 disabled:cursor-not-allowed
            focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2;
     font-weight: 600;
@@ -341,49 +351,51 @@
   .btn-primary {
     @apply btn-base min-h-10 px-5 py-2.5
            bg-accent text-white font-bold
-           hover:bg-accent-700 active:bg-accent-800
+           hover:bg-accent-700 active:bg-accent-800 active:scale-[0.96]
            shadow-sm hover:shadow-md;
     font-weight: 700;
   }
 
   .btn-secondary {
-    @apply btn-base min-h-9 px-4 py-2
+    @apply btn-base min-h-10 px-4 py-2
            bg-white text-neutral-900 border border-neutral-200
-           hover:bg-neutral-50 active:bg-neutral-100
+           hover:bg-neutral-50 active:bg-neutral-100 active:scale-[0.96]
            shadow-xs;
   }
 
   .btn-ghost {
-    @apply btn-base px-3 py-2 text-neutral-600
+    @apply btn-base min-h-10 px-3 py-2 text-neutral-600
            hover:text-neutral-900 hover:bg-neutral-100
-           active:bg-neutral-200;
+           active:bg-neutral-200 active:scale-[0.96];
   }
 
   .btn-danger {
-    @apply btn-base min-h-9 px-4 py-2
+    @apply btn-base min-h-10 px-4 py-2
            bg-danger text-white font-semibold
-           hover:bg-danger-600 active:bg-danger-700;
+           hover:bg-danger-600 active:bg-danger-700 active:scale-[0.96];
   }
 
   .btn-accent-ghost {
-    @apply btn-base px-3 py-2 text-accent
+    @apply btn-base min-h-10 px-3 py-2 text-accent
            hover:text-accent-700 hover:bg-accent/10
-           active:bg-accent/20;
+           active:bg-accent/20 active:scale-[0.96];
   }
 
   .btn-icon {
-    @apply flex items-center justify-center w-9 h-9
+    @apply flex items-center justify-center w-10 h-10
            rounded-lg text-neutral-500
            hover:text-neutral-900 hover:bg-neutral-100
-           transition-colors duration-150
+           transition-[background-color,color,transform] duration-150
+           active:scale-[0.96]
            disabled:opacity-50;
   }
 
   .btn-icon-accent {
-    @apply flex items-center justify-center w-9 h-9
+    @apply flex items-center justify-center w-10 h-10
            rounded-lg text-accent
            hover:bg-accent/10
-           transition-colors duration-150;
+           transition-[background-color,transform] duration-150
+           active:scale-[0.96];
   }
 
   .btn-sm { @apply text-xs min-h-7 px-2.5 py-1; }
@@ -533,11 +545,13 @@
 
   .modal-overlay {
     @apply fixed inset-0 bg-black/40 flex items-center justify-center z-50;
+    animation: fadeIn 0.15s cubic-bezier(0.2, 0, 0, 1);
   }
 
   .modal-content {
     @apply bg-white rounded-2xl shadow-xl
            max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto;
+    animation: modalPop 0.2s cubic-bezier(0.2, 0, 0, 1);
   }
 
   .modal-header {
@@ -603,6 +617,7 @@
 
   .empty-state-title {
     @apply text-lg font-semibold text-neutral-900 mb-2;
+    text-wrap: balance;
   }
 
   .empty-state-description {
@@ -661,7 +676,8 @@
            rounded-full border border-neutral-200
            bg-white text-neutral-600
            hover:border-accent/50 hover:text-accent hover:bg-accent/[0.04]
-           transition-colors duration-150 cursor-pointer;
+           transition-[background-color,border-color,color,transform] duration-150 cursor-pointer
+           active:scale-[0.96];
   }
 
   .filter-chip-active {
@@ -672,10 +688,10 @@
      NUMBER HIGHLIGHTS
      ═══════════════════════════════════════════════════════════ */
 
-  .num-positive  { @apply text-success-600 font-medium; }
-  .num-negative  { @apply text-danger-600 font-medium; }
-  .num-highlight { @apply text-accent font-semibold; }
-  .num-muted     { @apply text-neutral-500 font-normal; }
+  .num-positive  { @apply text-success-600 font-medium tabular-nums; }
+  .num-negative  { @apply text-danger-600 font-medium tabular-nums; }
+  .num-highlight { @apply text-accent font-semibold tabular-nums; }
+  .num-muted     { @apply text-neutral-500 font-normal tabular-nums; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -697,6 +713,57 @@
   @keyframes slideUp {
     from { transform: translateY(100%); }
     to   { transform: translateY(0); }
+  }
+
+  /* Stagger fade-up for grid/list reveals */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-up {
+    animation: fadeUp 0.25s cubic-bezier(0.2, 0, 0, 1) forwards;
+  }
+  .bento-grid > * {
+    animation: fadeUp 0.25s cubic-bezier(0.2, 0, 0, 1) forwards;
+  }
+  .bento-grid > *:nth-child(1)  { animation-delay: 0ms; }
+  .bento-grid > *:nth-child(2)  { animation-delay: 40ms; }
+  .bento-grid > *:nth-child(3)  { animation-delay: 80ms; }
+  .bento-grid > *:nth-child(4)  { animation-delay: 120ms; }
+  .bento-grid > *:nth-child(5)  { animation-delay: 160ms; }
+  .bento-grid > *:nth-child(6)  { animation-delay: 200ms; }
+  .bento-grid > *:nth-child(7)  { animation-delay: 240ms; }
+  .bento-grid > *:nth-child(8)  { animation-delay: 280ms; }
+  .bento-grid > *:nth-child(n+9){ animation-delay: 320ms; }
+
+  /* Overlay fade — for modal backdrops */
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  .animate-fade-in {
+    animation: fadeIn 0.15s cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  /* Modal pop — scale + fade for centered dialogs */
+  @keyframes modalPop {
+    from { opacity: 0; transform: scale(0.97) translateY(4px); }
+    to   { opacity: 1; transform: scale(1)    translateY(0); }
+  }
+  .animate-modal-pop {
+    animation: modalPop 0.2s cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  /* Shake — for disabled-action feedback */
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20%       { transform: translateX(-4px); }
+    40%       { transform: translateX(4px); }
+    60%       { transform: translateX(-3px); }
+    80%       { transform: translateX(3px); }
+  }
+  .animate-shake {
+    animation: shake 0.35s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
   }
 
   /* Text Utilities */
