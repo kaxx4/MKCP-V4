@@ -8,7 +8,6 @@ import { useDiscountStore } from "./store/discountStore";
 import { loadData, loadFromStore } from "./db/idb";
 import { deserializeParsedData } from "./utils/serialize";
 import { useTallyAutoSync } from "./hooks/useTallyAutoSync";
-import { useDeliveryNoteAutoSync } from "./hooks/useDeliveryNoteAutoSync";
 import { usePersistenceMonitor } from "./hooks/usePersistenceMonitor";
 import { useSupabaseConfigSync } from "./hooks/useSupabaseConfigSync";
 import { useSupabaseAutoPushAfterTally } from "./hooks/useSupabaseAutoPushAfterTally";
@@ -20,7 +19,6 @@ function SyncAgent() {
 
   // background sync hooks — keep running even with no rich UI
   useTallyAutoSync();
-  useDeliveryNoteAutoSync();
   usePersistenceMonitor({ verbose: (import.meta as any).env?.DEV });
   useSupabaseConfigSync();
   useSupabaseAutoPushAfterTally();
