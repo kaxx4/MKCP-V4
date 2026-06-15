@@ -1,15 +1,25 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
 import {
   Wifi, WifiOff, RefreshCw, Cloud, CloudOff, CheckCircle, XCircle,
   Clock, Activity, ChevronDown, ChevronUp, Settings, Database,
-  AlertTriangle, Loader2,
+  AlertTriangle, Loader2, RotateCcw, ChevronRight,
 } from "lucide-react";
 import { useTallyStore } from "./store/tallyStore";
 import { useSupabaseSyncStatusStore } from "./store/supabaseSyncStatusStore";
 import { useToast } from "./components/Toast";
 
+// Read-only client for the renderer (publishable key — no service-role).
+// Supabase RLS allows SELECT on public tables with the publishable key.
+const SUPA_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
+const SUPA_ANON = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
+const sbRead = SUPA_URL && SUPA_ANON
+  ? createClient(SUPA_URL, SUPA_ANON, { auth: { persistSession: false } })
+  : null;
+
 const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
 
+// ── Types ────────────────────────────────────────────────────────────────────
 interface PushAgentStatus {
   enabled: boolean;
   agentId: string;
@@ -17,21 +27,68 @@ interface PushAgentStatus {
   tallyHealthy: boolean;
   claimedCount: number;
   last10Results: Array<{ id: string; idempotency_key: string; status: string; error?: string; at: string }>;
+  queueStats: { pending: number; pushing: number; failed: number };
 }
 
 interface TallyHealth {
   connected: boolean;
   tallyUrl: string;
+  current?: string | null;
   error?: string;
-  current?: string;
 }
 
-function fmt(iso: string | null): string {
+interface SyncHistoryRow {
+  id: string;
+  sync_type: "masters" | "vouchers";
+  started_at: string;
+  completed_at: string;
+  success: boolean;
+  duration_ms: number | null;
+  chunk_count: number | null;
+  row_counts: Record<string, number> | null;
+  errors: string[] | null;
+}
+
+interface PushLogRow {
+  id: string;
+  push_queue_id: string;
+  idempotency_key: string;
+  voucher_type: string | null;
+  party: string | null;
+  date: string | null;
+  status: "succeeded" | "failed";
+  tally_vch_id: string | null;
+  attempts: number;
+  last_error: string | null;
+  line_errors: string[] | null;
+  resolved_at: string;
+}
+
+interface FailedQueueRow {
+  id: string;
+  idempotency_key: string;
+  company: string;
+  payload: Record<string, unknown>;
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function fmt(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
   return `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
 }
 
+function fmtDur(ms: number | null | undefined): string {
+  if (ms == null) return "—";
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
+}
+
+// ── Shared UI components ──────────────────────────────────────────────────────
 function Pill({ ok, label }: { ok: boolean | null; label: string }) {
   if (ok === null) return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-neutral-100 text-neutral-500">
@@ -39,24 +96,42 @@ function Pill({ ok, label }: { ok: boolean | null; label: string }) {
     </span>
   );
   return ok ? (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-green-50 text-green-700">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-green-50 text-green-700 font-medium">
       <CheckCircle size={11} /> {label}
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-red-50 text-red-700">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-red-50 text-red-700 font-medium">
       <XCircle size={11} /> {label}
     </span>
   );
 }
 
-function SectionCard({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function Badge({ label, color }: { label: string; color: "green" | "red" | "yellow" | "blue" | "gray" }) {
+  const cls = {
+    green: "bg-green-100 text-green-800",
+    red: "bg-red-100 text-red-800",
+    yellow: "bg-yellow-100 text-yellow-800",
+    blue: "bg-blue-100 text-blue-800",
+    gray: "bg-neutral-100 text-neutral-600",
+  }[color];
+  return <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`}>{label}</span>;
+}
+
+function SectionCard({ title, icon, children, defaultOpen = true }: {
+  title: string; icon: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-neutral-100 bg-neutral-50">
+      <button
+        className="flex items-center gap-2 px-4 py-3 border-b border-neutral-100 bg-neutral-50 w-full text-left"
+        onClick={() => setOpen(v => !v)}
+      >
         <span className="text-neutral-500">{icon}</span>
-        <h2 className="font-semibold text-sm text-neutral-700">{title}</h2>
-      </div>
-      <div className="px-4 py-3">{children}</div>
+        <h2 className="font-semibold text-sm text-neutral-700 flex-1">{title}</h2>
+        {open ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
+      </button>
+      {open && <div className="px-4 py-3">{children}</div>}
     </div>
   );
 }
@@ -65,11 +140,31 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between py-1.5 text-sm border-b border-neutral-50 last:border-0">
       <span className="text-neutral-500 text-xs">{label}</span>
-      <span className="text-neutral-800 font-medium text-right ml-4">{value}</span>
+      <span className="text-neutral-800 font-medium text-right ml-4 max-w-[200px] truncate">{value}</span>
     </div>
   );
 }
 
+function Btn({ onClick, disabled, children, variant = "secondary" }: {
+  onClick: () => void; disabled?: boolean; children: React.ReactNode; variant?: "primary" | "secondary" | "danger";
+}) {
+  const cls = {
+    primary: "bg-blue-600 text-white hover:bg-blue-700",
+    secondary: "border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-700",
+    danger: "border border-red-200 bg-red-50 hover:bg-red-100 text-red-700",
+  }[variant];
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg disabled:opacity-50 disabled:cursor-not-allowed ${cls}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function AgentStatus() {
   const tally = useTallyStore();
   const cloud = useSupabaseSyncStatusStore();
@@ -79,21 +174,58 @@ export default function AgentStatus() {
   const [pushStatus, setPushStatus] = useState<PushAgentStatus | null>(null);
   const [polling, setPolling] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
   const [draining, setDraining] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [syncHistory, setSyncHistory] = useState<SyncHistoryRow[]>([]);
+  const [pushLog, setPushLog] = useState<PushLogRow[]>([]);
+  const [failedJobs, setFailedJobs] = useState<FailedQueueRow[]>([]);
+  const [requeueing, setRequeueing] = useState<string | null>(null);
+  const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
 
-  // editable settings (local state, saved to tallyStore on apply)
+  // settings local state
   const [editCompany, setEditCompany] = useState(tally.companyName);
   const [editProxy, setEditProxy] = useState(tally.proxyUrl);
   const [editFyFrom, setEditFyFrom] = useState(tally.fyFromDate);
   const [editFyTo, setEditFyTo] = useState(tally.fyToDate);
 
+  // ── Data fetch helpers ──────────────────────────────────────────────────────
+  const fetchHistory = useCallback(async () => {
+    if (!sbRead) return;
+    const { data } = await sbRead
+      .from("tally_sync_history")
+      .select("id,sync_type,started_at,completed_at,success,duration_ms,chunk_count,row_counts,errors")
+      .order("started_at", { ascending: false })
+      .limit(20);
+    if (data) setSyncHistory(data as SyncHistoryRow[]);
+  }, []);
+
+  const fetchPushLog = useCallback(async () => {
+    if (!sbRead) return;
+    const { data } = await sbRead
+      .from("push_sync_log")
+      .select("id,push_queue_id,idempotency_key,voucher_type,party,date,status,tally_vch_id,attempts,last_error,line_errors,resolved_at")
+      .order("resolved_at", { ascending: false })
+      .limit(30);
+    if (data) setPushLog(data as PushLogRow[]);
+  }, []);
+
+  const fetchFailedJobs = useCallback(async () => {
+    if (!sbRead) return;
+    const { data } = await sbRead
+      .from("push_queue")
+      .select("id,idempotency_key,company,payload,attempts,last_error,created_at")
+      .eq("status", "failed")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (data) setFailedJobs(data as FailedQueueRow[]);
+  }, []);
+
   const poll = useCallback(async () => {
     setPolling(true);
     try {
       const [h, p] = await Promise.all([
-        fetch(`${BASE}/api/tally/health`).then((r) => r.json()).catch(() => null),
-        fetch(`${BASE}/api/push-agent/status`).then((r) => r.json()).catch(() => null),
+        fetch(`${BASE}/api/tally/health`).then(r => r.json()).catch(() => null),
+        fetch(`${BASE}/api/push-agent/status`).then(r => r.json()).catch(() => null),
       ]);
       setHealth(h);
       if (h?.connected) tally.setConnected(true);
@@ -104,12 +236,42 @@ export default function AgentStatus() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Realtime subscriptions ──────────────────────────────────────────────────
+  const realtimeSetupRef = useRef(false);
   useEffect(() => {
-    poll();
-    const id = setInterval(poll, 10_000);
-    return () => clearInterval(id);
-  }, [poll]);
+    if (!sbRead || realtimeSetupRef.current) return;
+    realtimeSetupRef.current = true;
 
+    sbRead
+      .channel("agent-status-sync")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "tally_sync_history" }, () => {
+        void fetchHistory();
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "push_sync_log" }, () => {
+        void fetchPushLog();
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "push_queue" }, () => {
+        void fetchFailedJobs();
+      })
+      .subscribe();
+
+    return () => {
+      sbRead.channel("agent-status-sync").unsubscribe();
+      realtimeSetupRef.current = false;
+    };
+  }, [fetchHistory, fetchPushLog, fetchFailedJobs]);
+
+  // ── Initial load + poll interval ────────────────────────────────────────────
+  useEffect(() => {
+    void poll();
+    void fetchHistory();
+    void fetchPushLog();
+    void fetchFailedJobs();
+    const id = setInterval(() => { void poll(); }, 10_000);
+    return () => clearInterval(id);
+  }, [poll, fetchHistory, fetchPushLog, fetchFailedJobs]);
+
+  // ── Actions ─────────────────────────────────────────────────────────────────
   async function triggerSync(endpoint: string, body: Record<string, unknown>, label: string) {
     if (syncing) return;
     setSyncing(label);
@@ -123,6 +285,7 @@ export default function AgentStatus() {
       if (j.success) {
         toast(`${label} complete`, "success");
         tally.setLastSync(new Date().toISOString());
+        void fetchHistory();
       } else {
         toast(`${label} failed: ${j.error || "unknown error"}`, "error");
       }
@@ -130,7 +293,6 @@ export default function AgentStatus() {
       toast(`${label} failed: ${e.message}`, "error");
     } finally {
       setSyncing(null);
-      poll();
     }
   }
 
@@ -139,13 +301,36 @@ export default function AgentStatus() {
     setDraining(true);
     try {
       await fetch(`${BASE}/api/push-agent/drain`, { method: "POST" });
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 600));
       await poll();
+      void fetchPushLog();
+      void fetchFailedJobs();
       toast("Drain tick triggered", "success");
-    } catch {
-      toast("Drain trigger failed", "error");
+    } catch { toast("Drain trigger failed", "error"); }
+    finally { setDraining(false); }
+  }
+
+  async function requeueJob(id: string) {
+    if (requeueing) return;
+    setRequeueing(id);
+    try {
+      const r = await fetch(`${BASE}/api/push-agent/requeue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        toast("Job requeued — draining now", "success");
+        void fetchFailedJobs();
+        void poll();
+      } else {
+        toast(`Requeue failed: ${j.error}`, "error");
+      }
+    } catch (e: any) {
+      toast(`Requeue failed: ${e.message}`, "error");
     } finally {
-      setDraining(false);
+      setRequeueing(null);
     }
   }
 
@@ -156,27 +341,30 @@ export default function AgentStatus() {
     toast("Settings saved", "success");
   }
 
-  const company = tally.companyName || "—";
+  function toggleError(id: string) {
+    setExpandedErrors(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
   const connected = health?.connected ?? false;
+  const company = tally.companyName || "—";
   const cloudOk = cloud.config.success !== false && cloud.masters.success !== false && cloud.vouchers.success !== false;
   const cloudLastAt = cloud.vouchers.lastAt || cloud.masters.lastAt || cloud.config.lastAt;
-
-  const statusColors: Record<string, string> = {
-    succeeded: "text-green-700",
-    failed: "text-red-700",
-    retry: "text-yellow-700",
-  };
+  const qs = pushStatus?.queueStats ?? { pending: 0, pushing: 0, failed: 0 };
 
   return (
     <div className="min-h-screen bg-neutral-100 p-4 md:p-6">
       {/* Header */}
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-5 flex items-center justify-between max-w-5xl mx-auto">
         <div>
           <h1 className="text-xl font-bold text-neutral-900">MKCP Sync Agent</h1>
           <p className="text-xs text-neutral-500 mt-0.5">{company}</p>
         </div>
         <button
-          onClick={poll}
+          onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
           disabled={polling}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-600 disabled:opacity-50"
         >
@@ -185,132 +373,284 @@ export default function AgentStatus() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl mx-auto">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mx-auto">
 
-        {/* ── Tally Connection ─────────────────────────────────── */}
+        {/* ── Tally Connection ──────────────────────────────────── */}
         <SectionCard title="Tally" icon={connected ? <Wifi size={15} /> : <WifiOff size={15} />}>
-          <Row
-            label="Status"
-            value={connected
-              ? <Pill ok={true} label="Connected" />
-              : <Pill ok={false} label="Disconnected" />}
-          />
+          <Row label="Status" value={<Pill ok={connected} label={connected ? "Connected" : "Disconnected"} />} />
           <Row label="URL" value={health?.tallyUrl || BASE} />
-          <Row label="Company" value={company} />
+          <Row label="Company" value={health?.current || company} />
           {!connected && health?.error && (
             <p className="mt-2 text-xs text-red-600 bg-red-50 rounded p-2">{health.error}</p>
           )}
         </SectionCard>
 
-        {/* ── Cloud / Supabase ─────────────────────────────────── */}
+        {/* ── Cloud / Supabase ──────────────────────────────────── */}
         <SectionCard title="Supabase Cloud" icon={cloudOk ? <Cloud size={15} /> : <CloudOff size={15} />}>
-          <Row
-            label="Config"
-            value={<Pill ok={cloud.config.success} label={cloud.config.success == null ? "Never" : cloud.config.success ? "OK" : "Error"} />}
-          />
-          <Row
-            label="Masters"
-            value={<Pill ok={cloud.masters.success} label={cloud.masters.success == null ? "Never" : cloud.masters.success ? "OK" : "Error"} />}
-          />
-          <Row
-            label="Vouchers"
-            value={<Pill ok={cloud.vouchers.success} label={cloud.vouchers.success == null ? "Never" : cloud.vouchers.success ? "OK" : "Error"} />}
-          />
+          {(["config", "masters", "vouchers"] as const).map(ch => (
+            <Row key={ch} label={ch.charAt(0).toUpperCase() + ch.slice(1)} value={
+              <span className="flex items-center gap-1">
+                <Pill ok={cloud[ch].success} label={
+                  cloud[ch].success == null ? "Never" : cloud[ch].success ? "OK" : "Error"
+                } />
+                {cloud[ch].retryScheduled && (
+                  <span className="text-[10px] text-yellow-600">retry ~60s</span>
+                )}
+              </span>
+            } />
+          ))}
           <Row label="Last pushed" value={fmt(cloudLastAt)} />
           {cloud.vouchers.error && (
-            <p className="mt-2 text-xs text-red-600 bg-red-50 rounded p-2 truncate">{cloud.vouchers.error}</p>
+            <p className="mt-2 text-xs text-red-600 bg-red-50 rounded p-2 truncate" title={cloud.vouchers.error}>
+              {cloud.vouchers.error}
+            </p>
           )}
         </SectionCard>
 
-        {/* ── Pull Sync ────────────────────────────────────────── */}
-        <SectionCard title="Pull Sync  (Tally → Supabase)" icon={<Database size={15} />}>
-          <Row label="Last full sync" value={fmt(tally.lastSyncAt)} />
-          <Row label="Last masters" value={fmt(tally.lastMastersSyncAt)} />
-          <Row label="Last vouchers" value={fmt(tally.lastVouchersSyncAt)} />
-          <Row label="Last voucher date" value={tally.lastVoucherDate || "—"} />
-          <div className="flex gap-2 mt-3 flex-wrap">
-            <button
-              onClick={() => triggerSync("/api/tally/sync", { company, fromDate: tally.fyFromDate, toDate: tally.fyToDate, mode: "smart" }, "Full sync")}
-              disabled={!!syncing || !connected}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {syncing === "Full sync" ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-              Sync Now
-            </button>
-            <button
-              onClick={() => triggerSync("/api/tally/sync-masters", { company }, "Sync Masters")}
-              disabled={!!syncing || !connected}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 disabled:opacity-50"
-            >
-              {syncing === "Sync Masters" ? <Loader2 size={12} className="animate-spin" /> : null}
-              Sync Masters
-            </button>
-            <button
-              onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: tally.fyFromDate, toDate: tally.fyToDate }, "Sync Daybook")}
-              disabled={!!syncing || !connected}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 disabled:opacity-50"
-            >
-              {syncing === "Sync Daybook" ? <Loader2 size={12} className="animate-spin" /> : null}
-              Sync Daybook
-            </button>
-          </div>
-        </SectionCard>
-
-        {/* ── Push Queue ───────────────────────────────────────── */}
-        <SectionCard title="Push Queue  (Supabase → Tally)" icon={<Activity size={15} />}>
-          {pushStatus ? (
-            <>
-              <Row label="Agent" value={pushStatus.enabled ? <Pill ok={true} label="Running" /> : <Pill ok={false} label="Disabled" />} />
-              <Row label="Tally health" value={<Pill ok={pushStatus.tallyHealthy} label={pushStatus.tallyHealthy ? "Healthy" : "Unreachable"} />} />
-              <Row label="Last tick" value={fmt(pushStatus.lastTick)} />
-              <Row label="Claimed this tick" value={pushStatus.claimedCount} />
-
-              <div className="mt-2">
-                <button
-                  onClick={drainQueue}
-                  disabled={draining || !pushStatus.enabled}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 disabled:opacity-50"
-                >
-                  {draining ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                  Drain Now
-                </button>
+        {/* ── Pull Sync ─────────────────────────────────────────── */}
+        <div className="md:col-span-2">
+          <SectionCard title="Pull Sync  (Tally → Supabase)" icon={<Database size={15} />}>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+              <div className="bg-neutral-50 rounded-lg p-2 text-center">
+                <div className="text-[10px] text-neutral-400 uppercase tracking-wide">Full sync</div>
+                <div className="text-xs font-medium text-neutral-800 mt-0.5 truncate">{fmt(tally.lastSyncAt).split(" ")[0] || "—"}</div>
               </div>
+              <div className="bg-neutral-50 rounded-lg p-2 text-center">
+                <div className="text-[10px] text-neutral-400 uppercase tracking-wide">Masters</div>
+                <div className="text-xs font-medium text-neutral-800 mt-0.5 truncate">{fmt(tally.lastMastersSyncAt).split(" ")[0] || "—"}</div>
+              </div>
+              <div className="bg-neutral-50 rounded-lg p-2 text-center">
+                <div className="text-[10px] text-neutral-400 uppercase tracking-wide">Vouchers</div>
+                <div className="text-xs font-medium text-neutral-800 mt-0.5 truncate">{fmt(tally.lastVouchersSyncAt).split(" ")[0] || "—"}</div>
+              </div>
+              <div className="bg-neutral-50 rounded-lg p-2 text-center">
+                <div className="text-[10px] text-neutral-400 uppercase tracking-wide">Last voucher</div>
+                <div className="text-xs font-medium text-neutral-800 mt-0.5">{tally.lastVoucherDate || "—"}</div>
+              </div>
+            </div>
+            <div className="flex gap-2 flex-wrap mb-4">
+              <Btn variant="primary" onClick={() => triggerSync("/api/tally/sync", { company, fromDate: tally.fyFromDate, toDate: tally.fyToDate, mode: "smart" }, "Full sync")} disabled={!!syncing || !connected}>
+                {syncing === "Full sync" ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                Sync Now
+              </Btn>
+              <Btn onClick={() => triggerSync("/api/tally/sync-masters", { company }, "Sync Masters")} disabled={!!syncing || !connected}>
+                {syncing === "Sync Masters" && <Loader2 size={12} className="animate-spin" />}
+                Sync Masters
+              </Btn>
+              <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: tally.fyFromDate, toDate: tally.fyToDate }, "Sync Daybook")} disabled={!!syncing || !connected}>
+                {syncing === "Sync Daybook" && <Loader2 size={12} className="animate-spin" />}
+                Sync Daybook
+              </Btn>
+            </div>
 
-              {pushStatus.last10Results.length > 0 && (
-                <div className="mt-3">
-                  <p className="text-xs text-neutral-400 mb-1.5">Last 10 results</p>
-                  <div className="space-y-1 max-h-40 overflow-y-auto">
-                    {pushStatus.last10Results.map((r) => (
-                      <div key={r.id} className="flex items-center justify-between text-xs py-1 border-b border-neutral-50">
-                        <span className="text-neutral-400 truncate max-w-[140px]" title={r.idempotency_key}>
-                          {r.idempotency_key.slice(0, 20)}…
-                        </span>
-                        <span className={statusColors[r.status] ?? "text-neutral-500"}>{r.status}</span>
-                        <span className="text-neutral-300 text-[10px]">{fmt(r.at)}</span>
-                      </div>
-                    ))}
-                  </div>
+            {/* Sync History */}
+            {syncHistory.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-neutral-500 mb-1.5">Recent sync history</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-neutral-100">
+                        <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Started</th>
+                        <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Type</th>
+                        <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Duration</th>
+                        <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Chunks</th>
+                        <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Rows</th>
+                        <th className="text-left py-1 text-neutral-400 font-medium">Result</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {syncHistory.map(row => (
+                        <>
+                          <tr key={row.id} className="border-b border-neutral-50 hover:bg-neutral-50 cursor-pointer"
+                            onClick={() => row.errors?.length && toggleError(row.id)}>
+                            <td className="py-1 pr-3 text-neutral-600 whitespace-nowrap">{fmt(row.started_at)}</td>
+                            <td className="py-1 pr-3">
+                              <Badge label={row.sync_type} color={row.sync_type === "masters" ? "blue" : "gray"} />
+                            </td>
+                            <td className="py-1 pr-3 text-neutral-600">{fmtDur(row.duration_ms)}</td>
+                            <td className="py-1 pr-3 text-neutral-600">{row.chunk_count ?? "—"}</td>
+                            <td className="py-1 pr-3 text-neutral-600">
+                              {row.row_counts
+                                ? Object.entries(row.row_counts).map(([k, v]) => `${k}:${v}`).join(" ")
+                                : "—"}
+                            </td>
+                            <td className="py-1">
+                              <span className="flex items-center gap-1">
+                                <Pill ok={row.success} label={row.success ? "OK" : "Error"} />
+                                {row.errors?.length ? <ChevronRight size={11} className="text-neutral-400" /> : null}
+                              </span>
+                            </td>
+                          </tr>
+                          {expandedErrors.has(row.id) && row.errors?.length && (
+                            <tr key={`${row.id}-err`}>
+                              <td colSpan={6} className="pb-2">
+                                <div className="bg-red-50 rounded p-2 text-xs text-red-700 space-y-0.5">
+                                  {row.errors.map((e, i) => <div key={i}>{e}</div>)}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              )}
+                {!sbRead && (
+                  <p className="text-xs text-neutral-400 mt-1">
+                    Set VITE_SUPABASE_URL + VITE_SUPABASE_PUBLISHABLE_KEY to enable history.
+                  </p>
+                )}
+              </div>
+            )}
+          </SectionCard>
+        </div>
 
-              {!pushStatus.enabled && (
-                <p className="mt-2 text-xs text-yellow-700 bg-yellow-50 rounded p-2 flex items-center gap-1">
-                  <AlertTriangle size={12} />
-                  Set PUSH_AGENT_ENABLED=true in server env to activate.
-                </p>
-              )}
-            </>
-          ) : (
-            <p className="text-xs text-neutral-400 py-2">Loading push agent status…</p>
-          )}
-        </SectionCard>
+        {/* ── Push Queue ────────────────────────────────────────── */}
+        <div className="md:col-span-2">
+          <SectionCard title="Push Queue  (Supabase → Tally)" icon={<Activity size={15} />}>
+            {pushStatus ? (
+              <>
+                {/* Agent status + queue depth */}
+                <div className="flex items-center gap-3 mb-3 flex-wrap">
+                  <Pill ok={pushStatus.enabled} label={pushStatus.enabled ? "Agent running" : "Agent disabled"} />
+                  <Pill ok={pushStatus.tallyHealthy} label={pushStatus.tallyHealthy ? "Tally healthy" : "Tally unreachable"} />
+                  <span className="text-xs text-neutral-500">Last tick: {fmt(pushStatus.lastTick)}</span>
+                </div>
+
+                {/* Queue depth badges */}
+                <div className="flex gap-2 mb-3 flex-wrap">
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-800 text-xs font-medium">
+                    Pending: {qs.pending}
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-yellow-50 text-yellow-800 text-xs font-medium">
+                    Pushing: {qs.pushing}
+                  </span>
+                  <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${qs.failed > 0 ? "bg-red-100 text-red-800" : "bg-neutral-100 text-neutral-600"}`}>
+                    Failed: {qs.failed}
+                  </span>
+                </div>
+
+                <div className="flex gap-2 mb-4">
+                  <Btn onClick={drainQueue} disabled={draining || !pushStatus.enabled}>
+                    {draining ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                    Drain Now
+                  </Btn>
+                </div>
+
+                {!pushStatus.enabled && (
+                  <p className="mb-3 text-xs text-yellow-700 bg-yellow-50 rounded p-2 flex items-center gap-1">
+                    <AlertTriangle size={12} />
+                    Set PUSH_AGENT_ENABLED=true in server env to activate the drain agent.
+                  </p>
+                )}
+
+                {/* Push Log (permanent, from push_sync_log) */}
+                {pushLog.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-xs font-medium text-neutral-500 mb-1.5">Push log (last 30)</p>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-neutral-100">
+                            <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Resolved</th>
+                            <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Type</th>
+                            <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Party</th>
+                            <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Date</th>
+                            <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Result</th>
+                            <th className="text-left py-1 text-neutral-400 font-medium">VCH ID</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pushLog.map(row => (
+                            <>
+                              <tr key={row.id}
+                                className="border-b border-neutral-50 hover:bg-neutral-50 cursor-pointer"
+                                onClick={() => row.last_error && toggleError(`pl-${row.id}`)}>
+                                <td className="py-1 pr-3 text-neutral-500 whitespace-nowrap">{fmt(row.resolved_at)}</td>
+                                <td className="py-1 pr-3">
+                                  <Badge label={row.voucher_type || "—"} color="gray" />
+                                </td>
+                                <td className="py-1 pr-3 text-neutral-700 max-w-[120px] truncate" title={row.party ?? ""}>{row.party || "—"}</td>
+                                <td className="py-1 pr-3 text-neutral-500">{row.date || "—"}</td>
+                                <td className="py-1 pr-3">
+                                  <span className="flex items-center gap-1">
+                                    <Badge label={row.status} color={row.status === "succeeded" ? "green" : "red"} />
+                                    {row.last_error ? <ChevronRight size={11} className="text-neutral-400" /> : null}
+                                  </span>
+                                </td>
+                                <td className="py-1 text-neutral-500 font-mono text-[10px]">{row.tally_vch_id || "—"}</td>
+                              </tr>
+                              {expandedErrors.has(`pl-${row.id}`) && row.last_error && (
+                                <tr key={`pl-${row.id}-err`}>
+                                  <td colSpan={6} className="pb-2">
+                                    <div className="bg-red-50 rounded p-2 text-xs text-red-700">
+                                      {row.line_errors?.join(" · ") || row.last_error}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Failed jobs with re-queue */}
+                {failedJobs.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-red-600 mb-1.5 flex items-center gap-1">
+                      <AlertTriangle size={12} /> {failedJobs.length} failed job{failedJobs.length > 1 ? "s" : ""} in queue
+                    </p>
+                    <div className="space-y-2">
+                      {failedJobs.map(job => (
+                        <div key={job.id} className="bg-red-50 rounded-lg p-3 text-xs">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1 flex-wrap">
+                                <span className="font-medium text-red-800">
+                                  {(job.payload as any)?.voucherType || "Voucher"}
+                                </span>
+                                {(job.payload as any)?.partyLedgerName && (
+                                  <span className="text-red-700">→ {(job.payload as any).partyLedgerName}</span>
+                                )}
+                                <span className="text-red-400">· attempts: {job.attempts}</span>
+                              </div>
+                              {job.last_error && (
+                                <p className="text-red-600 mt-1 break-words">{job.last_error}</p>
+                              )}
+                              <p className="text-red-400 mt-0.5 font-mono text-[10px]">{job.idempotency_key.slice(0, 30)}…</p>
+                            </div>
+                            <Btn
+                              onClick={() => requeueJob(job.id)}
+                              disabled={requeueing === job.id}
+                            >
+                              {requeueing === job.id
+                                ? <Loader2 size={11} className="animate-spin" />
+                                : <RotateCcw size={11} />}
+                              Re-queue
+                            </Btn>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-neutral-400 py-2">Loading push agent status…</p>
+            )}
+          </SectionCard>
+        </div>
 
         {/* ── Settings ─────────────────────────────────────────── */}
         <div className="md:col-span-2">
           <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
             <button
               className="flex items-center gap-2 px-4 py-3 border-b border-neutral-100 bg-neutral-50 w-full text-left"
-              onClick={() => setShowSettings((v) => !v)}
+              onClick={() => setShowSettings(v => !v)}
             >
               <Settings size={15} className="text-neutral-500" />
               <h2 className="font-semibold text-sm text-neutral-700 flex-1">Settings</h2>
@@ -318,45 +658,23 @@ export default function AgentStatus() {
             </button>
             {showSettings && (
               <div className="px-4 py-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Company name</span>
-                  <input
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={editCompany}
-                    onChange={(e) => setEditCompany(e.target.value)}
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Proxy URL</span>
-                  <input
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={editProxy}
-                    onChange={(e) => setEditProxy(e.target.value)}
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">FY from (YYYYMMDD)</span>
-                  <input
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={editFyFrom}
-                    onChange={(e) => setEditFyFrom(e.target.value)}
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">FY to (YYYYMMDD)</span>
-                  <input
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={editFyTo}
-                    onChange={(e) => setEditFyTo(e.target.value)}
-                  />
-                </label>
+                {([
+                  ["Company name", editCompany, setEditCompany],
+                  ["Proxy URL", editProxy, setEditProxy],
+                  ["FY from (YYYYMMDD)", editFyFrom, setEditFyFrom],
+                  ["FY to (YYYYMMDD)", editFyTo, setEditFyTo],
+                ] as [string, string, (v: string) => void][]).map(([label, val, set]) => (
+                  <label key={label} className="block">
+                    <span className="text-xs text-neutral-500 mb-1 block">{label}</span>
+                    <input
+                      className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={val}
+                      onChange={e => set(e.target.value)}
+                    />
+                  </label>
+                ))}
                 <div className="sm:col-span-2">
-                  <button
-                    onClick={applySettings}
-                    className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-                  >
-                    Save settings
-                  </button>
+                  <Btn variant="primary" onClick={applySettings}>Save settings</Btn>
                 </div>
               </div>
             )}
@@ -365,8 +683,8 @@ export default function AgentStatus() {
 
       </div>
 
-      <p className="mt-6 text-center text-xs text-neutral-400">
-        Agent ID: {pushStatus?.agentId ?? "—"} · Polling every 10 s
+      <p className="mt-6 text-center text-xs text-neutral-400 max-w-5xl mx-auto">
+        Agent: {pushStatus?.agentId ?? "—"} · Auto-refresh every 10 s
       </p>
     </div>
   );
