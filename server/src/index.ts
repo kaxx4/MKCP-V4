@@ -17,6 +17,7 @@ const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 // Singletons
 const changeDetector = new ChangeDetector();
 const orchestrator = new SyncOrchestrator(TALLY, changeDetector);
+const supabaseSync = new SupabaseSync();
 
 // Duplicate sync lock
 const activeSyncs = new Map<string, Promise<any>>();
@@ -33,13 +34,13 @@ const originalLog = console.log;
 const originalError = console.error;
 console.log = (...args: any[]) => {
   const msg = args.join(" ");
-  logBuffer.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+  logBuffer.push(`[${new Date().toISOString().slice(11, 19)}] ${msg}`);
   if (logBuffer.length > MAX_LOGS) logBuffer.shift();
   originalLog(...args);
 };
 console.error = (...args: any[]) => {
   const msg = args.join(" ");
-  logBuffer.push(`[${new Date().toLocaleTimeString()}] ❌ ${msg}`);
+  logBuffer.push(`[${new Date().toISOString().slice(11, 19)}] ❌ ${msg}`);
   if (logBuffer.length > MAX_LOGS) logBuffer.shift();
   originalError(...args);
 };
@@ -199,8 +200,6 @@ app.post("/api/supabase/sync", async (req: express.Request, res: express.Respons
 
   try {
     console.log(`[Supabase] Manual sync initiated: ${items.length} items, ${ledgers.length} ledgers, ${vouchers.length} vouchers`);
-    const supabase = new SupabaseSync();
-
     // Build master messages from frontend data
     const masterMessages = [
       ...items.map((item: any) => ({
@@ -220,7 +219,7 @@ app.post("/api/supabase/sync", async (req: express.Request, res: express.Respons
 
     // Sync masters
     if (masterMessages.length > 0) {
-      await supabase.syncMasters(masterMessages, company);
+      await supabaseSync.syncMasters(masterMessages, company);
     }
 
     // Build voucher messages from frontend data
@@ -257,7 +256,7 @@ app.post("/api/supabase/sync", async (req: express.Request, res: express.Respons
 
     // Sync vouchers
     if (voucherMessages.length > 0) {
-      await supabase.syncVouchers(voucherMessages, company);
+      await supabaseSync.syncVouchers(voucherMessages, company);
     }
 
     console.log(`[Supabase] Manual sync completed successfully`);
@@ -303,26 +302,24 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
       `${Object.keys(vendorGroupAssignments).length} vendor assignments, ${Object.keys(itemNotes).length} notes, ` +
       `${callingList.length} calling entries, ${Object.keys(tallyPriceListImports).length} tally prices`
     );
-    const supabase = new SupabaseSync();
-
     // Sync each table in parallel — Promise.allSettled means one failure doesn't break others.
     // Each entry is labeled so we can report exactly which table failed.
     const syncTasks: Array<{ label: string; promise: Promise<void> }> = [
-      { label: "discount_rules", promise: discountRules.length > 0 ? supabase.syncDiscountRules(discountRules, company) : Promise.resolve() },
-      { label: "order_groups", promise: orderGroups.length > 0 ? supabase.syncOrderGroups(orderGroups, company) : Promise.resolve() },
-      { label: "unit_overrides", promise: Object.keys(unitOverrides).length > 0 ? supabase.syncUnitOverrides(unitOverrides, company) : Promise.resolve() },
-      { label: "rate_overrides", promise: rateOverrides.length > 0 ? supabase.syncRateOverrides(rateOverrides, company) : Promise.resolve() },
-      { label: "gst_overrides", promise: Object.keys(gstOverrides).length > 0 ? supabase.syncGstOverrides(gstOverrides, company) : Promise.resolve() },
-      { label: "item_category_overrides", promise: Object.keys(itemCategoryOverrides).length > 0 ? supabase.syncItemCategoryOverrides(itemCategoryOverrides, company) : Promise.resolve() },
-      { label: "category_colors", promise: Object.keys(categoryColors).length > 0 ? supabase.syncCategoryColors(categoryColors, company) : Promise.resolve() },
-      { label: "vendor_group_assignments", promise: Object.keys(vendorGroupAssignments).length > 0 ? supabase.syncVendorGroupAssignments(vendorGroupAssignments, company) : Promise.resolve() },
-      { label: "item_notes", promise: Object.keys(itemNotes).length > 0 ? supabase.syncItemNotes(itemNotes, company) : Promise.resolve() },
-      { label: "calling_list_entries", promise: callingList.length > 0 ? supabase.syncCallingList(callingList, company) : Promise.resolve() },
-      { label: "tally_price_list_imports", promise: Object.keys(tallyPriceListImports).length > 0 ? supabase.syncTallyPriceListImports(tallyPriceListImports, tallyPriceListImportedAt, company) : Promise.resolve() },
-      { label: "voucher_overrides", promise: Object.keys(voucherOverrides).length > 0 ? supabase.syncVoucherOverrides(voucherOverrides, company) : Promise.resolve() },
-      { label: "app_settings", promise: Object.keys(appSettings).length > 0 ? supabase.syncAppSettings(appSettings, company) : Promise.resolve() },
+      { label: "discount_rules", promise: discountRules.length > 0 ? supabaseSync.syncDiscountRules(discountRules, company) : Promise.resolve() },
+      { label: "order_groups", promise: orderGroups.length > 0 ? supabaseSync.syncOrderGroups(orderGroups, company) : Promise.resolve() },
+      { label: "unit_overrides", promise: Object.keys(unitOverrides).length > 0 ? supabaseSync.syncUnitOverrides(unitOverrides, company) : Promise.resolve() },
+      { label: "rate_overrides", promise: rateOverrides.length > 0 ? supabaseSync.syncRateOverrides(rateOverrides, company) : Promise.resolve() },
+      { label: "gst_overrides", promise: Object.keys(gstOverrides).length > 0 ? supabaseSync.syncGstOverrides(gstOverrides, company) : Promise.resolve() },
+      { label: "item_category_overrides", promise: Object.keys(itemCategoryOverrides).length > 0 ? supabaseSync.syncItemCategoryOverrides(itemCategoryOverrides, company) : Promise.resolve() },
+      { label: "category_colors", promise: Object.keys(categoryColors).length > 0 ? supabaseSync.syncCategoryColors(categoryColors, company) : Promise.resolve() },
+      { label: "vendor_group_assignments", promise: Object.keys(vendorGroupAssignments).length > 0 ? supabaseSync.syncVendorGroupAssignments(vendorGroupAssignments, company) : Promise.resolve() },
+      { label: "item_notes", promise: Object.keys(itemNotes).length > 0 ? supabaseSync.syncItemNotes(itemNotes, company) : Promise.resolve() },
+      { label: "calling_list_entries", promise: callingList.length > 0 ? supabaseSync.syncCallingList(callingList, company) : Promise.resolve() },
+      { label: "tally_price_list_imports", promise: Object.keys(tallyPriceListImports).length > 0 ? supabaseSync.syncTallyPriceListImports(tallyPriceListImports, tallyPriceListImportedAt, company) : Promise.resolve() },
+      { label: "voucher_overrides", promise: Object.keys(voucherOverrides).length > 0 ? supabaseSync.syncVoucherOverrides(voucherOverrides, company) : Promise.resolve() },
+      { label: "app_settings", promise: Object.keys(appSettings).length > 0 ? supabaseSync.syncAppSettings(appSettings, company) : Promise.resolve() },
       // order_draft_lines always fires — empty array means "clear the cloud draft"
-      { label: "order_draft_lines", promise: supabase.syncOrderDraftLines(orderDraftLines, company) },
+      { label: "order_draft_lines", promise: supabaseSync.syncOrderDraftLines(orderDraftLines, company) },
     ];
 
     const results = await Promise.allSettled(syncTasks.map(t => t.promise));

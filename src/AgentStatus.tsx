@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 import {
   Wifi, WifiOff, RefreshCw, Cloud, CloudOff, CheckCircle, XCircle,
   Clock, Activity, ChevronDown, ChevronUp, Settings, Database,
@@ -9,8 +9,6 @@ import { useTallyStore } from "./store/tallyStore";
 import { useSupabaseSyncStatusStore } from "./store/supabaseSyncStatusStore";
 import { useToast } from "./components/Toast";
 
-// Read-only client for the renderer (publishable key — no service-role).
-// Supabase RLS allows SELECT on public tables with the publishable key.
 const SUPA_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
 const SUPA_ANON = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
 const sbRead = SUPA_URL && SUPA_ANON
@@ -166,8 +164,25 @@ function Btn({ onClick, disabled, children, variant = "secondary" }: {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function AgentStatus() {
-  const tally = useTallyStore();
-  const cloud = useSupabaseSyncStatusStore();
+  // Fine-grained selectors — component only re-renders when the specific field changes.
+  const companyName        = useTallyStore((s) => s.companyName);
+  const proxyUrl           = useTallyStore((s) => s.proxyUrl);
+  const fyFromDate         = useTallyStore((s) => s.fyFromDate);
+  const fyToDate           = useTallyStore((s) => s.fyToDate);
+  const lastSyncAt         = useTallyStore((s) => s.lastSyncAt);
+  const lastMastersSyncAt  = useTallyStore((s) => s.lastMastersSyncAt);
+  const lastVouchersSyncAt = useTallyStore((s) => s.lastVouchersSyncAt);
+  const lastVoucherDate    = useTallyStore((s) => s.lastVoucherDate);
+  const setConnected       = useTallyStore((s) => s.setConnected);
+  const setLastSync        = useTallyStore((s) => s.setLastSync);
+  const setCompanyName     = useTallyStore((s) => s.setCompanyName);
+  const setProxyUrl        = useTallyStore((s) => s.setProxyUrl);
+  const setFyDates         = useTallyStore((s) => s.setFyDates);
+
+  const cloudConfig   = useSupabaseSyncStatusStore((s) => s.config);
+  const cloudMasters  = useSupabaseSyncStatusStore((s) => s.masters);
+  const cloudVouchers = useSupabaseSyncStatusStore((s) => s.vouchers);
+
   const { toast } = useToast();
 
   const [health, setHealth] = useState<TallyHealth | null>(null);
@@ -182,13 +197,13 @@ export default function AgentStatus() {
   const [requeueing, setRequeueing] = useState<string | null>(null);
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
 
-  // settings local state
-  const [editCompany, setEditCompany] = useState(tally.companyName);
-  const [editProxy, setEditProxy] = useState(tally.proxyUrl);
-  const [editFyFrom, setEditFyFrom] = useState(tally.fyFromDate);
-  const [editFyTo, setEditFyTo] = useState(tally.fyToDate);
+  // Settings local state (initialised once from store — not reactive after that)
+  const [editCompany, setEditCompany] = useState(companyName);
+  const [editProxy, setEditProxy]     = useState(proxyUrl);
+  const [editFyFrom, setEditFyFrom]   = useState(fyFromDate);
+  const [editFyTo, setEditFyTo]       = useState(fyToDate);
 
-  // ── Data fetch helpers ──────────────────────────────────────────────────────
+  // ── Supabase data fetchers ────────────────────────────────────────────────
   const fetchHistory = useCallback(async () => {
     if (!sbRead) return;
     const { data } = await sbRead
@@ -220,6 +235,7 @@ export default function AgentStatus() {
     if (data) setFailedJobs(data as FailedQueueRow[]);
   }, []);
 
+  // ── Poll — only hits local server endpoints (not Supabase) ───────────────
   const poll = useCallback(async () => {
     setPolling(true);
     try {
@@ -228,52 +244,47 @@ export default function AgentStatus() {
         fetch(`${BASE}/api/push-agent/status`).then(r => r.json()).catch(() => null),
       ]);
       setHealth(h);
-      if (h?.connected) tally.setConnected(true);
-      else if (h) tally.setConnected(false);
+      if (h != null) setConnected(!!h.connected);
       setPushStatus(p);
     } finally {
       setPolling(false);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [setConnected]);
 
-  // ── Realtime subscriptions ──────────────────────────────────────────────────
-  const realtimeSetupRef = useRef(false);
+  // ── Realtime — stored by ref, removed via removeChannel on unmount ────────
+  const realtimeChannelRef = useRef<RealtimeChannel | null>(null);
   useEffect(() => {
-    if (!sbRead || realtimeSetupRef.current) return;
-    realtimeSetupRef.current = true;
-
-    sbRead
+    if (!sbRead || realtimeChannelRef.current) return;
+    realtimeChannelRef.current = sbRead
       .channel("agent-status-sync")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "tally_sync_history" }, () => {
-        void fetchHistory();
-      })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "push_sync_log" }, () => {
-        void fetchPushLog();
-      })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "push_queue" }, () => {
-        void fetchFailedJobs();
-      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "tally_sync_history" }, () => void fetchHistory())
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "push_sync_log" }, () => void fetchPushLog())
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "push_queue" }, () => void fetchFailedJobs())
       .subscribe();
-
     return () => {
-      sbRead.channel("agent-status-sync").unsubscribe();
-      realtimeSetupRef.current = false;
+      if (realtimeChannelRef.current && sbRead) {
+        sbRead.removeChannel(realtimeChannelRef.current);
+        realtimeChannelRef.current = null;
+      }
     };
-  }, [fetchHistory, fetchPushLog, fetchFailedJobs]);
+  }, []); // stable: fetchHistory/fetchPushLog/fetchFailedJobs all have [] deps
 
-  // ── Initial load + poll interval ────────────────────────────────────────────
+  // ── Poll interval — server endpoints only ─────────────────────────────────
   useEffect(() => {
     void poll();
+    const id = setInterval(() => void poll(), 10_000);
+    return () => clearInterval(id);
+  }, [poll]);
+
+  // ── One-time initial Supabase fetch — realtime drives subsequent updates ──
+  useEffect(() => {
     void fetchHistory();
     void fetchPushLog();
     void fetchFailedJobs();
-    const id = setInterval(() => { void poll(); }, 10_000);
-    return () => clearInterval(id);
-  }, [poll, fetchHistory, fetchPushLog, fetchFailedJobs]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Actions ─────────────────────────────────────────────────────────────────
-  async function triggerSync(endpoint: string, body: Record<string, unknown>, label: string) {
-    if (syncing) return;
+  // ── Actions (stable refs via useCallback) ────────────────────────────────
+  const triggerSync = useCallback(async (endpoint: string, body: Record<string, unknown>, label: string) => {
     setSyncing(label);
     try {
       const r = await fetch(`${BASE}${endpoint}`, {
@@ -284,7 +295,7 @@ export default function AgentStatus() {
       const j = await r.json();
       if (j.success) {
         toast(`${label} complete`, "success");
-        tally.setLastSync(new Date().toISOString());
+        setLastSync(new Date().toISOString());
         void fetchHistory();
       } else {
         toast(`${label} failed: ${j.error || "unknown error"}`, "error");
@@ -294,10 +305,9 @@ export default function AgentStatus() {
     } finally {
       setSyncing(null);
     }
-  }
+  }, [toast, setLastSync, fetchHistory]);
 
-  async function drainQueue() {
-    if (draining) return;
+  const drainQueue = useCallback(async () => {
     setDraining(true);
     try {
       await fetch(`${BASE}/api/push-agent/drain`, { method: "POST" });
@@ -308,10 +318,9 @@ export default function AgentStatus() {
       toast("Drain tick triggered", "success");
     } catch { toast("Drain trigger failed", "error"); }
     finally { setDraining(false); }
-  }
+  }, [toast, poll, fetchPushLog, fetchFailedJobs]);
 
-  async function requeueJob(id: string) {
-    if (requeueing) return;
+  const requeueJob = useCallback(async (id: string) => {
     setRequeueing(id);
     try {
       const r = await fetch(`${BASE}/api/push-agent/requeue`, {
@@ -332,28 +341,35 @@ export default function AgentStatus() {
     } finally {
       setRequeueing(null);
     }
-  }
+  }, [toast, fetchFailedJobs, poll]);
 
-  function applySettings() {
-    tally.setCompanyName(editCompany.trim());
-    tally.setProxyUrl(editProxy.trim());
-    tally.setFyDates(editFyFrom.trim(), editFyTo.trim());
+  const applySettings = useCallback(() => {
+    setCompanyName(editCompany.trim());
+    setProxyUrl(editProxy.trim());
+    setFyDates(editFyFrom.trim(), editFyTo.trim());
     toast("Settings saved", "success");
-  }
+  }, [editCompany, editProxy, editFyFrom, editFyTo, setCompanyName, setProxyUrl, setFyDates, toast]);
 
-  function toggleError(id: string) {
+  const toggleError = useCallback((id: string) => {
     setExpandedErrors(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
-  }
+  }, []);
 
+  // ── Derived values ────────────────────────────────────────────────────────
   const connected = health?.connected ?? false;
-  const company = tally.companyName || "—";
-  const cloudOk = cloud.config.success !== false && cloud.masters.success !== false && cloud.vouchers.success !== false;
-  const cloudLastAt = cloud.vouchers.lastAt || cloud.masters.lastAt || cloud.config.lastAt;
+  const company = companyName || "—";
+  const cloudOk = cloudConfig.success !== false && cloudMasters.success !== false && cloudVouchers.success !== false;
+  const cloudLastAt = cloudVouchers.lastAt || cloudMasters.lastAt || cloudConfig.lastAt;
   const qs = pushStatus?.queueStats ?? { pending: 0, pushing: 0, failed: 0 };
+
+  const cloudChannels = [
+    ["config",   cloudConfig]   as const,
+    ["masters",  cloudMasters]  as const,
+    ["vouchers", cloudVouchers] as const,
+  ];
 
   return (
     <div className="min-h-screen bg-neutral-100 p-4 md:p-6">
@@ -387,52 +403,51 @@ export default function AgentStatus() {
 
         {/* ── Cloud / Supabase ──────────────────────────────────── */}
         <SectionCard title="Supabase Cloud" icon={cloudOk ? <Cloud size={15} /> : <CloudOff size={15} />}>
-          {(["config", "masters", "vouchers"] as const).map(ch => (
+          {cloudChannels.map(([ch, chCloud]) => (
             <Row key={ch} label={ch.charAt(0).toUpperCase() + ch.slice(1)} value={
               <span className="flex items-center gap-1">
-                <Pill ok={cloud[ch].success} label={
-                  cloud[ch].success == null ? "Never" : cloud[ch].success ? "OK" : "Error"
+                <Pill ok={chCloud.success} label={
+                  chCloud.success == null ? "Never" : chCloud.success ? "OK" : "Error"
                 } />
-                {cloud[ch].retryScheduled && (
+                {chCloud.retryScheduled && (
                   <span className="text-[10px] text-yellow-600">retry ~60s</span>
                 )}
               </span>
             } />
           ))}
           <Row label="Last pushed" value={fmt(cloudLastAt)} />
-          {(["config", "masters", "vouchers"] as const).map(ch => {
-            const err = cloud[ch].error;
-            return err && cloud[ch].success === false ? (
-              <p key={`err-${ch}`} className="mt-1 text-xs text-red-600 bg-red-50 rounded p-2 truncate" title={err}>
-                <span className="font-medium capitalize">{ch}:</span> {err}
+          {cloudChannels.map(([ch, chCloud]) =>
+            chCloud.error && chCloud.success === false ? (
+              <p key={`err-${ch}`} className="mt-1 text-xs text-red-600 bg-red-50 rounded p-2 truncate" title={chCloud.error}>
+                <span className="font-medium capitalize">{ch}:</span> {chCloud.error}
               </p>
-            ) : null;
-          })}
+            ) : null
+          )}
         </SectionCard>
 
         {/* ── Pull Sync ─────────────────────────────────────────── */}
         <div className="md:col-span-2">
           <SectionCard title="Pull Sync  (Tally → Supabase)" icon={<Database size={15} />}>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-              <div className="bg-neutral-50 rounded-lg p-2 text-center">
-                <div className="text-[10px] text-neutral-400 uppercase tracking-wide">Full sync</div>
-                <div className="text-xs font-medium text-neutral-800 mt-0.5 truncate">{fmt(tally.lastSyncAt).split(" ")[0] || "—"}</div>
-              </div>
-              <div className="bg-neutral-50 rounded-lg p-2 text-center">
-                <div className="text-[10px] text-neutral-400 uppercase tracking-wide">Masters</div>
-                <div className="text-xs font-medium text-neutral-800 mt-0.5 truncate">{fmt(tally.lastMastersSyncAt).split(" ")[0] || "—"}</div>
-              </div>
-              <div className="bg-neutral-50 rounded-lg p-2 text-center">
-                <div className="text-[10px] text-neutral-400 uppercase tracking-wide">Vouchers</div>
-                <div className="text-xs font-medium text-neutral-800 mt-0.5 truncate">{fmt(tally.lastVouchersSyncAt).split(" ")[0] || "—"}</div>
-              </div>
+              {([
+                ["Full sync",    lastSyncAt],
+                ["Masters",      lastMastersSyncAt],
+                ["Vouchers",     lastVouchersSyncAt],
+              ] as [string, string | null][]).map(([label, val]) => (
+                <div key={label} className="bg-neutral-50 rounded-lg p-2 text-center">
+                  <div className="text-[10px] text-neutral-400 uppercase tracking-wide">{label}</div>
+                  <div className="text-xs font-medium text-neutral-800 mt-0.5 truncate">{fmt(val).split(" ")[0] || "—"}</div>
+                </div>
+              ))}
               <div className="bg-neutral-50 rounded-lg p-2 text-center">
                 <div className="text-[10px] text-neutral-400 uppercase tracking-wide">Last voucher</div>
-                <div className="text-xs font-medium text-neutral-800 mt-0.5">{tally.lastVoucherDate || "—"}</div>
+                <div className="text-xs font-medium text-neutral-800 mt-0.5">{lastVoucherDate || "—"}</div>
               </div>
             </div>
             <div className="flex gap-2 flex-wrap mb-4">
-              <Btn variant="primary" onClick={() => triggerSync("/api/tally/sync", { company, fromDate: tally.fyFromDate, toDate: tally.fyToDate, mode: "smart" }, "Full sync")} disabled={!!syncing || !connected}>
+              <Btn variant="primary"
+                onClick={() => triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "smart" }, "Full sync")}
+                disabled={!!syncing || !connected}>
                 {syncing === "Full sync" ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                 Sync Now
               </Btn>
@@ -440,7 +455,7 @@ export default function AgentStatus() {
                 {syncing === "Sync Masters" && <Loader2 size={12} className="animate-spin" />}
                 Sync Masters
               </Btn>
-              <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: tally.fyFromDate, toDate: tally.fyToDate }, "Sync Daybook")} disabled={!!syncing || !connected}>
+              <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate }, "Sync Daybook")} disabled={!!syncing || !connected}>
                 {syncing === "Sync Daybook" && <Loader2 size={12} className="animate-spin" />}
                 Sync Daybook
               </Btn>
@@ -514,7 +529,6 @@ export default function AgentStatus() {
           <SectionCard title="Push Queue  (Supabase → Tally)" icon={<Activity size={15} />}>
             {pushStatus ? (
               <>
-                {/* Agent status + queue depth */}
                 <div className="flex items-center gap-3 mb-3 flex-wrap">
                   <Pill ok={pushStatus.enabled} label={pushStatus.enabled ? "Agent running" : "Agent disabled"} />
                   {pushStatus.lastTick == null
@@ -524,7 +538,6 @@ export default function AgentStatus() {
                   <span className="text-xs text-neutral-500">Last tick: {fmt(pushStatus.lastTick)}</span>
                 </div>
 
-                {/* Queue depth badges */}
                 <div className="flex gap-2 mb-3 flex-wrap">
                   <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-800 text-xs font-medium">
                     Pending: {qs.pending}
@@ -551,7 +564,7 @@ export default function AgentStatus() {
                   </p>
                 )}
 
-                {/* Push Log (permanent, from push_sync_log) */}
+                {/* Push Log */}
                 {pushLog.length > 0 && (
                   <div className="mb-4">
                     <p className="text-xs font-medium text-neutral-500 mb-1.5">Push log (last 30)</p>
@@ -629,10 +642,7 @@ export default function AgentStatus() {
                               )}
                               <p className="text-red-400 mt-0.5 font-mono text-[10px]">{job.idempotency_key.slice(0, 30)}…</p>
                             </div>
-                            <Btn
-                              onClick={() => requeueJob(job.id)}
-                              disabled={requeueing === job.id}
-                            >
+                            <Btn onClick={() => requeueJob(job.id)} disabled={requeueing === job.id}>
                               {requeueing === job.id
                                 ? <Loader2 size={11} className="animate-spin" />
                                 : <RotateCcw size={11} />}
@@ -665,10 +675,10 @@ export default function AgentStatus() {
             {showSettings && (
               <div className="px-4 py-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {([
-                  ["Company name", editCompany, setEditCompany],
-                  ["Proxy URL", editProxy, setEditProxy],
-                  ["FY from (YYYYMMDD)", editFyFrom, setEditFyFrom],
-                  ["FY to (YYYYMMDD)", editFyTo, setEditFyTo],
+                  ["Company name",       editCompany, setEditCompany],
+                  ["Proxy URL",          editProxy,   setEditProxy],
+                  ["FY from (YYYYMMDD)", editFyFrom,  setEditFyFrom],
+                  ["FY to (YYYYMMDD)",   editFyTo,    setEditFyTo],
                 ] as [string, string, (v: string) => void][]).map(([label, val, set]) => (
                   <label key={label} className="block">
                     <span className="text-xs text-neutral-500 mb-1 block">{label}</span>

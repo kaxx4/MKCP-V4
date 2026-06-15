@@ -69,30 +69,31 @@ export function usePersistenceMonitor(config: PersistenceConfig = {}) {
     // on every render of the parent.
   }, [data, verbose]);
 
-  // Periodic auto-backup (5-min default). Backup runs in idle callback so
-  // serializing the entire dataset doesn't block UI.
+  // Periodic auto-backup (5-min default). Reads data imperatively via getState()
+  // so the interval is stable — it doesn't restart every time data changes.
   useEffect(() => {
-    if (!data || data.vouchers.length === 0) return;
-
-    const performBackup = async () => {
-      try {
-        const backupKey = await createBackup(
-          serializeParsedData(data),
-          `auto_backup_${new Date().toISOString()}`
-        );
-        if (verbose) {
-          console.log(`[PERSIST] ✓ Auto-backup created: ${backupKey}`);
-        }
-      } catch (err) {
-        console.warn("[PERSIST] ⚠️ Auto-backup failed:", err);
-      }
-    };
-
     const scheduledBackup = () => {
+      const current = useDataStore.getState().data;
+      if (!current || current.vouchers.length === 0) return;
+
+      const performBackup = async () => {
+        try {
+          const backupKey = await createBackup(
+            serializeParsedData(current),
+            `auto_backup_${new Date().toISOString()}`
+          );
+          if (verbose) {
+            console.log(`[PERSIST] ✓ Auto-backup created: ${backupKey}`);
+          }
+        } catch (err) {
+          console.warn("[PERSIST] ⚠️ Auto-backup failed:", err);
+        }
+      };
+
       if (typeof requestIdleCallback === "function") {
         requestIdleCallback(performBackup, { timeout: 3000 });
       } else {
-        performBackup();
+        void performBackup();
       }
     };
 
@@ -100,7 +101,7 @@ export function usePersistenceMonitor(config: PersistenceConfig = {}) {
     return () => {
       if (backupIntervalRef.current) clearInterval(backupIntervalRef.current);
     };
-  }, [data, autoBackupInterval, verbose]);
+  }, [autoBackupInterval, verbose]);
 }
 
 export default usePersistenceMonitor;

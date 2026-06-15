@@ -3,8 +3,8 @@ import { useTallyStore } from "../store/tallyStore";
 import { useDataStore } from "../store/dataStore";
 import { syncDayBook } from "../api/tallyApi";
 import { parseTransactions } from "../parser/transactionParser";
-import { saveData, loadData, createBackup } from "../db/idb";
-import { serializeParsedData, deserializeParsedData } from "../utils/serialize";
+import { loadData, createBackup } from "../db/idb";
+import { deserializeParsedData } from "../utils/serialize";
 import { useToast } from "../components/Toast";
 
 const INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
@@ -20,8 +20,11 @@ function todayStr(): string {
  * Only runs when Tally is connected. No full-sync — daybook only.
  */
 export function useTallyAutoSync() {
-  const { isConnected, isSyncing, companyName, setSyncing, setLastSync, setLastVoucherDate, setLastVouchersSync } =
-    useTallyStore();
+  const isConnected       = useTallyStore((s) => s.isConnected);
+  const isSyncing         = useTallyStore((s) => s.isSyncing);
+  const companyName       = useTallyStore((s) => s.companyName);
+  const setSyncing        = useTallyStore((s) => s.setSyncing);
+  const completeSyncWith  = useTallyStore((s) => s.completeSyncWith);
   const mergeData = useDataStore((s) => s.mergeData);
   const { toast } = useToast();
 
@@ -67,15 +70,9 @@ export function useTallyAutoSync() {
           warnings: parsed.warnings,
         });
 
-        const merged = useDataStore.getState().data!;
-        await saveData("parsedData", serializeParsedData(merged));
-
-        const now = new Date().toISOString();
-        setLastSync(now);
-        setLastVouchersSync(now);
-
         const dates = parsed.vouchers.map((v) => v.date).filter(Boolean).sort();
-        if (dates.length) setLastVoucherDate(dates[dates.length - 1]!);
+        const lastDate = dates.length ? dates[dates.length - 1]! : null;
+        completeSyncWith(new Date().toISOString(), lastDate);
 
         toast(`Auto-synced ${parsed.vouchers.length} voucher(s) from today.`, "success");
         console.log(`[auto-sync] Done — ${parsed.vouchers.length} vouchers merged.`);

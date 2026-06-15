@@ -77,7 +77,7 @@ export function getAgentClient() { return client; }
 // ── Tally health (reuses the frozen tally.ts health envelope) ────────────────────
 async function isTallyHealthy(): Promise<boolean> {
   try {
-    await tallyPost(tallyUrl, HEALTH_XML, 10_000);
+    await tallyPost(tallyUrl, HEALTH_XML, 3_000);
     return true;
   } catch {
     return false;
@@ -262,17 +262,31 @@ async function reconcile(): Promise<void> {
     if (error) console.error(`[pushAgent] reconcile: ${error.message}`);
     return;
   }
+  if (data.length === 0) return;
+
+  // Bulk lookup — one query instead of N sequential findInMirror calls.
+  const keys = (data as Array<{ id: string; idempotency_key: string }>).map((r) => r.idempotency_key);
+  const { data: mirrors } = await client
+    .from("tally_vouchers")
+    .select("guid, reference")
+    .in("reference", keys);
+
+  const mirrorMap = new Map<string, string>(); // idempotency_key → guid
+  for (const m of (mirrors ?? []) as Array<{ guid: string; reference: string }>) {
+    if (m.reference) mirrorMap.set(m.reference, m.guid);
+  }
+
   for (const cand of data as Array<{ id: string; idempotency_key: string }>) {
-    const match = await findInMirror(cand.idempotency_key);
-    if (match) {
+    const guid = mirrorMap.get(cand.idempotency_key);
+    if (guid) {
       await client.from("push_queue").update({
         status: "succeeded",
-        tally_vch_id: match.guid,
+        tally_vch_id: guid,
         last_error: "reconciled from mirror",
         pushed_at: nowIso(),
       }).eq("id", cand.id);
       record(cand.id, cand.idempotency_key, "succeeded");
-      console.log(`[pushAgent] reconciled ${cand.idempotency_key} → ${match.guid} (no re-push)`);
+      console.log(`[pushAgent] reconciled ${cand.idempotency_key} → ${guid} (no re-push)`);
     }
   }
 }
