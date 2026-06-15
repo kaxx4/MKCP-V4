@@ -400,11 +400,14 @@ export default function AgentStatus() {
             } />
           ))}
           <Row label="Last pushed" value={fmt(cloudLastAt)} />
-          {cloud.vouchers.error && (
-            <p className="mt-2 text-xs text-red-600 bg-red-50 rounded p-2 truncate" title={cloud.vouchers.error}>
-              {cloud.vouchers.error}
-            </p>
-          )}
+          {(["config", "masters", "vouchers"] as const).map(ch => {
+            const err = cloud[ch].error;
+            return err && cloud[ch].success === false ? (
+              <p key={`err-${ch}`} className="mt-1 text-xs text-red-600 bg-red-50 rounded p-2 truncate" title={err}>
+                <span className="font-medium capitalize">{ch}:</span> {err}
+              </p>
+            ) : null;
+          })}
         </SectionCard>
 
         {/* ── Pull Sync ─────────────────────────────────────────── */}
@@ -514,7 +517,10 @@ export default function AgentStatus() {
                 {/* Agent status + queue depth */}
                 <div className="flex items-center gap-3 mb-3 flex-wrap">
                   <Pill ok={pushStatus.enabled} label={pushStatus.enabled ? "Agent running" : "Agent disabled"} />
-                  <Pill ok={pushStatus.tallyHealthy} label={pushStatus.tallyHealthy ? "Tally healthy" : "Tally unreachable"} />
+                  {pushStatus.lastTick == null
+                    ? <Pill ok={null} label="Tally not checked" />
+                    : <Pill ok={pushStatus.tallyHealthy} label={pushStatus.tallyHealthy ? "Tally healthy" : "Tally unreachable"} />
+                  }
                   <span className="text-xs text-neutral-500">Last tick: {fmt(pushStatus.lastTick)}</span>
                 </div>
 
