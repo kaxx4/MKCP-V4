@@ -39,7 +39,8 @@ export class ErrorBoundary extends Component<Props, State> {
             <button
               onClick={() => {
                 this.setState({ hasError: false, error: null });
-                window.location.href = "/";
+                // reload() works for both BrowserRouter and HashRouter (Electron)
+                window.location.reload();
               }}
               className="btn-primary btn-lg gap-2"
             >

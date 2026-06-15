@@ -1,11 +1,13 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, Tag, ChevronDown, Search, FileUp, Trash2 } from "lucide-react";
+import { Upload, Tag, ChevronDown, Search, FileUp, Trash2, RotateCcw } from "lucide-react";
 import clsx from "clsx";
 import { useDataStore } from "../store/dataStore";
 import { fmtRate } from "../utils/format";
 import { useTallyPriceListStore } from "../store/tallyPriceListStore";
+import { useOverrideStore } from "../store/overrideStore";
 import { parseTallyPriceListJson } from "../parser/tallyPriceListParser";
+import { inferGstRatesFromVouchers } from "../utils/gstInference";
 
 type SortKey = "name" | "group";
 type SortDir = "asc" | "desc";
@@ -14,6 +16,10 @@ interface PriceRow {
   itemId: string;
   name: string;
   group: string;
+  gstRate?: number;
+  gstRateInferred: boolean;
+  gstRateDefault: boolean;
+  gstRateOverridden: boolean;     // user manually set this via the GST cell
   tallyRate?: number;
   tallyUnit?: string;
   tallyCostPrice?: number;
@@ -22,8 +28,11 @@ interface PriceRow {
 
 export default function PriceList() {
   const navigate = useNavigate();
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
   const { entries: tallyEntries, importedAt, itemCount: tallyItemCount, setPriceList, clearPriceList } = useTallyPriceListStore();
+  const gstOverrides = useOverrideStore((s) => s.gstRates);
+  const setGstOverride = useOverrideStore((s) => s.setGstOverride);
+  const removeGstOverride = useOverrideStore((s) => s.removeGstOverride);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
@@ -32,6 +41,44 @@ export default function PriceList() {
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  // Inline GST edit state: which item's GST cell is currently editing + the input draft
+  const [editingGstId, setEditingGstId] = useState<string | null>(null);
+  const [editingGstValue, setEditingGstValue] = useState<string>("");
+  const gstInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-focus and select-all when entering edit mode
+  useEffect(() => {
+    if (editingGstId && gstInputRef.current) {
+      gstInputRef.current.focus();
+      gstInputRef.current.select();
+    }
+  }, [editingGstId]);
+
+  function startGstEdit(itemId: string, currentPct: number) {
+    setEditingGstId(itemId);
+    setEditingGstValue(String(currentPct));
+  }
+
+  function commitGstEdit() {
+    if (!editingGstId) return;
+    const trimmed = editingGstValue.trim();
+    if (trimmed === "") {
+      setEditingGstId(null);
+      return;
+    }
+    const pct = parseFloat(trimmed);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      // Invalid — just discard the edit and exit
+      setEditingGstId(null);
+      return;
+    }
+    setGstOverride(editingGstId, pct);
+    setEditingGstId(null);
+  }
+
+  function cancelGstEdit() {
+    setEditingGstId(null);
+  }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -41,7 +88,12 @@ export default function PriceList() {
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
-        const text = ev.target?.result as string;
+        const buffer = ev.target?.result as ArrayBuffer;
+        const bytes = new Uint8Array(buffer);
+        let encoding = "UTF-8";
+        if (bytes[0] === 0xFF && bytes[1] === 0xFE) encoding = "UTF-16LE";
+        else if (bytes[0] === 0xFE && bytes[1] === 0xFF) encoding = "UTF-16BE";
+        const text = new TextDecoder(encoding).decode(buffer);
         const entries = parseTallyPriceListJson(text);
         if (entries.length === 0) {
           setImportError("No items with selling rates found in the file.");
@@ -59,17 +111,37 @@ export default function PriceList() {
       setImportError("Failed to read file.");
       setImporting(false);
     };
-    reader.readAsText(file, "UTF-8");
+    reader.readAsArrayBuffer(file);
   }
+
+  // Dep narrowed to data?.vouchers so unrelated data field changes
+  // (importedAt, sourceFiles, items map mutations from override edits)
+  // don't trigger a full voucher scan to rebuild the GST inference map.
+  const inferredGstRates = useMemo(
+    () => (data ? inferGstRatesFromVouchers(data.vouchers) : new Map<string, number>()),
+    [data?.vouchers]
+  );
 
   const rows = useMemo<PriceRow[]>(() => {
     if (!data) return [];
     return Array.from(data.items.values()).map((item) => {
       const tallyEntry = tallyEntries[item.name.toUpperCase()];
+      const override = gstOverrides[item.itemId];
+      const masterGst = item.gstRate;
+      const inferredGst = inferredGstRates.get(item.itemId);
+      // Priority: user override > Tally master > voucher-inferred > default 5%
+      const gstRate = override?.gstPct ?? masterGst ?? inferredGst ?? 5;
+      const gstRateOverridden = override !== undefined;
+      const gstRateInferred = !gstRateOverridden && masterGst === undefined && inferredGst !== undefined;
+      const gstRateDefault = !gstRateOverridden && masterGst === undefined && inferredGst === undefined;
       return {
         itemId: item.itemId,
         name: item.name,
         group: item.group,
+        gstRate,
+        gstRateInferred,
+        gstRateDefault,
+        gstRateOverridden,
         tallyRate: tallyEntry?.sellingRate,
         tallyUnit: tallyEntry?.unit,
         tallyCostPrice: tallyEntry?.costPrice,
@@ -80,7 +152,7 @@ export default function PriceList() {
         })),
       };
     });
-  }, [data, tallyEntries]);
+  }, [data, tallyEntries, inferredGstRates, gstOverrides]);
 
   const groups = useMemo(() => {
     const gs = new Set(rows.map((r) => r.group));
@@ -122,7 +194,7 @@ export default function PriceList() {
     setExpandedItems(next);
   }
 
-  const cols = tallyItemCount > 0 ? "48px 1fr 160px 140px" : "48px 1fr 160px";
+  const cols = tallyItemCount > 0 ? "48px 1fr 160px 80px 140px 150px" : "48px 1fr 160px 80px";
 
   if (!data) {
     return (
@@ -145,7 +217,7 @@ export default function PriceList() {
       {/* Page Header */}
       <div className="mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
-          <h1 className="text-4xl font-bold text-slate-900 mb-1">Dealer Price List</h1>
+          <h1 className="page-title mb-1">Dealer Price List</h1>
           <p className="text-slate-600">Manage and view all item pricing across dealer price lists</p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -168,7 +240,7 @@ export default function PriceList() {
             {tallyItemCount > 0 && (
               <button
                 onClick={clearPriceList}
-                className="flex items-center gap-2 px-3 py-2 bg-red-100 text-red-700 font-semibold rounded-lg hover:bg-red-200 transition-colors text-sm"
+                className="flex items-center gap-2 px-3 py-2 bg-red-100 text-red-700 font-semibold rounded-lg hover:bg-red-200 transition-colors text-sm min-h-10"
                 title="Clear imported rates"
               >
                 <Trash2 size={15} />
@@ -258,9 +330,17 @@ export default function PriceList() {
           >
             Group {sortIcon("group")}
           </div>
+          <div className="px-4 py-4 text-right text-orange-600">
+            GST %
+          </div>
           {tallyItemCount > 0 && (
             <div className="px-4 py-4 text-right text-emerald-700">
               Tally Rate
+            </div>
+          )}
+          {tallyItemCount > 0 && (
+            <div className="px-4 py-4 text-right text-purple-700">
+              Price + GST
             </div>
           )}
         </div>
@@ -289,7 +369,7 @@ export default function PriceList() {
                       {hasDealerPrices && (
                         <button
                           onClick={() => toggleExpanded(row.itemId)}
-                          className="p-2 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                          className="min-h-10 min-w-10 flex items-center justify-center hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
                           title={expanded ? "Collapse dealer prices" : "Expand to view dealer prices"}
                           aria-expanded={expanded}
                           aria-label={`${expanded ? "Collapse" : "Expand"} dealer prices for ${row.name}`}
@@ -316,6 +396,72 @@ export default function PriceList() {
                       </span>
                     </div>
 
+                    {/* GST Rate — click pill to edit, Enter to save, Esc to cancel */}
+                    <div className="px-2 text-right">
+                      {editingGstId === row.itemId ? (
+                        <div className="inline-flex items-center gap-1">
+                          <input
+                            ref={gstInputRef}
+                            type="number"
+                            inputMode="decimal"
+                            min={0}
+                            max={100}
+                            step={0.5}
+                            value={editingGstValue}
+                            onChange={(e) => setEditingGstValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") { e.preventDefault(); commitGstEdit(); }
+                              else if (e.key === "Escape") { e.preventDefault(); cancelGstEdit(); }
+                            }}
+                            onBlur={commitGstEdit}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-16 px-2 py-0.5 text-sm font-bold tabular-nums text-right border-2 border-accent rounded-md focus:outline-none focus:ring-2 focus:ring-accent/30 bg-white"
+                            aria-label={`Edit GST rate for ${row.name}`}
+                          />
+                          <span className="text-sm font-bold text-slate-600">%</span>
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5">
+                          {row.gstRateOverridden && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); removeGstOverride(row.itemId); }}
+                              title="Reset to Tally master / inferred rate"
+                              aria-label={`Reset GST override for ${row.name}`}
+                              className="text-blue-500 hover:text-blue-700 transition-colors"
+                            >
+                              <RotateCcw size={12} strokeWidth={2.5} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); startGstEdit(row.itemId, row.gstRate ?? 5); }}
+                            title={
+                              row.gstRateOverridden
+                                ? `Manually set — click to edit (was ${row.gstRateInferred ? "inferred" : "from Tally master"})`
+                                : row.gstRateDefault
+                                  ? "Default 5% — click to set"
+                                  : row.gstRateInferred
+                                    ? "Rate inferred from past vouchers — click to override"
+                                    : "Rate from Tally master — click to override"
+                            }
+                            className={clsx(
+                              "inline-block px-2 py-0.5 font-bold text-sm rounded-full tabular-nums cursor-pointer transition-all active:scale-95 hover:ring-2 hover:ring-offset-1",
+                              row.gstRateOverridden
+                                ? "bg-blue-50 text-blue-700 border border-blue-300 hover:ring-blue-300"
+                                : row.gstRateDefault
+                                  ? "bg-slate-100 text-slate-500 border border-slate-200 hover:ring-slate-300"
+                                  : row.gstRateInferred
+                                    ? "bg-amber-50 text-amber-700 border border-amber-200 hover:ring-amber-300"
+                                    : "bg-orange-50 text-orange-700 hover:ring-orange-300"
+                            )}
+                          >
+                            {row.gstRateOverridden ? "✎ " : row.gstRateDefault ? "" : row.gstRateInferred ? "~" : ""}{row.gstRate}%
+                          </button>
+                        </span>
+                      )}
+                    </div>
+
                     {/* Tally Rate */}
                     {tallyItemCount > 0 && (
                       <div className="px-2 text-right">
@@ -330,6 +476,19 @@ export default function PriceList() {
                               </div>
                             )}
                           </>
+                        ) : (
+                          <span className="text-slate-300 text-lg">—</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Price + GST */}
+                    {tallyItemCount > 0 && (
+                      <div className="px-2 text-right">
+                        {row.tallyRate !== undefined && row.gstRate !== undefined ? (
+                          <div className="text-lg font-bold tabular-nums text-purple-700">
+                            {fmtRate(row.tallyRate * (1 + row.gstRate / 100))}
+                          </div>
                         ) : (
                           <span className="text-slate-300 text-lg">—</span>
                         )}

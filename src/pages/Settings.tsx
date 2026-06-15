@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive, Activity, Wifi, RefreshCw } from "lucide-react";
+import { Settings as SettingsIcon, Trash2, Download, Upload, AlertTriangle, FileSpreadsheet, Archive, RotateCcw, Shield, HardDrive, Activity, Wifi, RefreshCw, Cloud, CloudOff } from "lucide-react";
 import clsx from "clsx";
 import { useUIStore } from "../store/uiStore";
 import { useDataStore } from "../store/dataStore";
@@ -10,16 +10,22 @@ import { useToast } from "../components/Toast";
 import { exportUnitsToExcel, importUnitsFromExcel } from "../utils/unitExcelHandler";
 import { deserializeParsedData } from "../utils/serialize";
 import { checkTallyHealth } from "../api/tallyApi";
+import { syncConfigToSupabase, type SyncResult } from "../hooks/useSupabaseConfigSync";
+import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
 
 export default function Settings() {
   const { unitMode, toggleUnitMode, fyYear, setFyYear, coverMonths, setCoverMonths, leadTimeMonths, setLeadTimeMonths, defaultCreditDays, setDefaultCreditDays } = useUIStore();
-  const { clearData, data, refreshOverrides, voucherIndex } = useDataStore();
+  const clearData = useDataStore((s) => s.clearData);
+  const data = useDataStore((s) => s.data);
+  const refreshOverrides = useDataStore((s) => s.refreshOverrides);
+  const voucherIndex = useDataStore((s) => s.voucherIndex);
   const { exportAuditLog, units, setUnitOverride } = useOverrideStore();
   const { toast } = useToast();
   const [confirmClear, setConfirmClear] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [backups, setBackups] = useState<Array<{ key: string; label: string; createdAt: string }>>([]);
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [eraseStep, setEraseStep] = useState<"idle" | "confirm" | "downloading" | "done">("idle");
   const [jsonUploads, setJsonUploads] = useState<string[]>([]);
   const [auditResults, setAuditResults] = useState<any>(null);
@@ -27,7 +33,123 @@ export default function Settings() {
   const [showDiscrepancies, setShowDiscrepancies] = useState(false);
   const [showNegativeStock, setShowNegativeStock] = useState(false);
   const [showNoGstItems, setShowNoGstItems] = useState(false);
+  const [syncingSupabase, setSyncingSupabase] = useState(false);
+  const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [pushingVouchers, setPushingVouchers] = useState(false);
+  const [voucherPushResult, setVoucherPushResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handlePushLocalVouchersToSupabase() {
+    if (pushingVouchers) return;
+    if (!data) {
+      toast("No local data to push. Import from Tally first.", "warn");
+      return;
+    }
+    setPushingVouchers(true);
+    setVoucherPushResult(null);
+    try {
+      const items = Array.from(data.items.values());
+      const ledgers = Array.from(data.ledgers.values());
+      const vouchers = data.vouchers;
+      const company = data.company?.name || "M.K.CYCLES (P) LTD.";
+
+      // Run config sync and voucher sync in parallel so a single button-click
+      // pushes EVERYTHING: discount rules, order groups, vendor groups,
+      // item assignments, category colors, notes, prices, items, ledgers, vouchers.
+      const [configResult, voucherResp] = await Promise.allSettled([
+        syncConfigToSupabase(company),
+        fetch("http://localhost:3100/api/supabase/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ company, items, ledgers, vouchers }),
+        }).then(async (r) => {
+          const j = await r.json();
+          if (!r.ok || !j.success) throw new Error(j.error || `HTTP ${r.status}`);
+          return j;
+        }),
+      ]);
+
+      const configOk = configResult.status === "fulfilled" && configResult.value.success;
+      const voucherOk = voucherResp.status === "fulfilled";
+
+      // Record masters/vouchers status so the NavBar Cloud Sync pill reflects
+      // a manual Push EVERYTHING the same way auto-pushes do. config status is
+      // already recorded inside syncConfigToSupabase().
+      const statusStore = useSupabaseSyncStatusStore.getState();
+      if (voucherOk) {
+        statusStore.recordResult("masters", true);
+        statusStore.recordResult("vouchers", true);
+      } else {
+        const errMsg = voucherResp.status === "rejected"
+          ? (voucherResp.reason?.message || String(voucherResp.reason))
+          : "Unknown voucher push error";
+        statusStore.recordResult("masters", false, errMsg);
+        statusStore.recordResult("vouchers", false, errMsg);
+      }
+
+      if (configResult.status === "fulfilled") {
+        setLastSyncResult(configResult.value);
+        setLastSyncAt(new Date().toISOString());
+      }
+
+      const counts = configResult.status === "fulfilled" ? configResult.value.counts : null;
+      const voucherCounts = voucherResp.status === "fulfilled" ? voucherResp.value : null;
+
+      if (configOk && voucherOk && counts && voucherCounts) {
+        const msg =
+          `Pushed ${voucherCounts.vouchersCount} vouchers · ${voucherCounts.itemsCount} items · ` +
+          `${voucherCounts.ledgersCount} ledgers · ${counts.orderGroups} order groups · ` +
+          `${counts.discountRules} discount rules · ${counts.itemCategoryOverrides} item assignments · ` +
+          `${counts.categoryColors} colors · ${counts.vendorGroupAssignments} vendor assignments · ` +
+          `${counts.tallyPriceListImports} prices · ${counts.rateOverrides} rate overrides · ` +
+          `${counts.unitOverrides} unit overrides · ${counts.itemNotes} notes · ${counts.callingList} calls`;
+        toast(msg, "success");
+        setVoucherPushResult({ ok: true, msg });
+      } else {
+        const errs: string[] = [];
+        if (configResult.status === "rejected") errs.push(`config: ${configResult.reason?.message || configResult.reason}`);
+        else if (!configOk && configResult.value.errors) errs.push(...configResult.value.errors);
+        if (voucherResp.status === "rejected") errs.push(`vouchers: ${voucherResp.reason?.message || voucherResp.reason}`);
+        const msg = `Partial push (${errs.length} error${errs.length === 1 ? "" : "s"}): ${errs.slice(0, 2).join(" | ")}${errs.length > 2 ? ` …+${errs.length - 2} more` : ""}`;
+        toast(msg, errs.length === 0 ? "success" : "warn");
+        setVoucherPushResult({ ok: errs.length === 0, msg });
+        if (errs.length > 0) console.warn("[Push All] Errors:", errs);
+      }
+    } catch (e: any) {
+      toast(`Push failed: ${e.message}`, "error");
+      setVoucherPushResult({ ok: false, msg: e.message });
+    } finally {
+      setPushingVouchers(false);
+    }
+  }
+
+  async function handlePushToSupabase() {
+    if (syncingSupabase) return;
+    setSyncingSupabase(true);
+    try {
+      const result = await syncConfigToSupabase();
+      setLastSyncResult(result);
+      setLastSyncAt(new Date().toISOString());
+      if (result.success) {
+        const total = Object.values(result.counts).reduce((s, n) => s + n, 0);
+        toast(
+          `Pushed ${total} records to Supabase: ${result.counts.discountRules} rules, ${result.counts.orderGroups} groups, ${result.counts.itemCategoryOverrides} item assignments, ${result.counts.tallyPriceListImports} prices, ${result.counts.rateOverrides} rate overrides`,
+          "success"
+        );
+        if (result.errors && result.errors.length > 0) {
+          toast(`Partial sync: ${result.errors.length} table(s) had errors. Check console.`, "warn");
+          console.warn("[Push to Supabase] Per-table errors:", result.errors);
+        }
+      } else {
+        toast(`Push failed: ${result.errors?.[0] || "Unknown error"}`, "error");
+      }
+    } catch (e: any) {
+      toast(`Push failed: ${e.message}`, "error");
+    } finally {
+      setSyncingSupabase(false);
+    }
+  }
 
   // Load backups and json uploads on mount
   useEffect(() => {
@@ -92,6 +214,25 @@ export default function Settings() {
     }
   }
 
+  async function handleDeleteAllBackups() {
+    if (backups.length === 0) return;
+    if (!confirmDeleteAll) {
+      setConfirmDeleteAll(true);
+      return;
+    }
+    try {
+      for (const b of backups) {
+        await deleteBackup(b.key);
+      }
+      await loadBackupsList();
+      toast(`Deleted ${backups.length} backup(s)`, "info");
+    } catch (err) {
+      toast(`Delete all failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    } finally {
+      setConfirmDeleteAll(false);
+    }
+  }
+
   async function handleClearData() {
     if (!confirmClear) {
       setConfirmClear(true);
@@ -145,13 +286,13 @@ export default function Settings() {
     toast("Audit log exported", "success");
   }
 
-  function handleExportUnits() {
+  async function handleExportUnits() {
     if (!data) {
       toast("No data loaded. Import data first.", "error");
       return;
     }
     try {
-      exportUnitsToExcel(data.items, units);
+      await exportUnitsToExcel(data.items, units);
       toast("Unit configuration exported successfully", "success");
     } catch (err) {
       toast(`Export failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
@@ -283,6 +424,126 @@ export default function Settings() {
             </>
           ) : (
             <p className="text-sm text-muted italic">No data loaded</p>
+          )}
+        </div>
+      </Section>
+
+      {/* Supabase Sync */}
+      <Section title="Supabase Cloud Sync">
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Cloud size={14} className="text-accent" />
+            <span className="text-xs text-muted">
+              Discount rules, item assignments, price list, order groups, vendor groups, notes, calling list and more auto-push to Supabase on edit (debounced 2s). Use the button below to force-push everything immediately.
+            </span>
+          </div>
+
+          <button
+            onClick={handlePushToSupabase}
+            disabled={syncingSupabase}
+            className="btn-secondary w-full"
+            title="Push only config (rules, groups, prices, notes) — does NOT push items/ledgers/vouchers"
+          >
+            {syncingSupabase ? (
+              <>
+                <RefreshCw size={14} className="animate-spin" />
+                Pushing config only…
+              </>
+            ) : (
+              <>
+                <Cloud size={14} />
+                Push Config Only (rules, groups, prices, notes)
+              </>
+            )}
+          </button>
+
+          <button
+            onClick={handlePushLocalVouchersToSupabase}
+            disabled={pushingVouchers || !data}
+            className="btn-primary w-full"
+            title={!data ? "Import data from Tally first" : "Push everything to Supabase: items, ledgers, vouchers, order groups, discount rules, item assignments, vendor groups, notes, prices, all overrides"}
+          >
+            {pushingVouchers ? (
+              <>
+                <RefreshCw size={14} className="animate-spin" />
+                Pushing everything to Supabase…
+              </>
+            ) : (
+              <>
+                <Cloud size={14} />
+                {data
+                  ? `Push EVERYTHING to Supabase (${data.items.size} items · ${data.ledgers.size} ledgers · ${data.vouchers.length} vouchers · all config)`
+                  : "Push EVERYTHING to Supabase (no data loaded)"}
+              </>
+            )}
+          </button>
+
+          {voucherPushResult && (
+            <div className={clsx(
+              "rounded-lg border p-3 text-xs",
+              voucherPushResult.ok
+                ? "border-success/30 bg-success/[0.04] text-success-700"
+                : "border-danger/30 bg-danger/[0.04] text-danger-700"
+            )}>
+              <div className="flex items-center gap-2 font-semibold">
+                {voucherPushResult.ok ? <Cloud size={12} /> : <CloudOff size={12} />}
+                <span>{voucherPushResult.msg}</span>
+              </div>
+            </div>
+          )}
+
+          {lastSyncAt && lastSyncResult && (
+            <div className={clsx(
+              "rounded-lg border p-3 text-xs space-y-1.5",
+              lastSyncResult.success
+                ? "border-success/30 bg-success/[0.04]"
+                : "border-danger/30 bg-danger/[0.04]"
+            )}>
+              <div className="flex items-center gap-2 font-semibold">
+                {lastSyncResult.success ? (
+                  <>
+                    <Cloud size={12} className="text-success-600" />
+                    <span className="text-success-700">Last push succeeded</span>
+                  </>
+                ) : (
+                  <>
+                    <CloudOff size={12} className="text-danger-600" />
+                    <span className="text-danger-700">Last push failed</span>
+                  </>
+                )}
+                <span className="text-muted font-normal ml-auto">
+                  {new Date(lastSyncAt).toLocaleString()}
+                </span>
+              </div>
+              {lastSyncResult.success && (
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-muted">
+                  <span>Discount rules: <b className="text-primary tabular-nums">{lastSyncResult.counts.discountRules}</b></span>
+                  <span>Item assignments: <b className="text-primary tabular-nums">{lastSyncResult.counts.itemCategoryOverrides}</b></span>
+                  <span>Order groups: <b className="text-primary tabular-nums">{lastSyncResult.counts.orderGroups}</b></span>
+                  <span>Category colors: <b className="text-primary tabular-nums">{lastSyncResult.counts.categoryColors}</b></span>
+                  <span>Vendor assignments: <b className="text-primary tabular-nums">{lastSyncResult.counts.vendorGroupAssignments}</b></span>
+                  <span>Unit overrides: <b className="text-primary tabular-nums">{lastSyncResult.counts.unitOverrides}</b></span>
+                  <span>Rate overrides: <b className="text-primary tabular-nums">{lastSyncResult.counts.rateOverrides}</b></span>
+                  <span>GST overrides: <b className="text-primary tabular-nums">{lastSyncResult.counts.gstOverrides}</b></span>
+                  <span>Price list imports: <b className="text-primary tabular-nums">{lastSyncResult.counts.tallyPriceListImports}</b></span>
+                  <span>Item notes: <b className="text-primary tabular-nums">{lastSyncResult.counts.itemNotes}</b></span>
+                  <span>Calling list: <b className="text-primary tabular-nums">{lastSyncResult.counts.callingList}</b></span>
+                  <span>Voucher overrides: <b className="text-primary tabular-nums">{lastSyncResult.counts.voucherOverrides}</b></span>
+                  <span>App settings: <b className="text-primary tabular-nums">{lastSyncResult.counts.appSettings}</b></span>
+                  <span>Order draft lines: <b className="text-primary tabular-nums">{lastSyncResult.counts.orderDraftLines}</b></span>
+                </div>
+              )}
+              {lastSyncResult.errors && lastSyncResult.errors.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-danger/20">
+                  <div className="text-danger-700 font-semibold mb-1">Errors:</div>
+                  <ul className="space-y-0.5 text-danger-600">
+                    {lastSyncResult.errors.slice(0, 5).map((err, i) => (
+                      <li key={i} className="font-mono text-2xs break-all">• {err}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </Section>
@@ -573,14 +834,14 @@ export default function Settings() {
                       className={clsx("btn-sm text-xs px-2 py-1", confirmRestore === backup.key ? "btn-primary" : "btn-secondary")}
                       title="Restore this backup"
                     >
-                      <RotateCcw size={11} />
+                      <RotateCcw size={12} />
                       {confirmRestore === backup.key ? "Confirm?" : "Restore"}
                     </button>
                     <button onClick={() => handleDownloadBackup(backup.key)} className="btn-secondary btn-sm text-xs px-2 py-1" title="Download as JSON">
-                      <Download size={11} />
+                      <Download size={12} />
                     </button>
                     <button onClick={() => handleDeleteBackup(backup.key)} className="btn-danger btn-sm text-xs px-2 py-1" title="Delete backup">
-                      <Trash2 size={11} />
+                      <Trash2 size={12} />
                     </button>
                   </div>
                 </div>
@@ -589,6 +850,33 @@ export default function Settings() {
           )}
           {backups.length > 15 && (
             <p className="text-xs text-warn">{backups.length} backups stored — consider deleting old ones.</p>
+          )}
+          {backups.length > 0 && (
+            <div className="flex items-center justify-between pt-2 border-t border-bg-border">
+              {confirmDeleteAll && (
+                <p className="text-xs text-danger font-medium">
+                  Delete all {backups.length} backups? This cannot be undone.
+                </p>
+              )}
+              <div className={clsx("flex items-center gap-2", !confirmDeleteAll && "ml-auto")}>
+                {confirmDeleteAll && (
+                  <button
+                    onClick={() => setConfirmDeleteAll(false)}
+                    className="btn-secondary btn-sm text-xs px-3 py-1"
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button
+                  onClick={handleDeleteAllBackups}
+                  className="btn-danger btn-sm text-xs px-3 py-1"
+                  title={confirmDeleteAll ? "Click again to confirm" : `Delete all ${backups.length} backups`}
+                >
+                  <Trash2 size={12} />
+                  {confirmDeleteAll ? `Confirm delete ${backups.length}` : "Delete All Backups"}
+                </button>
+              </div>
+            </div>
           )}
         </div>
       </Section>

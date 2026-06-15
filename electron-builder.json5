@@ -46,5 +46,6 @@
     createStartMenuShortcut: true,
     shortcutName: "MK Cycles Dashboard",
   },
+  compression: "maximum",  // 7z maximum compression → ~15-20% smaller installer (slower build)
   publish: null,
 }

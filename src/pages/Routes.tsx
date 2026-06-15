@@ -39,26 +39,40 @@ function hasWarning(station: StationData): boolean {
   );
 }
 
-function makeDotIcon(color: string, selected: boolean) {
+// Icon cache — module-scope memo so we never allocate new L.divIcon instances
+// when toggling selection. ~6 colors × 5 variants = 30 entries at most.
+// Previously, every selection change re-allocated and replaced DOM via Leaflet's
+// marker.setIcon() → DOM thrashing on every click.
+const _iconCache = new Map<string, L.DivIcon>();
+
+function makeDotIcon(color: string, selected: boolean): L.DivIcon {
+  const key = `dot|${color}|${selected ? 1 : 0}`;
+  let icon = _iconCache.get(key);
+  if (icon) return icon;
   const size = selected ? 18 : 13;
   const border = selected ? "3px solid #fff" : "2px solid rgba(255,255,255,0.85)";
   const shadow = selected ? "0 2px 8px rgba(0,0,0,0.5)" : "0 1px 4px rgba(0,0,0,0.3)";
-  return L.divIcon({
+  icon = L.divIcon({
     className: "",
     html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};border:${border};box-shadow:${shadow};"></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
     popupAnchor: [0, -(size / 2 + 4)],
   });
+  _iconCache.set(key, icon);
+  return icon;
 }
 
-function makeBeaconIcon(color: string, selected: boolean) {
+function makeBeaconIcon(color: string, selected: boolean): L.DivIcon {
+  const key = `beacon|${color}|${selected ? 1 : 0}`;
+  let icon = _iconCache.get(key);
+  if (icon) return icon;
   const dot = selected ? 18 : 13;
   const ring = dot + 14;
   const offset = (ring - dot) / 2;
   const border = selected ? "3px solid #fff" : "2px solid rgba(255,255,255,0.85)";
   const shadow = selected ? "0 2px 8px rgba(0,0,0,0.5)" : "0 1px 4px rgba(0,0,0,0.3)";
-  return L.divIcon({
+  icon = L.divIcon({
     className: "",
     html: `
       <div style="position:relative;width:${ring}px;height:${ring}px;">
@@ -69,27 +83,35 @@ function makeBeaconIcon(color: string, selected: boolean) {
     iconAnchor: [ring / 2, ring / 2],
     popupAnchor: [0, -(ring / 2 + 4)],
   });
+  _iconCache.set(key, icon);
+  return icon;
 }
 
-function makePairedIcon(color: string) {
-  // Larger ring, white inner dot — visually distinct from selected/normal
-  return L.divIcon({
+function makePairedIcon(color: string): L.DivIcon {
+  const key = `paired|${color}`;
+  let icon = _iconCache.get(key);
+  if (icon) return icon;
+  icon = L.divIcon({
     className: "",
     html: `<div style="width:17px;height:17px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 0 0 2px ${color},0 2px 8px rgba(0,0,0,0.35);"></div>`,
     iconSize: [17, 17],
     iconAnchor: [8.5, 8.5],
     popupAnchor: [0, -12],
   });
+  _iconCache.set(key, icon);
+  return icon;
 }
 
-function makeGodownIcon() {
-  return L.divIcon({
-    className: "",
-    html: `<div style="width:20px;height:20px;border-radius:4px;background:#1d4ed8;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;"><div style="width:6px;height:6px;background:#fff;border-radius:50%;"></div></div>`,
-    iconSize: [20, 20],
-    iconAnchor: [10, 10],
-    popupAnchor: [0, -14],
-  });
+// Godown icon is a single instance — never changes.
+const _godownIcon = L.divIcon({
+  className: "",
+  html: `<div style="width:20px;height:20px;border-radius:4px;background:#1d4ed8;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;"><div style="width:6px;height:6px;background:#fff;border-radius:50%;"></div></div>`,
+  iconSize: [20, 20],
+  iconAnchor: [10, 10],
+  popupAnchor: [0, -14],
+});
+function makeGodownIcon(): L.DivIcon {
+  return _godownIcon;
 }
 
 type SortKey = "freight" | "distance" | "name" | "invoices";
@@ -117,7 +139,7 @@ export default function Routes() {
   const [zoneFilter, setZoneFilter] = useState<Zone>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
 
   // Build map of stationId → pending delivery note count
   const pendingCountMap = useMemo<Map<string, number>>(() => {
@@ -147,6 +169,7 @@ export default function Routes() {
   const routeLinesRef = useRef<L.Polyline[]>([]);
   const onSelectRef = useRef<(id: string) => void>(() => {});
   const pendingIdsRef = useRef<Set<string>>(new Set());
+  const prevSelectedIdRef = useRef<string | null>(null);
 
   // Paired station IDs for the currently selected station
   const pairedIds = useMemo<Set<string>>(() => {
@@ -238,7 +261,9 @@ export default function Routes() {
     };
   }, []);
 
-  // Update marker icons + popups; draw route polylines when selection changes
+  // Update marker icons + popups; draw route polylines when selection changes.
+  // Only touches markers whose state changed (prev/new selected + their pairs)
+  // instead of iterating all 400 markers on every click.
   useEffect(() => {
     const map = leafletMap.current;
 
@@ -263,12 +288,26 @@ export default function Routes() {
       }
     }
 
-    markersRef.current.forEach((marker, id) => {
-      const station = STATIONS.find((s) => s.id === id)!;
+    // Determine which markers need a visual update: only those that changed state
+    const prevId = prevSelectedIdRef.current;
+    const prevPaired = new Set<string>(prevId ? (ROUTE_PAIRS[prevId] ?? []) : []);
+    const nextPaired = pairedIds; // already computed above
+
+    const toUpdate = new Set<string>();
+    if (prevId) toUpdate.add(prevId);
+    prevPaired.forEach((id) => toUpdate.add(id));
+    if (selectedId) toUpdate.add(selectedId);
+    nextPaired.forEach((id) => toUpdate.add(id));
+
+    toUpdate.forEach((id) => {
+      const marker = markersRef.current.get(id);
+      const station = STATIONS.find((s) => s.id === id);
+      if (!marker || !station) return;
+
       const zone = getDistanceZone(station.distanceKm);
       const color = ZONE_COLORS[zone];
       const isSelected = id === selectedId;
-      const isPaired = pairedIds.has(id);
+      const isPaired = nextPaired.has(id);
       const count = pendingCountMap.get(id) ?? 0;
       const hasPending = count > 0;
 
@@ -299,6 +338,8 @@ export default function Routes() {
           <a href="${mapsDirectionsUrl(station)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:6px;color:#2563eb;font-size:11px;">Get directions ↗</a>
         </div>`);
     });
+
+    prevSelectedIdRef.current = selectedId;
   }, [selectedId, pendingCountMap, pairedIds]);
 
   // Fly to selected station

@@ -77,6 +77,13 @@ export function computeTaxRadar(
   vouchers: CanonicalVoucher[],
   items: Map<string, CanonicalItem>,
   ledgers: Map<string, CanonicalLedger>,
+  /**
+   * Optional per-item user GST overrides. If a row in this map exists for an
+   * itemId, that pct wins over `item.gstRate`. Lets PriceList edits feed
+   * straight into the tax-rate categorization without round-tripping through
+   * the Tally master.
+   */
+  gstOverrides?: Record<string, { gstPct: number }>,
 ): TaxRadarResult {
   const monthlyMap = new Map<string, {
     gstCollected: number;
@@ -126,7 +133,8 @@ export function computeTaxRadar(
           // Track tax categories by item GST rate
           if (line.itemId) {
             const item = items.get(line.itemId);
-            const rate = item?.gstRate ?? 18;
+            const override = gstOverrides?.[line.itemId]?.gstPct;
+            const rate = override ?? item?.gstRate ?? 18;
             const lineAmt = Math.abs(line.lineAmount ?? 0);
             const taxAmt = lineAmt * rate / 100;
             let tr = taxRateMap.get(rate);

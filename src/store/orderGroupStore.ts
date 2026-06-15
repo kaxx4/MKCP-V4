@@ -11,6 +11,7 @@ export interface OrderGroup {
   lines: Record<string, OrderLine>;
   tags: string[];
   color: string;
+  itemIds?: string[]; // Items assigned to this group (without quantities)
 }
 
 interface OrderGroupState {
@@ -33,6 +34,13 @@ interface OrderGroupState {
   getGroupLineCount: (id: string) => number;
   getGroupTotalValue: (id: string) => number;
   exportGroupAsLines: (id: string) => OrderLine[];
+
+  // Item assignment (without quantities)
+  assignItemToGroup: (groupId: string, itemId: string) => void;
+  removeItemFromGroup: (groupId: string, itemId: string) => void;
+  setGroupItems: (groupId: string, itemIds: string[]) => void;
+  getGroupItems: (groupId: string) => string[];
+  getItemGroups: () => Record<string, string>; // itemId -> groupId mapping
 }
 
 const COLORS = [
@@ -178,6 +186,75 @@ export const useOrderGroupStore = create<OrderGroupState>()(
         const group = get().groups[id];
         if (!group) return [];
         return Object.values(group.lines);
+      },
+
+      // Item assignment methods
+      assignItemToGroup: (groupId, itemId) => {
+        set((s) => {
+          const group = s.groups[groupId];
+          if (!group) return s;
+          const itemIds = group.itemIds ?? [];
+          if (itemIds.includes(itemId)) return s;
+          return {
+            groups: {
+              ...s.groups,
+              [groupId]: {
+                ...group,
+                itemIds: [...itemIds, itemId],
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          };
+        });
+      },
+
+      removeItemFromGroup: (groupId, itemId) => {
+        set((s) => {
+          const group = s.groups[groupId];
+          if (!group) return s;
+          const itemIds = (group.itemIds ?? []).filter((id) => id !== itemId);
+          return {
+            groups: {
+              ...s.groups,
+              [groupId]: {
+                ...group,
+                itemIds,
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          };
+        });
+      },
+
+      setGroupItems: (groupId, itemIds) => {
+        set((s) => {
+          const group = s.groups[groupId];
+          if (!group) return s;
+          return {
+            groups: {
+              ...s.groups,
+              [groupId]: {
+                ...group,
+                itemIds,
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          };
+        });
+      },
+
+      getGroupItems: (groupId) => {
+        return get().groups[groupId]?.itemIds ?? [];
+      },
+
+      getItemGroups: () => {
+        const mapping: Record<string, string> = {};
+        for (const [groupId, group] of Object.entries(get().groups)) {
+          for (const itemId of group.itemIds ?? []) {
+            mapping[itemId] = groupId;
+          }
+        }
+        return mapping;
       },
     }),
     { name: "mkcycles-order-groups" }

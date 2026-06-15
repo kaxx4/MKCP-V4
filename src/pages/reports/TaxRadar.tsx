@@ -9,6 +9,7 @@ import { AlertTriangle, Shield, FileText, TrendingUp } from "lucide-react";
 import clsx from "clsx";
 import type { ParsedData } from "../../types/canonical";
 import type { VoucherIndex } from "../../engine/inventory";
+import { useOverrideStore } from "../../store/overrideStore";
 
 interface Props {
   data: ParsedData;
@@ -21,9 +22,10 @@ const TOOLTIP_STYLE = { background: "#ffffff", border: "1px solid #e2e8f0", bord
 const LABEL_STYLE = { color: "#0f172a", fontWeight: 600, marginBottom: 4 };
 
 export default function TaxRadar({ data }: Props) {
+  const gstOverrides = useOverrideStore((s) => s.gstRates);
   const analysis = useMemo(
-    () => computeTaxRadar(data.vouchers, data.items, data.ledgers),
-    [data.vouchers, data.items, data.ledgers]
+    () => computeTaxRadar(data.vouchers, data.items, data.ledgers, gstOverrides),
+    [data.vouchers, data.items, data.ledgers, gstOverrides]
   );
 
   const { summary, monthlyData, alerts, missingGSTEntries, taxCategories } = analysis;

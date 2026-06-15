@@ -193,6 +193,44 @@ export async function pushVoucherBatch(payload: { company: string; vouchers: any
   }
 }
 
+// ── Push-test: build + push a voucher from simple form inputs ────────────────
+
+export interface PushTestRequest {
+  company: string;
+  voucherType: "Sales" | "Purchase" | "Delivery Note";
+  date: string;               // YYYY-MM-DD
+  partyName: string;
+  ledgerName: string;         // sales/purchase account (not needed for Delivery Note)
+  items: { name: string; qty: number; unit: string; rate: number }[];
+  voucherNumber?: string;
+  narration?: string;
+  dryRun?: boolean;
+}
+
+export interface PushTestResult extends PushResult {
+  dryRun?: boolean;
+  sentXml?: string;
+  payload?: any;
+  error?: string;
+}
+
+export async function pushTest(req: PushTestRequest): Promise<PushTestResult> {
+  try {
+    const r = await fetch(`${BASE}/api/tally/push-test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      return { success: false, created: 0, errors: 1, lastVoucherId: null, lineErrors: [`HTTP ${r.status}: ${text}`], rawResponse: text };
+    }
+    return await r.json();
+  } catch (e: any) {
+    return { success: false, created: 0, errors: 1, lastVoucherId: null, lineErrors: [e.message], rawResponse: "" };
+  }
+}
+
 // ── Company detection ─────────────────────────────────────────────────────────
 
 export async function detectCompany(): Promise<{ success: boolean; companies: { name: string }[]; current: string | null }> {

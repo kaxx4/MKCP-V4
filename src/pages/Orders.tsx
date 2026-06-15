@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Minus, Trash2, Download, X, Upload, Package, Filter, FolderPlus, FolderOpen, Save, Copy, ChevronDown, ChevronUp, BarChart3 } from "lucide-react";
 import Fuse from "fuse.js";
-import * as XLSX from "xlsx";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ResponsiveContainer,
@@ -23,13 +22,18 @@ import { getCurrentStock, getCurrentStockIndexed, computeMonthlyBuckets, compute
 import { getItemMovements, getItemOrderDocs, type MovementRecord, type MovementDirection } from "../engine/audit/movementTracer";
 import { toDisplay, fromDisplay } from "../engine/unitEngine";
 import { UnitToggle } from "../components/UnitToggle";
+import { GroupTabs } from "../components/GroupTabs";
+import { VendorGroupsSummary } from "../components/VendorGroupsSummary";
+import { ExpandedGroupsView } from "../components/ExpandedGroupsView";
 import { fmtNum } from "../utils/format";
 import type { CanonicalItem } from "../types/canonical";
 import clsx from "clsx";
 
 export default function Orders() {
   const navigate = useNavigate();
-  const { data, voucherIndex } = useDataStore();
+  const data = useDataStore((s) => s.data);
+  const voucherIndex = useDataStore((s) => s.voucherIndex);
+  const stockMap = useDataStore((s) => s.stockMap);
   const { unitMode, coverMonths, setCoverMonths, isMobile } = useUIStore();
   const { lines: orderLines, setLine, removeLine, clearAll, getAllLines } = useOrderStore();
   const {
@@ -43,6 +47,10 @@ export default function Orders() {
     setGroupLines,
     addLinesToGroup,
     getAllGroups,
+    assignItemToGroup,
+    removeItemFromGroup,
+    getGroupItems,
+    getItemGroups,
   } = useOrderGroupStore();
 
   const [search, setSearch] = useState("");
@@ -58,8 +66,13 @@ export default function Orders() {
   const [showChart, setShowChart] = useState(true);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupDesc, setNewGroupDesc] = useState("");
+  const [groupPanelTab, setGroupPanelTab] = useState<"groups" | "items">("groups");
+  const [itemSearch, setItemSearch] = useState("");
   const [movementModal, setMovementModal] = useState<{ direction: MovementDirection; month?: string } | null>(null);
   const [modalTab, setModalTab] = useState<"actual" | "orders">("actual");
+  const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const [batchAssignGroupId, setBatchAssignGroupId] = useState<string | null>(null);
 
   function openMovementModal(direction: MovementDirection, month?: string) {
     setModalTab("actual");
@@ -73,6 +86,7 @@ export default function Orders() {
   const orderInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
   const parentRef = useRef<HTMLDivElement>(null);
   const orderPanelRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Debounce search input
   useEffect(() => {
@@ -115,18 +129,20 @@ export default function Orders() {
     [allItems]
   );
 
-  // Cache stock calculations for all items (using indexed lookup)
-  const stockCache = useMemo(() => {
-    if (!data) return new Map<string, number>();
-    const cache = new Map<string, number>();
-    for (const item of allItems) {
-      cache.set(item.itemId, getCurrentStockIndexed(item, voucherIndex));
-    }
-    return cache;
-  }, [data, allItems, voucherIndex]);
+  // Use pre-computed stockMap from dataStore (single pass after data load).
+  // Eliminates the 559 × 5000 voucher scans that previously ran per keystroke.
+  const stockCache = stockMap;
 
   const filteredItems = useMemo(() => {
     let result = allItems;
+
+    // Filter by active group if set
+    if (activeGroupId) {
+      const groupItems = getGroupItems(activeGroupId);
+      const groupItemSet = new Set(groupItems);
+      result = result.filter((i) => groupItemSet.has(i.itemId));
+    }
+
     if (groupFilter !== "ALL") result = result.filter((i) => i.group === groupFilter);
     if (debouncedSearch.trim()) {
       const searchResult = fuse.search(debouncedSearch.trim());
@@ -143,7 +159,7 @@ export default function Orders() {
       });
     }
     return result;
-  }, [allItems, debouncedSearch, groupFilter, fuse, stockFilterEnabled, stockFilterOp, stockFilterValue, stockCache]);
+  }, [allItems, debouncedSearch, groupFilter, fuse, stockFilterEnabled, stockFilterOp, stockFilterValue, stockCache, activeGroupId, getGroupItems]);
 
   const itemListVirtualizer = useVirtualizer({
     count: filteredItems.length,
@@ -165,9 +181,9 @@ export default function Orders() {
   );
 
   const currentStock = useMemo(() => {
-    if (!selectedItem || !data) return 0;
-    return getCurrentStockIndexed(selectedItem, voucherIndex);
-  }, [selectedItem, data, voucherIndex]);
+    if (!selectedItem) return 0;
+    return stockMap.get(selectedItem.itemId) ?? 0;
+  }, [selectedItem, stockMap]);
 
   const monthlyBuckets = useMemo(() => {
     if (!selectedItem || !data) return [];
@@ -197,6 +213,35 @@ export default function Orders() {
     } else {
       setTimeout(() => qtyRef.current?.focus(), 50);
     }
+  }
+
+  function toggleMultiSelect(itemId: string) {
+    const newSelection = new Set(selectedItemIds);
+    if (newSelection.has(itemId)) {
+      newSelection.delete(itemId);
+    } else {
+      newSelection.add(itemId);
+    }
+    setSelectedItemIds(newSelection);
+  }
+
+  function batchAssignToGroup() {
+    if (selectedItemIds.size === 0 || !batchAssignGroupId) return;
+    selectedItemIds.forEach((itemId) => {
+      const itemGroups = getItemGroups();
+      const currentGroupId = itemGroups[itemId];
+      if (currentGroupId && currentGroupId !== batchAssignGroupId) {
+        removeItemFromGroup(currentGroupId, itemId);
+      }
+      assignItemToGroup(batchAssignGroupId, itemId);
+    });
+    setSelectedItemIds(new Set());
+    setBatchAssignGroupId(null);
+  }
+
+  function clearBatchSelection() {
+    setSelectedItemIds(new Set());
+    setBatchAssignGroupId(null);
   }
 
   function addToOrder() {
@@ -330,7 +375,8 @@ export default function Orders() {
     }
   }
 
-  function exportXLSX() {
+  async function exportXLSX() {
+    const XLSX = await import("xlsx");
     const lines = getAllLines();
     const ws = XLSX.utils.aoa_to_sheet([
       ["Item", "Qty", "Unit"],
@@ -343,6 +389,80 @@ export default function Orders() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Order");
     XLSX.writeFile(wb, `order_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
+  // ── Export/Import Order Groups ────────────────────────────────────────
+  function exportOrderGroups() {
+    const payload = {
+      version: "1.0",
+      exportedAt: new Date().toISOString(),
+      groups: orderGroups,
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `order-groups-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importOrderGroups() {
+    fileInputRef.current?.click();
+  }
+
+  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string) as {
+          version: string;
+          exportedAt: string;
+          groups: OrderGroup[];
+        };
+
+        if (!data.groups || !Array.isArray(data.groups)) {
+          alert("Invalid file: missing groups");
+          return;
+        }
+
+        // Import groups — overwrite existing by name, create only if new
+        const existingGroups = getAllGroups();
+        const nameToId = new Map(existingGroups.map((g) => [g.name, g.id]));
+        let created = 0, updated = 0;
+
+        for (const group of data.groups) {
+          const lineMap: Record<string, any> = {};
+          for (const [itemId, line] of Object.entries(group.lines)) {
+            lineMap[itemId] = line;
+          }
+          const existingId = nameToId.get(group.name);
+          if (existingId) {
+            updateGroup(existingId, {
+              description: group.description,
+              color: group.color,
+              tags: group.tags,
+            });
+            setGroupLines(existingId, lineMap);
+            updated++;
+          } else {
+            const id = createGroup(group.name, group.description, group.color, group.tags);
+            setGroupLines(id, lineMap);
+            created++;
+          }
+        }
+
+        alert(`Imported ${data.groups.length} group(s): ${updated} updated, ${created} created`);
+      } catch {
+        alert("Invalid JSON file");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
   }
 
   function getStockColor(item: CanonicalItem, stock: number) {
@@ -397,7 +517,7 @@ export default function Orders() {
         <button
           onClick={() => setShowGroupPanel(!showGroupPanel)}
           className={clsx(
-            "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition duration-150",
+            "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-[background-color,color] duration-150",
             showGroupPanel ? "bg-accent text-white" : "bg-neutral-100 text-neutral-500 hover:text-neutral-900"
           )}
         >
@@ -405,25 +525,11 @@ export default function Orders() {
           Order Groups ({orderGroups.length})
         </button>
         {orderGroups.length > 0 && !showGroupPanel && (
-          <div className="flex gap-1.5 overflow-x-auto">
-            {orderGroups.slice(0, 5).map((g) => (
-              <button
-                key={g.id}
-                onClick={() => handleLoadGroup(g)}
-                className={clsx(
-                  "flex items-center gap-1 text-xs px-2.5 py-1 rounded-md border transition duration-150 whitespace-nowrap",
-                  activeGroupId === g.id
-                    ? "border-accent bg-accent/10 text-accent font-medium"
-                    : "border-neutral-200 text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100/50"
-                )}
-                title={`${Object.keys(g.lines).length} items — ${g.description || "No description"}`}
-              >
-                <span className="w-2 h-2 rounded-full" style={{ background: g.color }} />
-                {g.name}
-                <span className="text-neutral-400 tabular-nums">({Object.keys(g.lines).length})</span>
-              </button>
-            ))}
-          </div>
+          <GroupTabs
+            activeGroupId={activeGroupId ?? undefined}
+            onGroupSelect={(groupId) => setActiveGroup(groupId ?? null)}
+            className="flex-1"
+          />
         )}
         <div className="ml-auto flex items-center gap-2 text-xs text-neutral-500">
           <span className="tabular-nums">{orderLinesList.length} items in order</span>
@@ -432,8 +538,38 @@ export default function Orders() {
 
       {/* Order Groups Expanded Panel */}
       {showGroupPanel && (
-        <div className="bg-white border-x border-b border-neutral-200 p-4 space-y-3 mb-0 page-section">
-          {/* Create new group */}
+        <div className="bg-white border-x border-b border-neutral-200 mb-0 page-section">
+          {/* Tabs */}
+          <div className="flex border-b border-neutral-200 px-4 pt-4 gap-0">
+            <button
+              onClick={() => setGroupPanelTab("groups")}
+              className={clsx(
+                "px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors -mb-px",
+                groupPanelTab === "groups"
+                  ? "border-accent text-accent"
+                  : "border-transparent text-neutral-500 hover:text-neutral-800"
+              )}
+            >
+              Manage Groups
+            </button>
+            <button
+              onClick={() => setGroupPanelTab("items")}
+              className={clsx(
+                "px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors -mb-px",
+                groupPanelTab === "items"
+                  ? "border-accent text-accent"
+                  : "border-transparent text-neutral-500 hover:text-neutral-800"
+              )}
+            >
+              Assign Items
+            </button>
+          </div>
+
+          {/* Tab Content */}
+          <div className="p-4 space-y-3">
+            {groupPanelTab === "groups" ? (
+              <>
+                {/* Create new group */}
           <div className="flex flex-col md:flex-row items-stretch md:items-end gap-2 md:gap-3">
             <div className="flex-1">
               <label className="label-text mb-1 block">Group Name</label>
@@ -465,76 +601,134 @@ export default function Orders() {
             </button>
           </div>
 
-          {/* Existing groups */}
-          {orderGroups.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {orderGroups.map((g) => {
-                const lineCount = Object.keys(g.lines).length;
-                const isActive = activeGroupId === g.id;
-                return (
-                  <div
-                    key={g.id}
-                    className={clsx(
-                      "border rounded-lg p-3 transition duration-150",
-                      isActive ? "border-accent bg-accent/5" : "border-neutral-200 bg-neutral-50 hover:bg-neutral-100/20"
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: g.color }} />
-                        <span className="card-title truncate">{g.name}</span>
-                      </div>
-                      <span className="text-xs tabular-nums text-neutral-500 whitespace-nowrap">{lineCount} items</span>
-                    </div>
-                    {g.description && (
-                      <p className="text-xs text-neutral-500 mb-2 truncate">{g.description}</p>
-                    )}
-                    <div className="text-xs text-neutral-500 mb-2">
-                      Updated: {new Date(g.updatedAt).toLocaleDateString("en-IN", { dateStyle: "medium" })}
-                    </div>
-                    <div className="flex gap-1.5">
-                      <button
-                        onClick={() => handleLoadGroup(g)}
-                        className="btn-accent-ghost btn-sm"
-                      >
-                        <FolderOpen size={11} /> Load
-                      </button>
-                      <button
-                        onClick={() => handleAddGroupToOrder(g)}
-                        className="btn-ghost btn-sm"
-                        title="Add group items to current order"
-                      >
-                        <Plus size={11} /> Merge
-                      </button>
-                      <button
-                        onClick={() => handleSaveToGroup(g.id)}
-                        className="btn-ghost btn-sm"
-                        title="Overwrite group with current order"
-                      >
-                        <Save size={11} /> Save
-                      </button>
-                      <button
-                        onClick={() => duplicateGroup(g.id)}
-                        className="btn-ghost btn-sm"
-                      >
-                        <Copy size={11} />
-                      </button>
-                      <button
-                        onClick={() => { if (confirm(`Delete "${g.name}"?`)) deleteGroup(g.id); }}
-                        className="flex items-center gap-1 text-xs px-2 py-1 bg-danger/10 text-danger hover:bg-danger/20 rounded transition duration-150 ml-auto"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    </div>
+          {/* Export/Import groups */}
+          <div className="flex gap-2 pt-2 border-t border-neutral-200">
+            <button
+              onClick={exportOrderGroups}
+              disabled={orderGroups.length === 0}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors duration-150 border-neutral-200 text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Export all order groups to JSON file"
+            >
+              <Download size={13} />
+              Export Groups
+            </button>
+            <button
+              onClick={importOrderGroups}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors duration-150 border-neutral-200 text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50"
+              title="Import order groups from JSON file"
+            >
+              <Upload size={13} />
+              Import Groups
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              onChange={handleFileInputChange}
+              className="hidden"
+              aria-label="Import order groups file"
+            />
+          </div>
+
+          {/* Vendor Groups Summary */}
+          <div className="pt-2 border-t border-neutral-200">
+            <VendorGroupsSummary />
+          </div>
+
+          {/* Existing groups - Expanded view */}
+          <div className="pt-4 border-t border-neutral-200">
+            <h3 className="text-xs font-semibold text-neutral-700 mb-3">All Order Groups</h3>
+            <ExpandedGroupsView
+              activeGroupId={activeGroupId}
+              onGroupSelect={(groupId) => {
+                setActiveGroup(groupId);
+              }}
+              onLoadGroup={(groupId) => {
+                const g = orderGroups.find((x) => x.id === groupId);
+                if (g) handleLoadGroup(g);
+              }}
+              onDeleteGroup={(groupId) => {
+                deleteGroup(groupId);
+              }}
+            />
+          </div>
+            </>
+            ) : (
+              <>
+                {/* Items Tab: Assign items to groups */}
+                <div className="space-y-3">
+                  <div>
+                    <input
+                      value={itemSearch}
+                      onChange={(e) => setItemSearch(e.target.value)}
+                      placeholder="Search items…"
+                      className="search-input w-full text-xs"
+                    />
                   </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="text-center py-4 text-sm text-neutral-500">
-              No order groups yet. Create one to save your current order for reuse.
-            </div>
-          )}
+
+                  {orderGroups.length === 0 ? (
+                    <div className="text-center py-8 text-sm text-neutral-500">
+                      Create groups first to assign items to them
+                    </div>
+                  ) : (
+                    <div className="border border-neutral-200 rounded-lg overflow-hidden">
+                      {/* Header */}
+                      <div className="grid grid-cols-[1fr_1fr] px-4 py-2.5 text-xs font-semibold text-neutral-600 border-b border-neutral-200 bg-neutral-50 sticky top-0 z-10">
+                        <span>Item</span>
+                        <span>Assigned Group</span>
+                      </div>
+                      {/* Items list */}
+                      <div className="divide-y divide-neutral-100 max-h-96 overflow-y-auto">
+                        {allItems
+                          .filter((item) =>
+                            itemSearch.trim() === ""
+                              ? true
+                              : item.name.toLowerCase().includes(itemSearch.toLowerCase()) ||
+                                item.itemId.toLowerCase().includes(itemSearch.toLowerCase())
+                          )
+                          .map((item) => {
+                            const itemGroupsMap = getItemGroups();
+                            const assignedGroupId = itemGroupsMap[item.itemId];
+                            const assignedGroup = assignedGroupId ? orderGroupsMap[assignedGroupId] : null;
+                            return (
+                              <div
+                                key={item.itemId}
+                                className="grid grid-cols-[1fr_1fr] px-4 py-2.5 items-center hover:bg-neutral-50 transition-colors"
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="text-xs text-neutral-700 truncate font-medium" title={item.name}>
+                                    {item.name}
+                                  </span>
+                                </div>
+                                <select
+                                  value={assignedGroup?.id ?? "unassigned"}
+                                  onChange={(e) => {
+                                    if (e.target.value === "unassigned") {
+                                      if (assignedGroup) removeItemFromGroup(assignedGroup.id, item.itemId);
+                                    } else {
+                                      if (assignedGroup) removeItemFromGroup(assignedGroup.id, item.itemId);
+                                      assignItemToGroup(e.target.value, item.itemId);
+                                    }
+                                  }}
+                                  className="form-select text-xs"
+                                >
+                                  <option value="unassigned">— Unassigned —</option>
+                                  {orderGroups.map((g) => (
+                                    <option key={g.id} value={g.id}>
+                                      {g.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -546,7 +740,7 @@ export default function Orders() {
               key={tab}
               onClick={() => setMobileTab(tab)}
               className={clsx(
-                "flex-1 py-2 text-xs font-medium rounded-lg transition duration-150",
+                "flex-1 py-2 text-xs font-medium rounded-lg transition-[background-color,color] duration-150",
                 mobileTab === tab ? "bg-accent text-white" : "text-neutral-500 hover:text-neutral-900"
               )}
             >
@@ -579,10 +773,10 @@ export default function Orders() {
               <button
                 onClick={() => setStockFilterEnabled((v) => !v)}
                 className={clsx(
-                  "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition duration-150",
+                  "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition-[background-color,border-color,color] duration-150",
                   stockFilterEnabled
                     ? "bg-accent/15 border-accent text-accent font-medium"
-                    : "bg-neutral-50border-neutral-200 text-neutral-500 hover:text-neutral-900"
+                    : "bg-neutral-50 border-neutral-200 text-neutral-500 hover:text-neutral-900"
                 )}
                 title="Filter by closing stock"
               >
@@ -608,7 +802,54 @@ export default function Orders() {
                   />
                 </>
               )}
+              <button
+                onClick={() => {
+                  setMultiSelectEnabled(!multiSelectEnabled);
+                  if (multiSelectEnabled) {
+                    clearBatchSelection();
+                  }
+                }}
+                className={clsx(
+                  "flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition-[background-color,border-color,color] duration-150 ml-auto",
+                  multiSelectEnabled
+                    ? "bg-accent/15 border-accent text-accent font-medium"
+                    : "bg-neutral-50 border-neutral-200 text-neutral-500 hover:text-neutral-900"
+                )}
+                title="Enable multi-select to assign items to groups in bulk"
+              >
+                <Package size={12} />
+                Multi-Select {multiSelectEnabled && `(${selectedItemIds.size})`}
+              </button>
             </div>
+            {multiSelectEnabled && selectedItemIds.size > 0 && (
+              <div className="flex items-center gap-2 pt-1.5">
+                <select
+                  value={batchAssignGroupId ?? ""}
+                  onChange={(e) => setBatchAssignGroupId(e.target.value || null)}
+                  className="form-select text-xs flex-1"
+                >
+                  <option value="">Select group to assign {selectedItemIds.size} items…</option>
+                  {getAllGroups().map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={batchAssignToGroup}
+                  disabled={!batchAssignGroupId}
+                  className="btn-accent text-xs disabled:opacity-50"
+                >
+                  Assign
+                </button>
+                <button
+                  onClick={clearBatchSelection}
+                  className="btn-ghost text-xs"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
           </div>
           <div ref={parentRef} className="flex-1 overflow-y-auto">
                 <div style={{ height: `${itemListVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
@@ -616,12 +857,19 @@ export default function Orders() {
                     const item = filteredItems[virtualRow.index];
                     const stock = stockCache.get(item.itemId) ?? 0;
                     const isSelected = item.itemId === selectedItemId;
+                    const isMultiSelected = selectedItemIds.has(item.itemId);
                     const inOrder = !!orderLines[item.itemId];
                     const stockDisp = toDisplay(item, stock, unitMode);
                     return (
                       <div
                         key={item.itemId}
-                        onClick={() => selectItem(item)}
+                        onClick={() => {
+                          if (multiSelectEnabled) {
+                            toggleMultiSelect(item.itemId);
+                          } else {
+                            selectItem(item);
+                          }
+                        }}
                         style={{
                           position: 'absolute',
                           top: 0,
@@ -631,12 +879,21 @@ export default function Orders() {
                         }}
                         className={clsx(
                           "flex items-center gap-2 px-3 py-1.5 cursor-pointer border-b border-neutral-100 transition-colors duration-100",
-                          isSelected ? "bg-accent/10 border-l-2 border-l-accent" : "hover:bg-neutral-50"
+                          isMultiSelected ? "bg-accent/20 border-l-2 border-l-accent" : isSelected ? "bg-accent/10 border-l-2 border-l-accent" : "hover:bg-neutral-50"
                         )}
                       >
+                        {multiSelectEnabled && (
+                          <input
+                            type="checkbox"
+                            checked={isMultiSelected}
+                            onChange={() => toggleMultiSelect(item.itemId)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="form-checkbox w-4 h-4 flex-shrink-0"
+                          />
+                        )}
                         <span className={clsx(
                           "text-xs truncate flex-1 min-w-0 leading-none",
-                          isSelected ? "text-accent font-semibold" : "text-neutral-800"
+                          isMultiSelected ? "text-accent font-semibold" : isSelected ? "text-accent font-semibold" : "text-neutral-800"
                         )}>
                           {item.name}
                         </span>
@@ -666,30 +923,6 @@ export default function Orders() {
                 <h2 className="subsection-header leading-tight">{focusedItem.name}</h2>
                 <div className="metric-label mt-0.5">{focusedItem.group} · {focusedItem.baseUnit}{focusedItem.pkgUnit ? ` · ${focusedItem.unitsPerPkg}/${focusedItem.pkgUnit}` : ""}</div>
               </div>
-
-              {/* Mobile quick-add to order */}
-              {isMobile && selectedItem && (
-                <div className="flex items-center gap-2 bg-white border border-neutral-200 rounded-lg p-2">
-                  <span className="label-text flex-shrink-0">Order Qty:</span>
-                  <input
-                    ref={qtyRef}
-                    type="text"
-                    inputMode="decimal"
-                    value={orderQty}
-                    onChange={(e) => setOrderQty(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && addToOrder()}
-                    placeholder="0"
-                    className="flex-1 form-input tabular-nums text-sm text-center"
-                  />
-                  <button
-                    onClick={addToOrder}
-                    disabled={!orderQty}
-                    className="btn-primary btn-sm"
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-              )}
 
               {/* Mini KPIs - Redesigned for Accessibility */}
               {focusedItem && focusedMonthlyBuckets.length > 0 && (() => {

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, memo } from "react";
 import {
   CalendarDays,
   Rows3,
@@ -145,7 +145,7 @@ function StatusBadge({ status }: { status: KanbanStatus }) {
 
 // ─── VOUCHER CARD (shared by Kanban + other views) ────────────────────────────
 
-function VoucherCard({
+const VoucherCard = memo(function VoucherCard({
   dv,
   isSelected,
   onSelect,
@@ -231,12 +231,12 @@ function VoucherCard({
       </div>
     </div>
   );
-}
+});
 
 // ─── DAY ROWS VIEW (daily kanban) ────────────────────────────────────────────
 
 /** Compact horizontal card used inside day rows */
-function DayCard({
+const DayCard = memo(function DayCard({
   dv,
   isSelected,
   onSelect,
@@ -291,7 +291,7 @@ function DayCard({
       </div>
     </div>
   );
-}
+});
 
 function DayRowsView({
   items,
@@ -596,12 +596,8 @@ function ListView({
 
   const sorted = useMemo(() => {
     return [...items].sort((a, b) => {
-      if (sortBy === "date") {
-        return (a.displayDate > b.displayDate ? 1 : -1) * sortDir;
-      }
-      if (sortBy === "amount") {
-        return (a.voucher.totalAmount - b.voucher.totalAmount) * sortDir;
-      }
+      if (sortBy === "date") return (a.displayDate > b.displayDate ? 1 : -1) * sortDir;
+      if (sortBy === "amount") return (a.voucher.totalAmount - b.voucher.totalAmount) * sortDir;
       return ((a.voucher.partyName ?? "") > (b.voucher.partyName ?? "") ? 1 : -1) * sortDir;
     });
   }, [items, sortBy, sortDir]);
@@ -612,87 +608,138 @@ function ListView({
     const active = sortBy === col;
     return (
       <button
-        onClick={() => { if (active) setSortDir((d) => (d === 1 ? -1 : 1)); else { setSortBy(col); setSortDir(-1); } }}
-        className={clsx("text-xs font-medium flex items-center gap-1 transition-colors", active ? "text-accent" : "text-neutral-500 hover:text-neutral-700")}
+        onClick={() => {
+          if (active) setSortDir((d) => (d === 1 ? -1 : 1));
+          else { setSortBy(col); setSortDir(-1); }
+        }}
+        className={clsx(
+          "flex items-center gap-1 px-2.5 py-2 rounded-lg text-xs font-medium transition active:scale-[0.96]",
+          active
+            ? "bg-accent/10 text-accent"
+            : "text-neutral-500 hover:text-neutral-700 hover:bg-neutral-100"
+        )}
       >
         {label}
-        {active && <ChevronDown size={11} className={sortDir === 1 ? "rotate-180" : ""} />}
+        {/* Keep the icon in the DOM so width stays stable; fade in when active */}
+        <ChevronDown
+          size={11}
+          className={clsx(
+            "transition-[transform,opacity] duration-150",
+            active ? "opacity-100" : "opacity-0 pointer-events-none",
+            sortDir === 1 ? "rotate-180" : "rotate-0"
+          )}
+        />
       </button>
     );
   }
 
   return (
     <div className="bg-white rounded-xl border border-neutral-200/80 overflow-hidden">
-      <div className="px-4 py-3 border-b border-neutral-100 flex items-center gap-4 flex-wrap">
-        <span className="text-xs text-neutral-500">Sort:</span>
+      {/* Sort bar */}
+      <div className="px-3 py-2 border-b border-neutral-100 flex items-center gap-1">
+        <span className="text-xs text-neutral-400 px-1.5 mr-1">Sort</span>
         <SortBtn col="date" label="Date" />
         <SortBtn col="amount" label="Amount" />
         <SortBtn col="party" label="Party" />
       </div>
+
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[600px]">
           <thead>
-            <tr className="border-b border-neutral-100">
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-neutral-500">Party</th>
-              <th className="text-left px-3 py-2.5 text-xs font-semibold text-neutral-500">Type / No.</th>
-              <th className="text-left px-3 py-2.5 text-xs font-semibold text-neutral-500">Status</th>
-              <th className="text-left px-3 py-2.5 text-xs font-semibold text-neutral-500">Date</th>
-              <th className="text-right px-3 py-2.5 text-xs font-semibold text-neutral-500">Amount</th>
-              <th className="text-left px-3 py-2.5 text-xs font-semibold text-neutral-500">Items</th>
+            <tr className="border-b border-neutral-200 bg-neutral-50">
+              <th className="text-left px-4 py-3 text-xs font-semibold text-neutral-600 uppercase tracking-wide">Party</th>
+              <th className="text-left px-3 py-3 text-xs font-semibold text-neutral-600 uppercase tracking-wide">Type / No.</th>
+              <th className="text-left px-3 py-3 text-xs font-semibold text-neutral-600 uppercase tracking-wide">Status</th>
+              <th className="text-left px-3 py-3 text-xs font-semibold text-neutral-600 uppercase tracking-wide">Date</th>
+              <th className="text-right px-3 py-3 text-xs font-semibold text-neutral-600 uppercase tracking-wide">Amount</th>
+              <th className="text-left px-3 py-3 text-xs font-semibold text-neutral-600 uppercase tracking-wide">Items</th>
             </tr>
           </thead>
           <tbody>
             {sorted.map((dv) => {
               const { voucher, status, displayDate, isRescheduled } = dv;
               const isOld = displayDate < today && status !== "done" && status !== "invoiced";
+              const isSelected = voucher.voucherId === selectedId;
               const inventoryLines = voucher.lines.filter((l) => l.type === "inventory");
+              const typeDot = VOUCHER_TYPE_COLORS[voucher.voucherType] ?? "bg-neutral-400";
               return (
                 <tr
                   key={voucher.voucherId}
                   onClick={() => onSelect(voucher.voucherId)}
                   className={clsx(
-                    "border-b border-neutral-50 cursor-pointer transition-colors",
-                    voucher.voucherId === selectedId ? "bg-accent/5" : "hover:bg-neutral-50"
+                    "border-b border-neutral-100 cursor-pointer transition-colors duration-100",
+                    isSelected
+                      ? "bg-accent/5"
+                      : isOld
+                      ? "bg-red-50/40 hover:bg-red-50/70"
+                      : "hover:bg-neutral-50/80"
                   )}
                 >
-                  <td className="px-4 py-2.5">
-                    <p className="font-semibold text-neutral-900 text-sm">{voucher.partyName ?? "—"}</p>
+                  {/* Party — carries the left-edge status indicator */}
+                  <td className={clsx(
+                    "px-4 py-3 border-l-2",
+                    isSelected
+                      ? "border-l-accent/60"
+                      : isOld
+                      ? "border-l-red-400"
+                      : "border-l-transparent"
+                  )}>
+                    <div className="flex items-center gap-2">
+                      <span className={clsx("w-2 h-2 rounded-full flex-shrink-0", typeDot)} />
+                      <p className="font-semibold text-neutral-900 text-sm leading-tight">{voucher.partyName ?? "—"}</p>
+                    </div>
                   </td>
-                  <td className="px-3 py-2.5">
-                    <p className="text-xs text-neutral-600">{voucher.voucherType}</p>
-                    <p className="text-2xs text-neutral-400">{voucher.voucherNumber}</p>
+
+                  {/* Type + voucher number */}
+                  <td className="px-3 py-3">
+                    <p className="text-xs text-neutral-600 font-medium">{voucher.voucherType}</p>
+                    <p className="text-2xs text-neutral-400 tabular-nums mt-0.5">{voucher.voucherNumber}</p>
                   </td>
-                  <td className="px-3 py-2.5">
+
+                  {/* Status badge */}
+                  <td className="px-3 py-3">
                     <StatusBadge status={status} />
                   </td>
-                  <td className="px-3 py-2.5">
+
+                  {/* Date — tabular-nums prevents layout shift when sorting */}
+                  <td className="px-3 py-3">
                     {isRescheduled ? (
                       <div>
-                        <p className="text-2xs text-neutral-400 line-through">{fmtShort(voucher.date)}</p>
-                        <p className={clsx("text-xs font-medium", isOld ? "text-red-600" : "text-neutral-700")}>{fmtShort(displayDate)}</p>
+                        <p className="text-2xs text-neutral-400 line-through tabular-nums">{fmtShort(voucher.date)}</p>
+                        <p className={clsx("text-xs font-medium tabular-nums", isOld ? "text-red-600" : "text-neutral-700")}>
+                          {fmtShort(displayDate)}
+                        </p>
                       </div>
                     ) : (
-                      <span className={clsx("text-xs", isOld ? "text-red-600 font-medium" : "text-neutral-600")}>
+                      <span className={clsx("text-xs tabular-nums", isOld ? "text-red-600 font-semibold" : "text-neutral-600")}>
                         {fmtShort(displayDate)}
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2.5 text-right">
-                    <span className="text-sm font-semibold text-neutral-900">{fmtLakh(voucher.totalAmount)}</span>
+
+                  {/* Amount — tabular-nums keeps column stable while sorting */}
+                  <td className="px-3 py-3 text-right">
+                    <span className="text-sm font-semibold text-neutral-900 tabular-nums">{fmtLakh(voucher.totalAmount)}</span>
                   </td>
-                  <td className="px-3 py-2.5">
-                    <span className="text-xs text-neutral-500">
-                      {inventoryLines.slice(0, 2).map((l) => l.itemId?.split("_").slice(0,3).join(" ")).join(", ")}
-                      {inventoryLines.length > 2 && ` +${inventoryLines.length - 2}`}
+
+                  {/* Item preview */}
+                  <td className="px-3 py-3">
+                    <span className="text-xs text-neutral-500 leading-relaxed">
+                      {inventoryLines.slice(0, 2).map((l) => l.itemId?.split("_").slice(0, 3).join(" ")).join(", ")}
+                      {inventoryLines.length > 2 && (
+                        <span className="ml-1 text-neutral-400 font-medium">+{inventoryLines.length - 2}</span>
+                      )}
                     </span>
                   </td>
                 </tr>
               );
             })}
+
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm text-neutral-400">
-                  No vouchers match the current filter
+                <td colSpan={6} className="px-4 py-14 text-center">
+                  <List size={28} className="mx-auto mb-3 text-neutral-300" />
+                  <p className="text-sm text-neutral-400">No vouchers match the current filter</p>
                 </td>
               </tr>
             )}
@@ -973,7 +1020,7 @@ export default function CalendarPage() {
     setShowTypes,
   } = useCalendarStore();
 
-  const { data } = useDataStore();
+  const data = useDataStore((s) => s.data);
   const [statusFilter, setStatusFilter] = useState<KanbanStatus | "all">("all");
 
   // Build display vouchers from Tally data + overrides
