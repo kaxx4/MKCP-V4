@@ -536,6 +536,7 @@ export class SupabaseSync {
       voucher_type: m.vouchertypename,
       party_ledger_name: m.partyledgername,
       narration: m.narration,
+      reference: m.reference ?? null,   // mirror Tally <REFERENCE> for push-agent reconciliation (see migration 012)
       is_cancelled: m.iscancelled === true,
       is_optional: m.isoptional === true,
       ledger_entries: ledgerArr.length > 0 ? ledgerArr : null,
