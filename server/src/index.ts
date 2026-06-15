@@ -7,6 +7,7 @@ import { SyncOrchestrator } from "./services/syncOrchestrator.js";
 import { ChangeDetector } from "./services/changeDetector.js";
 import { SupabaseSync } from "./services/supabaseSync.js";
 import { pushVoucherToTally, pushBatchToTally, buildVoucherImportXml, parseImportResponse } from "./services/voucherPusher.js";
+import { startPushAgent, getPushAgentStatus } from "./services/pushAgent.js";
 import type { SyncPlan, PushVoucherRequest, PushBatchRequest } from "./types.js";
 
 const app = express();
@@ -559,3 +560,15 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
     console.error(`❌ Server error: ${err.message}`);
   }
 });
+
+// ── Push-Queue Drain Agent (additive — Prompt 3) ─────────────────────────────────
+// Status route for the strip-down status UI (Prompt 4). Always available; reports
+// `enabled:false` when the agent isn't running.
+app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()));
+
+// Start the drain loop only when explicitly enabled, so it can be turned off without
+// a code change. The agent is an ADDITIONAL consumer of Tally — the manual
+// /api/tally/push-voucher and /push-batch endpoints above are unchanged.
+if (process.env.PUSH_AGENT_ENABLED === "true") {
+  startPushAgent({ tallyUrl: TALLY });
+}
