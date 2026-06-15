@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
-import { useDataStore } from "../store/dataStore";
-import { syncConfigToSupabase } from "./useSupabaseConfigSync";
 import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
+import { pushAll } from "../services/supabasePushAll";
 
 /**
  * Hook that automatically pushes EVERYTHING to Supabase every 15 minutes,
@@ -24,65 +23,8 @@ import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
  *
  * Best-effort: failures are warned to console only, no UI noise.
  */
-const INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
-const RETRY_DELAY_MS = 60 * 1000;   // 60s retry after a failure
-const SERVER_URL = "http://localhost:3100/api/supabase/sync";
-
-async function pushAll(label: string): Promise<{ mastersVouchersOk: boolean; configOk: boolean }> {
-  const status = useSupabaseSyncStatusStore.getState();
-  const data = useDataStore.getState().data;
-  if (!data) return { mastersVouchersOk: true, configOk: true };
-  const company = data.company?.name || "M.K.CYCLES (P) LTD.";
-
-  const items = Array.from(data.items.values());
-  const ledgers = Array.from(data.ledgers.values());
-  const vouchers = data.vouchers;
-
-  console.log(`[${label}] Firing — config + ${items.length} items + ${ledgers.length} ledgers + ${vouchers.length} vouchers`);
-
-  const [configResult, voucherResp] = await Promise.allSettled([
-    syncConfigToSupabase(company),
-    fetch(SERVER_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ company, items, ledgers, vouchers }),
-    }).then(async (r) => {
-      const j = await r.json();
-      if (!r.ok || !j.success) throw new Error(j.error || `HTTP ${r.status}`);
-      return j;
-    }),
-  ]);
-
-  const configOk =
-    configResult.status === "fulfilled" &&
-    configResult.value.success &&
-    (!configResult.value.errors || configResult.value.errors.length === 0);
-
-  if (configResult.status === "fulfilled" && configResult.value.success) {
-    console.log(`[${label}] ✓ Config synced:`, configResult.value.counts);
-    if (configResult.value.errors?.length) {
-      console.warn(`[${label}] Config had per-table errors:`, configResult.value.errors);
-    }
-  } else {
-    console.warn(`[${label}] Config sync failed:`, configResult.status === "fulfilled" ? configResult.value.errors : configResult.reason);
-  }
-
-  let mastersVouchersOk: boolean;
-  if (voucherResp.status === "fulfilled") {
-    console.log(`[${label}] ✓ Masters + vouchers synced:`, voucherResp.value);
-    status.recordResult("masters", true);
-    status.recordResult("vouchers", true);
-    mastersVouchersOk = true;
-  } else {
-    const errMsg = (voucherResp.reason as any)?.message || String(voucherResp.reason);
-    console.warn(`[${label}] Masters + vouchers rejected: ${errMsg}`);
-    status.recordResult("masters", false, errMsg);
-    status.recordResult("vouchers", false, errMsg);
-    mastersVouchersOk = false;
-  }
-
-  return { mastersVouchersOk, configOk };
-}
+const INTERVAL_MS = 15 * 60 * 1000;
+const RETRY_DELAY_MS = 60 * 1000;
 
 export function useSupabaseAutoPushInterval() {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

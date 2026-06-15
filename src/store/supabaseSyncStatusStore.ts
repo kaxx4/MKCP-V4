@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 
 /**
  * Tracks the outcome of the most recent Supabase auto-push attempts.
@@ -37,36 +36,30 @@ interface SupabaseSyncStatusStore {
 const EMPTY: ChannelStatus = { lastAt: null, success: null, error: null, retryScheduled: false };
 
 export const useSupabaseSyncStatusStore = create<SupabaseSyncStatusStore>()(
-  persist(
-    (set, get) => ({
-      config: EMPTY,
-      masters: EMPTY,
-      vouchers: EMPTY,
-      recordResult: (channel, success, error = null) =>
-        set((s) => ({
-          [channel]: {
-            lastAt: new Date().toISOString(),
-            success,
-            error: success ? null : error,
-            retryScheduled: s[channel].retryScheduled,
-          },
-        }) as Partial<SupabaseSyncStatusStore>),
-      setRetryScheduled: (channel, scheduled) =>
-        set((s) => ({
-          [channel]: { ...s[channel], retryScheduled: scheduled },
-        }) as Partial<SupabaseSyncStatusStore>),
-      isAnyFailed: () => {
-        const s = get();
-        return s.config.success === false || s.masters.success === false || s.vouchers.success === false;
-      },
-      allSuccess: () => {
-        const s = get();
-        return s.config.success === true && s.masters.success === true && s.vouchers.success === true;
-      },
-    }),
-    {
-      name: "mk_supabase_sync_status",
-      partialize: (s) => ({ config: s.config, masters: s.masters, vouchers: s.vouchers }),
-    }
-  )
+  (set, get) => ({
+    config: EMPTY,
+    masters: EMPTY,
+    vouchers: EMPTY,
+    recordResult: (channel, success, error = null) =>
+      set((s) => ({
+        [channel]: {
+          lastAt: new Date().toISOString(),
+          success,
+          error: success ? null : error,
+          retryScheduled: s[channel].retryScheduled,
+        },
+      }) as Partial<SupabaseSyncStatusStore>),
+    setRetryScheduled: (channel, scheduled) =>
+      set((s) => ({
+        [channel]: { ...s[channel], retryScheduled: scheduled },
+      }) as Partial<SupabaseSyncStatusStore>),
+    isAnyFailed: () => {
+      const s = get();
+      return s.config.success === false || s.masters.success === false || s.vouchers.success === false;
+    },
+    allSuccess: () => {
+      const s = get();
+      return s.config.success === true && s.masters.success === true && s.vouchers.success === true;
+    },
+  })
 );

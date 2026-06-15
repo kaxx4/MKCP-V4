@@ -30,6 +30,7 @@ interface TallyConnectionState {
   setLastVoucherDate: (d: string | null) => void;
   setLastMastersSync: (at: string) => void;
   setLastVouchersSync: (at: string) => void;
+  completeSyncWith: (at: string, voucherDate: string | null) => void;
 }
 
 export const useTallyStore = create<TallyConnectionState>()(
@@ -61,6 +62,11 @@ export const useTallyStore = create<TallyConnectionState>()(
       setLastVoucherDate: (lastVoucherDate) => set({ lastVoucherDate }),
       setLastMastersSync: (lastMastersSyncAt) => set({ lastMastersSyncAt }),
       setLastVouchersSync: (lastVouchersSyncAt) => set({ lastVouchersSyncAt }),
+      completeSyncWith: (at, voucherDate) => set({
+        lastSyncAt: at,
+        lastVouchersSyncAt: at,
+        ...(voucherDate != null ? { lastVoucherDate: voucherDate } : {}),
+      }),
       resetToCurrentFY: () => set({
         fyFromDate: getDefaultFYStart(),
         fyToDate: getDefaultFYEnd(),

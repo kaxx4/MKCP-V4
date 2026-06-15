@@ -86,11 +86,11 @@ export async function createBackup(data: unknown, label: string): Promise<string
 
 export async function listBackups(): Promise<Array<{ key: string; label: string; createdAt: string }>> {
   const db = await getDB();
-  const keys = await db.getAllKeys("backups");
+  const [keys, values] = await Promise.all([db.getAllKeys("backups"), db.getAll("backups")]);
   const backups: Array<{ key: string; label: string; createdAt: string }> = [];
-  for (const key of keys) {
-    const val = await db.get("backups", key);
-    if (val) backups.push({ key: String(key), label: val.label, createdAt: val.createdAt });
+  for (let i = 0; i < keys.length; i++) {
+    const val = values[i];
+    if (val) backups.push({ key: String(keys[i]), label: val.label, createdAt: val.createdAt });
   }
   return backups.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }

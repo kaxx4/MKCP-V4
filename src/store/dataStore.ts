@@ -134,40 +134,19 @@ export const useDataStore = create<DataState>((set, get) => ({
       partyStats: null, // reset — populated in idle callback below
     });
 
-    // Pre-compute ledger transaction map in idle callback — heavy single pass,
-    // but eliminates the 1-2s freeze per ledger click on Ledgers page.
-    const computeLedgerTxns = () => {
-      const map = buildLedgerTransactionMap(newData.vouchers, newData.ledgers);
-      set({ ledgerTransactionMap: map });
-    };
-    if (typeof requestIdleCallback === "function") {
-      requestIdleCallback(computeLedgerTxns);
-    } else {
-      setTimeout(computeLedgerTxns, 100);
-    }
-
-    // Pre-compute party RFM/churn stats in idle callback — eliminates Outreach
-    // page's 1-2s freeze on mount.
-    const computePartyStatsAsync = () => {
-      const stats = computePartyStats(newData.vouchers, newData.ledgers);
-      set({ partyStats: stats });
-    };
-    if (typeof requestIdleCallback === "function") {
-      requestIdleCallback(computePartyStatsAsync);
-    } else {
-      setTimeout(computePartyStatsAsync, 150);
-    }
-
-    // Pre-compute item margins in background so PendingOrders can read them
-    // without running O(items × vouchers) on every navigation.
-    const computeMargins = () => {
+    // Single idle callback computes all three heavy derived values and writes
+    // them in one set() call — prevents 3 separate render cascades.
+    const computeIdle = () => {
+      const ledgerTransactionMap = buildLedgerTransactionMap(newData.vouchers, newData.ledgers);
+      const partyStats = computePartyStats(newData.vouchers, newData.ledgers);
       const margins = computeItemMargins(newData.items, newData.vouchers);
-      set({ itemMargins: new Map(margins.map((m) => [m.itemId, m])) });
+      const itemMargins = new Map(margins.map((m) => [m.itemId, m]));
+      set({ ledgerTransactionMap, partyStats, itemMargins });
     };
     if (typeof requestIdleCallback === "function") {
-      requestIdleCallback(computeMargins);
+      requestIdleCallback(computeIdle, { timeout: 3000 });
     } else {
-      setTimeout(computeMargins, 100);
+      setTimeout(computeIdle, 100);
     }
 
     // Run audit in development mode (Phase 5.1)
