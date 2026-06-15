@@ -243,7 +243,7 @@ export class SyncOrchestrator {
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`[DAYBOOK] ✓ Total: ${allVouchers.length} vouchers in ${elapsed}s (${chunksSucceeded}/${chunks.length} chunks succeeded)`);
 
-    this.supabase.syncVouchers(allVouchers, company).catch(e =>
+    this.supabase.syncVouchers(allVouchers, company, { chunkCount: chunks.length }).catch(e =>
       console.error(`[Supabase] Vouchers sync failed: ${e.message}`)
     );
 
