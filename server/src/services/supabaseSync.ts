@@ -153,7 +153,7 @@ export class SupabaseSync {
     }
   }
 
-  async syncVouchers(messages: any[], company: string): Promise<void> {
+  async syncVouchers(messages: any[], company: string, meta?: { chunkCount?: number }): Promise<void> {
     if (!this.client) return;
     if (!messages || messages.length === 0) return;
 
@@ -261,7 +261,9 @@ export class SupabaseSync {
           ledgerEntries: ledgerEntries.length,
           inventoryEntries: inventoryEntries.length,
         },
-        errors.length === 0 ? null : errors
+        errors.length === 0 ? null : errors,
+        undefined,
+        meta?.chunkCount
       );
     } catch (e: any) {
       const msg = `[Supabase] Vouchers sync error: ${e.message}`;
@@ -277,7 +279,8 @@ export class SupabaseSync {
     startedAtMs: number,
     rowCounts: any,
     errors: string[] | null = null,
-    success: boolean = !errors || errors.length === 0
+    success: boolean = !errors || errors.length === 0,
+    chunkCount?: number
   ): Promise<void> {
     if (!this.client) return;
 
@@ -293,6 +296,8 @@ export class SupabaseSync {
         row_counts: rowCounts,
         errors: errors,
         success,
+        duration_ms: Date.now() - startedAtMs,
+        ...(chunkCount != null ? { chunk_count: chunkCount } : {}),
       });
     } catch (e: any) {
       console.error(`[Supabase] Failed to log sync history: ${e.message}`);
