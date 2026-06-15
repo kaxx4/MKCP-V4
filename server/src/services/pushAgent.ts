@@ -58,6 +58,7 @@ const state = {
   tallyHealthy: false,
   claimedCount: 0,
   last10Results: [] as ResultLogEntry[],
+  queueStats: { pending: 0, pushing: 0, failed: 0 } as Record<string, number>,
 };
 
 function record(id: string, idempotency_key: string, status: string, error?: string) {
@@ -70,6 +71,9 @@ let tallyUrl = "http://localhost:9000";
 let tickRunning = false;
 let timers: NodeJS.Timeout[] = [];
 
+/** Expose the service-role Supabase client for use in server routes (e.g. /requeue). */
+export function getAgentClient() { return client; }
+
 // ── Tally health (reuses the frozen tally.ts health envelope) ────────────────────
 async function isTallyHealthy(): Promise<boolean> {
   try {
@@ -77,6 +81,43 @@ async function isTallyHealthy(): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Refresh live queue depth counters from Supabase (called at end of each tick). */
+async function refreshQueueStats(): Promise<void> {
+  if (!client) return;
+  const { data } = await client
+    .from("push_queue")
+    .select("status")
+    .in("status", ["pending", "pushing", "failed"]);
+  const counts: Record<string, number> = { pending: 0, pushing: 0, failed: 0 };
+  for (const row of (data ?? [])) counts[row.status] = (counts[row.status] ?? 0) + 1;
+  state.queueStats = counts;
+}
+
+/** Write a permanent push resolution record to push_sync_log (succeeds or final-fail only). */
+async function writePushLog(job: PushJob, status: "succeeded" | "failed", result: PushResult | null, resolvedAt: string): Promise<void> {
+  if (!client) return;
+  try {
+    const payload = job.payload as VoucherPayload;
+    await client.from("push_sync_log").insert({
+      push_queue_id: job.id,
+      company: job.company,
+      idempotency_key: job.idempotency_key,
+      voucher_type: payload.voucherType ?? null,
+      party: payload.partyLedgerName ?? null,
+      date: payload.date ?? null,
+      status,
+      tally_vch_id: result?.lastVoucherId ?? null,
+      attempts: job.attempts,
+      last_error: result?.lineErrors?.[0] ?? null,
+      line_errors: result?.lineErrors?.length ? result.lineErrors : null,
+      resolved_at: resolvedAt,
+    });
+  } catch (e: any) {
+    console.warn(`[pushAgent] push_sync_log write failed: ${e.message}`);
+    // Non-fatal — push_queue row is the source of truth.
   }
 }
 
@@ -120,6 +161,7 @@ async function tick(): Promise<void> {
     for (const job of claimed) {
       await processJob(job);
     }
+    await refreshQueueStats();
   } finally {
     tickRunning = false;
   }
@@ -152,12 +194,14 @@ async function processJob(job: PushJob): Promise<void> {
   try {
     const result: PushResult = await pushVoucherToTally(tallyUrl, job.company, job.payload);
     if (result.success) {
+      const resolvedAt = nowIso();
       await client.from("push_queue").update({
         status: "succeeded",
         tally_vch_id: result.lastVoucherId,
         result: result as unknown as Record<string, unknown>,
-        pushed_at: nowIso(),
+        pushed_at: resolvedAt,
       }).eq("id", job.id);
+      await writePushLog(job, "succeeded", result, resolvedAt);
       record(job.id, job.idempotency_key, "succeeded");
     } else {
       await fail(job, newAttempts, result.lineErrors?.join("; ") || "push failed", result);
@@ -170,11 +214,14 @@ async function processJob(job: PushJob): Promise<void> {
 async function fail(job: PushJob, newAttempts: number, msg: string, result: PushResult | null): Promise<void> {
   if (!client) return;
   if (newAttempts >= job.max_attempts) {
+    const resolvedAt = nowIso();
     await client.from("push_queue").update({
       status: "failed",
       last_error: msg,
       result: (result as unknown as Record<string, unknown>) ?? null,
     }).eq("id", job.id);
+    const syntheticResult = { ...(result ?? {}), lineErrors: msg ? [msg] : [] } as PushResult;
+    await writePushLog(job, "failed", syntheticResult, resolvedAt);
     record(job.id, job.idempotency_key, "failed", msg);
   } else {
     await client.from("push_queue").update({
@@ -284,6 +331,7 @@ export function getPushAgentStatus() {
     tallyHealthy: state.tallyHealthy,
     claimedCount: state.claimedCount,
     last10Results: state.last10Results,
+    queueStats: state.queueStats,
   };
 }
 
