@@ -402,6 +402,7 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
         date: txt(v.DATE) || txt(v["@_DATE"]),
         guid: txt(v.GUID) || txt(v["@_GUID"]),
         vouchernumber: txt(v.VOUCHERNUMBER) || txt(v.REFERENCE),
+        reference: txt(v.REFERENCE),
         vouchertypename: txt(v.VOUCHERTYPENAME) || txt(v["@_VCHTYPE"]),
         partyledgername: txt(v.PARTYLEDGERNAME),
         narration: txt(v.NARRATION),
