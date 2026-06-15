@@ -286,3 +286,8 @@ export function getPushAgentStatus() {
     last10Results: state.last10Results,
   };
 }
+
+/** Trigger an immediate drain tick (used by the status window's "Drain Now" button). */
+export function drainNow(): void {
+  void tick();
+}
