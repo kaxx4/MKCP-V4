@@ -1,4 +1,6 @@
-import { useEffect, useRef, useCallback } from 'react';
+// NOTE: kept at this path because pushAll imports syncConfigToSupabase from here.
+// The old useSupabaseConfigSync hook (2s-debounce auto-push on config edits) was
+// removed — the scheduled quick syncs push config via pushAll, so it was redundant.
 import { useDiscountStore } from '../store/discountStore';
 import { useOrderGroupStore } from '../store/orderGroupStore';
 import { useOverrideStore } from '../store/overrideStore';
@@ -210,109 +212,4 @@ function emptyCounts() {
     appSettings: 0,
     orderDraftLines: 0,
   };
-}
-
-/**
- * Hook to auto-sync ALL local configuration data to Supabase whenever stores change.
- * Debounced 2s. Best-effort — failures logged to console, no UI noise.
- *
- * Syncs the following:
- *  • Discount rules (categories + tiers)
- *  • Item -> category overrides (item assignments)
- *  • Category colors
- *  • Order groups (with items/lines)
- *  • Unit overrides (alt units for items)
- *  • Rate overrides (custom rates / price list)
- *  • Vendor group assignments
- *  • Item notes
- *  • Calling list entries
- *  • Tally price list imports (uploaded JSON)
- */
-export function useSupabaseConfigSync(company: string = DEFAULT_COMPANY) {
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Subscribe to all 11 store slices that contribute to the sync payload.
-  // Each is its own selector so we only subscribe to specific slices (not
-  // entire stores). Zustand returns stable references when the slice is
-  // unchanged, so the useEffect deps array below only flips when at least
-  // one slice actually mutates.
-  const discountRules = useDiscountStore((s) => s.categories);
-  const itemCategoryOverrides = useDiscountStore((s) => s.itemCategoryOverrides);
-  const categoryColors = useDiscountStore((s) => s.categoryColors);
-  const orderGroups = useOrderGroupStore((s) => s.groups);
-  const unitOverrides = useOverrideStore((s) => s.units);
-  const rateOverrides = useOverrideStore((s) => s.rates);
-  const gstOverrides = useOverrideStore((s) => s.gstRates);
-  const vendorGroupAssignments = useVendorGroupStore((s) => s.assignments);
-  const itemNotes = useNotesStore((s) => s.notes);
-  const callingList = useCallingListStore((s) => s.entries);
-  const tallyPriceList = useTallyPriceListStore((s) => s.entries);
-  const tallyPriceListImportedAt = useTallyPriceListStore((s) => s.importedAt);
-  const voucherOverrides = useCalendarStore((s) => s.overrides);
-
-  // uiStore prefs — these are user-edited via Settings page
-  const unitMode = useUIStore((s) => s.unitMode);
-  const fyYear = useUIStore((s) => s.fyYear);
-  const coverMonths = useUIStore((s) => s.coverMonths);
-  const leadTimeMonths = useUIStore((s) => s.leadTimeMonths);
-  const defaultCreditDays = useUIStore((s) => s.defaultCreditDays);
-
-  // tallyStore prefs — proxy URL, FY dates, sync mode (user-edited in Settings)
-  const tallyProxyUrl = useTallyStore((s) => s.proxyUrl);
-  const tallyFyFromDate = useTallyStore((s) => s.fyFromDate);
-  const tallyFyToDate = useTallyStore((s) => s.fyToDate);
-  const tallySyncMode = useTallyStore((s) => s.syncMode);
-
-  // orderStore — current order draft lines
-  const orderDraftLines = useOrderStore((s) => s.lines);
-
-  useEffect(() => {
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
-
-    debounceTimerRef.current = setTimeout(async () => {
-      const result = await syncConfigToSupabase(company);
-      if (result.success) {
-        console.log(`[Config Sync] ✓ Synced to Supabase:`, result.counts);
-      } else {
-        console.warn(`[Config Sync] Failed:`, result.errors);
-      }
-    }, 2000);
-
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, [
-    discountRules,
-    itemCategoryOverrides,
-    categoryColors,
-    orderGroups,
-    unitOverrides,
-    rateOverrides,
-    gstOverrides,
-    vendorGroupAssignments,
-    itemNotes,
-    callingList,
-    tallyPriceList,
-    tallyPriceListImportedAt,
-    voucherOverrides,
-    unitMode,
-    fyYear,
-    coverMonths,
-    leadTimeMonths,
-    defaultCreditDays,
-    tallyProxyUrl,
-    tallyFyFromDate,
-    tallyFyToDate,
-    tallySyncMode,
-    orderDraftLines,
-    company,
-  ]);
-
-  // Expose manual trigger for "Push Now" buttons
-  const pushNow = useCallback(async () => syncConfigToSupabase(company), [company]);
-  return { pushNow };
 }

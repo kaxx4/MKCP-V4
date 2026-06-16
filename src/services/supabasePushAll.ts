@@ -1,5 +1,4 @@
 import { useDataStore } from "../store/dataStore";
-import { useTallyStore } from "../store/tallyStore";
 import { syncConfigToSupabase } from "../hooks/useSupabaseConfigSync";
 import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
 
@@ -10,23 +9,24 @@ const SERVER_URL = `${BASE}/api/supabase/sync`;
 let pushing = false;
 
 /**
- * Block until no Tally sync is in flight (locally OR on the server). A push that
- * runs mid-sync would ship a half-updated snapshot and miss the window, so the
- * push always waits for the sync to finish first. Bounded so it never hangs.
+ * Block until the SERVER reports no Tally pull in flight. A push that runs while
+ * Tally is being pulled would ship a half-updated snapshot and miss the window.
+ * We check the server busy flag (not the local isSyncing lock, which the caller
+ * runQuickSync holds for the whole pull+push — checking it here would deadlock).
+ * Bounded so it never hangs.
  */
 async function waitForTallyIdle(maxMs = 15 * 60 * 1000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < maxMs) {
-    const localSyncing = useTallyStore.getState().isSyncing;
     let serverBusy = false;
     try {
       const h = await fetch(`${BASE}/api/tally/health`).then((r) => r.json());
       serverBusy = !!h.busy;
     } catch { /* server unreachable — don't block forever */ }
-    if (!localSyncing && !serverBusy) return;
+    if (!serverBusy) return;
     await new Promise((r) => setTimeout(r, 1500));
   }
-  console.warn("[push] Tally sync still running after wait cap — pushing anyway");
+  console.warn("[push] Tally still busy after wait cap — pushing anyway");
 }
 
 export async function pushAll(label: string): Promise<{ mastersVouchersOk: boolean; configOk: boolean }> {
