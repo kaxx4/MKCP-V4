@@ -157,6 +157,11 @@ export class SyncOrchestrator {
     const seenGuids = new Set<string>();
     const chunkDetails: { label: string; count: number; ms: number }[] = [];
     const errors: string[] = [];
+    // Days (YYYYMMDD) whose daily chunk pulled SUCCESSFULLY — each is authoritative
+    // for that one day, so the cloud can prune deletions on it even if other days
+    // in the window failed. This is what reliably clears old deleted/converted
+    // vouchers (e.g. Delivery Notes) without an all-or-nothing full-window pull.
+    const succeededDays: string[] = [];
     let chunksSucceeded = 0;
     let chunksFailed = 0;
 
@@ -186,6 +191,9 @@ export class SyncOrchestrator {
         const ms = Date.now() - chunkT0;
         chunkDetails.push({ label: chunk.label, count: added, ms });
         chunksSucceeded++;
+        // Daily chunk = one day (from === to). Record it so the cloud can prune
+        // that day's deletions even if other days in this run failed.
+        if (chunk.from === chunk.to) succeededDays.push(chunk.from);
         console.log(`[DAYBOOK] ✓ ${chunk.label}: ${added} vouchers (${ms}ms)`);
       } catch (e: any) {
         const isTimeout = e.message?.includes("timeout") || e.message?.includes("TIMEOUT");
@@ -250,19 +258,26 @@ export class SyncOrchestrator {
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`[DAYBOOK] ✓ Total: ${allVouchers.length} vouchers in ${elapsed}s (${chunksSucceeded}/${chunks.length} chunks succeeded)`);
 
-    // pruneRange makes this pull authoritative for [fromDate, toDate] ONLY:
-    // vouchers deleted/converted in Tally within that window are removed from the
-    // cloud, while everything outside the window is left untouched.
-    // BUT only when the pull was COMPLETE (no failed chunks, not aborted) — a
-    // partial pull is missing real vouchers and pruning would wrongly delete them.
+    // Pruning = remove vouchers deleted/converted in Tally from the cloud.
+    //   • daily strategy → prune PER successfully-pulled day (pruneDays). Each clean
+    //     day is authoritative for itself, so deletions clear even when other days in
+    //     the run failed. This is what reliably removes old deleted Delivery Notes.
+    //   • other strategies → whole-window prune, but only on a fully-clean pull.
     const cleanPull = chunksFailed === 0 && !signal?.aborted;
-    this.supabase.syncVouchers(allVouchers, company, {
+    const meta: { chunkCount: number; pruneRange?: { from: string; to: string }; pruneDays?: string[] } = {
       chunkCount: chunks.length,
-      ...(cleanPull ? { pruneRange: { from: fromDate, to: toDate } } : {}),
-    }).catch(e =>
+    };
+    if (strategy === "daily") {
+      if (succeededDays.length > 0) meta.pruneDays = succeededDays;
+    } else if (cleanPull) {
+      meta.pruneRange = { from: fromDate, to: toDate };
+    }
+    this.supabase.syncVouchers(allVouchers, company, meta).catch(e =>
       console.error(`[Supabase] Vouchers sync failed: ${e.message}`)
     );
-    if (!cleanPull) {
+    if (strategy === "daily") {
+      console.log(`[Supabase] Per-day prune over ${succeededDays.length} successfully-pulled day(s)`);
+    } else if (!cleanPull) {
       console.log(`[Supabase] Skipping voucher prune for ${fromDate}–${toDate} (partial pull: ${chunksFailed} failed chunk(s))`);
     }
 
