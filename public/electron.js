@@ -1,13 +1,33 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, globalShortcut } = require('electron');
 
-// ── Crash auto-restart ────────────────────────────────────────────────────────
-// Uncaught exceptions in the main process should relaunch rather than silently
-// leaving the sync agent dead. The renderer's own uncaught exceptions are caught
-// by the 'render-process-crashed' / 'child-process-gone' events separately.
+let mainWindow = null;
+let tray = null;
+let appQuitting = false;
+const APP_START = Date.now();
+
+// ── Crash auto-restart (loop-guarded) ─────────────────────────────────────────
+// A bare relaunch-on-any-error is dangerous: an error during shutdown undoes the
+// quit (app reopens) and an error during startup turns into an infinite relaunch
+// loop where the app never opens cleanly. Guards:
+//   • If we're intentionally quitting → just exit, never relaunch.
+//   • If the crash happens within the first 30s (boot window) → DON'T relaunch;
+//     stay alive so the user can read the error and close the app instead of
+//     fighting a flicker loop.
+//   • Otherwise → relaunch once.
 process.on('uncaughtException', (err) => {
-  console.error('[electron] uncaughtException — relaunching:', err);
+  console.error('[electron] uncaughtException:', err);
+  if (appQuitting) { app.exit(0); return; }
+  if (Date.now() - APP_START < 30_000) {
+    console.error('[electron] crash during startup — NOT relaunching (avoids boot loop)');
+    return;
+  }
+  console.error('[electron] relaunching after crash');
   app.relaunch();
   app.exit(0);
+});
+process.on('unhandledRejection', (reason) => {
+  // Never crash/relaunch on an unhandled promise rejection — just log it.
+  console.error('[electron] unhandledRejection:', reason);
 });
 const path = require('path');
 const fs = require('fs');
@@ -38,9 +58,7 @@ if (!app.requestSingleInstanceLock()) {
 // app.isPackaged is reliable; NODE_ENV is NOT set by electron-builder
 const isDev = !app.isPackaged;
 
-let mainWindow = null;
-let tray = null;
-let appQuitting = false;
+// (mainWindow / tray / appQuitting hoisted to the top for the crash handler)
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const configPath = path.join(app.getPath('userData'), 'config.json');
@@ -180,9 +198,20 @@ function createWindow() {
     : pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
 
   mainWindow.loadURL(startUrl).catch((err) => console.error('loadURL failed:', err));
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+
+  // Show on ready-to-show, but force-show after 8s as a fallback so a renderer
+  // that white-screens (JS error, blocked on the not-yet-ready :3100 server)
+  // can never leave an invisible, unreachable window behind.
+  let shown = false;
+  const showOnce = () => {
+    if (shown || !mainWindow) return;
+    shown = true;
+    mainWindow.show();
+  };
+  mainWindow.once('ready-to-show', showOnce);
+  setTimeout(showOnce, 8000);
   mainWindow.on('close', (e) => {
-    if (mainWindow) setConfig('windowBounds', mainWindow.getBounds());
+    try { if (mainWindow) setConfig('windowBounds', mainWindow.getBounds()); } catch {}
     if (!appQuitting) {
       // Hide to tray instead of closing — keeps sync agent alive.
       e.preventDefault();
@@ -196,7 +225,13 @@ function createWindow() {
 function createTray() {
   // Use the existing app icon, scaled to 16x16 for the tray.
   const iconPath = path.join(__dirname, 'icon.png');
-  const icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+  let icon;
+  try {
+    icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+    if (icon.isEmpty()) icon = nativeImage.createEmpty();
+  } catch {
+    icon = nativeImage.createEmpty();
+  }
 
   tray = new Tray(icon);
   tray.setToolTip('MKCP Sync Agent');
@@ -299,18 +334,32 @@ app.on('second-instance', () => {
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   console.log('MK Cycles Dashboard starting...');
-  try {
-    await startExpressServer();
-    console.log('Server ready on :3100');
-  } catch (err) {
-    console.error('Server failed:', err.message);
-    dialog.showErrorBox('API Server Error',
-      `The local server could not start.\n\n${err.message}\n\nTally sync will not work.`);
-  }
+
+  // Open the window and tray FIRST so the UI appears immediately and the user
+  // always has a quit affordance — even if the server is slow or fails to start.
   createWindow();
-  createTray();
+  try {
+    createTray();
+  } catch (err) {
+    console.error('[electron] Tray creation failed (continuing without tray):', err);
+  }
+
+  // Start the local server in the BACKGROUND. The renderer polls :3100 and shows
+  // a "Disconnected" state until it's up, so a slow (~20s) or failed start no
+  // longer blocks the window from appearing.
+  startExpressServer()
+    .then(() => console.log('Server ready on :3100'))
+    .catch((err) => {
+      console.error('Server failed:', err.message);
+      dialog.showErrorBox('API Server Error',
+        `The local server could not start.\n\n${err.message}\n\nTally sync will not work.`);
+    });
+
+  // Quit accelerator — always-available fallback if the tray ever fails.
+  const quit = () => { appQuitting = true; tray?.destroy(); app.quit(); };
+  globalShortcut.register('CommandOrControl+Q', quit);
 
   // Dev-only keyboard shortcuts (menu bar is hidden in all builds)
   if (isDev) {
