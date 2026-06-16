@@ -7,7 +7,19 @@ import {
 } from "lucide-react";
 import { useTallyStore } from "./store/tallyStore";
 import { useSupabaseSyncStatusStore } from "./store/supabaseSyncStatusStore";
+import { useDataStore } from "./store/dataStore";
 import { useToast } from "./components/Toast";
+import { pullFromTally, todayYmd, daysAgoYmd, type PullResult } from "./services/tallyPull";
+import { pushAll } from "./services/supabasePushAll";
+
+interface QuickSyncState {
+  running: string | null;            // label of the button currently running
+  phase: "sync" | "push" | null;     // which phase is in progress
+  tally?: PullResult;
+  push?: { ok: boolean; items: number; ledgers: number; vouchers: number; configErr?: string | null; vouchersErr?: string | null };
+  ok?: boolean;
+  finishedAt?: string;
+}
 
 const SUPA_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
 const SUPA_ANON = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -208,6 +220,7 @@ export default function AgentStatus() {
   const [failedJobs, setFailedJobs] = useState<FailedQueueRow[]>([]);
   const [requeueing, setRequeueing] = useState<string | null>(null);
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+  const [qsync, setQsync] = useState<QuickSyncState>({ running: null, phase: null });
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [logFilter, setLogFilter] = useState<"all" | "errors" | "tally" | "supabase">("all");
@@ -328,6 +341,47 @@ export default function AgentStatus() {
     const el = logsBoxRef.current;
     if (el && logsAutoScrollRef.current) el.scrollTop = el.scrollHeight;
   }, [logs, logFilter]);
+
+  // ── Quick Sync: pull from Tally (daily), THEN push to Supabase ────────────
+  // Sequential by design — the push only starts after the Tally pull finishes,
+  // and pullFromTally holds the global sync lock so the push can't run mid-sync.
+  const quickSync = useCallback(async (label: string, fromYmd: string, toYmd: string) => {
+    if (qsync.running) return; // one quick-sync at a time
+    setQsync({ running: label, phase: "sync" });
+
+    // Phase 1 — Tally → app (+ server pushes vouchers to Supabase as it pulls).
+    const tally = await pullFromTally(companyName, fromYmd, toYmd, "daily");
+    void fetchHistory();
+    if (!tally.ok) {
+      setQsync({ running: null, phase: null, tally, ok: false, finishedAt: new Date().toISOString() });
+      toast(`${label}: Tally sync failed — ${tally.error ?? "unknown"}`, "error");
+      return;
+    }
+
+    // Phase 2 — push the full local store (config + masters + vouchers) to Supabase.
+    setQsync({ running: label, phase: "push", tally });
+    const pr = await pushAll(`quick:${label}`);
+    const st = useSupabaseSyncStatusStore.getState();
+    const data = useDataStore.getState().data;
+    const pushOk = pr.mastersVouchersOk && pr.configOk;
+    setQsync({
+      running: null, phase: null, tally, ok: tally.ok && pushOk,
+      finishedAt: new Date().toISOString(),
+      push: {
+        ok: pushOk,
+        items: data?.items.size ?? 0,
+        ledgers: data?.ledgers.size ?? 0,
+        vouchers: data?.vouchers.length ?? 0,
+        configErr: pr.configOk ? null : st.config.error,
+        vouchersErr: pr.mastersVouchersOk ? null : st.vouchers.error,
+      },
+    });
+    void fetchPushLog();
+    toast(
+      pushOk ? `${label}: synced ${tally.vouchers} voucher(s) → pushed to Supabase` : `${label}: synced, but Supabase push had errors`,
+      pushOk ? "success" : "error",
+    );
+  }, [qsync.running, companyName, toast, fetchHistory, fetchPushLog]);
 
   // ── Actions (stable refs via useCallback) ────────────────────────────────
   const triggerSync = useCallback(async (endpoint: string, body: Record<string, unknown>, label: string) => {
@@ -502,6 +556,76 @@ export default function AgentStatus() {
             ) : null
           )}
         </SectionCard>
+
+        {/* ── Quick Sync (Tally → then → Supabase) ──────────────── */}
+        <div className="md:col-span-2">
+          <SectionCard title="Quick Sync  (Tally → then push → Supabase)" icon={<RefreshCw size={15} />}>
+            <p className="text-xs text-neutral-500 mb-2">
+              Pulls daily from Tally, then pushes to Supabase once the pull finishes (never during a sync).
+            </p>
+            <div className="flex gap-2 flex-wrap mb-3">
+              {([
+                ["Today",        todayYmd(),        todayYmd()],
+                ["Last 7 days",  daysAgoYmd(6),     todayYmd()],
+                ["This FY",      fyFromDate,        todayYmd()],
+              ] as [string, string, string][]).map(([label, from, to]) => {
+                const running = qsync.running === label;
+                return (
+                  <Btn key={label} variant={label === "Last 7 days" ? "primary" : "secondary"}
+                    onClick={() => quickSync(label, from, to)}
+                    disabled={!!qsync.running || !!syncing || !connected}>
+                    {running
+                      ? <><Loader2 size={12} className="animate-spin" /> {qsync.phase === "push" ? "Pushing…" : "Syncing…"}</>
+                      : <><RefreshCw size={12} /> {label}</>}
+                  </Btn>
+                );
+              })}
+            </div>
+
+            {/* Two-phase result with clear success / error + statistics */}
+            {(qsync.tally || qsync.running) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                {/* Phase 1 — Tally */}
+                <div className="rounded-lg border border-neutral-200 p-2.5">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    {qsync.running && qsync.phase === "sync"
+                      ? <Loader2 size={13} className="animate-spin text-blue-500" />
+                      : qsync.tally?.ok ? <CheckCircle size={13} className="text-green-600" /> : qsync.tally ? <XCircle size={13} className="text-red-600" /> : <Clock size={13} className="text-neutral-400" />}
+                    <span className="font-semibold text-neutral-700">1 · Tally pull</span>
+                  </div>
+                  {qsync.tally ? (
+                    qsync.tally.ok ? (
+                      <div className="text-neutral-600 space-y-0.5">
+                        <div><span className="font-medium text-neutral-800">{qsync.tally.vouchers}</span> voucher(s) pulled{qsync.tally.cleared > 0 ? <> · <span className="text-amber-700">{qsync.tally.cleared} cleared</span></> : null}</div>
+                        <div className="text-neutral-400">{qsync.tally.chunksSucceeded}/{qsync.tally.chunksTotal} chunks{qsync.tally.chunksFailed > 0 ? <span className="text-red-600"> · {qsync.tally.chunksFailed} failed</span> : null} · {qsync.tally.elapsedSeconds}s</div>
+                      </div>
+                    ) : (
+                      <div className="text-red-600 break-words">{qsync.tally.error}</div>
+                    )
+                  ) : <div className="text-neutral-400">{qsync.phase === "sync" ? "Pulling from Tally…" : "—"}</div>}
+                </div>
+
+                {/* Phase 2 — Supabase */}
+                <div className="rounded-lg border border-neutral-200 p-2.5">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    {qsync.running && qsync.phase === "push"
+                      ? <Loader2 size={13} className="animate-spin text-blue-500" />
+                      : qsync.push?.ok ? <CheckCircle size={13} className="text-green-600" /> : qsync.push ? <XCircle size={13} className="text-red-600" /> : <Clock size={13} className="text-neutral-400" />}
+                    <span className="font-semibold text-neutral-700">2 · Supabase push</span>
+                  </div>
+                  {qsync.push ? (
+                    <div className="text-neutral-600 space-y-0.5">
+                      <div><span className="font-medium text-neutral-800">{qsync.push.vouchers}</span> vouchers · {qsync.push.items} items · {qsync.push.ledgers} ledgers</div>
+                      {qsync.push.ok
+                        ? <div className="text-green-700">Pushed successfully</div>
+                        : <div className="text-red-600 break-words">{qsync.push.vouchersErr || qsync.push.configErr || "Push had errors"}</div>}
+                    </div>
+                  ) : <div className="text-neutral-400">{qsync.phase === "push" ? "Pushing to Supabase…" : qsync.running ? "Waiting for pull…" : "—"}</div>}
+                </div>
+              </div>
+            )}
+          </SectionCard>
+        </div>
 
         {/* ── Pull Sync ─────────────────────────────────────────── */}
         <div className="md:col-span-2">
