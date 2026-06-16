@@ -322,7 +322,12 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
       { label: "order_draft_lines", promise: supabaseSync.syncOrderDraftLines(orderDraftLines, company) },
     ];
 
-    const results = await Promise.allSettled(syncTasks.map(t => t.promise));
+    // Run sync tasks sequentially — firing 14 tasks in parallel overwhelms Supabase's
+    // connection pool (~15 slots) causing "TypeError: fetch failed" on the overflow.
+    const results: PromiseSettledResult<void>[] = [];
+    for (const task of syncTasks) {
+      results.push(await Promise.allSettled([task.promise]).then(r => r[0]));
+    }
 
     const errors = results
       .map((r, i) => ({ r, label: syncTasks[i].label }))
