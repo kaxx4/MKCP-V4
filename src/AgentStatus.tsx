@@ -202,6 +202,7 @@ export default function AgentStatus() {
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const [logFilter, setLogFilter] = useState<"all" | "errors" | "tally" | "supabase">("all");
   const logsBoxRef = useRef<HTMLDivElement | null>(null);
   const logsAutoScrollRef = useRef(true);
 
@@ -314,7 +315,7 @@ export default function AgentStatus() {
   useEffect(() => {
     const el = logsBoxRef.current;
     if (el && logsAutoScrollRef.current) el.scrollTop = el.scrollHeight;
-  }, [logs]);
+  }, [logs, logFilter]);
 
   // ── Actions (stable refs via useCallback) ────────────────────────────────
   const triggerSync = useCallback(async (endpoint: string, body: Record<string, unknown>, label: string) => {
@@ -411,6 +412,18 @@ export default function AgentStatus() {
     ["masters",  cloudMasters]  as const,
     ["vouchers", cloudVouchers] as const,
   ];
+
+  // ── Log filtering ──────────────────────────────────────────────────────────
+  // Genuine errors carry the ❌/✗ marker (the server prefixes every console.error
+  // with ❌). Also catch explicit failure words, but NOT benign "(0 errors)" summaries.
+  const isErrorLine = (l: string) => /❌|✗/.test(l) || /\bfailed\b|\bexception\b|\brejected\b/i.test(l);
+  const errorLogCount = logs.filter(isErrorLine).length;
+  const visibleLogs = logs.filter((l) => {
+    if (logFilter === "errors")   return isErrorLine(l);
+    if (logFilter === "tally")    return /\[tally\]|\[DAYBOOK\]|\[SYNC\]|\[MASTERS\]|\[convert\]|\[PUSH-TEST\]/i.test(l);
+    if (logFilter === "supabase") return /\[Supabase\]|\[pushAgent\]|\[Auto-push|\[Config Sync\]/i.test(l);
+    return true;
+  });
 
   return (
     <div className="min-h-screen bg-neutral-100 p-4 md:p-6">
@@ -746,6 +759,9 @@ export default function AgentStatus() {
               <Activity size={15} className="text-neutral-500" />
               <h2 className="font-semibold text-sm text-neutral-700 flex-1">
                 Logs{showLogs && logs.length > 0 ? ` (${logs.length})` : ""}
+                {showLogs && errorLogCount > 0 && (
+                  <span className="ml-2 text-xs font-medium text-red-600">{errorLogCount} error{errorLogCount === 1 ? "" : "s"}</span>
+                )}
               </h2>
               {showLogs && (
                 <span
@@ -754,7 +770,7 @@ export default function AgentStatus() {
                   className="text-xs text-neutral-500 hover:text-neutral-800 px-2 py-0.5 rounded border border-neutral-200"
                   onClick={(e) => {
                     e.stopPropagation();
-                    navigator.clipboard?.writeText(logs.join("\n")).then(
+                    navigator.clipboard?.writeText(visibleLogs.join("\n")).then(
                       () => toast("Logs copied", "success"),
                       () => toast("Copy failed", "error"),
                     );
@@ -767,6 +783,27 @@ export default function AgentStatus() {
             </button>
             {showLogs && (
               <div className="px-3 py-3">
+                {/* Filter chips — isolate errors or a single source for debugging */}
+                <div className="flex gap-1.5 mb-2 flex-wrap">
+                  {([
+                    ["all", "All"],
+                    ["errors", "Errors only"],
+                    ["tally", "Tally"],
+                    ["supabase", "Supabase"],
+                  ] as [typeof logFilter, string][]).map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setLogFilter(key)}
+                      className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors ${
+                        logFilter === key
+                          ? "bg-neutral-900 text-white border-neutral-900"
+                          : "bg-white text-neutral-600 border-neutral-200 hover:bg-neutral-50"
+                      }`}
+                    >
+                      {label}{key === "errors" && errorLogCount > 0 ? ` (${errorLogCount})` : ""}
+                    </button>
+                  ))}
+                </div>
                 <div
                   ref={logsBoxRef}
                   onScroll={(e) => {
@@ -775,13 +812,17 @@ export default function AgentStatus() {
                   }}
                   className="font-mono text-[11px] leading-relaxed bg-neutral-950 text-neutral-200 rounded-lg p-3 h-80 overflow-y-auto whitespace-pre-wrap"
                 >
-                  {logs.length === 0 ? (
-                    <span className="text-neutral-500">Waiting for log activity… (trigger a sync to see Tally + Supabase logs here)</span>
+                  {visibleLogs.length === 0 ? (
+                    <span className="text-neutral-500">
+                      {logs.length === 0
+                        ? "Waiting for log activity… (trigger a sync to see Tally + Supabase logs here)"
+                        : `No ${logFilter === "all" ? "" : logFilter + " "}lines in the current buffer.`}
+                    </span>
                   ) : (
-                    logs.map((line, i) => {
-                      const cls = /✓/.test(line) ? "text-green-400"
-                        : /✗|❌/.test(line) ? "text-red-400"
+                    visibleLogs.map((line, i) => {
+                      const cls = isErrorLine(line) ? "text-red-400"
                         : /⚠/.test(line) ? "text-amber-400"
+                        : /✓/.test(line) ? "text-green-400"
                         : "text-neutral-300";
                       return <div key={i} className={cls}>{line}</div>;
                     })

@@ -334,7 +334,12 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
       .filter(({ r }) => r.status === "rejected")
       .map(({ r, label }) => `${label}: ${(r as PromiseRejectedResult).reason?.message || String((r as PromiseRejectedResult).reason)}`);
 
-    console.log(`[Supabase] Config sync completed (${errors.length} errors)`);
+    if (errors.length > 0) {
+      // Surface each failing table in the log buffer (console.error → ❌ in the
+      // Logs panel) so the exact failure is visible for debugging, not just a count.
+      for (const e of errors) console.error(`[Supabase] Config sync error → ${e}`);
+    }
+    console.log(`[Supabase] Config sync completed (${errors.length} error${errors.length === 1 ? "" : "s"})`);
     res.json({
       success: true,
       message: "Configuration data synced to Supabase",
