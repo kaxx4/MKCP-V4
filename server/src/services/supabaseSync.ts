@@ -153,7 +153,11 @@ export class SupabaseSync {
     }
   }
 
-  async syncVouchers(messages: any[], company: string, meta?: { chunkCount?: number }): Promise<void> {
+  async syncVouchers(
+    messages: any[],
+    company: string,
+    meta?: { chunkCount?: number; pruneRange?: { from: string; to: string } }
+  ): Promise<void> {
     if (!this.client) return;
     if (!messages || messages.length === 0) return;
 
@@ -247,12 +251,26 @@ export class SupabaseSync {
         }
       }
 
-      // Remove vouchers deleted or converted in Tally (not in the current push).
-      // Safe because full-sync always sends all vouchers for the company.
-      const deleted = await this.deleteOrphans("tally_vouchers", company, "guid", Array.from(voucherGuids));
-      if (deleted > 0) {
-        // Clean up child rows whose parent was just deleted.
-        await this.cleanupOrphanEntries(company);
+      // Remove vouchers deleted or converted in Tally — but ONLY within the date
+      // window that was actually pulled (meta.pruneRange). A daybook/range sync
+      // pulls a SUBSET of vouchers, so deleting every GUID not in that subset
+      // would wipe the entire history outside the range. Scoping the delete to
+      // [from, to] makes a range pull authoritative for that range only and
+      // leaves all other dates untouched. Callers that push a partial set with
+      // no authoritative range (e.g. the renderer's local-store push) omit
+      // pruneRange entirely → pure upsert, no deletion.
+      let deleted = 0;
+      if (meta?.pruneRange?.from && meta?.pruneRange?.to) {
+        deleted = await this.deleteVoucherOrphansInRange(
+          company,
+          meta.pruneRange.from,
+          meta.pruneRange.to,
+          Array.from(voucherGuids)
+        );
+        if (deleted > 0) {
+          // Clean up child rows whose parent was just deleted.
+          await this.cleanupOrphanEntries(company);
+        }
       }
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -358,6 +376,48 @@ export class SupabaseSync {
       return n;
     } catch (e: any) {
       console.warn(`[Supabase] Orphan cleanup error in ${table}: ${e?.message || e}`);
+      return 0;
+    }
+  }
+
+  /**
+   * Delete vouchers within [from, to] whose GUID is NOT in the just-pulled set.
+   * This is how a range sync propagates Tally deletions/conversions to the cloud
+   * WITHOUT touching vouchers dated outside the pulled window.
+   *
+   * Uses an RPC (migration 017) so the GUID list ships in the POST body — a plain
+   * .not("guid","in",...) DELETE would put hundreds of 36-char GUIDs in the URL
+   * query string and overflow the length limit. Best-effort: a missing migration
+   * or any error logs a warning and returns 0 (never throws, never over-deletes).
+   */
+  private async deleteVoucherOrphansInRange(
+    company: string,
+    from: string,
+    to: string,
+    validGuids: string[]
+  ): Promise<number> {
+    if (!this.client) return 0;
+    const clean = (validGuids || []).filter((g): g is string => typeof g === "string" && g.length > 0);
+    // Empty valid set is ambiguous (genuinely-empty range vs failed pull) — refuse
+    // to delete-all-in-range. The early `vouchers.length === 0` return upstream
+    // already guards this, but keep the belt-and-braces check here too.
+    if (clean.length === 0) return 0;
+    try {
+      const { data, error } = await this.client.rpc("delete_voucher_orphans_in_range", {
+        p_company: company,
+        p_from: from,
+        p_to: to,
+        p_valid_guids: clean,
+      });
+      if (error) {
+        console.warn(`[Supabase] Voucher range cleanup skipped (${from}–${to}): ${error.message}`);
+        return 0;
+      }
+      const n = typeof data === "number" ? data : 0;
+      if (n > 0) console.log(`[Supabase] ⌫ Removed ${n} voucher(s) deleted in Tally within ${from}–${to}`);
+      return n;
+    } catch (e: any) {
+      console.warn(`[Supabase] Voucher range cleanup error: ${e?.message || e}`);
       return 0;
     }
   }

@@ -243,7 +243,13 @@ export class SyncOrchestrator {
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`[DAYBOOK] ✓ Total: ${allVouchers.length} vouchers in ${elapsed}s (${chunksSucceeded}/${chunks.length} chunks succeeded)`);
 
-    this.supabase.syncVouchers(allVouchers, company, { chunkCount: chunks.length }).catch(e =>
+    // pruneRange makes this pull authoritative for [fromDate, toDate] ONLY:
+    // vouchers deleted/converted in Tally within that window are removed from the
+    // cloud, while everything outside the window is left untouched.
+    this.supabase.syncVouchers(allVouchers, company, {
+      chunkCount: chunks.length,
+      pruneRange: { from: fromDate, to: toDate },
+    }).catch(e =>
       console.error(`[Supabase] Vouchers sync failed: ${e.message}`)
     );
 
