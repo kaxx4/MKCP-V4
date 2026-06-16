@@ -7,8 +7,6 @@ import { loadData, createBackup } from "../db/idb";
 import { deserializeParsedData } from "../utils/serialize";
 import { useToast } from "../components/Toast";
 
-const INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-
 function todayStr(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -23,6 +21,7 @@ export function useTallyAutoSync() {
   const isConnected       = useTallyStore((s) => s.isConnected);
   const isSyncing         = useTallyStore((s) => s.isSyncing);
   const companyName       = useTallyStore((s) => s.companyName);
+  const intervalMinutes   = useTallyStore((s) => s.tallyAutoSyncMinutes);
   const setSyncing        = useTallyStore((s) => s.setSyncing);
   const completeSyncWith  = useTallyStore((s) => s.completeSyncWith);
   const mergeData = useDataStore((s) => s.mergeData);
@@ -87,12 +86,16 @@ export function useTallyAutoSync() {
     // Run once immediately on mount (after a short delay to let the app settle)
     const initialTimer = setTimeout(runSync, 10_000);
 
-    // Then every 30 minutes
-    const interval = setInterval(runSync, INTERVAL_MS);
+    // Then every `intervalMinutes` minutes. 0 (or invalid) disables the repeat
+    // entirely — only the one-shot initial run above fires. Falls back to the
+    // 30-min default if the stored value is missing.
+    const minutes = Number.isFinite(intervalMinutes) ? intervalMinutes : 30;
+    const interval = minutes > 0 ? setInterval(runSync, minutes * 60_000) : null;
+    console.log(`[auto-sync] Tally pull interval: ${minutes > 0 ? `${minutes} min` : "disabled"}`);
 
     return () => {
       clearTimeout(initialTimer);
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
     };
-  }, []); // stable — reads via refs, no deps needed
+  }, [intervalMinutes]); // re-arm the timer when the configured interval changes
 }

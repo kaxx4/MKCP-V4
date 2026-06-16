@@ -173,11 +173,15 @@ export default function AgentStatus() {
   const lastMastersSyncAt  = useTallyStore((s) => s.lastMastersSyncAt);
   const lastVouchersSyncAt = useTallyStore((s) => s.lastVouchersSyncAt);
   const lastVoucherDate    = useTallyStore((s) => s.lastVoucherDate);
+  const tallyAutoSyncMinutes = useTallyStore((s) => s.tallyAutoSyncMinutes);
+  const supabasePushMinutes  = useTallyStore((s) => s.supabasePushMinutes);
   const setConnected       = useTallyStore((s) => s.setConnected);
   const setLastSync        = useTallyStore((s) => s.setLastSync);
   const setCompanyName     = useTallyStore((s) => s.setCompanyName);
   const setProxyUrl        = useTallyStore((s) => s.setProxyUrl);
   const setFyDates         = useTallyStore((s) => s.setFyDates);
+  const setTallyAutoSyncMinutes = useTallyStore((s) => s.setTallyAutoSyncMinutes);
+  const setSupabasePushMinutes  = useTallyStore((s) => s.setSupabasePushMinutes);
 
   const cloudConfig   = useSupabaseSyncStatusStore((s) => s.config);
   const cloudMasters  = useSupabaseSyncStatusStore((s) => s.masters);
@@ -202,6 +206,8 @@ export default function AgentStatus() {
   const [editProxy, setEditProxy]     = useState(proxyUrl);
   const [editFyFrom, setEditFyFrom]   = useState(fyFromDate);
   const [editFyTo, setEditFyTo]       = useState(fyToDate);
+  const [editTallyMins, setEditTallyMins] = useState(String(tallyAutoSyncMinutes));
+  const [editPushMins, setEditPushMins]   = useState(String(supabasePushMinutes));
 
   // ── Supabase data fetchers ────────────────────────────────────────────────
   const fetchHistory = useCallback(async () => {
@@ -347,8 +353,16 @@ export default function AgentStatus() {
     setCompanyName(editCompany.trim());
     setProxyUrl(editProxy.trim());
     setFyDates(editFyFrom.trim(), editFyTo.trim());
+    // Clamp interval inputs: non-negative integers, 0 = disabled.
+    const tallyMins = Math.max(0, Math.round(Number(editTallyMins) || 0));
+    const pushMins  = Math.max(0, Math.round(Number(editPushMins) || 0));
+    setTallyAutoSyncMinutes(tallyMins);
+    setSupabasePushMinutes(pushMins);
+    setEditTallyMins(String(tallyMins));
+    setEditPushMins(String(pushMins));
     toast("Settings saved", "success");
-  }, [editCompany, editProxy, editFyFrom, editFyTo, setCompanyName, setProxyUrl, setFyDates, toast]);
+  }, [editCompany, editProxy, editFyFrom, editFyTo, editTallyMins, editPushMins,
+      setCompanyName, setProxyUrl, setFyDates, setTallyAutoSyncMinutes, setSupabasePushMinutes, toast]);
 
   const toggleError = useCallback((id: string) => {
     setExpandedErrors(prev => {
@@ -723,6 +737,27 @@ export default function AgentStatus() {
                     />
                   </label>
                 ))}
+
+                {/* Auto-sync intervals — editable separately. 0 = off. */}
+                <label className="block">
+                  <span className="text-xs text-neutral-500 mb-1 block">Auto pull from Tally (minutes, 0 = off)</span>
+                  <input
+                    type="number" min={0} step={1}
+                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={editTallyMins}
+                    onChange={e => setEditTallyMins(e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs text-neutral-500 mb-1 block">Auto push to Supabase (minutes, 0 = off)</span>
+                  <input
+                    type="number" min={0} step={1}
+                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={editPushMins}
+                    onChange={e => setEditPushMins(e.target.value)}
+                  />
+                </label>
+
                 <div className="sm:col-span-2">
                   <Btn variant="primary" onClick={applySettings}>Save settings</Btn>
                 </div>

@@ -9,6 +9,10 @@ interface TallyConnectionState {
   lastError: string | null;
   isSyncing: boolean;
   autoSyncMinutes: number;
+  /** Auto pull-sync interval (Tally → app/Supabase), minutes. 0 = disabled. */
+  tallyAutoSyncMinutes: number;
+  /** Auto push interval (app → Supabase), minutes. 0 = disabled. */
+  supabasePushMinutes: number;
   fyFromDate: string;
   fyToDate: string;
   syncMode: "smart" | "monthly" | "daily" | "weekly";
@@ -23,6 +27,8 @@ interface TallyConnectionState {
   setLastError: (err: string | null) => void;
   setSyncing: (v: boolean) => void;
   setAutoSync: (minutes: number) => void;
+  setTallyAutoSyncMinutes: (minutes: number) => void;
+  setSupabasePushMinutes: (minutes: number) => void;
   setFyDates: (from: string, to: string) => void;
   setSyncMode: (mode: "smart" | "monthly" | "daily" | "weekly") => void;
   resetToCurrentFY: () => void;
@@ -43,6 +49,8 @@ export const useTallyStore = create<TallyConnectionState>()(
       lastError: null,
       isSyncing: false,
       autoSyncMinutes: 0,
+      tallyAutoSyncMinutes: 30,
+      supabasePushMinutes: 15,
       fyFromDate: getDefaultFYStart(),
       fyToDate: getDefaultFYEnd(),
       syncMode: "smart",
@@ -57,6 +65,8 @@ export const useTallyStore = create<TallyConnectionState>()(
       setLastError: (lastError) => set({ lastError }),
       setSyncing: (isSyncing) => set({ isSyncing }),
       setAutoSync: (autoSyncMinutes) => set({ autoSyncMinutes }),
+      setTallyAutoSyncMinutes: (tallyAutoSyncMinutes) => set({ tallyAutoSyncMinutes }),
+      setSupabasePushMinutes: (supabasePushMinutes) => set({ supabasePushMinutes }),
       setFyDates: (fyFromDate, fyToDate) => set({ fyFromDate, fyToDate }),
       setSyncMode: (syncMode) => set({ syncMode }),
       setLastVoucherDate: (lastVoucherDate) => set({ lastVoucherDate }),
@@ -82,7 +92,7 @@ export const useTallyStore = create<TallyConnectionState>()(
         const { isSyncing, ...rest } = state;
         return rest;
       },
-      version: 3,
+      version: 4,
       migrate: (persisted: any, version: number) => {
         if (version < 2) {
           persisted.fyFromDate = getDefaultFYStart();
@@ -93,6 +103,10 @@ export const useTallyStore = create<TallyConnectionState>()(
           persisted.lastVoucherDate = null;
           persisted.lastMastersSyncAt = null;
           persisted.lastVouchersSyncAt = null;
+        }
+        if (version < 4) {
+          persisted.tallyAutoSyncMinutes = 30;
+          persisted.supabasePushMinutes = 15;
         }
         return persisted;
       },
