@@ -33,9 +33,8 @@ function toIso(yyyymmdd: string): string {
 
 /**
  * Pull vouchers from Tally for [fromYmd, toYmd] and merge into the local store.
- * Sets tallyStore.isSyncing for the whole operation — this is the GLOBAL "a Tally
- * sync is running" lock that the auto-sync and the Supabase push both respect, so
- * a push never runs mid-sync (and would miss a window).
+ * The GLOBAL "a sync is running" lock (tallyStore.isSyncing) is owned by the
+ * caller (runQuickSync) so it spans the whole pull+push, not just the pull.
  *
  * On a CLEAN pull (no failed chunks) the window is authoritative: vouchers Tally
  * no longer has are cleared. A partial pull falls back to a safe additive merge.
@@ -46,15 +45,11 @@ export async function pullFromTally(
   toYmd: string,
   strategy: "daily" | "weekly" | "monthly" = "daily",
 ): Promise<PullResult> {
-  const tally = useTallyStore.getState();
-  if (tally.isSyncing) {
-    return { ok: false, vouchers: 0, chunksSucceeded: 0, chunksTotal: 0, chunksFailed: 0, cleared: 0, elapsedSeconds: 0, error: "A Tally sync is already running" };
-  }
   if (!company?.trim()) {
     return { ok: false, vouchers: 0, chunksSucceeded: 0, chunksTotal: 0, chunksFailed: 0, cleared: 0, elapsedSeconds: 0, error: "No company configured" };
   }
 
-  tally.setSyncing(true);
+  const tally = useTallyStore.getState();
   try {
     const result = await syncDayBook(company, fromYmd, toYmd, strategy);
     const s = result.stats;
@@ -103,7 +98,5 @@ export async function pullFromTally(
     return { ok: true, vouchers: parsed.vouchers.length, cleared, ...base };
   } catch (e: any) {
     return { ok: false, vouchers: 0, chunksSucceeded: 0, chunksTotal: 0, chunksFailed: 0, cleared: 0, elapsedSeconds: 0, error: e?.message || String(e) };
-  } finally {
-    tally.setSyncing(false);
   }
 }

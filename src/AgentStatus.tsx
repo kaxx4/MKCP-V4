@@ -179,6 +179,8 @@ export default function AgentStatus() {
   const syncTodayMinutes = useTallyStore((s) => s.syncTodayMinutes);
   const syncWeekMinutes  = useTallyStore((s) => s.syncWeekMinutes);
   const syncFyMinutes    = useTallyStore((s) => s.syncFyMinutes);
+  const isSyncing        = useTallyStore((s) => s.isSyncing);   // global "any sync running" lock
+  const setTallySyncing  = useTallyStore((s) => s.setSyncing);
   const setConnected       = useTallyStore((s) => s.setConnected);
   const setLastSync        = useTallyStore((s) => s.setLastSync);
   const setCompanyName     = useTallyStore((s) => s.setCompanyName);
@@ -345,7 +347,11 @@ export default function AgentStatus() {
 
   // ── Actions (stable refs via useCallback) ────────────────────────────────
   const triggerSync = useCallback(async (endpoint: string, body: Record<string, unknown>, label: string) => {
+    // Respect the global lock — never start a manual sync while another sync
+    // (manual, scheduled, or quick) is running.
+    if (useTallyStore.getState().isSyncing) { toast("A sync is already running — please wait", "info"); return; }
     setSyncing(label);
+    setTallySyncing(true);
     try {
       const r = await fetch(`${BASE}${endpoint}`, {
         method: "POST",
@@ -364,8 +370,9 @@ export default function AgentStatus() {
       toast(`${label} failed: ${e.message}`, "error");
     } finally {
       setSyncing(null);
+      setTallySyncing(false);
     }
-  }, [toast, setLastSync, fetchHistory]);
+  }, [toast, setLastSync, fetchHistory, setTallySyncing]);
 
   const drainQueue = useCallback(async () => {
     setDraining(true);
@@ -524,7 +531,7 @@ export default function AgentStatus() {
                 return (
                   <Btn key={label} variant={label === "Last 7 days" ? "primary" : "secondary"}
                     onClick={() => quickSync(label, from, to)}
-                    disabled={!!qsync.running || !!syncing || !connected}>
+                    disabled={!!qsync.running || !!syncing || isSyncing || !connected}>
                     {running
                       ? <><Loader2 size={12} className="animate-spin" /> {qsync.phase === "push" ? "Pushing…" : "Syncing…"}</>
                       : <><RefreshCw size={12} /> {label}</>}
@@ -600,15 +607,15 @@ export default function AgentStatus() {
             <div className="flex gap-2 flex-wrap mb-2">
               <Btn variant="primary"
                 onClick={() => triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "full", chunkStrategy: "daily" }, "Full sync")}
-                disabled={!!syncing || !connected}>
+                disabled={!!syncing || isSyncing || !connected}>
                 {syncing === "Full sync" ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                 Sync Now
               </Btn>
-              <Btn onClick={() => triggerSync("/api/tally/sync-masters", { company }, "Sync Masters")} disabled={!!syncing || !connected}>
+              <Btn onClick={() => triggerSync("/api/tally/sync-masters", { company }, "Sync Masters")} disabled={!!syncing || isSyncing || !connected}>
                 {syncing === "Sync Masters" && <Loader2 size={12} className="animate-spin" />}
                 Sync Masters
               </Btn>
-              <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate, chunkMode: "daily" }, "Sync Daybook")} disabled={!!syncing || !connected}>
+              <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate, chunkMode: "daily" }, "Sync Daybook")} disabled={!!syncing || isSyncing || !connected}>
                 {syncing === "Sync Daybook" && <Loader2 size={12} className="animate-spin" />}
                 Sync Daybook
               </Btn>
@@ -636,7 +643,7 @@ export default function AgentStatus() {
                   <button
                     key={label}
                     onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fmt8(from), toDate: fmt8(to), chunkMode: "daily" }, key)}
-                    disabled={!!syncing || !connected}
+                    disabled={!!syncing || isSyncing || !connected}
                     className="px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors
                       border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50 hover:border-neutral-300
                       disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
