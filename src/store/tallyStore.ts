@@ -67,7 +67,7 @@ export const useTallyStore = create<TallyConnectionState>()(
       tallySyncWindowDays: 7,
       tallySyncStrategy: "daily",
       tallyDeepSyncMinutes: 360,
-      tallyDeepSyncWindowDays: 90,
+      tallyDeepSyncWindowDays: 30,
       fyFromDate: getDefaultFYStart(),
       fyToDate: getDefaultFYEnd(),
       syncMode: "smart",
@@ -135,7 +135,7 @@ export const useTallyStore = create<TallyConnectionState>()(
         }
         if (version < 6) {
           persisted.tallyDeepSyncMinutes = 360;
-          persisted.tallyDeepSyncWindowDays = 90;
+          persisted.tallyDeepSyncWindowDays = 30;
         }
         return persisted;
       },

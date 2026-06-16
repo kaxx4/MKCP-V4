@@ -945,7 +945,7 @@ export default function AgentStatus() {
                   />
                 </label>
                 <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Deep window (days back, e.g. 90)</span>
+                  <span className="text-xs text-neutral-500 mb-1 block">Deep window (days back, e.g. 30)</span>
                   <input
                     type="number" min={1} step={1}
                     className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
