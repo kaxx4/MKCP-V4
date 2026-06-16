@@ -8,6 +8,7 @@ import { ChangeDetector } from "./services/changeDetector.js";
 import { SupabaseSync } from "./services/supabaseSync.js";
 import { pushVoucherToTally, pushBatchToTally, buildVoucherImportXml, parseImportResponse } from "./services/voucherPusher.js";
 import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
+import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import type { SyncPlan, PushVoucherRequest, PushBatchRequest } from "./types.js";
 
 const app = express();
@@ -54,8 +55,12 @@ function syncGuard(req: express.Request, res: express.Response, next: express.Ne
     return res.status(409).json({ success: false, error: "Sync already in progress for this company" });
   }
   activeSyncs.set(lockKey, Promise.resolve());
-  res.on("finish", () => activeSyncs.delete(lockKey));
-  res.on("close", () => activeSyncs.delete(lockKey));
+  // Mark Tally as busy so health pings skip the (now-saturated) port until done.
+  beginTallyWork();
+  let released = false;
+  const release = () => { if (released) return; released = true; activeSyncs.delete(lockKey); endTallyWork(); };
+  res.on("finish", release);
+  res.on("close", release);
   next();
 }
 
@@ -90,6 +95,12 @@ app.get("/api/tally/progress", (req, res) => {
 });
 
 app.get("/api/tally/health", async (_req, res) => {
+  // A sync in flight IS proof Tally is reachable. Skip the ping so it doesn't
+  // queue behind the sync on Tally's single-threaded port and time out (which
+  // would flap the connected indicator and spam errors).
+  if (isTallyBusy()) {
+    return res.json({ connected: true, tallyUrl: TALLY, busy: true });
+  }
   try {
     await tallyPost(TALLY, HEALTH_XML, 10_000);
     res.json({ connected: true, tallyUrl: TALLY });

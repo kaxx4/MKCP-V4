@@ -20,6 +20,7 @@ import os from "os";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { tallyPost, HEALTH_XML } from "../tally.js";
 import { pushVoucherToTally } from "./voucherPusher.js";
+import { isTallyBusy } from "./tallyBusy.js";
 import type { VoucherPayload, PushResult } from "../types.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────────
@@ -81,6 +82,8 @@ export function getAgentClient() { return client; }
 
 // ── Tally health (reuses the frozen tally.ts health envelope) ────────────────────
 async function isTallyHealthy(): Promise<boolean> {
+  // A pull-sync in flight already proves Tally is up — don't add a competing ping.
+  if (isTallyBusy()) return true;
   try {
     await tallyPost(tallyUrl, HEALTH_XML, 3_000);
     return true;
@@ -170,7 +173,14 @@ async function tick(): Promise<void> {
       return;
     }
 
-    // We have work — verify Tally is up before pushing.
+    // We have work — but if a pull-sync is hammering Tally's single-threaded
+    // port, defer: release the claim and retry next tick once the sync is done.
+    if (isTallyBusy()) {
+      await releaseClaims(claimed);
+      return;
+    }
+
+    // Verify Tally is up before pushing.
     ticksSinceHealth = 0;
     const healthy = await isTallyHealthy();
     state.tallyHealthy = healthy;
