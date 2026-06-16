@@ -10,7 +10,15 @@
     // React build (self-contained — no node_modules needed at runtime)
     "dist/**/*",
     "!dist/electron/**",         // Safety: exclude any old electron output inside dist/
-    // Electron shell
+    // Vite's publicDir copies the electron shell (electron.js/preload.js/package.json)
+    // from public/ into dist/. Those are redundant in the asar — the canonical copies
+    // are bundled from public/ below. Exclude the dist/ duplicates so we don't ship
+    // (and risk loading) two copies. dist/favicon.svg is a real web asset → kept.
+    "!dist/electron.js",
+    "!dist/preload.js",
+    "!dist/package.json",
+    "!dist/icon.png",
+    // Electron shell (canonical copies)
     "public/electron.js",
     "public/preload.js",
     "public/favicon.svg",
@@ -26,7 +34,8 @@
   ],
   extraResources: [
     {
-      // Server runs OUTSIDE the asar via utilityProcess.fork() — needs its own node_modules
+      // Server runs in the main process via require(process.resourcesPath/server/dist/index.js)
+      // — it lives OUTSIDE the asar so it can resolve its own node_modules at runtime.
       from: "server",
       to: "server",
       filter: ["dist/**/*", "package.json", "node_modules/**/*"],
