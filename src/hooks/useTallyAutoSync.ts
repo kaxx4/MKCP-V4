@@ -7,10 +7,18 @@ import { loadData, createBackup } from "../db/idb";
 import { deserializeParsedData } from "../utils/serialize";
 import { useToast } from "../components/Toast";
 
-function todayStr(): string {
-  const d = new Date();
+function ymd(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+}
+function todayStr(): string {
+  return ymd(new Date());
+}
+/** YYYYMMDD for `daysBack` days before today (0 = today). */
+function daysAgoStr(daysBack: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - Math.max(0, daysBack));
+  return ymd(d);
 }
 
 /**
@@ -22,10 +30,17 @@ export function useTallyAutoSync() {
   const isSyncing         = useTallyStore((s) => s.isSyncing);
   const companyName       = useTallyStore((s) => s.companyName);
   const intervalMinutes   = useTallyStore((s) => s.tallyAutoSyncMinutes);
+  const windowDays        = useTallyStore((s) => s.tallySyncWindowDays);
+  const strategy          = useTallyStore((s) => s.tallySyncStrategy);
   const setSyncing        = useTallyStore((s) => s.setSyncing);
   const completeSyncWith  = useTallyStore((s) => s.completeSyncWith);
   const mergeData = useDataStore((s) => s.mergeData);
   const { toast } = useToast();
+
+  const windowRef = useRef(windowDays);
+  useEffect(() => { windowRef.current = windowDays; }, [windowDays]);
+  const strategyRef = useRef(strategy);
+  useEffect(() => { strategyRef.current = strategy; }, [strategy]);
 
   const isSyncingRef = useRef(isSyncing);
   useEffect(() => { isSyncingRef.current = isSyncing; }, [isSyncing]);
@@ -41,14 +56,19 @@ export function useTallyAutoSync() {
       if (!isConnectedRef.current || isSyncingRef.current || !companyRef.current.trim()) return;
 
       const today = todayStr();
-      console.log(`[auto-sync] Today's daybook sync — ${today}`);
+      // Bounded date window, daily chunks by default — keeps each Tally request
+      // tiny so the in-process server never gets overloaded by a big pull.
+      const win = Number.isFinite(windowRef.current) ? Math.max(1, windowRef.current) : 7;
+      const from = daysAgoStr(win - 1);
+      const strat = strategyRef.current || "daily";
+      console.log(`[auto-sync] Daybook sync ${from}→${today} (${win}d, ${strat})`);
       setSyncing(true);
 
       try {
-        const result = await syncDayBook(companyRef.current, today, today, "daily");
+        const result = await syncDayBook(companyRef.current, from, today, strat);
 
         if (!result.data?.tallymessage?.length) {
-          console.log("[auto-sync] No vouchers for today yet.");
+          console.log("[auto-sync] No vouchers in window yet.");
           return;
         }
 

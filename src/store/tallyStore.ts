@@ -13,6 +13,10 @@ interface TallyConnectionState {
   tallyAutoSyncMinutes: number;
   /** Auto push interval (app → Supabase), minutes. 0 = disabled. */
   supabasePushMinutes: number;
+  /** How many days back the auto pull-sync covers (date window). 1 = today only. */
+  tallySyncWindowDays: number;
+  /** Chunking granularity for syncs. "daily" keeps each Tally request tiny. */
+  tallySyncStrategy: "daily" | "weekly" | "monthly";
   fyFromDate: string;
   fyToDate: string;
   syncMode: "smart" | "monthly" | "daily" | "weekly";
@@ -29,6 +33,8 @@ interface TallyConnectionState {
   setAutoSync: (minutes: number) => void;
   setTallyAutoSyncMinutes: (minutes: number) => void;
   setSupabasePushMinutes: (minutes: number) => void;
+  setTallySyncWindowDays: (days: number) => void;
+  setTallySyncStrategy: (s: "daily" | "weekly" | "monthly") => void;
   setFyDates: (from: string, to: string) => void;
   setSyncMode: (mode: "smart" | "monthly" | "daily" | "weekly") => void;
   resetToCurrentFY: () => void;
@@ -51,6 +57,8 @@ export const useTallyStore = create<TallyConnectionState>()(
       autoSyncMinutes: 0,
       tallyAutoSyncMinutes: 30,
       supabasePushMinutes: 15,
+      tallySyncWindowDays: 7,
+      tallySyncStrategy: "daily",
       fyFromDate: getDefaultFYStart(),
       fyToDate: getDefaultFYEnd(),
       syncMode: "smart",
@@ -67,6 +75,8 @@ export const useTallyStore = create<TallyConnectionState>()(
       setAutoSync: (autoSyncMinutes) => set({ autoSyncMinutes }),
       setTallyAutoSyncMinutes: (tallyAutoSyncMinutes) => set({ tallyAutoSyncMinutes }),
       setSupabasePushMinutes: (supabasePushMinutes) => set({ supabasePushMinutes }),
+      setTallySyncWindowDays: (tallySyncWindowDays) => set({ tallySyncWindowDays }),
+      setTallySyncStrategy: (tallySyncStrategy) => set({ tallySyncStrategy }),
       setFyDates: (fyFromDate, fyToDate) => set({ fyFromDate, fyToDate }),
       setSyncMode: (syncMode) => set({ syncMode }),
       setLastVoucherDate: (lastVoucherDate) => set({ lastVoucherDate }),
@@ -92,7 +102,7 @@ export const useTallyStore = create<TallyConnectionState>()(
         const { isSyncing, ...rest } = state;
         return rest;
       },
-      version: 4,
+      version: 5,
       migrate: (persisted: any, version: number) => {
         if (version < 2) {
           persisted.fyFromDate = getDefaultFYStart();
@@ -107,6 +117,10 @@ export const useTallyStore = create<TallyConnectionState>()(
         if (version < 4) {
           persisted.tallyAutoSyncMinutes = 30;
           persisted.supabasePushMinutes = 15;
+        }
+        if (version < 5) {
+          persisted.tallySyncWindowDays = 7;
+          persisted.tallySyncStrategy = "daily";
         }
         return persisted;
       },
