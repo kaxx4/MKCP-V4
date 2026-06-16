@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, globalShortcut } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, globalShortcut, screen } = require('electron');
 
 let mainWindow = null;
 let tray = null;
@@ -70,6 +70,45 @@ function writeConfig(data) {
 }
 function getConfig(key, def) { return readConfig()[key] ?? def; }
 function setConfig(key, value) { const c = readConfig(); c[key] = value; writeConfig(c); }
+
+// ── Window-bounds safety ────────────────────────────────────────────────────────
+// A window that hides-to-tray and is later closed can persist bogus/off-screen
+// coordinates (we have seen x/y = -25600). Restoring those opens the window where
+// it can't be seen — the app looks "running but broken". These helpers validate
+// bounds on both restore and save so an off-screen rect can never stick.
+function getSafeWindowBounds() {
+  const b = getConfig('windowBounds', {}) || {};
+  const width = b.width || 1400;
+  const height = b.height || 900;
+  if (b.x == null || b.y == null) return { width, height }; // no position → center
+
+  // The window is acceptable only if a meaningful chunk overlaps a real display's
+  // work area (enough that the titlebar is on-screen and grabbable).
+  const onScreen = screen.getAllDisplays().some((d) => {
+    const wa = d.workArea;
+    const ox = Math.min(b.x + width, wa.x + wa.width) - Math.max(b.x, wa.x);
+    const oy = Math.min(b.y + height, wa.y + wa.height) - Math.max(b.y, wa.y);
+    return ox >= 200 && oy >= 100;
+  });
+  if (!onScreen) {
+    console.warn(`[electron] saved window bounds (${b.x},${b.y}) are off-screen — centering instead`);
+    return { width, height };
+  }
+  return { width, height, x: b.x, y: b.y };
+}
+
+function saveWindowBounds() {
+  try {
+    if (!mainWindow) return;
+    // Don't persist bounds for a minimized or hidden (in-tray) window — those
+    // report meaningless coordinates that would later open the window off-screen.
+    if (mainWindow.isMinimized() || !mainWindow.isVisible()) return;
+    const b = mainWindow.getNormalBounds(); // restored rect, ignores minimized state
+    if (!b || b.width < 200 || b.height < 200) return;
+    if (b.x < -10000 || b.y < -10000 || b.x > 50000 || b.y > 50000) return; // absurd → skip
+    setConfig('windowBounds', b);
+  } catch {}
+}
 
 // ── Wait for server ───────────────────────────────────────────────────────────
 function waitForServer(port, timeoutMs = 20000) {
@@ -173,11 +212,11 @@ async function startExpressServer() {
 
 // ── Window ────────────────────────────────────────────────────────────────────
 function createWindow() {
-  const bounds = getConfig('windowBounds', {});
+  const bounds = getSafeWindowBounds();
 
   mainWindow = new BrowserWindow({
-    width: bounds.width || 1400,
-    height: bounds.height || 900,
+    width: bounds.width,
+    height: bounds.height,
     ...(bounds.x != null && { x: bounds.x }),
     ...(bounds.y != null && { y: bounds.y }),
     minWidth: 900,
@@ -215,7 +254,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', showOnce);
   setTimeout(showOnce, 8000);
   mainWindow.on('close', (e) => {
-    try { if (mainWindow) setConfig('windowBounds', mainWindow.getBounds()); } catch {}
+    saveWindowBounds(); // only persists valid, on-screen bounds (skips minimized/hidden)
     if (!appQuitting) {
       // Hide to tray instead of closing — keeps sync agent alive.
       e.preventDefault();
