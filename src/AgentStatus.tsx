@@ -7,19 +7,10 @@ import {
 } from "lucide-react";
 import { useTallyStore } from "./store/tallyStore";
 import { useSupabaseSyncStatusStore } from "./store/supabaseSyncStatusStore";
-import { useDataStore } from "./store/dataStore";
 import { useToast } from "./components/Toast";
-import { pullFromTally, todayYmd, daysAgoYmd, type PullResult } from "./services/tallyPull";
-import { pushAll } from "./services/supabasePushAll";
-
-interface QuickSyncState {
-  running: string | null;            // label of the button currently running
-  phase: "sync" | "push" | null;     // which phase is in progress
-  tally?: PullResult;
-  push?: { ok: boolean; items: number; ledgers: number; vouchers: number; configErr?: string | null; vouchersErr?: string | null };
-  ok?: boolean;
-  finishedAt?: string;
-}
+import { todayYmd, daysAgoYmd } from "./services/tallyPull";
+import { runQuickSync } from "./services/quickSync";
+import { useQuickSyncStore } from "./store/quickSyncStore";
 
 const SUPA_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
 const SUPA_ANON = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -185,23 +176,17 @@ export default function AgentStatus() {
   const lastMastersSyncAt  = useTallyStore((s) => s.lastMastersSyncAt);
   const lastVouchersSyncAt = useTallyStore((s) => s.lastVouchersSyncAt);
   const lastVoucherDate    = useTallyStore((s) => s.lastVoucherDate);
-  const tallyAutoSyncMinutes = useTallyStore((s) => s.tallyAutoSyncMinutes);
-  const supabasePushMinutes  = useTallyStore((s) => s.supabasePushMinutes);
-  const tallySyncWindowDays  = useTallyStore((s) => s.tallySyncWindowDays);
-  const tallySyncStrategy    = useTallyStore((s) => s.tallySyncStrategy);
-  const tallyDeepSyncMinutes = useTallyStore((s) => s.tallyDeepSyncMinutes);
-  const tallyDeepSyncWindowDays = useTallyStore((s) => s.tallyDeepSyncWindowDays);
+  const syncTodayMinutes = useTallyStore((s) => s.syncTodayMinutes);
+  const syncWeekMinutes  = useTallyStore((s) => s.syncWeekMinutes);
+  const syncFyMinutes    = useTallyStore((s) => s.syncFyMinutes);
   const setConnected       = useTallyStore((s) => s.setConnected);
   const setLastSync        = useTallyStore((s) => s.setLastSync);
   const setCompanyName     = useTallyStore((s) => s.setCompanyName);
   const setProxyUrl        = useTallyStore((s) => s.setProxyUrl);
   const setFyDates         = useTallyStore((s) => s.setFyDates);
-  const setTallyAutoSyncMinutes = useTallyStore((s) => s.setTallyAutoSyncMinutes);
-  const setSupabasePushMinutes  = useTallyStore((s) => s.setSupabasePushMinutes);
-  const setTallySyncWindowDays  = useTallyStore((s) => s.setTallySyncWindowDays);
-  const setTallySyncStrategy    = useTallyStore((s) => s.setTallySyncStrategy);
-  const setTallyDeepSyncMinutes = useTallyStore((s) => s.setTallyDeepSyncMinutes);
-  const setTallyDeepSyncWindowDays = useTallyStore((s) => s.setTallyDeepSyncWindowDays);
+  const setSyncTodayMinutes = useTallyStore((s) => s.setSyncTodayMinutes);
+  const setSyncWeekMinutes  = useTallyStore((s) => s.setSyncWeekMinutes);
+  const setSyncFyMinutes    = useTallyStore((s) => s.setSyncFyMinutes);
 
   const cloudConfig   = useSupabaseSyncStatusStore((s) => s.config);
   const cloudMasters  = useSupabaseSyncStatusStore((s) => s.masters);
@@ -220,7 +205,7 @@ export default function AgentStatus() {
   const [failedJobs, setFailedJobs] = useState<FailedQueueRow[]>([]);
   const [requeueing, setRequeueing] = useState<string | null>(null);
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
-  const [qsync, setQsync] = useState<QuickSyncState>({ running: null, phase: null });
+  const qsync = useQuickSyncStore();
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [logFilter, setLogFilter] = useState<"all" | "errors" | "tally" | "supabase">("all");
@@ -232,12 +217,9 @@ export default function AgentStatus() {
   const [editProxy, setEditProxy]     = useState(proxyUrl);
   const [editFyFrom, setEditFyFrom]   = useState(fyFromDate);
   const [editFyTo, setEditFyTo]       = useState(fyToDate);
-  const [editTallyMins, setEditTallyMins] = useState(String(tallyAutoSyncMinutes));
-  const [editPushMins, setEditPushMins]   = useState(String(supabasePushMinutes));
-  const [editWindowDays, setEditWindowDays] = useState(String(tallySyncWindowDays));
-  const [editStrategy, setEditStrategy]     = useState(tallySyncStrategy);
-  const [editDeepMins, setEditDeepMins]     = useState(String(tallyDeepSyncMinutes));
-  const [editDeepWindow, setEditDeepWindow] = useState(String(tallyDeepSyncWindowDays));
+  const [editTodayMins, setEditTodayMins] = useState(String(syncTodayMinutes));
+  const [editWeekMins, setEditWeekMins]   = useState(String(syncWeekMinutes));
+  const [editFyMins, setEditFyMins]       = useState(String(syncFyMinutes));
 
   // ── Supabase data fetchers ────────────────────────────────────────────────
   const fetchHistory = useCallback(async () => {
@@ -346,42 +328,20 @@ export default function AgentStatus() {
   // Sequential by design — the push only starts after the Tally pull finishes,
   // and pullFromTally holds the global sync lock so the push can't run mid-sync.
   const quickSync = useCallback(async (label: string, fromYmd: string, toYmd: string) => {
-    if (qsync.running) return; // one quick-sync at a time
-    setQsync({ running: label, phase: "sync" });
-
-    // Phase 1 — Tally → app (+ server pushes vouchers to Supabase as it pulls).
-    const tally = await pullFromTally(companyName, fromYmd, toYmd, "daily");
+    if (useQuickSyncStore.getState().running) return; // one quick-sync at a time
+    await runQuickSync(companyName, label, fromYmd, toYmd, false);
     void fetchHistory();
-    if (!tally.ok) {
-      setQsync({ running: null, phase: null, tally, ok: false, finishedAt: new Date().toISOString() });
-      toast(`${label}: Tally sync failed — ${tally.error ?? "unknown"}`, "error");
-      return;
-    }
-
-    // Phase 2 — push the full local store (config + masters + vouchers) to Supabase.
-    setQsync({ running: label, phase: "push", tally });
-    const pr = await pushAll(`quick:${label}`);
-    const st = useSupabaseSyncStatusStore.getState();
-    const data = useDataStore.getState().data;
-    const pushOk = pr.mastersVouchersOk && pr.configOk;
-    setQsync({
-      running: null, phase: null, tally, ok: tally.ok && pushOk,
-      finishedAt: new Date().toISOString(),
-      push: {
-        ok: pushOk,
-        items: data?.items.size ?? 0,
-        ledgers: data?.ledgers.size ?? 0,
-        vouchers: data?.vouchers.length ?? 0,
-        configErr: pr.configOk ? null : st.config.error,
-        vouchersErr: pr.mastersVouchersOk ? null : st.vouchers.error,
-      },
-    });
     void fetchPushLog();
-    toast(
-      pushOk ? `${label}: synced ${tally.vouchers} voucher(s) → pushed to Supabase` : `${label}: synced, but Supabase push had errors`,
-      pushOk ? "success" : "error",
-    );
-  }, [qsync.running, companyName, toast, fetchHistory, fetchPushLog]);
+    const r = useQuickSyncStore.getState();
+    if (!r.tally?.ok) {
+      toast(`${label}: Tally sync failed — ${r.tally?.error ?? "unknown"}`, "error");
+    } else {
+      toast(
+        r.ok ? `${label}: synced ${r.tally.vouchers} voucher(s) → pushed to Supabase` : `${label}: synced, but Supabase push had errors`,
+        r.ok ? "success" : "error",
+      );
+    }
+  }, [companyName, toast, fetchHistory, fetchPushLog]);
 
   // ── Actions (stable refs via useCallback) ────────────────────────────────
   const triggerSync = useCallback(async (endpoint: string, body: Record<string, unknown>, label: string) => {
@@ -448,27 +408,18 @@ export default function AgentStatus() {
     setProxyUrl(editProxy.trim());
     setFyDates(editFyFrom.trim(), editFyTo.trim());
     // Clamp interval inputs: non-negative integers, 0 = disabled.
-    const tallyMins = Math.max(0, Math.round(Number(editTallyMins) || 0));
-    const pushMins  = Math.max(0, Math.round(Number(editPushMins) || 0));
-    const winDays   = Math.max(1, Math.round(Number(editWindowDays) || 1));
-    const deepMins  = Math.max(0, Math.round(Number(editDeepMins) || 0));
-    const deepWin   = Math.max(1, Math.round(Number(editDeepWindow) || 1));
-    setTallyAutoSyncMinutes(tallyMins);
-    setSupabasePushMinutes(pushMins);
-    setTallySyncWindowDays(winDays);
-    setTallySyncStrategy(editStrategy);
-    setTallyDeepSyncMinutes(deepMins);
-    setTallyDeepSyncWindowDays(deepWin);
-    setEditTallyMins(String(tallyMins));
-    setEditPushMins(String(pushMins));
-    setEditWindowDays(String(winDays));
-    setEditDeepMins(String(deepMins));
-    setEditDeepWindow(String(deepWin));
+    const todayM = Math.max(0, Math.round(Number(editTodayMins) || 0));
+    const weekM  = Math.max(0, Math.round(Number(editWeekMins) || 0));
+    const fyM    = Math.max(0, Math.round(Number(editFyMins) || 0));
+    setSyncTodayMinutes(todayM);
+    setSyncWeekMinutes(weekM);
+    setSyncFyMinutes(fyM);
+    setEditTodayMins(String(todayM));
+    setEditWeekMins(String(weekM));
+    setEditFyMins(String(fyM));
     toast("Settings saved", "success");
-  }, [editCompany, editProxy, editFyFrom, editFyTo, editTallyMins, editPushMins, editWindowDays, editStrategy,
-      editDeepMins, editDeepWindow,
-      setCompanyName, setProxyUrl, setFyDates, setTallyAutoSyncMinutes, setSupabasePushMinutes,
-      setTallySyncWindowDays, setTallySyncStrategy, setTallyDeepSyncMinutes, setTallyDeepSyncWindowDays, toast]);
+  }, [editCompany, editProxy, editFyFrom, editFyTo, editTodayMins, editWeekMins, editFyMins,
+      setCompanyName, setProxyUrl, setFyDates, setSyncTodayMinutes, setSyncWeekMinutes, setSyncFyMinutes, toast]);
 
   const toggleError = useCallback((id: string) => {
     setExpandedErrors(prev => {
@@ -648,7 +599,7 @@ export default function AgentStatus() {
             </div>
             <div className="flex gap-2 flex-wrap mb-2">
               <Btn variant="primary"
-                onClick={() => triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "full", chunkStrategy: tallySyncStrategy }, "Full sync")}
+                onClick={() => triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "full", chunkStrategy: "daily" }, "Full sync")}
                 disabled={!!syncing || !connected}>
                 {syncing === "Full sync" ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                 Sync Now
@@ -657,7 +608,7 @@ export default function AgentStatus() {
                 {syncing === "Sync Masters" && <Loader2 size={12} className="animate-spin" />}
                 Sync Masters
               </Btn>
-              <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate, chunkMode: tallySyncStrategy }, "Sync Daybook")} disabled={!!syncing || !connected}>
+              <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate, chunkMode: "daily" }, "Sync Daybook")} disabled={!!syncing || !connected}>
                 {syncing === "Sync Daybook" && <Loader2 size={12} className="animate-spin" />}
                 Sync Daybook
               </Btn>
@@ -1013,68 +964,36 @@ export default function AgentStatus() {
                   </label>
                 ))}
 
-                {/* Auto-sync intervals — editable separately. 0 = off. */}
-                <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Auto pull from Tally (minutes, 0 = off)</span>
-                  <input
-                    type="number" min={0} step={1}
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={editTallyMins}
-                    onChange={e => setEditTallyMins(e.target.value)}
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Auto push to Supabase (minutes, 0 = off)</span>
-                  <input
-                    type="number" min={0} step={1}
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={editPushMins}
-                    onChange={e => setEditPushMins(e.target.value)}
-                  />
-                </label>
-
-                <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Sync window (days back, e.g. 7 = last week)</span>
-                  <input
-                    type="number" min={1} step={1}
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={editWindowDays}
-                    onChange={e => setEditWindowDays(e.target.value)}
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Chunk granularity (daily = smallest/safest)</span>
-                  <select
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={editStrategy}
-                    onChange={e => setEditStrategy(e.target.value as "daily" | "weekly" | "monthly")}
-                  >
-                    <option value="daily">Daily (recommended)</option>
-                    <option value="weekly">Weekly</option>
-                    <option value="monthly">Monthly</option>
-                  </select>
-                </label>
-
+                {/* Scheduled quick syncs — the only automatic syncs. 0 = off. */}
                 <div className="sm:col-span-2 mt-1 pt-3 border-t border-neutral-100">
-                  <p className="text-xs font-medium text-neutral-600">Deep re-sync</p>
-                  <p className="text-[10px] text-neutral-400">A slower, wider pass that catches edits/conversions to older Purchase/Sales/Delivery-Note vouchers.</p>
+                  <p className="text-xs font-medium text-neutral-600">Automatic sync intervals</p>
+                  <p className="text-[10px] text-neutral-400">Each runs the matching Quick Sync (pull daily from Tally → push to Supabase). 0 disables that one. No other auto-syncs run.</p>
                 </div>
                 <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Deep re-sync every (minutes, 0 = off)</span>
+                  <span className="text-xs text-neutral-500 mb-1 block">Today — every (minutes)</span>
                   <input
                     type="number" min={0} step={1}
                     className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={editDeepMins}
-                    onChange={e => setEditDeepMins(e.target.value)}
+                    value={editTodayMins}
+                    onChange={e => setEditTodayMins(e.target.value)}
                   />
                 </label>
                 <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Deep window (days back, e.g. 30)</span>
+                  <span className="text-xs text-neutral-500 mb-1 block">Last 7 days — every (minutes)</span>
                   <input
-                    type="number" min={1} step={1}
+                    type="number" min={0} step={1}
                     className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    value={editDeepWindow}
-                    onChange={e => setEditDeepWindow(e.target.value)}
+                    value={editWeekMins}
+                    onChange={e => setEditWeekMins(e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs text-neutral-500 mb-1 block">This FY — every (minutes)</span>
+                  <input
+                    type="number" min={0} step={1}
+                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={editFyMins}
+                    onChange={e => setEditFyMins(e.target.value)}
                   />
                 </label>
 

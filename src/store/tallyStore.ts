@@ -22,6 +22,14 @@ interface TallyConnectionState {
   tallyDeepSyncMinutes: number;
   /** Deep re-sync window (days back). Larger than the quick window. */
   tallyDeepSyncWindowDays: number;
+  // ── Scheduled quick syncs (each = pull from Tally daily, then push to Supabase).
+  //    These are the ONLY automatic syncs. Minutes; 0 = disabled.
+  /** "Today" quick sync interval. */
+  syncTodayMinutes: number;
+  /** "Last 7 days" quick sync interval. */
+  syncWeekMinutes: number;
+  /** "This FY" quick sync interval. */
+  syncFyMinutes: number;
   fyFromDate: string;
   fyToDate: string;
   syncMode: "smart" | "monthly" | "daily" | "weekly";
@@ -42,6 +50,9 @@ interface TallyConnectionState {
   setTallySyncStrategy: (s: "daily" | "weekly" | "monthly") => void;
   setTallyDeepSyncMinutes: (minutes: number) => void;
   setTallyDeepSyncWindowDays: (days: number) => void;
+  setSyncTodayMinutes: (minutes: number) => void;
+  setSyncWeekMinutes: (minutes: number) => void;
+  setSyncFyMinutes: (minutes: number) => void;
   setFyDates: (from: string, to: string) => void;
   setSyncMode: (mode: "smart" | "monthly" | "daily" | "weekly") => void;
   resetToCurrentFY: () => void;
@@ -68,6 +79,9 @@ export const useTallyStore = create<TallyConnectionState>()(
       tallySyncStrategy: "daily",
       tallyDeepSyncMinutes: 360,
       tallyDeepSyncWindowDays: 30,
+      syncTodayMinutes: 30,
+      syncWeekMinutes: 120,
+      syncFyMinutes: 360,
       fyFromDate: getDefaultFYStart(),
       fyToDate: getDefaultFYEnd(),
       syncMode: "smart",
@@ -88,6 +102,9 @@ export const useTallyStore = create<TallyConnectionState>()(
       setTallySyncStrategy: (tallySyncStrategy) => set({ tallySyncStrategy }),
       setTallyDeepSyncMinutes: (tallyDeepSyncMinutes) => set({ tallyDeepSyncMinutes }),
       setTallyDeepSyncWindowDays: (tallyDeepSyncWindowDays) => set({ tallyDeepSyncWindowDays }),
+      setSyncTodayMinutes: (syncTodayMinutes) => set({ syncTodayMinutes }),
+      setSyncWeekMinutes: (syncWeekMinutes) => set({ syncWeekMinutes }),
+      setSyncFyMinutes: (syncFyMinutes) => set({ syncFyMinutes }),
       setFyDates: (fyFromDate, fyToDate) => set({ fyFromDate, fyToDate }),
       setSyncMode: (syncMode) => set({ syncMode }),
       setLastVoucherDate: (lastVoucherDate) => set({ lastVoucherDate }),
@@ -113,7 +130,7 @@ export const useTallyStore = create<TallyConnectionState>()(
         const { isSyncing, ...rest } = state;
         return rest;
       },
-      version: 6,
+      version: 7,
       migrate: (persisted: any, version: number) => {
         if (version < 2) {
           persisted.fyFromDate = getDefaultFYStart();
@@ -136,6 +153,11 @@ export const useTallyStore = create<TallyConnectionState>()(
         if (version < 6) {
           persisted.tallyDeepSyncMinutes = 360;
           persisted.tallyDeepSyncWindowDays = 30;
+        }
+        if (version < 7) {
+          persisted.syncTodayMinutes = 30;
+          persisted.syncWeekMinutes = 120;
+          persisted.syncFyMinutes = 360;
         }
         return persisted;
       },
