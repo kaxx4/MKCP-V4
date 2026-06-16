@@ -986,14 +986,19 @@ export class SupabaseSync {
         synced_at: new Date().toISOString(),
       }));
 
-      // Replace strategy: delete all existing rows for company then insert current draft.
-      // Simpler than tracking deletes (user could remove a line; upsert alone would leave stale rows).
-      await this.client.from("order_draft_lines").delete().eq("company", company);
-      const BATCH = 200;
-      for (let i = 0; i < mapped.length; i += BATCH) {
-        const batch = mapped.slice(i, i + BATCH);
-        const { error } = await this.client.from("order_draft_lines").insert(batch);
-        if (error) throw new Error(error.message);
+      // Upsert is safe under concurrent calls (idempotent per unique key).
+      // Then delete rows whose item_id is no longer in the current draft.
+      // This avoids the DELETE-then-INSERT race that caused duplicate-key errors
+      // when two concurrent config syncs ran simultaneously.
+      await this.upsertBatch("order_draft_lines", mapped, "company,item_id");
+      const currentIds = mapped.map(r => r.item_id).filter(Boolean);
+      if (currentIds.length > 0) {
+        const { error } = await this.client
+          .from("order_draft_lines")
+          .delete()
+          .eq("company", company)
+          .not("item_id", "in", `(${currentIds.join(",")})`);
+        if (error) console.warn(`[Supabase] order_draft_lines orphan delete: ${error.message}`);
       }
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`[Supabase] ✓ Synced ${mapped.length} order draft lines (${elapsed}s)`);
