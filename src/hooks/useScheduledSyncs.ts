@@ -38,14 +38,24 @@ export function useScheduledSyncs() {
     if (weekMin  > 0) timers.push(setInterval(() => fire("Last 7 days", () => daysAgoYmd(6)),  weekMin  * 60_000));
     if (fyMin    > 0) timers.push(setInterval(() => fire("This FY",     () => fyFromRef.current), fyMin * 60_000));
 
-    // One "Today" pass shortly after launch so the app is current right away.
-    const initial = setTimeout(() => fire("Today", () => todayYmd()), 10_000);
+    // One "Today" pass as soon as the Tally connection is actually established —
+    // polls every 3s (Tally can be slow to answer right after launch) and fires
+    // once, so a slow startup doesn't push the first sync out to the full interval.
+    let didInitial = false;
+    const initialPoll = setInterval(() => {
+      if (didInitial) { clearInterval(initialPoll); return; }
+      if (connRef.current && companyRef.current.trim()) {
+        didInitial = true;
+        clearInterval(initialPoll);
+        fire("Today", () => todayYmd());
+      }
+    }, 3_000);
 
     console.log(`[scheduled-sync] today: ${todayMin || "off"}m · 7d: ${weekMin || "off"}m · FY: ${fyMin || "off"}m`);
 
     return () => {
       timers.forEach(clearInterval);
-      clearTimeout(initial);
+      clearInterval(initialPoll);
     };
   }, [todayMin, weekMin, fyMin]);
 }
