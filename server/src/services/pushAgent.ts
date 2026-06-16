@@ -70,6 +70,11 @@ let client: SupabaseClient | null = null;
 let tallyUrl = "http://localhost:9000";
 let tickRunning = false;
 let timers: NodeJS.Timeout[] = [];
+// When the queue is idle we still refresh the Tally-health indicator, but only
+// every Nth tick (not every tick) so we don't ping Tally every 4s and collide
+// with active pull-syncs (which would time out and spam errors).
+let ticksSinceHealth = 0;
+const HEALTH_REFRESH_TICKS = 8; // ~32s at POLL_MS=4000 when idle
 
 /** Expose the service-role Supabase client for use in server routes (e.g. /requeue). */
 export function getAgentClient() { return client; }
@@ -140,10 +145,8 @@ async function tick(): Promise<void> {
   try {
     state.lastTick = nowIso();
 
-    const healthy = await isTallyHealthy();
-    state.tallyHealthy = healthy;
-    if (!healthy) return; // leave rows pending; try next tick
-
+    // Claim FIRST (cheap Supabase call). No point pinging Tally — and colliding
+    // with an in-progress pull-sync — when there's nothing to push.
     const { data: jobs, error } = await client.rpc("claim_push_jobs", {
       p_agent: AGENT_ID,
       p_limit: BATCH,
@@ -157,6 +160,27 @@ async function tick(): Promise<void> {
     const claimed = (jobs ?? []) as PushJob[];
     state.claimedCount = claimed.length;
 
+    if (claimed.length === 0) {
+      // Idle: refresh the Tally-health indicator only occasionally, not every tick.
+      if (++ticksSinceHealth >= HEALTH_REFRESH_TICKS) {
+        ticksSinceHealth = 0;
+        state.tallyHealthy = await isTallyHealthy();
+      }
+      await refreshQueueStats();
+      return;
+    }
+
+    // We have work — verify Tally is up before pushing.
+    ticksSinceHealth = 0;
+    const healthy = await isTallyHealthy();
+    state.tallyHealthy = healthy;
+    if (!healthy) {
+      // Tally down: release the claim immediately so the next tick retries
+      // (instead of holding the lease for LEASE_SEC).
+      await releaseClaims(claimed);
+      return;
+    }
+
     // SEQUENTIAL — never parallel to one company (Tally is single-threaded per company).
     for (const job of claimed) {
       await processJob(job);
@@ -164,6 +188,18 @@ async function tick(): Promise<void> {
     await refreshQueueStats();
   } finally {
     tickRunning = false;
+  }
+}
+
+/** Return claimed-but-unprocessed rows to `pending` so they retry on the next tick. */
+async function releaseClaims(jobs: PushJob[]): Promise<void> {
+  if (!client || jobs.length === 0) return;
+  try {
+    await client.from("push_queue")
+      .update({ status: "pending", claimed_by: null, claimed_at: null, lease_until: null })
+      .in("id", jobs.map((j) => j.id));
+  } catch (e: any) {
+    console.warn(`[pushAgent] releaseClaims failed (watchdog will reclaim): ${e?.message || e}`);
   }
 }
 
