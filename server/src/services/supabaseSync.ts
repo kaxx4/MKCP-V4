@@ -247,9 +247,17 @@ export class SupabaseSync {
         }
       }
 
+      // Remove vouchers deleted or converted in Tally (not in the current push).
+      // Safe because full-sync always sends all vouchers for the company.
+      const deleted = await this.deleteOrphans("tally_vouchers", company, "guid", Array.from(voucherGuids));
+      if (deleted > 0) {
+        // Clean up child rows whose parent was just deleted.
+        await this.cleanupOrphanEntries(company);
+      }
+
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(
-        `[Supabase] ✓ Vouchers synced: ${vouchers.length} vouchers, ${ledgerEntries.length} ledger entries, ${inventoryEntries.length} inventory entries (${elapsed}s)`
+        `[Supabase] ✓ Vouchers synced: ${vouchers.length} vouchers, ${ledgerEntries.length} ledger entries, ${inventoryEntries.length} inventory entries${deleted > 0 ? `, ${deleted} orphan(s) removed` : ""} (${elapsed}s)`
       );
 
       await this.logSyncHistory(
@@ -322,15 +330,15 @@ export class SupabaseSync {
     company: string,
     keyCol: string,
     validKeys: string[]
-  ): Promise<void> {
-    if (!this.client) return;
+  ): Promise<number> {
+    if (!this.client) return 0;
     // Defensive filter: a single null/undefined/empty key in the array would
     // poison the DB-side `<>ALL($2)` comparison (NULL propagation) and quietly
     // skip the cleanup. Strip them client-side so the cleanup is reliable.
     const clean = (validKeys || []).filter(
       (k): k is string => typeof k === "string" && k.length > 0
     );
-    if (clean.length === 0) return;
+    if (clean.length === 0) return 0;
     try {
       const { data, error } = await this.client.rpc("delete_orphans", {
         p_table: table,
@@ -339,15 +347,35 @@ export class SupabaseSync {
         p_valid_keys: clean,
       });
       if (error) {
-        // Most likely cause: migration 010 not applied yet. Log + continue.
+        // Most likely cause: migration not applied yet. Log + continue.
         console.warn(`[Supabase] Orphan cleanup skipped for ${table}: ${error.message}`);
+        return 0;
+      }
+      const n = typeof data === "number" ? data : 0;
+      if (n > 0) {
+        console.log(`[Supabase] ⌫ Cleaned ${n} orphan rows from ${table}`);
+      }
+      return n;
+    } catch (e: any) {
+      console.warn(`[Supabase] Orphan cleanup error in ${table}: ${e?.message || e}`);
+      return 0;
+    }
+  }
+
+  /** Remove ledger + inventory entries for vouchers no longer in tally_vouchers. */
+  private async cleanupOrphanEntries(company: string): Promise<void> {
+    if (!this.client) return;
+    try {
+      const { data, error } = await this.client.rpc("cleanup_orphan_voucher_entries", { p_company: company });
+      if (error) {
+        console.warn(`[Supabase] Orphan entry cleanup skipped: ${error.message}`);
         return;
       }
       if (typeof data === "number" && data > 0) {
-        console.log(`[Supabase] ⌫ Cleaned ${data} orphan rows from ${table}`);
+        console.log(`[Supabase] ⌫ Cleaned ${data} orphan entry rows (ledger + inventory)`);
       }
     } catch (e: any) {
-      console.warn(`[Supabase] Orphan cleanup error in ${table}: ${e?.message || e}`);
+      console.warn(`[Supabase] Orphan entry cleanup error: ${e?.message || e}`);
     }
   }
 
