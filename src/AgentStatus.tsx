@@ -175,6 +175,8 @@ export default function AgentStatus() {
   const lastVoucherDate    = useTallyStore((s) => s.lastVoucherDate);
   const tallyAutoSyncMinutes = useTallyStore((s) => s.tallyAutoSyncMinutes);
   const supabasePushMinutes  = useTallyStore((s) => s.supabasePushMinutes);
+  const tallySyncWindowDays  = useTallyStore((s) => s.tallySyncWindowDays);
+  const tallySyncStrategy    = useTallyStore((s) => s.tallySyncStrategy);
   const setConnected       = useTallyStore((s) => s.setConnected);
   const setLastSync        = useTallyStore((s) => s.setLastSync);
   const setCompanyName     = useTallyStore((s) => s.setCompanyName);
@@ -182,6 +184,8 @@ export default function AgentStatus() {
   const setFyDates         = useTallyStore((s) => s.setFyDates);
   const setTallyAutoSyncMinutes = useTallyStore((s) => s.setTallyAutoSyncMinutes);
   const setSupabasePushMinutes  = useTallyStore((s) => s.setSupabasePushMinutes);
+  const setTallySyncWindowDays  = useTallyStore((s) => s.setTallySyncWindowDays);
+  const setTallySyncStrategy    = useTallyStore((s) => s.setTallySyncStrategy);
 
   const cloudConfig   = useSupabaseSyncStatusStore((s) => s.config);
   const cloudMasters  = useSupabaseSyncStatusStore((s) => s.masters);
@@ -213,6 +217,8 @@ export default function AgentStatus() {
   const [editFyTo, setEditFyTo]       = useState(fyToDate);
   const [editTallyMins, setEditTallyMins] = useState(String(tallyAutoSyncMinutes));
   const [editPushMins, setEditPushMins]   = useState(String(supabasePushMinutes));
+  const [editWindowDays, setEditWindowDays] = useState(String(tallySyncWindowDays));
+  const [editStrategy, setEditStrategy]     = useState(tallySyncStrategy);
 
   // ── Supabase data fetchers ────────────────────────────────────────────────
   const fetchHistory = useCallback(async () => {
@@ -384,13 +390,18 @@ export default function AgentStatus() {
     // Clamp interval inputs: non-negative integers, 0 = disabled.
     const tallyMins = Math.max(0, Math.round(Number(editTallyMins) || 0));
     const pushMins  = Math.max(0, Math.round(Number(editPushMins) || 0));
+    const winDays   = Math.max(1, Math.round(Number(editWindowDays) || 1));
     setTallyAutoSyncMinutes(tallyMins);
     setSupabasePushMinutes(pushMins);
+    setTallySyncWindowDays(winDays);
+    setTallySyncStrategy(editStrategy);
     setEditTallyMins(String(tallyMins));
     setEditPushMins(String(pushMins));
+    setEditWindowDays(String(winDays));
     toast("Settings saved", "success");
-  }, [editCompany, editProxy, editFyFrom, editFyTo, editTallyMins, editPushMins,
-      setCompanyName, setProxyUrl, setFyDates, setTallyAutoSyncMinutes, setSupabasePushMinutes, toast]);
+  }, [editCompany, editProxy, editFyFrom, editFyTo, editTallyMins, editPushMins, editWindowDays, editStrategy,
+      setCompanyName, setProxyUrl, setFyDates, setTallyAutoSyncMinutes, setSupabasePushMinutes,
+      setTallySyncWindowDays, setTallySyncStrategy, toast]);
 
   const toggleError = useCallback((id: string) => {
     setExpandedErrors(prev => {
@@ -500,7 +511,7 @@ export default function AgentStatus() {
             </div>
             <div className="flex gap-2 flex-wrap mb-2">
               <Btn variant="primary"
-                onClick={() => triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "smart" }, "Full sync")}
+                onClick={() => triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "full", chunkStrategy: tallySyncStrategy }, "Full sync")}
                 disabled={!!syncing || !connected}>
                 {syncing === "Full sync" ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                 Sync Now
@@ -509,7 +520,7 @@ export default function AgentStatus() {
                 {syncing === "Sync Masters" && <Loader2 size={12} className="animate-spin" />}
                 Sync Masters
               </Btn>
-              <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate }, "Sync Daybook")} disabled={!!syncing || !connected}>
+              <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate, chunkMode: tallySyncStrategy }, "Sync Daybook")} disabled={!!syncing || !connected}>
                 {syncing === "Sync Daybook" && <Loader2 size={12} className="animate-spin" />}
                 Sync Daybook
               </Btn>
@@ -536,7 +547,7 @@ export default function AgentStatus() {
                 return (
                   <button
                     key={label}
-                    onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fmt8(from), toDate: fmt8(to) }, key)}
+                    onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fmt8(from), toDate: fmt8(to), chunkMode: "daily" }, key)}
                     disabled={!!syncing || !connected}
                     className="px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors
                       border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50 hover:border-neutral-300
@@ -883,6 +894,28 @@ export default function AgentStatus() {
                     value={editPushMins}
                     onChange={e => setEditPushMins(e.target.value)}
                   />
+                </label>
+
+                <label className="block">
+                  <span className="text-xs text-neutral-500 mb-1 block">Sync window (days back, e.g. 7 = last week)</span>
+                  <input
+                    type="number" min={1} step={1}
+                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={editWindowDays}
+                    onChange={e => setEditWindowDays(e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs text-neutral-500 mb-1 block">Chunk granularity (daily = smallest/safest)</span>
+                  <select
+                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={editStrategy}
+                    onChange={e => setEditStrategy(e.target.value as "daily" | "weekly" | "monthly")}
+                  >
+                    <option value="daily">Daily (recommended)</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
                 </label>
 
                 <div className="sm:col-span-2">
