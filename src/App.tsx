@@ -7,24 +7,19 @@ import { useOverrideStore } from "./store/overrideStore";
 import { useDiscountStore } from "./store/discountStore";
 import { loadData, loadFromStore } from "./db/idb";
 import { deserializeParsedData } from "./utils/serialize";
-import { useTallyAutoSync } from "./hooks/useTallyAutoSync";
+import { useScheduledSyncs } from "./hooks/useScheduledSyncs";
 import { usePersistenceMonitor } from "./hooks/usePersistenceMonitor";
-import { useSupabaseConfigSync } from "./hooks/useSupabaseConfigSync";
-import { useSupabaseAutoPushAfterTally } from "./hooks/useSupabaseAutoPushAfterTally";
-import { useSupabaseAutoPushInterval } from "./hooks/useSupabaseAutoPushInterval";
 import AgentStatus from "./AgentStatus";
 
 function SyncAgent() {
   const setData = useDataStore((s) => s.setData);
 
-  // background sync hooks — keep running even with no rich UI
-  useTallyAutoSync();
+  // The ONLY automatic sync: three scheduled quick syncs (Today / 7d / FY),
+  // each pulls from Tally then pushes to Supabase. No other auto-sync/push.
+  useScheduledSyncs();
   usePersistenceMonitor({ verbose: (import.meta as any).env?.DEV });
-  useSupabaseConfigSync();
-  useSupabaseAutoPushAfterTally();
-  useSupabaseAutoPushInterval();
 
-  // Restore local IDB snapshot on boot (feeds useTallyAutoSync merge path)
+  // Restore local IDB snapshot on boot (feeds the scheduled-sync merge path)
   useEffect(() => {
     (async () => {
       try {
