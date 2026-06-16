@@ -200,6 +200,10 @@ export default function AgentStatus() {
   const [failedJobs, setFailedJobs] = useState<FailedQueueRow[]>([]);
   const [requeueing, setRequeueing] = useState<string | null>(null);
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+  const [showLogs, setShowLogs] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const logsBoxRef = useRef<HTMLDivElement | null>(null);
+  const logsAutoScrollRef = useRef(true);
 
   // Settings local state (initialised once from store — not reactive after that)
   const [editCompany, setEditCompany] = useState(companyName);
@@ -239,6 +243,15 @@ export default function AgentStatus() {
       .order("created_at", { ascending: false })
       .limit(50);
     if (data) setFailedJobs(data as FailedQueueRow[]);
+  }, []);
+
+  // ── Server log buffer (Tally + Supabase sync activity) ──────────────────────
+  const fetchLogs = useCallback(async () => {
+    try {
+      const r = await fetch(`${BASE}/api/tally/logs`);
+      const lines = await r.json();
+      if (Array.isArray(lines)) setLogs(lines as string[]);
+    } catch { /* server not up yet — ignore */ }
   }, []);
 
   // ── Poll — only hits local server endpoints (not Supabase) ───────────────
@@ -288,6 +301,20 @@ export default function AgentStatus() {
     void fetchPushLog();
     void fetchFailedJobs();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Live log polling — only while the Logs panel is open (every 2s) ───────
+  useEffect(() => {
+    if (!showLogs) return;
+    void fetchLogs();
+    const id = setInterval(() => void fetchLogs(), 2000);
+    return () => clearInterval(id);
+  }, [showLogs, fetchLogs]);
+
+  // Keep the log box pinned to the bottom unless the user scrolled up.
+  useEffect(() => {
+    const el = logsBoxRef.current;
+    if (el && logsAutoScrollRef.current) el.scrollTop = el.scrollHeight;
+  }, [logs]);
 
   // ── Actions (stable refs via useCallback) ────────────────────────────────
   const triggerSync = useCallback(async (endpoint: string, body: Record<string, unknown>, label: string) => {
@@ -707,6 +734,65 @@ export default function AgentStatus() {
               <p className="text-xs text-neutral-400 py-2">Loading push agent status…</p>
             )}
           </SectionCard>
+        </div>
+
+        {/* ── Logs ─────────────────────────────────────────────── */}
+        <div className="md:col-span-2">
+          <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+            <button
+              className="flex items-center gap-2 px-4 py-3 border-b border-neutral-100 bg-neutral-50 w-full text-left"
+              onClick={() => setShowLogs(v => !v)}
+            >
+              <Activity size={15} className="text-neutral-500" />
+              <h2 className="font-semibold text-sm text-neutral-700 flex-1">
+                Logs{showLogs && logs.length > 0 ? ` (${logs.length})` : ""}
+              </h2>
+              {showLogs && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  className="text-xs text-neutral-500 hover:text-neutral-800 px-2 py-0.5 rounded border border-neutral-200"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigator.clipboard?.writeText(logs.join("\n")).then(
+                      () => toast("Logs copied", "success"),
+                      () => toast("Copy failed", "error"),
+                    );
+                  }}
+                >
+                  Copy
+                </span>
+              )}
+              {showLogs ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
+            </button>
+            {showLogs && (
+              <div className="px-3 py-3">
+                <div
+                  ref={logsBoxRef}
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    logsAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+                  }}
+                  className="font-mono text-[11px] leading-relaxed bg-neutral-950 text-neutral-200 rounded-lg p-3 h-80 overflow-y-auto whitespace-pre-wrap"
+                >
+                  {logs.length === 0 ? (
+                    <span className="text-neutral-500">Waiting for log activity… (trigger a sync to see Tally + Supabase logs here)</span>
+                  ) : (
+                    logs.map((line, i) => {
+                      const cls = /✓/.test(line) ? "text-green-400"
+                        : /✗|❌/.test(line) ? "text-red-400"
+                        : /⚠/.test(line) ? "text-amber-400"
+                        : "text-neutral-300";
+                      return <div key={i} className={cls}>{line}</div>;
+                    })
+                  )}
+                </div>
+                <p className="mt-1.5 text-[10px] text-neutral-400">
+                  Live tail of the local server (last {logs.length || 0} lines, refreshes every 2s). Also at {BASE}/
+                </p>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* ── Settings ─────────────────────────────────────────── */}
