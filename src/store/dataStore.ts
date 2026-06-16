@@ -43,6 +43,12 @@ interface DataState {
    *  Tally drop off Pending Orders (plain mergeData never removes stale vouchers).
    *  Falls back to a merge if no data exists yet. */
   replaceDeliveryNotesInRange: (freshVouchers: CanonicalVoucher[], fromISO: string, toISO: string) => void;
+  /** Replace EVERY voucher dated in [fromISO, toISO] with the freshly-pulled set:
+   *  drop all existing in-window vouchers, then add `freshVouchers`. Any voucher
+   *  deleted/converted in Tally (absent from the fresh pull) thus disappears locally.
+   *  Caller MUST only use this for a COMPLETE pull of the window (no failed chunks),
+   *  else a partial pull would wrongly delete vouchers Tally still has. */
+  replaceVouchersInRange: (freshVouchers: CanonicalVoucher[], fromISO: string, toISO: string) => void;
   clearData: () => void;
   refreshOverrides: () => void; // Apply current overrides to raw data
 }
@@ -385,5 +391,51 @@ export const useDataStore = create<DataState>((set, get) => ({
       ],
     };
     get().setData(rebuilt);
+  },
+
+  replaceVouchersInRange: (freshVouchers, fromISO, toISO) => {
+    const cur = get().rawData;
+    // No existing dataset — nothing to prune against; just load the fresh set.
+    if (!cur) {
+      get().setData({
+        company: null,
+        items: new Map(),
+        ledgers: new Map(),
+        vouchers: freshVouchers,
+        importedAt: new Date().toISOString(),
+        sourceFiles: ["tally-window-refresh"],
+        warnings: [],
+      });
+      return;
+    }
+
+    // Keep every voucher OUTSIDE the window; drop all in-window ones (they are
+    // re-added below only if Tally still has them).
+    const vMap = new Map<string, CanonicalVoucher>();
+    let droppedInRange = 0;
+    for (const v of cur.vouchers) {
+      if (v.date >= fromISO && v.date <= toISO) { droppedInRange++; continue; }
+      vMap.set(v.voucherId, v);
+    }
+    // Re-add the freshly-pulled window (authoritative for [fromISO, toISO]).
+    for (const v of freshVouchers) vMap.set(v.voucherId, v);
+
+    const removed = droppedInRange - freshVouchers.length;
+    const allVouchers = Array.from(vMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+    get().setData({
+      ...cur,
+      vouchers: allVouchers,
+      importedAt: new Date().toISOString(),
+      sourceFiles: [...new Set([...cur.sourceFiles, "tally-window-refresh"])],
+      warnings: [
+        ...cur.warnings,
+        {
+          severity: "info",
+          context: "window-refresh",
+          message: `Window refresh ${fromISO}–${toISO}: ${freshVouchers.length} from Tally${removed > 0 ? `, ${removed} deleted voucher(s) cleared` : ""}`,
+        },
+      ],
+    });
   },
 }));
