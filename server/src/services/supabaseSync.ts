@@ -23,6 +23,14 @@ if (typeof globalThis !== 'undefined' && !globalThis.WebSocket) {
  * NOTE: this lives in the Supabase sync layer — it does NOT modify how Tally
  * XML is parsed, fetched, or imported. The Tally import path is untouched.
  */
+/** Normalize a Tally date to ISO YYYY-MM-DD. Accepts "20260401" or "2026-04-01". */
+function toIsoDate(raw: any): any {
+  if (raw == null) return raw;
+  const s = String(raw).trim();
+  if (/^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  return s;
+}
+
 function normalizeTallyEntries(raw: any, innerKey: string): any[] {
   if (raw == null) return [];
   // Already an array (old format / multiple rows)
@@ -156,10 +164,12 @@ export class SupabaseSync {
   async syncVouchers(
     messages: any[],
     company: string,
-    meta?: { chunkCount?: number; pruneRange?: { from: string; to: string } }
+    meta?: { chunkCount?: number; pruneRange?: { from: string; to: string }; pruneDays?: string[] }
   ): Promise<void> {
     if (!this.client) return;
-    if (!messages || messages.length === 0) return;
+    // If there are days to prune we must run even with zero pulled vouchers
+    // (those days may be empty in Tally now and need their stale rows cleared).
+    if ((!messages || messages.length === 0) && !meta?.pruneDays?.length) return;
 
     const t0 = Date.now();
     const errors: string[] = [];
@@ -170,7 +180,8 @@ export class SupabaseSync {
         .map((m) => this.mapVoucher(m, company))
         .filter(Boolean);
 
-      if (vouchers.length === 0) return;
+      // Per-day prune can clear empty days even with nothing to upsert.
+      if (vouchers.length === 0 && !meta?.pruneDays?.length) return;
 
       // Batch vouchers in chunks of 200 (smaller than stock items due to JSONB payload)
       const BATCH_SIZE = 200;
@@ -260,17 +271,22 @@ export class SupabaseSync {
       // no authoritative range (e.g. the renderer's local-store push) omit
       // pruneRange entirely → pure upsert, no deletion.
       let deleted = 0;
-      if (meta?.pruneRange?.from && meta?.pruneRange?.to) {
+      if (meta?.pruneDays?.length) {
+        // Per-day prune: each successfully-pulled day is authoritative for itself,
+        // so deletions (incl. old Delivery Notes) clear even if other days failed.
+        // Empty days are pruned too (their stale rows have no matching pulled GUID).
+        deleted = await this.deleteVoucherOrphansForDays(company, meta.pruneDays, Array.from(voucherGuids));
+      } else if (meta?.pruneRange?.from && meta?.pruneRange?.to) {
         deleted = await this.deleteVoucherOrphansInRange(
           company,
           meta.pruneRange.from,
           meta.pruneRange.to,
           Array.from(voucherGuids)
         );
-        if (deleted > 0) {
-          // Clean up child rows whose parent was just deleted.
-          await this.cleanupOrphanEntries(company);
-        }
+      }
+      if (deleted > 0) {
+        // Clean up child rows whose parent was just deleted.
+        await this.cleanupOrphanEntries(company);
       }
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -405,8 +421,8 @@ export class SupabaseSync {
     try {
       const { data, error } = await this.client.rpc("delete_voucher_orphans_in_range", {
         p_company: company,
-        p_from: from,
-        p_to: to,
+        p_from: toIsoDate(from),
+        p_to: toIsoDate(to),
         p_valid_guids: clean,
       });
       if (error) {
@@ -418,6 +434,40 @@ export class SupabaseSync {
       return n;
     } catch (e: any) {
       console.warn(`[Supabase] Voucher range cleanup error: ${e?.message || e}`);
+      return 0;
+    }
+  }
+
+  /**
+   * Delete vouchers on the given days whose GUID isn't in the just-pulled set.
+   * One RPC for all days (migration 019). Each day must be one we pulled cleanly;
+   * an empty pulled set for a day means that day is empty in Tally now, so its
+   * stale rows are removed. Best-effort: a missing migration warns and returns 0.
+   */
+  private async deleteVoucherOrphansForDays(company: string, days: string[], validGuids: string[]): Promise<number> {
+    if (!this.client) return 0;
+    // Days arrive as YYYYMMDD (chunk dates) — convert to ISO to match the stored
+    // tally_vouchers.date column (normalized to ISO above).
+    const cleanDays = (days || [])
+      .filter((d): d is string => typeof d === "string" && /^\d{8}$/.test(d))
+      .map((d) => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`);
+    if (cleanDays.length === 0) return 0;
+    const cleanGuids = (validGuids || []).filter((g): g is string => typeof g === "string" && g.length > 0);
+    try {
+      const { data, error } = await this.client.rpc("delete_voucher_orphans_for_days", {
+        p_company: company,
+        p_days: cleanDays,
+        p_valid_guids: cleanGuids,
+      });
+      if (error) {
+        console.warn(`[Supabase] Per-day voucher prune skipped: ${error.message}`);
+        return 0;
+      }
+      const n = typeof data === "number" ? data : 0;
+      if (n > 0) console.log(`[Supabase] ⌫ Removed ${n} voucher(s) deleted in Tally across ${cleanDays.length} day(s)`);
+      return n;
+    } catch (e: any) {
+      console.warn(`[Supabase] Per-day voucher prune error: ${e?.message || e}`);
       return 0;
     }
   }
@@ -655,8 +705,11 @@ export class SupabaseSync {
     return {
       guid: this.safeGuid(m.guid, company, fallbackKey),
       company,
-      date: m.date,
-      effective_date: m.effectivedate,
+      // Normalize to ISO YYYY-MM-DD so tally_vouchers.date is consistent no matter
+      // which path wrote it (server daybook = YYYYMMDD, renderer push = ISO).
+      // The prune compares on this column, so consistency is essential.
+      date: toIsoDate(m.date),
+      effective_date: toIsoDate(m.effectivedate),
       voucher_number: m.vouchernumber,
       voucher_type: m.vouchertypename,
       party_ledger_name: m.partyledgername,
