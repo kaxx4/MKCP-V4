@@ -246,12 +246,18 @@ export class SyncOrchestrator {
     // pruneRange makes this pull authoritative for [fromDate, toDate] ONLY:
     // vouchers deleted/converted in Tally within that window are removed from the
     // cloud, while everything outside the window is left untouched.
+    // BUT only when the pull was COMPLETE (no failed chunks, not aborted) — a
+    // partial pull is missing real vouchers and pruning would wrongly delete them.
+    const cleanPull = chunksFailed === 0 && !signal?.aborted;
     this.supabase.syncVouchers(allVouchers, company, {
       chunkCount: chunks.length,
-      pruneRange: { from: fromDate, to: toDate },
+      ...(cleanPull ? { pruneRange: { from: fromDate, to: toDate } } : {}),
     }).catch(e =>
       console.error(`[Supabase] Vouchers sync failed: ${e.message}`)
     );
+    if (!cleanPull) {
+      console.log(`[Supabase] Skipping voucher prune for ${fromDate}–${toDate} (partial pull: ${chunksFailed} failed chunk(s))`);
+    }
 
     return {
       success: allVouchers.length > 0,

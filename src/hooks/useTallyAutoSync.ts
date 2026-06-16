@@ -20,6 +20,10 @@ function daysAgoStr(daysBack: number): string {
   d.setDate(d.getDate() - Math.max(0, daysBack));
   return ymd(d);
 }
+/** "20260610" → "2026-06-10" (voucher dates are stored ISO-dashed). */
+function toIso(yyyymmdd: string): string {
+  return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
+}
 
 /**
  * Silently syncs today's vouchers from Tally every 30 minutes.
@@ -35,6 +39,7 @@ export function useTallyAutoSync() {
   const setSyncing        = useTallyStore((s) => s.setSyncing);
   const completeSyncWith  = useTallyStore((s) => s.completeSyncWith);
   const mergeData = useDataStore((s) => s.mergeData);
+  const replaceVouchersInRange = useDataStore((s) => s.replaceVouchersInRange);
   const { toast } = useToast();
 
   const windowRef = useRef(windowDays);
@@ -73,28 +78,39 @@ export function useTallyAutoSync() {
         }
 
         const parsed = parseTransactions(result.data);
-        if (!parsed.vouchers.length) return;
 
         const existingRaw = await loadData<unknown>("parsedData");
         const existing = existingRaw ? deserializeParsedData(existingRaw) : null;
         if (existing) await createBackup(existingRaw, "pre-auto-sync");
 
-        mergeData({
-          company: existing?.company ?? { name: companyRef.current, fyStartMonth: 4 },
-          items: existing?.items ?? new Map(),
-          ledgers: existing?.ledgers ?? new Map(),
-          vouchers: parsed.vouchers,
-          importedAt: new Date().toISOString(),
-          sourceFiles: ["tally-auto-sync"],
-          warnings: parsed.warnings,
-        });
+        // Only treat the pull as authoritative for the window (i.e. safe to delete
+        // vouchers no longer in Tally) when EVERY chunk succeeded. A partial pull
+        // would otherwise wrongly clear vouchers that simply weren't fetched.
+        const cleanPull = (result.stats?.chunksFailed ?? 1) === 0;
+
+        if (cleanPull && existing) {
+          // Replace the whole window: drops any voucher deleted/converted in Tally.
+          replaceVouchersInRange(parsed.vouchers, toIso(from), toIso(today));
+        } else {
+          // Partial pull (or first load) — additive merge, never deletes.
+          if (!parsed.vouchers.length) return;
+          mergeData({
+            company: existing?.company ?? { name: companyRef.current, fyStartMonth: 4 },
+            items: existing?.items ?? new Map(),
+            ledgers: existing?.ledgers ?? new Map(),
+            vouchers: parsed.vouchers,
+            importedAt: new Date().toISOString(),
+            sourceFiles: ["tally-auto-sync"],
+            warnings: parsed.warnings,
+          });
+        }
 
         const dates = parsed.vouchers.map((v) => v.date).filter(Boolean).sort();
         const lastDate = dates.length ? dates[dates.length - 1]! : null;
         completeSyncWith(new Date().toISOString(), lastDate);
 
-        toast(`Auto-synced ${parsed.vouchers.length} voucher(s) from today.`, "success");
-        console.log(`[auto-sync] Done — ${parsed.vouchers.length} vouchers merged.`);
+        toast(`Auto-synced ${parsed.vouchers.length} voucher(s) (last ${win}d).`, "success");
+        console.log(`[auto-sync] Done — ${parsed.vouchers.length} vouchers, window ${from}→${today}, clean=${cleanPull}.`);
       } catch (err: any) {
         console.warn("[auto-sync] Failed:", err.message);
         // Silent failure — don't toast errors on background sync
