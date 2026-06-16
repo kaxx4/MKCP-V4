@@ -444,7 +444,7 @@ export default function AgentStatus() {
                 <div className="text-xs font-medium text-neutral-800 mt-0.5">{lastVoucherDate || "—"}</div>
               </div>
             </div>
-            <div className="flex gap-2 flex-wrap mb-4">
+            <div className="flex gap-2 flex-wrap mb-2">
               <Btn variant="primary"
                 onClick={() => triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "smart" }, "Full sync")}
                 disabled={!!syncing || !connected}>
@@ -459,6 +459,40 @@ export default function AgentStatus() {
                 {syncing === "Sync Daybook" && <Loader2 size={12} className="animate-spin" />}
                 Sync Daybook
               </Btn>
+            </div>
+
+            {/* Quick voucher refresh by date range */}
+            <div className="flex gap-1.5 flex-wrap mb-4">
+              <span className="text-[10px] text-neutral-400 uppercase tracking-wide self-center mr-0.5">Vouchers:</span>
+              {([
+                ["Today",     0,  0 ],
+                ["Last week", 6,  0 ],
+                ["Last month",29, 0 ],
+                ["3 months",  89, 0 ],
+              ] as [string, number, number][]).map(([label, daysBack, daysAhead]) => {
+                const fmt8 = (d: Date) => {
+                  const y = d.getFullYear();
+                  const m = String(d.getMonth() + 1).padStart(2, "0");
+                  const day = String(d.getDate()).padStart(2, "0");
+                  return `${y}${m}${day}`;
+                };
+                const to   = new Date(); to.setDate(to.getDate() + daysAhead);
+                const from = new Date(); from.setDate(from.getDate() - daysBack);
+                const key  = `Vouchers ${label}`;
+                return (
+                  <button
+                    key={label}
+                    onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fmt8(from), toDate: fmt8(to) }, key)}
+                    disabled={!!syncing || !connected}
+                    className="px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors
+                      border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50 hover:border-neutral-300
+                      disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+                  >
+                    {syncing === key ? <Loader2 size={10} className="animate-spin" /> : null}
+                    {label}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Sync History */}
