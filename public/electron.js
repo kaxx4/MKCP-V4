@@ -15,15 +15,13 @@ const APP_START = Date.now();
 //     fighting a flicker loop.
 //   • Otherwise → relaunch once.
 process.on('uncaughtException', (err) => {
-  console.error('[electron] uncaughtException:', err);
+  console.error('[electron] uncaughtException (kept alive):', err);
   if (appQuitting) { app.exit(0); return; }
-  if (Date.now() - APP_START < 30_000) {
-    console.error('[electron] crash during startup — NOT relaunching (avoids boot loop)');
-    return;
-  }
-  console.error('[electron] relaunching after crash');
-  app.relaunch();
-  app.exit(0);
+  // Do NOT auto-relaunch. A throw mid-sync (operational error, transient network,
+  // etc.) must not restart the app and interrupt work — that reads to the user as
+  // "the app crashed". Log it and stay alive; the window + server keep running.
+  // (True process death from OOM can't be caught here anyway; the memory headroom
+  // bump below is what prevents that.)
 });
 process.on('unhandledRejection', (reason) => {
   // Never crash/relaunch on an unhandled promise rejection — just log it.
@@ -42,10 +40,11 @@ app.commandLine.appendSwitch('disable-software-rasterizer');
 app.commandLine.appendSwitch('disable-gpu-sandbox');
 
 // ── RAM efficiency ────────────────────────────────────────────────────────────
-// Cap renderer V8 old-space at 2 GB (default is 4 GB on 64-bit).
-// Parsed Tally data is ~100–500 MB of JS objects; 2 GB gives 4–20× headroom
-// while triggering GC earlier and keeping memory pressure lower.
-app.commandLine.appendSwitch('js-flags', '--max-old-space-size=2048');
+// V8 old-space ceiling. The main process hosts the embedded server, which builds
+// the full voucher payload in-memory during a sync (a multi-month pull can reach
+// hundreds of MB, a full year ~1.5 GB). 2 GB was too tight and a large sync could
+// OOM-crash the whole app; 4 GB gives the headroom to finish without crashing.
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 // Stop Chromium from making background DNS prefetch / update-check requests.
 app.commandLine.appendSwitch('disable-background-networking', '');
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
+import { useTallyStore } from "../store/tallyStore";
 import { pushAll } from "../services/supabasePushAll";
 
 /**
@@ -23,11 +24,11 @@ import { pushAll } from "../services/supabasePushAll";
  *
  * Best-effort: failures are warned to console only, no UI noise.
  */
-const INTERVAL_MS = 15 * 60 * 1000;
 const RETRY_DELAY_MS = 60 * 1000;
 
 export function useSupabaseAutoPushInterval() {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const intervalMinutes = useTallyStore((s) => s.supabasePushMinutes);
 
   useEffect(() => {
     const fire = async () => {
@@ -54,14 +55,15 @@ export function useSupabaseAutoPushInterval() {
       }
     };
 
-    const id = setInterval(fire, INTERVAL_MS);
-    console.log(`[Auto-push-15min] Scheduled: pushes EVERYTHING to Supabase every 15 min`);
+    const minutes = Number.isFinite(intervalMinutes) ? intervalMinutes : 15;
+    const id = minutes > 0 ? setInterval(fire, minutes * 60_000) : null;
+    console.log(`[Auto-push] Supabase push interval: ${minutes > 0 ? `${minutes} min` : "disabled"}`);
     return () => {
-      clearInterval(id);
+      if (id) clearInterval(id);
       if (retryTimerRef.current) {
         clearTimeout(retryTimerRef.current);
         retryTimerRef.current = null;
       }
     };
-  }, []);
+  }, [intervalMinutes]); // re-arm when the configured interval changes
 }
