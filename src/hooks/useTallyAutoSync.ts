@@ -36,6 +36,8 @@ export function useTallyAutoSync() {
   const intervalMinutes   = useTallyStore((s) => s.tallyAutoSyncMinutes);
   const windowDays        = useTallyStore((s) => s.tallySyncWindowDays);
   const strategy          = useTallyStore((s) => s.tallySyncStrategy);
+  const deepMinutes       = useTallyStore((s) => s.tallyDeepSyncMinutes);
+  const deepWindowDays    = useTallyStore((s) => s.tallyDeepSyncWindowDays);
   const setSyncing        = useTallyStore((s) => s.setSyncing);
   const completeSyncWith  = useTallyStore((s) => s.completeSyncWith);
   const mergeData = useDataStore((s) => s.mergeData);
@@ -46,6 +48,8 @@ export function useTallyAutoSync() {
   useEffect(() => { windowRef.current = windowDays; }, [windowDays]);
   const strategyRef = useRef(strategy);
   useEffect(() => { strategyRef.current = strategy; }, [strategy]);
+  const deepWindowRef = useRef(deepWindowDays);
+  useEffect(() => { deepWindowRef.current = deepWindowDays; }, [deepWindowDays]);
 
   const isSyncingRef = useRef(isSyncing);
   useEffect(() => { isSyncingRef.current = isSyncing; }, [isSyncing]);
@@ -57,16 +61,16 @@ export function useTallyAutoSync() {
   useEffect(() => { companyRef.current = companyName; }, [companyName]);
 
   useEffect(() => {
-    const runSync = async () => {
+    const runSync = async (winDaysRaw: number, label: string) => {
       if (!isConnectedRef.current || isSyncingRef.current || !companyRef.current.trim()) return;
 
       const today = todayStr();
       // Bounded date window, daily chunks by default — keeps each Tally request
       // tiny so the in-process server never gets overloaded by a big pull.
-      const win = Number.isFinite(windowRef.current) ? Math.max(1, windowRef.current) : 7;
+      const win = Number.isFinite(winDaysRaw) ? Math.max(1, winDaysRaw) : 7;
       const from = daysAgoStr(win - 1);
       const strat = strategyRef.current || "daily";
-      console.log(`[auto-sync] Daybook sync ${from}→${today} (${win}d, ${strat})`);
+      console.log(`[auto-sync:${label}] Daybook sync ${from}→${today} (${win}d, ${strat})`);
       setSyncing(true);
 
       try {
@@ -119,19 +123,26 @@ export function useTallyAutoSync() {
       }
     };
 
-    // Run once immediately on mount (after a short delay to let the app settle)
-    const initialTimer = setTimeout(runSync, 10_000);
+    const quickWin = () => (Number.isFinite(windowRef.current) ? Math.max(1, windowRef.current) : 7);
+    const deepWin  = () => (Number.isFinite(deepWindowRef.current) ? Math.max(1, deepWindowRef.current) : 90);
 
-    // Then every `intervalMinutes` minutes. 0 (or invalid) disables the repeat
-    // entirely — only the one-shot initial run above fires. Falls back to the
-    // 30-min default if the stored value is missing.
+    // Quick pass once on mount (after a short settle delay) — recent activity.
+    const initialTimer = setTimeout(() => void runSync(quickWin(), "quick"), 10_000);
+
+    // Quick pass on the configured interval. 0 = disabled.
     const minutes = Number.isFinite(intervalMinutes) ? intervalMinutes : 30;
-    const interval = minutes > 0 ? setInterval(runSync, minutes * 60_000) : null;
-    console.log(`[auto-sync] Tally pull interval: ${minutes > 0 ? `${minutes} min` : "disabled"}`);
+    const interval = minutes > 0 ? setInterval(() => void runSync(quickWin(), "quick"), minutes * 60_000) : null;
+
+    // Deep pass on its own (longer) interval — wider window that catches edits/
+    // conversions to OLDER vouchers. 0 = disabled.
+    const dMin = Number.isFinite(deepMinutes) ? deepMinutes : 360;
+    const deepInterval = dMin > 0 ? setInterval(() => void runSync(deepWin(), "deep"), dMin * 60_000) : null;
+    console.log(`[auto-sync] quick: ${minutes > 0 ? `${minutes} min / ${quickWin()}d` : "off"} · deep: ${dMin > 0 ? `${dMin} min / ${deepWin()}d` : "off"}`);
 
     return () => {
       clearTimeout(initialTimer);
       if (interval) clearInterval(interval);
+      if (deepInterval) clearInterval(deepInterval);
     };
-  }, [intervalMinutes]); // re-arm the timer when the configured interval changes
+  }, [intervalMinutes, deepMinutes]); // re-arm when either interval changes
 }

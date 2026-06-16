@@ -177,6 +177,8 @@ export default function AgentStatus() {
   const supabasePushMinutes  = useTallyStore((s) => s.supabasePushMinutes);
   const tallySyncWindowDays  = useTallyStore((s) => s.tallySyncWindowDays);
   const tallySyncStrategy    = useTallyStore((s) => s.tallySyncStrategy);
+  const tallyDeepSyncMinutes = useTallyStore((s) => s.tallyDeepSyncMinutes);
+  const tallyDeepSyncWindowDays = useTallyStore((s) => s.tallyDeepSyncWindowDays);
   const setConnected       = useTallyStore((s) => s.setConnected);
   const setLastSync        = useTallyStore((s) => s.setLastSync);
   const setCompanyName     = useTallyStore((s) => s.setCompanyName);
@@ -186,6 +188,8 @@ export default function AgentStatus() {
   const setSupabasePushMinutes  = useTallyStore((s) => s.setSupabasePushMinutes);
   const setTallySyncWindowDays  = useTallyStore((s) => s.setTallySyncWindowDays);
   const setTallySyncStrategy    = useTallyStore((s) => s.setTallySyncStrategy);
+  const setTallyDeepSyncMinutes = useTallyStore((s) => s.setTallyDeepSyncMinutes);
+  const setTallyDeepSyncWindowDays = useTallyStore((s) => s.setTallyDeepSyncWindowDays);
 
   const cloudConfig   = useSupabaseSyncStatusStore((s) => s.config);
   const cloudMasters  = useSupabaseSyncStatusStore((s) => s.masters);
@@ -219,6 +223,8 @@ export default function AgentStatus() {
   const [editPushMins, setEditPushMins]   = useState(String(supabasePushMinutes));
   const [editWindowDays, setEditWindowDays] = useState(String(tallySyncWindowDays));
   const [editStrategy, setEditStrategy]     = useState(tallySyncStrategy);
+  const [editDeepMins, setEditDeepMins]     = useState(String(tallyDeepSyncMinutes));
+  const [editDeepWindow, setEditDeepWindow] = useState(String(tallyDeepSyncWindowDays));
 
   // ── Supabase data fetchers ────────────────────────────────────────────────
   const fetchHistory = useCallback(async () => {
@@ -391,17 +397,24 @@ export default function AgentStatus() {
     const tallyMins = Math.max(0, Math.round(Number(editTallyMins) || 0));
     const pushMins  = Math.max(0, Math.round(Number(editPushMins) || 0));
     const winDays   = Math.max(1, Math.round(Number(editWindowDays) || 1));
+    const deepMins  = Math.max(0, Math.round(Number(editDeepMins) || 0));
+    const deepWin   = Math.max(1, Math.round(Number(editDeepWindow) || 1));
     setTallyAutoSyncMinutes(tallyMins);
     setSupabasePushMinutes(pushMins);
     setTallySyncWindowDays(winDays);
     setTallySyncStrategy(editStrategy);
+    setTallyDeepSyncMinutes(deepMins);
+    setTallyDeepSyncWindowDays(deepWin);
     setEditTallyMins(String(tallyMins));
     setEditPushMins(String(pushMins));
     setEditWindowDays(String(winDays));
+    setEditDeepMins(String(deepMins));
+    setEditDeepWindow(String(deepWin));
     toast("Settings saved", "success");
   }, [editCompany, editProxy, editFyFrom, editFyTo, editTallyMins, editPushMins, editWindowDays, editStrategy,
+      editDeepMins, editDeepWindow,
       setCompanyName, setProxyUrl, setFyDates, setTallyAutoSyncMinutes, setSupabasePushMinutes,
-      setTallySyncWindowDays, setTallySyncStrategy, toast]);
+      setTallySyncWindowDays, setTallySyncStrategy, setTallyDeepSyncMinutes, setTallyDeepSyncWindowDays, toast]);
 
   const toggleError = useCallback((id: string) => {
     setExpandedErrors(prev => {
@@ -916,6 +929,29 @@ export default function AgentStatus() {
                     <option value="weekly">Weekly</option>
                     <option value="monthly">Monthly</option>
                   </select>
+                </label>
+
+                <div className="sm:col-span-2 mt-1 pt-3 border-t border-neutral-100">
+                  <p className="text-xs font-medium text-neutral-600">Deep re-sync</p>
+                  <p className="text-[10px] text-neutral-400">A slower, wider pass that catches edits/conversions to older Purchase/Sales/Delivery-Note vouchers.</p>
+                </div>
+                <label className="block">
+                  <span className="text-xs text-neutral-500 mb-1 block">Deep re-sync every (minutes, 0 = off)</span>
+                  <input
+                    type="number" min={0} step={1}
+                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={editDeepMins}
+                    onChange={e => setEditDeepMins(e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs text-neutral-500 mb-1 block">Deep window (days back, e.g. 90)</span>
+                  <input
+                    type="number" min={1} step={1}
+                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={editDeepWindow}
+                    onChange={e => setEditDeepWindow(e.target.value)}
+                  />
                 </label>
 
                 <div className="sm:col-span-2">

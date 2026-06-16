@@ -219,12 +219,19 @@ export class SyncOrchestrator {
     // Process chunks in waves of CONCURRENCY.
     // Early-exit: if an entire wave yields 0 new vouchers (all deduped), Tally is ignoring the
     // date filter and returning the same data every time. Stop — we already have everything.
+    //
+    // NOT for "daily": with one-day chunks an empty wave just means those days had no
+    // business (weekends/gaps), which is normal — bailing there would skip the rest of
+    // the window and miss older vouchers. Daily requests are tiny, so we always run all
+    // of them to guarantee full-window coverage (needed for the deep edit-catching pass).
+    const earlyExitEnabled = strategy !== "daily";
     let consecutiveEmptyWaves = 0;
     for (let i = 0; i < chunks.length; i += CONCURRENCY) {
       if (signal?.aborted) { console.log("[DAYBOOK] Aborted — stopping"); break; }
       const prevCount = allVouchers.length;
       const wave = chunks.slice(i, i + CONCURRENCY);
       await Promise.all(wave.map((chunk, j) => processChunk(chunk, i + j)));
+      if (!earlyExitEnabled) continue;
       const newInWave = allVouchers.length - prevCount;
       if (newInWave === 0 && allVouchers.length > 0) {
         consecutiveEmptyWaves++;
