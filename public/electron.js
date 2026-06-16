@@ -126,6 +126,10 @@ async function startExpressServer() {
   process.env.SUPABASE_URL = process.env.SUPABASE_URL || "https://vmkytsytxlofjyeotmgb.supabase.co";
   process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZta3l0c3l0eGxvZmp5ZW90bWdiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODY0MjAyMCwiZXhwIjoyMDk0MjE4MDIwfQ.W-LfPU_GMCFafIWjHt0n5bs1oC08IX7IuXLj6TVY1BU";
 
+  // Enable the Supabase → Tally push-queue drain agent in the packaged app.
+  // Server reads this at module load (index.ts) to call startPushAgent().
+  process.env.PUSH_AGENT_ENABLED = process.env.PUSH_AGENT_ENABLED || "true";
+
   const serverDist = isDev
     ? path.join(__dirname, '../server/dist/index.js')
     : path.join(process.resourcesPath, 'server/dist/index.js');
