@@ -439,6 +439,40 @@ export class SupabaseSync {
     }
   }
 
+  /** True for connection-level blips worth retrying (NOT data/constraint errors). */
+  private isTransient(e: any): boolean {
+    const m = (e?.message || String(e ?? "")).toLowerCase();
+    return m.includes("fetch failed") || m.includes("econnreset") || m.includes("etimedout")
+      || m.includes("enotfound") || m.includes("eai_again") || m.includes("socket hang up")
+      || m.includes("network") || m.includes("und_err") || m.includes("timeout");
+  }
+
+  /**
+   * Run a Supabase network op with backoff retry on TRANSIENT failures only.
+   * A momentary "TypeError: fetch failed" (brief loss of connectivity) was aborting
+   * the whole masters/voucher sync; retrying lets it ride out the blip. Data errors
+   * (constraint/RLS) don't match isTransient, so they fail fast without pointless retries.
+   */
+  private async withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    const delays = [500, 1500, 3500]; // up to 3 retries (~5.5s total)
+    let lastErr: any;
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      try {
+        return await fn();
+      } catch (e: any) {
+        lastErr = e;
+        if (attempt < delays.length && this.isTransient(e)) {
+          const d = delays[attempt];
+          console.warn(`[Supabase] ${label}: transient failure (try ${attempt + 1}/${delays.length + 1}) — retrying in ${d}ms: ${e?.message || e}`);
+          await new Promise((r) => setTimeout(r, d));
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw lastErr;
+  }
+
   private async upsertBatch(
     table: string,
     rows: any[],
@@ -447,12 +481,10 @@ export class SupabaseSync {
     if (!this.client || rows.length === 0) return;
 
     try {
-      const { error } = await this.client.from(table).upsert(rows, {
-        onConflict: conflictCol,
+      await this.withRetry(`upsert ${table}`, async () => {
+        const { error } = await this.client!.from(table).upsert(rows, { onConflict: conflictCol });
+        if (error) throw new Error(`${table}: ${error.message}`);
       });
-      if (error) {
-        throw new Error(`${table}: ${error.message}`);
-      }
     } catch (e: any) {
       console.error(`[Supabase] Batch upsert error in ${table}: ${e.message}`);
       throw e;
@@ -476,10 +508,10 @@ export class SupabaseSync {
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {
       const batch = rows.slice(i, i + BATCH_SIZE);
       try {
-        const { error } = await this.client.from(table).insert(batch);
-        if (error) {
-          throw new Error(`${table}: ${error.message}`);
-        }
+        await this.withRetry(`insert ${table}`, async () => {
+          const { error } = await this.client!.from(table).insert(batch);
+          if (error) throw new Error(`${table}: ${error.message}`);
+        });
       } catch (e: any) {
         console.error(`[Supabase] Batch insert error in ${table}: ${e.message}`);
         throw e;
