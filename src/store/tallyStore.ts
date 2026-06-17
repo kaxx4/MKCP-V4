@@ -80,8 +80,8 @@ export const useTallyStore = create<TallyConnectionState>()(
       tallyDeepSyncMinutes: 360,
       tallyDeepSyncWindowDays: 30,
       syncTodayMinutes: 30,
-      syncWeekMinutes: 120,
-      syncFyMinutes: 0,   // FY is heavy — OFF on a schedule by default; run it manually
+      syncWeekMinutes: 0, // OFF by default — user enables it in Settings if wanted
+      syncFyMinutes: 0,   // FY is heavy — OFF by default; run it manually
       fyFromDate: getDefaultFYStart(),
       fyToDate: getDefaultFYEnd(),
       syncMode: "smart",
@@ -160,7 +160,9 @@ export const useTallyStore = create<TallyConnectionState>()(
           persisted.syncFyMinutes = 360;
         }
         if (version < 8) {
-          // FY auto-sync is heavy — disable it on a schedule (manual button only).
+          // Only "Today" auto-syncs by default now. Last 7 days + This FY are off
+          // (user enables them in Settings); This FY is heavy — manual button.
+          persisted.syncWeekMinutes = 0;
           persisted.syncFyMinutes = 0;
         }
         return persisted;
