@@ -995,7 +995,7 @@ export default function AgentStatus() {
                   />
                 </label>
                 <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">This FY — every (minutes)</span>
+                  <span className="text-xs text-neutral-500 mb-1 block">This FY — every (minutes, 0 = off · heavy, use the button)</span>
                   <input
                     type="number" min={0} step={1}
                     className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"

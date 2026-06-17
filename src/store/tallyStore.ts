@@ -81,7 +81,7 @@ export const useTallyStore = create<TallyConnectionState>()(
       tallyDeepSyncWindowDays: 30,
       syncTodayMinutes: 30,
       syncWeekMinutes: 120,
-      syncFyMinutes: 360,
+      syncFyMinutes: 0,   // FY is heavy — OFF on a schedule by default; run it manually
       fyFromDate: getDefaultFYStart(),
       fyToDate: getDefaultFYEnd(),
       syncMode: "smart",
@@ -130,7 +130,7 @@ export const useTallyStore = create<TallyConnectionState>()(
         const { isSyncing, ...rest } = state;
         return rest;
       },
-      version: 7,
+      version: 8,
       migrate: (persisted: any, version: number) => {
         if (version < 2) {
           persisted.fyFromDate = getDefaultFYStart();
@@ -158,6 +158,10 @@ export const useTallyStore = create<TallyConnectionState>()(
           persisted.syncTodayMinutes = 30;
           persisted.syncWeekMinutes = 120;
           persisted.syncFyMinutes = 360;
+        }
+        if (version < 8) {
+          // FY auto-sync is heavy — disable it on a schedule (manual button only).
+          persisted.syncFyMinutes = 0;
         }
         return persisted;
       },
