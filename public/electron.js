@@ -31,7 +31,10 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const net = require('net');
-const { execSync, execFileSync } = require('child_process');
+const { exec, execFile } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const { pathToFileURL } = require('url');
 
 // ── GPU crash fix (Windows STATUS_ACCESS_VIOLATION / c000005) ────────────────
@@ -61,10 +64,17 @@ const isDev = !app.isPackaged;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const configPath = path.join(app.getPath('userData'), 'config.json');
+// In-memory cache so getConfig/IPC calls don't re-read + parse the file on every
+// call. The main process is the only writer, so the cache stays authoritative;
+// writeConfig refreshes it. (External edits are picked up on next launch.)
+let _configCache = null;
 function readConfig() {
-  try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { return {}; }
+  if (_configCache) return _configCache;
+  try { _configCache = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { _configCache = {}; }
+  return _configCache;
 }
 function writeConfig(data) {
+  _configCache = data;
   try { fs.writeFileSync(configPath, JSON.stringify(data, null, 2)); } catch {}
 }
 function getConfig(key, def) { return readConfig()[key] ?? def; }
@@ -141,15 +151,16 @@ function isPortFree(port) {
 }
 
 // ── Kill stale process on a port (Windows only) ───────────────────────────────
-function killPortProcess(port) {
+// Async so the (rare) stale-port recovery never blocks the main thread / window.
+async function killPortProcess(port) {
   try {
-    const out = execSync(`netstat -ano`, { encoding: 'utf8', timeout: 3000, maxBuffer: 1024 * 1024 });
-    const lines = out.split('\n').filter(l => l.includes(`:${port} `) && l.includes('LISTENING'));
+    const { stdout } = await execAsync('netstat -ano', { encoding: 'utf8', timeout: 3000, maxBuffer: 1024 * 1024 });
+    const lines = stdout.split('\n').filter(l => l.includes(`:${port} `) && l.includes('LISTENING'));
     for (const line of lines) {
       const pid = line.trim().split(/\s+/).pop();
       if (pid && /^\d+$/.test(pid) && parseInt(pid) > 4) {
         console.warn(`[server] Killing stale PID ${pid} on port ${port}`);
-        try { execFileSync('taskkill', ['/F', '/PID', pid], { timeout: 3000 }); } catch {}
+        try { await execFileAsync('taskkill', ['/F', '/PID', pid], { timeout: 3000 }); } catch {}
       }
     }
   } catch {}
@@ -188,7 +199,7 @@ async function startExpressServer() {
     } catch {
       // Stale process — kill it and continue with normal startup
       console.warn('[server] Port 3100 occupied by non-responsive process — killing it...');
-      killPortProcess(3100);
+      await killPortProcess(3100);
       // Give OS a moment to release the port
       await new Promise(r => setTimeout(r, 800));
       const nowFree = await isPortFree(3100);

@@ -29,20 +29,27 @@ app.use(express.json({ limit: "100mb" }));
 // ── Log buffer + SSE streaming ────────────────────────────────────────────────
 const logBuffer: string[] = [];
 const MAX_LOGS = 500;
+const TRIM_AT = 600; // trim back to MAX in a single splice once we exceed this
 let lastRawXml: { request: string; response: string; timestamp: string; label: string } | null = null;
+
+// Push + amortized trim: instead of an O(n) Array.shift() on EVERY log line once at
+// cap (O(n²) during a chatty sync), let the buffer grow to TRIM_AT then drop the
+// oldest 100 in one splice — same "keep ~most-recent MAX lines" behavior, O(1) amortized.
+function pushLog(line: string) {
+  logBuffer.push(line);
+  if (logBuffer.length >= TRIM_AT) logBuffer.splice(0, logBuffer.length - MAX_LOGS);
+}
 
 const originalLog = console.log;
 const originalError = console.error;
 console.log = (...args: any[]) => {
   const msg = args.join(" ");
-  logBuffer.push(`[${new Date().toISOString().slice(11, 19)}] ${msg}`);
-  if (logBuffer.length > MAX_LOGS) logBuffer.shift();
+  pushLog(`[${new Date().toISOString().slice(11, 19)}] ${msg}`);
   originalLog(...args);
 };
 console.error = (...args: any[]) => {
   const msg = args.join(" ");
-  logBuffer.push(`[${new Date().toISOString().slice(11, 19)}] ❌ ${msg}`);
-  if (logBuffer.length > MAX_LOGS) logBuffer.shift();
+  pushLog(`[${new Date().toISOString().slice(11, 19)}] ❌ ${msg}`);
   originalError(...args);
 };
 
