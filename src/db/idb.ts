@@ -198,7 +198,9 @@ export async function pruneAllStores(opts?: {
   const [backups, predictions, jsonUploads] = await Promise.all([
     pruneBackups(opts?.keepBackups ?? 10),
     prunePredictions(opts?.keepPredictions ?? 5),
-    pruneJsonUploads(opts?.keepJsonUploads ?? 5),
+    // Raw uploads are 23–25 MB each and redundant once parsed (the canonical form
+    // is the source of truth and is itself backed up) — keep only the last 2.
+    pruneJsonUploads(opts?.keepJsonUploads ?? 2),
   ]);
   return { backups, predictions, jsonUploads };
 }
