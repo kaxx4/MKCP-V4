@@ -974,7 +974,7 @@ export default function AgentStatus() {
                 {/* Scheduled quick syncs — the only automatic syncs. 0 = off. */}
                 <div className="sm:col-span-2 mt-1 pt-3 border-t border-neutral-100">
                   <p className="text-xs font-medium text-neutral-600">Automatic sync intervals</p>
-                  <p className="text-[10px] text-neutral-400">Each runs the matching Quick Sync (pull daily from Tally → push to Supabase). 0 disables that one. No other auto-syncs run.</p>
+                  <p className="text-[10px] text-neutral-400">Each runs the matching Quick Sync (pull daily from Tally → push to Supabase). Only Today runs by default; set a value to enable the others (0 = off). No other auto-syncs run.</p>
                 </div>
                 <label className="block">
                   <span className="text-xs text-neutral-500 mb-1 block">Today — every (minutes)</span>
@@ -986,7 +986,7 @@ export default function AgentStatus() {
                   />
                 </label>
                 <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Last 7 days — every (minutes)</span>
+                  <span className="text-xs text-neutral-500 mb-1 block">Last 7 days — every (minutes, 0 = off)</span>
                   <input
                     type="number" min={0} step={1}
                     className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
