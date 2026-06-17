@@ -1,0 +1,54 @@
+{
+  // Side-by-side TEST build — distinct appId/productName/output so installing it
+  // does NOT overwrite the production "MK Cycles Dashboard". Everything else is
+  // identical to electron-builder.json5.
+  appId: "com.mkcycles.dashboard.test",
+  productName: "MK Cycles Dashboard Test",
+  copyright: "Copyright © 2025 M.K. Cycles (P) Ltd.",
+  directories: {
+    buildResources: "public",
+    output: "release-test",
+  },
+  files: [
+    "dist/**/*",
+    "!dist/electron/**",
+    "!dist/electron.js",
+    "!dist/preload.js",
+    "!dist/package.json",
+    "!dist/icon.png",
+    "public/electron.js",
+    "public/preload.js",
+    "public/favicon.svg",
+    "public/icon.png",
+    "public/package.json",
+    "package.json",
+    "!node_modules/**",
+    "!server/**",
+    "!src/**",
+    "!scripts/**",
+    "!*.md",
+  ],
+  extraResources: [
+    {
+      from: "server",
+      to: "server",
+      filter: ["dist/**/*", "package.json", "node_modules/**/*"],
+    },
+  ],
+  extraMetadata: {
+    main: "public/electron.js",
+  },
+  win: {
+    target: [{ target: "nsis", arch: ["x64"] }],
+    icon: "public/icon.png",
+  },
+  nsis: {
+    oneClick: false,
+    allowToChangeInstallationDirectory: true,
+    createDesktopShortcut: true,
+    createStartMenuShortcut: true,
+    shortcutName: "MK Cycles Dashboard Test",
+  },
+  compression: "maximum",
+  publish: null,
+}
