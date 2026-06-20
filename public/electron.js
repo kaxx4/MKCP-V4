@@ -179,6 +179,10 @@ async function startExpressServer() {
   // Server reads this at module load (index.ts) to call startPushAgent().
   process.env.PUSH_AGENT_ENABLED = process.env.PUSH_AGENT_ENABLED || "true";
 
+  // Company the remote-refresh listener filters on (must match the web's tally_company.name).
+  // dotenv can't read server/.env from inside the asar, so set it here for packaged builds.
+  process.env.TALLY_COMPANY = process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
+
   const serverDist = isDev
     ? path.join(__dirname, '../server/dist/index.js')
     : path.join(process.resourcesPath, 'server/dist/index.js');
