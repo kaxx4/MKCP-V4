@@ -9,6 +9,7 @@ import { SupabaseSync } from "./services/supabaseSync.js";
 import { pushVoucherToTally, pushBatchToTally, buildVoucherImportXml, parseImportResponse } from "./services/voucherPusher.js";
 import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
+import { startRefreshListener } from "./services/refreshListener.js";
 import type { SyncPlan, PushVoucherRequest, PushBatchRequest } from "./types.js";
 
 const app = express();
@@ -575,6 +576,12 @@ app.get("/api/distance", async (req, res) => {
 const httpServer = app.listen(PORT, () => {
   console.log(`\n✓ MKCP Tally Proxy → http://localhost:${PORT}`);
   console.log(`   Target: ${TALLY}\n`);
+
+  // Remote refresh: web dashboard can trigger a Tally sync via Supabase Realtime.
+  // Reads company name from env so it matches whatever the web inserted.
+  const company =
+    process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
+  startRefreshListener(PORT, company);
 });
 
 httpServer.on('error', (err: NodeJS.ErrnoException) => {
