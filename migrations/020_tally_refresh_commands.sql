@@ -10,7 +10,7 @@
 CREATE TABLE IF NOT EXISTS public.tally_refresh_commands (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   company     text NOT NULL,
-  status      text NOT NULL DEFAULT 'pending',  -- pending | ack | error
+  status      text NOT NULL DEFAULT 'pending',  -- pending | ack | done | error
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
