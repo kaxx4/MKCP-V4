@@ -64,25 +64,37 @@ export function startRefreshListener(localPort: number, company: string): void {
       },
       async (payload) => {
         const id: number = (payload.new as any).id;
-        console.log(
-          `[RefreshListener] Remote refresh requested (id=${id}) — firing sync`
-        );
+        const { from, to } = currentFyRange();
+
+        // ── Loud, distinct banner so a web-triggered sync is impossible to miss
+        //    in the log tail. Every line carries the 🌐 [WEB-SYNC] marker so the
+        //    in-app Logs panel "Remote" filter can isolate the whole lifecycle.
+        console.log("");
+        console.log("🌐 ──────────────────────────────────────────────────────");
+        console.log("🌐 [WEB-SYNC] Refresh requested from the WEB dashboard");
+        console.log(`🌐 [WEB-SYNC]   • command id : ${id}`);
+        console.log(`🌐 [WEB-SYNC]   • company    : ${company}`);
+        console.log(`🌐 [WEB-SYNC]   • range      : ${from} → ${to}  (daily chunks)`);
+        console.log("🌐 ──────────────────────────────────────────────────────");
 
         // Ack immediately so the web button shows "✓ Sync started" within ~1 s.
         await supabase
           .from("tally_refresh_commands")
           .update({ status: "ack" })
           .eq("id", id);
+        console.log(`🌐 [WEB-SYNC] ✓ Acknowledged (id=${id}) — web button now shows "started"`);
 
         // Fire the same /api/tally/sync endpoint the desktop UI uses.
         // NOTE: we pass the current FY date range + daily chunking. A bare
         // { company } produces an empty date window in the orchestrator, which
         // pulls masters but ZERO vouchers — so the remote refresh must scope the
         // range exactly like the desktop "Sync Now" button does.
+        // This fetch AWAITS the full sync (it can take minutes), so the response
+        // carries the real result counts — we log them when it returns.
         // syncGuard returns 409 if a sync is already running — that's fine,
         // it just means the data will be fresh from the current run anyway.
         try {
-          const { from, to } = currentFyRange();
+          console.log(`🌐 [WEB-SYNC] → Firing Tally sync now… (id=${id})`);
           const resp = await fetch(
             `http://localhost:${localPort}/api/tally/sync`,
             {
@@ -99,17 +111,33 @@ export function startRefreshListener(localPort: number, company: string): void {
           );
 
           if (resp.ok) {
-            console.log(`[RefreshListener] Sync triggered OK (id=${id})`);
+            const result: any = await resp.json().catch(() => null);
+            const s = result?.stats;
+            if (s) {
+              console.log(
+                `🌐 [WEB-SYNC] ✓ Completed (id=${id}): ` +
+                  `${s.vouchers ?? 0} vouchers, ${s.stockItems ?? 0} items, ` +
+                  `${s.ledgers ?? 0} ledgers in ${s.elapsedSeconds ?? "?"}s`
+              );
+            } else {
+              console.log(`🌐 [WEB-SYNC] ✓ Completed (id=${id})`);
+            }
+            // Mark done so the web button can flip to "✓ Synced".
+            await supabase
+              .from("tally_refresh_commands")
+              .update({ status: "done" })
+              .eq("id", id);
           } else if (resp.status === 409) {
             console.log(
-              `[RefreshListener] Sync already running (id=${id}) — skipped`
+              `🌐 [WEB-SYNC] ⏭ Skipped (id=${id}) — a sync was already running; ` +
+                `data will be fresh from that run`
             );
           } else {
             throw new Error(`HTTP ${resp.status}`);
           }
         } catch (err: any) {
           console.error(
-            `[RefreshListener] Sync trigger failed (id=${id}): ${err.message}`
+            `🌐 [WEB-SYNC] ✗ Failed (id=${id}): ${err.message}`
           );
           // Mark error so the web button shows "✗ Failed" instead of spinning.
           await supabase
@@ -122,11 +150,11 @@ export function startRefreshListener(localPort: number, company: string): void {
     .subscribe((status, err) => {
       if (status === "SUBSCRIBED") {
         console.log(
-          `[RefreshListener] ✓ Listening for remote refresh (company="${company}")`
+          `🌐 [WEB-SYNC] ✓ Listening for remote refresh (company="${company}")`
         );
       } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
         console.error(
-          `[RefreshListener] Channel error: ${status}${err ? " — " + err.message : ""}`
+          `🌐 [WEB-SYNC] ✗ Channel error: ${status}${err ? " — " + err.message : ""}`
         );
       }
     });
