@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
 
 // Same WebSocket polyfill used by SupabaseSync
@@ -26,10 +26,18 @@ function currentFyRange(): { from: string; to: string } {
  *   2. POST to our own /api/tally/sync endpoint (the same path the desktop
  *      UI uses) so the existing syncGuard, orchestrator, and Supabase upload
  *      all run normally.
+ *   3. On completion, set status → "done" (or "error" on failure / no data).
+ *
+ * The company we listen for is resolved from `tally_companies.name` — the SAME
+ * source the web dashboard's useCompany() reads — so the Realtime filter is
+ * guaranteed to match what the web inserts into tally_refresh_commands.company,
+ * and it survives FY-rollover renames (e.g. the "- (from 1-Apr-26)" suffix
+ * changing next year) without a code change. `fallbackCompany` (the TALLY_COMPANY
+ * env / literal) is used only if that lookup returns nothing.
  *
  * Call once from index.ts inside the app.listen callback.
  */
-export function startRefreshListener(localPort: number, company: string): void {
+export function startRefreshListener(localPort: number, fallbackCompany: string): void {
   if (started) return;
   started = true;
 
@@ -46,6 +54,39 @@ export function startRefreshListener(localPort: number, company: string): void {
     realtime: { params: { eventsPerSecond: 2 } },
   });
 
+  // Resolve the company from the live source of truth, then subscribe. If the
+  // lookup fails (table empty / network), fall back to the passed literal so the
+  // listener still comes up.
+  void (async () => {
+    let company = fallbackCompany;
+    try {
+      const { data, error } = await supabase
+        .from("tally_companies")
+        .select("name")
+        .order("synced_at", { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
+      if (!error && data?.name) {
+        company = data.name;
+        if (company !== fallbackCompany) {
+          console.log(
+            `🌐 [WEB-SYNC] Resolved company from tally_companies: "${company}" ` +
+              `(fallback was "${fallbackCompany}")`
+          );
+        }
+      }
+    } catch {
+      /* keep fallbackCompany */
+    }
+    subscribeForCompany(supabase, localPort, company);
+  })();
+}
+
+function subscribeForCompany(
+  supabase: SupabaseClient,
+  localPort: number,
+  company: string
+): void {
   // One channel per company so multiple desktop instances don't cross-trigger.
   const channelName = `refresh-listener-${company
     .replace(/[^a-zA-Z0-9]/g, "_")
@@ -59,12 +100,19 @@ export function startRefreshListener(localPort: number, company: string): void {
         event: "INSERT",
         schema: "public",
         table: "tally_refresh_commands",
-        // Only rows for THIS company — safe even if other companies share the DB.
+        // Only rows for THIS company — matches what the web inserts (its
+        // useCompany() resolves to the same tally_companies.name we resolved above).
         filter: `company=eq.${company}`,
       },
       async (payload) => {
         const id: number = (payload.new as any).id;
         const { from, to } = currentFyRange();
+
+        const setStatus = (status: string) =>
+          supabase
+            .from("tally_refresh_commands")
+            .update({ status })
+            .eq("id", id);
 
         // ── Loud, distinct banner so a web-triggered sync is impossible to miss
         //    in the log tail. Every line carries the 🌐 [WEB-SYNC] marker so the
@@ -78,10 +126,7 @@ export function startRefreshListener(localPort: number, company: string): void {
         console.log("🌐 ──────────────────────────────────────────────────────");
 
         // Ack immediately so the web button shows "✓ Sync started" within ~1 s.
-        await supabase
-          .from("tally_refresh_commands")
-          .update({ status: "ack" })
-          .eq("id", id);
+        await setStatus("ack");
         console.log(`🌐 [WEB-SYNC] ✓ Acknowledged (id=${id}) — web button now shows "started"`);
 
         // Fire the same /api/tally/sync endpoint the desktop UI uses.
@@ -112,38 +157,44 @@ export function startRefreshListener(localPort: number, company: string): void {
 
           if (resp.ok) {
             const result: any = await resp.json().catch(() => null);
-            const s = result?.stats;
-            if (s) {
-              console.log(
-                `🌐 [WEB-SYNC] ✓ Completed (id=${id}): ` +
-                  `${s.vouchers ?? 0} vouchers, ${s.stockItems ?? 0} items, ` +
-                  `${s.ledgers ?? 0} ledgers in ${s.elapsedSeconds ?? "?"}s`
+            // The orchestrator returns { success:false, error } when Tally hands
+            // back zero rows (wrong company / Tally closed / empty window). Don't
+            // report that as success — surface it so the web doesn't show "Synced".
+            if (result && result.success === false) {
+              console.error(
+                `🌐 [WEB-SYNC] ✗ No data (id=${id}): ` +
+                  `${result.error || "Tally returned zero rows — check the company name and that Tally is open"}`
               );
+              await setStatus("error");
             } else {
-              console.log(`🌐 [WEB-SYNC] ✓ Completed (id=${id})`);
+              const s = result?.stats;
+              if (s) {
+                console.log(
+                  `🌐 [WEB-SYNC] ✓ Completed (id=${id}): ` +
+                    `${s.vouchers ?? 0} vouchers, ${s.stockItems ?? 0} items, ` +
+                    `${s.ledgers ?? 0} ledgers in ${s.elapsedSeconds ?? "?"}s`
+                );
+              } else {
+                console.log(`🌐 [WEB-SYNC] ✓ Completed (id=${id})`);
+              }
+              // Mark done so the web button can flip to "✓ Synced".
+              await setStatus("done");
             }
-            // Mark done so the web button can flip to "✓ Synced".
-            await supabase
-              .from("tally_refresh_commands")
-              .update({ status: "done" })
-              .eq("id", id);
           } else if (resp.status === 409) {
+            // A sync is already running; it refreshes the same data. Mark done
+            // rather than leaving the row stuck at "ack" forever.
             console.log(
               `🌐 [WEB-SYNC] ⏭ Skipped (id=${id}) — a sync was already running; ` +
-                `data will be fresh from that run`
+                `data refreshes from that run`
             );
+            await setStatus("done");
           } else {
             throw new Error(`HTTP ${resp.status}`);
           }
         } catch (err: any) {
-          console.error(
-            `🌐 [WEB-SYNC] ✗ Failed (id=${id}): ${err.message}`
-          );
+          console.error(`🌐 [WEB-SYNC] ✗ Failed (id=${id}): ${err.message}`);
           // Mark error so the web button shows "✗ Failed" instead of spinning.
-          await supabase
-            .from("tally_refresh_commands")
-            .update({ status: "error" })
-            .eq("id", id);
+          await setStatus("error");
         }
       }
     )
