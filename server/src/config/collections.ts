@@ -87,7 +87,7 @@ export const TRANSACTION_COLLECTIONS: CollectionDef[] = [
     category: "transaction",
     fetch: [
       "Guid", "Date", "VoucherTypeName", "VoucherNumber", "Reference", "Narration",
-      "PartyLedgerName", "IsCancelled", "IsOptional", "EffectiveDate",
+      "PartyLedgerName", "IsCancelled", "IsOptional", "EffectiveDate", "AlterID",
       // Sub-lists WITHOUT .* wildcards — wildcards crash TallyPrime ("incorrect object type").
       // Requesting the parent key is enough: TallyPrime returns all standard sub-fields automatically.
       "AllLedgerEntries",

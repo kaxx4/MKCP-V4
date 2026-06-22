@@ -2,7 +2,7 @@ import type {
   SyncPlan, SyncProgress, SyncResult, MastersSyncResult, VouchersSyncResult
 } from "../types.js";
 import { tallyPostWithRetry } from "../tally.js";
-import { buildCollectionXml, buildDayBookXml } from "./xmlBuilder.js";
+import { buildCollectionXml, buildDayBookXml, buildChangedVoucherXml } from "./xmlBuilder.js";
 
 import { getMonthlyChunks, getWeeklyChunks, getDailyChunks } from "../tally.js";
 import {
@@ -374,6 +374,39 @@ export class SyncOrchestrator {
       transactions: vouchersResult?.data ?? { tallymessage: [] },
       stats,
     };
+  }
+
+  // ── Changed-voucher (incremental by AlterID) ───────────────────────────────
+  /**
+   * Fetch every voucher whose AlterID is greater than `sinceAlterId`, regardless
+   * of date. Catches edits to OLD vouchers that a date-windowed daybook pull
+   * misses. Returns converted vouchers (same shape as a normal pull) so the
+   * caller can merge them by GUID. Best-effort: any Tally error returns an empty
+   * set rather than failing the whole sync.
+   */
+  async syncChangedVouchers(
+    company: string,
+    sinceAlterId: number,
+    signal?: AbortSignal
+  ): Promise<ReturnType<typeof convertVouchers>> {
+    const since = Math.max(0, Math.floor(sinceAlterId || 0));
+    // Watermark 0 means we have no baseline yet — a normal date-window pull will
+    // seed AlterIDs first. Skip here so we don't pull the entire ledger unfiltered.
+    if (since <= 0) return { tallymessage: [] };
+
+    const voucherDef = TRANSACTION_COLLECTIONS[0];
+    const timeoutMs = voucherDef.timeout;
+    try {
+      const xml = buildChangedVoucherXml(voucherDef, company, since);
+      const result = await tallyPostWithRetry(this.tallyUrl, xml, timeoutMs, false, 1, signal);
+      const converted = convertVouchers(result);
+      console.log(`[CHANGED] AlterID > ${since}: ${converted.tallymessage.length} changed voucher(s)`);
+      return converted;
+    } catch (e: any) {
+      if (e?.message?.includes("Aborted")) throw e;
+      console.warn(`[CHANGED] AlterID fetch failed (skipping): ${e?.message || e}`);
+      return { tallymessage: [] };
+    }
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────

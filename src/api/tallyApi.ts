@@ -131,6 +131,34 @@ export async function syncDayBook(company: string, fromDate: string, toDate: str
   }
 }
 
+/**
+ * Fetch vouchers edited in Tally since a given AlterID watermark (any date).
+ * Catches edits to OLD vouchers the date-windowed daybook pull misses. Returns
+ * the same `{ data: { tallymessage } }` shape as syncDayBook so the result feeds
+ * straight into parseTransactions. Best-effort: errors resolve to an empty set.
+ */
+export async function fetchChangedVouchers(
+  company: string,
+  sinceAlterId: number
+): Promise<{ success: boolean; data?: { tallymessage: any[] }; error?: string }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 5_400_000);
+  try {
+    const r = await fetch(`${BASE}/api/tally/changed-vouchers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company, sinceAlterId }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) throw new Error(`Server error: ${r.status}`);
+    return await r.json();
+  } catch (e: any) {
+    clearTimeout(timer);
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
 export function subscribeToProgress(onLog: (msg: string) => void): () => void {
   const es = new EventSource(`${BASE}/api/tally/progress`);
   es.onmessage = (e) => {
