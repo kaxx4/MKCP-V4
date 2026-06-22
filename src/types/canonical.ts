@@ -86,6 +86,9 @@ export interface CanonicalVoucher {
   isCancelled: boolean;
   isOptional: boolean;
   lines: CanonicalVoucherLine[];
+  /** Tally's monotonic alteration id (bumps on every edit). Used as the
+   *  high-water mark for incremental "re-pull anything changed" sync. */
+  alterId?: number;
 }
 
 /** Tally's authoritative P&L report — fetched directly from Tally during sync */

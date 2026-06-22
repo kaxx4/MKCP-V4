@@ -406,6 +406,10 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
         vouchertypename: txt(v.VOUCHERTYPENAME) || txt(v["@_VCHTYPE"]),
         partyledgername: txt(v.PARTYLEDGERNAME),
         narration: txt(v.NARRATION),
+        // Tally's monotonic alteration id — bumps whenever this voucher is edited.
+        // Drives incremental "re-pull anything changed" sync (any date), so edits
+        // to old vouchers propagate. 0 when Tally omits it (older builds).
+        alterid: parseInt(txt(v.ALTERID) || txt(v["@_ALTERID"]) || "0", 10) || 0,
         iscancelled: txt(v.ISCANCELLED) === "Yes",
         isoptional: txt(v.ISOPTIONAL) === "Yes",
         effectivedate: txt(v.EFFECTIVEDATE) || txt(v.DATE),

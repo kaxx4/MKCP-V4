@@ -67,6 +67,50 @@ ${filterSystemBlock}
 </ENVELOPE>`;
 }
 
+/**
+ * Voucher collection filtered by AlterID — returns every voucher whose alteration
+ * id is greater than `sinceAlterId`, with NO date filter. This is how we catch
+ * edits to OLD vouchers (outside the daybook date window): any voucher touched in
+ * Tally gets a fresh, higher AlterID, so `$AlterID > watermark` surfaces exactly
+ * the changed set regardless of date. Same fetch fields as the normal voucher
+ * collection so the converter produces identical rows.
+ */
+export function buildChangedVoucherXml(
+  def: CollectionDef,
+  company: string,
+  sinceAlterId: number
+): string {
+  const colId = `MKCP_Changed_${def.tallyCollection}`;
+  const fetchLines = def.fetch?.map(f => `<NATIVEMETHOD>${esc(f)}</NATIVEMETHOD>`).join("\n") ?? "";
+  const since = Math.max(0, Math.floor(sinceAlterId || 0));
+  return `<ENVELOPE>
+<HEADER>
+<VERSION>1</VERSION>
+<TALLYREQUEST>Export</TALLYREQUEST>
+<TYPE>Collection</TYPE>
+<ID>${colId}</ID>
+</HEADER>
+<BODY>
+<DESC>
+<STATICVARIABLES>
+<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
+</STATICVARIABLES>
+<TDL>
+<TDLMESSAGE>
+<COLLECTION NAME="${colId}" ISMODIFY="No">
+<TYPE>${def.tallyCollection}</TYPE>
+${fetchLines}
+<FILTER>MKCPAlterFilter</FILTER>
+</COLLECTION>
+<SYSTEM TYPE="Formulae" NAME="MKCPAlterFilter">$AlterID &gt; ${since}</SYSTEM>
+</TDLMESSAGE>
+</TDL>
+</DESC>
+</BODY>
+</ENVELOPE>`;
+}
+
 /** Lightweight: fetch AltMstId + AltVchId from Company object */
 export function buildAlterIdXml(company: string): string {
   return `<ENVELOPE>

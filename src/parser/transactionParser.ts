@@ -329,6 +329,7 @@ function parseOneVoucher(rv: any, warnings: ImportWarning[]): CanonicalVoucher |
     isCancelled,
     isOptional,
     lines,
+    alterId: Number(rv.alterid ?? rv.alterId ?? rv.ALTERID ?? 0) || undefined,
   };
 }
 

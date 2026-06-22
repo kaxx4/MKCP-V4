@@ -1,6 +1,6 @@
 import { useTallyStore } from "../store/tallyStore";
 import { useDataStore } from "../store/dataStore";
-import { syncDayBook } from "../api/tallyApi";
+import { syncDayBook, fetchChangedVouchers } from "../api/tallyApi";
 import { parseTransactions } from "../parser/transactionParser";
 import { loadData, createBackup } from "../db/idb";
 import { deserializeParsedData } from "../utils/serialize";
@@ -91,6 +91,39 @@ export async function pullFromTally(
     // Net count change tells us how many stale vouchers were cleared (clean pull only).
     const after = useDataStore.getState().data?.vouchers.length ?? before;
     const cleared = cleanPull ? Math.max(0, (before + parsed.vouchers.length) - after) : 0;
+
+    // ── Incremental edit catch-up (AlterID) ─────────────────────────────────
+    // A date-windowed pull never re-fetches vouchers edited OUTSIDE [from,to], so
+    // edits to old vouchers never reach the store (or Supabase). Tally bumps a
+    // voucher's AlterID on every edit, so we re-pull everything changed since our
+    // highest-seen AlterID and merge it by GUID. Best-effort — a failure here must
+    // not fail the sync, and the watermark only exists once a prior pull has
+    // stamped AlterIDs (0 → skip, the window pull above seeds them).
+    try {
+      const storeVouchers = useDataStore.getState().data?.vouchers ?? [];
+      let sinceAlterId = 0;
+      for (const v of storeVouchers) {
+        if (typeof v.alterId === "number" && v.alterId > sinceAlterId) sinceAlterId = v.alterId;
+      }
+      if (sinceAlterId > 0) {
+        const changed = await fetchChangedVouchers(company, sinceAlterId);
+        const changedVouchers = changed.success && changed.data ? parseTransactions(changed.data).vouchers : [];
+        if (changedVouchers.length) {
+          useDataStore.getState().mergeData({
+            company: existing?.company ?? { name: company, fyStartMonth: 4 },
+            items: existing?.items ?? new Map(),
+            ledgers: existing?.ledgers ?? new Map(),
+            vouchers: changedVouchers,
+            importedAt: new Date().toISOString(),
+            sourceFiles: ["quick-sync:changed"],
+            warnings: [],
+          });
+          console.log(`[pull] AlterID catch-up: merged ${changedVouchers.length} edited voucher(s)`);
+        }
+      }
+    } catch (e) {
+      console.warn(`[pull] AlterID catch-up skipped: ${(e as Error)?.message || e}`);
+    }
 
     const dates = parsed.vouchers.map((v) => v.date).filter(Boolean).sort();
     tally.completeSyncWith(new Date().toISOString(), dates.length ? dates[dates.length - 1]! : null);

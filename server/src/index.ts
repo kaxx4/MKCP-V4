@@ -187,6 +187,27 @@ app.post("/api/tally/sync-daybook", syncGuard, async (req, res) => {
   }
 });
 
+// Incremental: fetch vouchers edited since a given AlterID watermark (any date),
+// so edits to OLD vouchers outside the daybook window still propagate.
+app.post("/api/tally/changed-vouchers", syncGuard, async (req, res) => {
+  const { company, sinceAlterId } = req.body as { company?: string; sinceAlterId?: number };
+  if (!company) return res.status(400).json({ success: false, error: "company required" });
+  const since = Number(sinceAlterId) || 0;
+
+  const ac = new AbortController();
+  res.on("close", () => { if (!res.writableEnded) ac.abort(); });
+  res.setTimeout(5_400_000);
+
+  try {
+    const converted = await orchestrator.syncChangedVouchers(company, since, ac.signal);
+    if (!res.writableEnded) {
+      res.json({ success: true, data: converted, stats: { vouchers: converted.tallymessage.length, sinceAlterId: since } });
+    }
+  } catch (e: any) {
+    if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ── Voucher push endpoints ─────────────────────────────────────────────────────
 app.post("/api/tally/push-voucher", async (req: express.Request, res: express.Response) => {
   const { company, voucher } = req.body as PushVoucherRequest;
