@@ -8,15 +8,34 @@ if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
 
 let started = false;
 
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const ymd = (d: Date) => `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
+
 /** Current financial year (Apr 1 → today) as YYYYMMDD. Matches the desktop FY. */
 function currentFyRange(): { from: string; to: string } {
   const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
   // FY starts 1 April; before April we're still in last year's FY.
   const fyStartYear = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
-  const from = `${fyStartYear}0401`;
-  const to = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
-  return { from, to };
+  return { from: `${fyStartYear}0401`, to: ymd(now) };
+}
+
+/** Trailing-N-days window (today − n → today) as YYYYMMDD. */
+function lastNDaysRange(n: number): { from: string; to: string } {
+  const now = new Date();
+  const start = new Date(now);
+  start.setDate(start.getDate() - n);
+  return { from: ymd(start), to: ymd(now) };
+}
+
+/** Resolve the sync window from a command row's `days` column.
+ *  null/0/undefined → full current FY; a positive int → that many trailing days. */
+function rangeForDays(days: unknown): { from: string; to: string; label: string } {
+  const n = typeof days === "number" && Number.isFinite(days) ? Math.floor(days) : 0;
+  if (n > 0) {
+    const r = lastNDaysRange(n);
+    return { ...r, label: `last ${n} days` };
+  }
+  return { ...currentFyRange(), label: "full FY" };
 }
 
 /**
@@ -106,7 +125,7 @@ function subscribeForCompany(
       },
       async (payload) => {
         const id: number = (payload.new as any).id;
-        const { from, to } = currentFyRange();
+        const { from, to, label: rangeLabel } = rangeForDays((payload.new as any).days);
 
         const setStatus = (status: string) =>
           supabase
@@ -122,7 +141,7 @@ function subscribeForCompany(
         console.log("🌐 [WEB-SYNC] Refresh requested from the WEB dashboard");
         console.log(`🌐 [WEB-SYNC]   • command id : ${id}`);
         console.log(`🌐 [WEB-SYNC]   • company    : ${company}`);
-        console.log(`🌐 [WEB-SYNC]   • range      : ${from} → ${to}  (daily chunks)`);
+        console.log(`🌐 [WEB-SYNC]   • range      : ${from} → ${to}  (${rangeLabel}, daily chunks)`);
         console.log("🌐 ──────────────────────────────────────────────────────");
 
         // Ack immediately so the web button shows "✓ Sync started" within ~1 s.
