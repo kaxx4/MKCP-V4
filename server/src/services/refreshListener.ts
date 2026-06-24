@@ -28,14 +28,13 @@ function lastNDaysRange(n: number): { from: string; to: string } {
 }
 
 /** Resolve the sync window from a command row's `days` column.
- *  null/0/undefined → full current FY; a positive int → that many trailing days. */
+ *  null/undefined → full current FY; 0 → today only; positive int → trailing N days. */
 function rangeForDays(days: unknown): { from: string; to: string; label: string } {
-  const n = typeof days === "number" && Number.isFinite(days) ? Math.floor(days) : 0;
-  if (n > 0) {
-    const r = lastNDaysRange(n);
-    return { ...r, label: `last ${n} days` };
-  }
-  return { ...currentFyRange(), label: "full FY" };
+  if (days === null || days === undefined) return { ...currentFyRange(), label: "full FY" };
+  const n = typeof days === "number" && Number.isFinite(days) ? Math.floor(days) : -1;
+  if (n < 0) return { ...currentFyRange(), label: "full FY" }; // non-numeric → safe default
+  if (n === 0) { const t = ymd(new Date()); return { from: t, to: t, label: "today" }; }
+  return { ...lastNDaysRange(n), label: `last ${n} days` };
 }
 
 /**
