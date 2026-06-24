@@ -103,12 +103,21 @@ export class SyncOrchestrator {
       ...costCentres.tallymessage,
     ];
 
-    this.supabase.syncMasters(mastersList, company).catch(e =>
-      console.error(`[Supabase] Masters sync failed: ${e.message}`)
-    );
+    // AWAIT the cloud upload (was fire-and-forget). Returning before the upload
+    // finished is what let the web read a half-written dataset and show zero /
+    // only the first day's data on a slow network. If the upload fails we mark
+    // the whole masters sync unsuccessful so the caller doesn't report "done".
+    let uploadOk = true;
+    try {
+      await this.supabase.syncMasters(mastersList, company);
+    } catch (e: any) {
+      uploadOk = false;
+      errors.push(`Supabase masters upload failed: ${e.message}`);
+      console.error(`[Supabase] Masters sync failed: ${e.message}`);
+    }
 
     return {
-      success: stocks.tallymessage.length > 0 || ledgers.tallymessage.length > 0,
+      success: uploadOk && (stocks.tallymessage.length > 0 || ledgers.tallymessage.length > 0),
       errors: errors.length > 0 ? errors : undefined,
       data: {
         tallymessage: mastersList,
@@ -162,6 +171,12 @@ export class SyncOrchestrator {
     // in the window failed. This is what reliably clears old deleted/converted
     // vouchers (e.g. Delivery Notes) without an all-or-nothing full-window pull.
     const succeededDays: string[] = [];
+    // Chunks whose fetch ultimately failed in the parallel pass — retried once
+    // more, SEQUENTIALLY with a longer timeout, before we give up. This is what
+    // recovers the "random days/months skipped on a slow network" symptom: a
+    // chunk that timed out while sharing bandwidth with two others usually
+    // succeeds on a calm, solo retry.
+    const failedChunks: typeof chunks = [];
     let chunksSucceeded = 0;
     let chunksFailed = 0;
 
@@ -218,8 +233,8 @@ export class SyncOrchestrator {
         } else {
           chunksFailed++;
           chunkDetails.push({ label: chunk.label, count: 0, ms: Date.now() - chunkT0 });
-          errors.push(`${chunk.label}: ${e.message}`);
-          console.error(`[DAYBOOK] ✗ ${chunk.label}: ${e.message}`);
+          failedChunks.push(chunk); // queue for the sequential retry sweep below
+          console.error(`[DAYBOOK] ✗ ${chunk.label}: ${e.message} — queued for retry`);
         }
       }
     };
@@ -255,8 +270,35 @@ export class SyncOrchestrator {
       }
     }
 
+    // ── Sequential retry sweep ──────────────────────────────────────────────
+    // Re-attempt every chunk that failed the parallel pass, one at a time (no
+    // bandwidth contention) and with double the timeout. Most "missing day"
+    // failures are transient slow-network timeouts that clear on a calm retry,
+    // so this is the main reliability win for flaky connections.
+    if (failedChunks.length > 0 && !signal?.aborted) {
+      console.log(`[DAYBOOK] ↻ Retry sweep: re-attempting ${failedChunks.length} failed chunk(s) sequentially…`);
+      const toRetry = failedChunks.splice(0); // drain; survivors get re-queued
+      for (const chunk of toRetry) {
+        if (signal?.aborted) { failedChunks.push(chunk); continue; }
+        try {
+          const vouchers = await this._fetchVoucherChunk(company, chunk.from, chunk.to, chunk.label, voucherTimeoutMs * 2, signal);
+          const added = this._collectVouchers(vouchers, chunk.label, allVouchers, seenGuids);
+          chunksSucceeded++;
+          chunksFailed--;
+          if (chunk.from === chunk.to) succeededDays.push(chunk.from);
+          console.log(`[DAYBOOK] ✓ (retry) ${chunk.label}: ${added} vouchers`);
+        } catch (e: any) {
+          failedChunks.push(chunk);
+          console.error(`[DAYBOOK] ✗ (retry) ${chunk.label}: ${e.message}`);
+        }
+      }
+    }
+    // Surface only the chunks that are STILL failed after the sweep, so the
+    // caller and logs reflect the true gap (not the transient first-pass misses).
+    for (const chunk of failedChunks) errors.push(`${chunk.label}: failed after retry`);
+
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-    console.log(`[DAYBOOK] ✓ Total: ${allVouchers.length} vouchers in ${elapsed}s (${chunksSucceeded}/${chunks.length} chunks succeeded)`);
+    console.log(`[DAYBOOK] ✓ Total: ${allVouchers.length} vouchers in ${elapsed}s (${chunksSucceeded}/${chunks.length} chunks succeeded, ${chunksFailed} failed)`);
 
     // Pruning = remove vouchers deleted/converted in Tally from the cloud.
     //   • daily strategy → prune PER successfully-pulled day (pruneDays). Each clean
@@ -272,9 +314,19 @@ export class SyncOrchestrator {
     } else if (cleanPull) {
       meta.pruneRange = { from: fromDate, to: toDate };
     }
-    this.supabase.syncVouchers(allVouchers, company, meta).catch(e =>
-      console.error(`[Supabase] Vouchers sync failed: ${e.message}`)
-    );
+    // AWAIT the cloud upload (was fire-and-forget). The desktop refresh listener
+    // marks the web command "done" the instant this orchestrator returns, so if
+    // we returned before the upload finished — or while it was failing — the web
+    // would read stale/partial data and show zero or just the first day. Awaiting
+    // guarantees "done" means the rows are actually in Supabase.
+    let uploadOk = true;
+    try {
+      await this.supabase.syncVouchers(allVouchers, company, meta);
+    } catch (e: any) {
+      uploadOk = false;
+      errors.push(`Supabase vouchers upload failed: ${e.message}`);
+      console.error(`[Supabase] Vouchers sync failed: ${e.message}`);
+    }
     if (strategy === "daily") {
       console.log(`[Supabase] Per-day prune over ${succeededDays.length} successfully-pulled day(s)`);
     } else if (!cleanPull) {
@@ -282,7 +334,7 @@ export class SyncOrchestrator {
     }
 
     return {
-      success: allVouchers.length > 0,
+      success: uploadOk && allVouchers.length > 0,
       errors: errors.length > 0 ? errors : undefined,
       data: { tallymessage: allVouchers },
       stats: {
