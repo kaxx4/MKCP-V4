@@ -10,6 +10,7 @@ import { pushVoucherToTally, pushBatchToTally, buildVoucherImportXml, parseImpor
 import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import { startRefreshListener } from "./services/refreshListener.js";
+import { startNightlySync } from "./services/nightlySync.js";
 import type { SyncPlan, PushVoucherRequest, PushBatchRequest } from "./types.js";
 
 const app = express();
@@ -603,6 +604,9 @@ const httpServer = app.listen(PORT, () => {
   const company =
     process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
   startRefreshListener(PORT, company);
+
+  // Nightly automatic full-FY sync at 00:00 local (configurable via NIGHTLY_SYNC_*).
+  startNightlySync(PORT, company);
 });
 
 httpServer.on('error', (err: NodeJS.ErrnoException) => {

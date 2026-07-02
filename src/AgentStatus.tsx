@@ -210,7 +210,7 @@ export default function AgentStatus() {
   const qsync = useQuickSyncStore();
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
-  const [logFilter, setLogFilter] = useState<"all" | "errors" | "tally" | "supabase" | "remote">("all");
+  const [logFilter, setLogFilter] = useState<"all" | "errors" | "tally" | "supabase" | "remote" | "auto">("all");
   const logsBoxRef = useRef<HTMLDivElement | null>(null);
   const logsAutoScrollRef = useRef(true);
 
@@ -459,6 +459,7 @@ export default function AgentStatus() {
     if (logFilter === "tally")    return /\[tally\]|\[DAYBOOK\]|\[SYNC\]|\[MASTERS\]|\[convert\]|\[PUSH-TEST\]/i.test(l);
     if (logFilter === "supabase") return /\[Supabase\]|\[pushAgent\]|\[Auto-push|\[Config Sync\]/i.test(l);
     if (logFilter === "remote")   return /🌐|\[WEB-SYNC\]/.test(l);  // web-triggered (Supabase) refresh
+    if (logFilter === "auto")     return /🌙|\[NIGHTLY\]/.test(l);   // scheduled nightly full-FY sync
     return true;
   });
 
@@ -898,6 +899,7 @@ export default function AgentStatus() {
                     ["tally", "Tally"],
                     ["supabase", "Supabase"],
                     ["remote", "🌐 Remote"],
+                    ["auto", "🌙 Auto"],
                   ] as [typeof logFilter, string][]).map(([key, label]) => (
                     <button
                       key={key}
@@ -930,6 +932,7 @@ export default function AgentStatus() {
                     visibleLogs.map((line, i) => {
                       const cls = isErrorLine(line) ? "text-red-400"
                         : /🌐/.test(line) ? "text-cyan-300"   // web-triggered remote refresh
+                        : /🌙/.test(line) ? "text-violet-300" // scheduled nightly full-FY sync
                         : /⚠/.test(line) ? "text-amber-400"
                         : /✓/.test(line) ? "text-green-400"
                         : "text-neutral-300";
