@@ -103,6 +103,22 @@ export class SyncOrchestrator {
       ...costCentres.tallymessage,
     ];
 
+    // Defense in depth: an aborted masters pull is partial — never upload it, or we'd
+    // overwrite the cloud masters with a truncated set. Bail out honestly.
+    if (signal?.aborted) {
+      console.error(`[MASTERS] ✗ Aborted before completion — NOT uploading partial masters to Supabase`);
+      return {
+        success: false,
+        errors: ["Masters sync aborted before completion — partial data was not uploaded", ...errors],
+        data: { tallymessage: [] },
+        stats: {
+          stockGroups: 0, units: 0, stockItems: 0, ledgers: 0,
+          godowns: 0, costCentres: 0, dealerPriceLists: 0,
+          elapsedSeconds: parseFloat(elapsed),
+        },
+      };
+    }
+
     // AWAIT the cloud upload (was fire-and-forget). Returning before the upload
     // finished is what let the web read a half-written dataset and show zero /
     // only the first day's data on a slow network. If the upload fails we mark
@@ -299,6 +315,32 @@ export class SyncOrchestrator {
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`[DAYBOOK] ✓ Total: ${allVouchers.length} vouchers in ${elapsed}s (${chunksSucceeded}/${chunks.length} chunks succeeded, ${chunksFailed} failed)`);
+
+    // Defense in depth: an aborted run (client disconnect / socket timeout) holds only
+    // a PARTIAL slice of the window. Never upload or prune partial data — doing so would
+    // overwrite the cloud with a truncated FY (the exact damage the http-client + no-server-
+    // timeout fixes prevent upstream). Bail out honestly instead of writing garbage.
+    if (signal?.aborted) {
+      console.error(
+        `[DAYBOOK] ✗ Aborted before completion — discarding ${allVouchers.length} partial voucher(s); NOT uploading to Supabase`
+      );
+      return {
+        success: false,
+        error: "Sync aborted before completion — partial data was not uploaded",
+        errors: errors.length > 0 ? errors : undefined,
+        data: { tallymessage: [] },
+        stats: {
+          vouchers: 0,
+          fromDate,
+          toDate,
+          chunksTotal: chunks.length,
+          chunksSucceeded,
+          chunksFailed,
+          chunkDetails,
+          elapsedSeconds: parseFloat(elapsed),
+        },
+      };
+    }
 
     // Pruning = remove vouchers deleted/converted in Tally from the cloud.
     //   • daily strategy → prune PER successfully-pulled day (pruneDays). Each clean

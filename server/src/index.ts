@@ -133,7 +133,7 @@ app.post("/api/tally/sync", syncGuard, async (req, res) => {
   const { company, fromDate, toDate, mode = "full", chunkStrategy = "smart" } = req.body;
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
-  res.setTimeout(5_400_000);
+  res.setTimeout(0); // No server socket timeout: a finite ceiling destroys the socket mid-sync → res.on("close") → ac.abort() → truncated upload. Per-chunk (orchestrator) + client (postTallySync 2h / browser) timeouts bound it.
 
   const plan: SyncPlan = {
     company, fromDate: fromDate ?? "", toDate: toDate ?? "",
@@ -154,7 +154,7 @@ app.post("/api/tally/sync-masters", syncGuard, async (req, res) => {
   const { company } = req.body;
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
-  res.setTimeout(1_200_000);
+  res.setTimeout(0); // No server socket timeout (see /api/tally/sync) — avoids destroying the socket mid-sync.
 
   try {
     const result = await orchestrator.syncMastersOnly(company, ac.signal, (p) => {
@@ -173,7 +173,7 @@ app.post("/api/tally/sync-daybook", syncGuard, async (req, res) => {
 
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
-  res.setTimeout(5_400_000);
+  res.setTimeout(0); // No server socket timeout: a finite ceiling destroys the socket mid-sync → res.on("close") → ac.abort() → truncated upload. Per-chunk (orchestrator) + client (postTallySync 2h / browser) timeouts bound it.
 
   const strategy: "smart" | "monthly" | "weekly" | "daily" =
     ["smart","monthly","weekly","daily"].includes(chunkMode) ? chunkMode : "smart";
@@ -197,7 +197,7 @@ app.post("/api/tally/changed-vouchers", syncGuard, async (req, res) => {
 
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
-  res.setTimeout(5_400_000);
+  res.setTimeout(0); // No server socket timeout: a finite ceiling destroys the socket mid-sync → res.on("close") → ac.abort() → truncated upload. Per-chunk (orchestrator) + client (postTallySync 2h / browser) timeouts bound it.
 
   try {
     const converted = await orchestrator.syncChangedVouchers(company, since, ac.signal);
