@@ -240,17 +240,25 @@ export class SupabaseSync {
         const DELETE_CHUNK = 100;
         for (let i = 0; i < guidsArray.length; i += DELETE_CHUNK) {
           const chunk = guidsArray.slice(i, i + DELETE_CHUNK);
-          await this.client
-            .from("tally_voucher_ledger_entries")
-            .delete()
-            .in("voucher_guid", chunk)
-            .eq("company", company);
+          // Retry-wrapped: a transient "fetch failed" here used to fail the whole
+          // voucher sync (leaving stale child entries). withRetry rides out the blip.
+          await this.withRetry("delete tally_voucher_ledger_entries", async () => {
+            const { error } = await this.client!
+              .from("tally_voucher_ledger_entries")
+              .delete()
+              .in("voucher_guid", chunk)
+              .eq("company", company);
+            if (error) throw new Error(`tally_voucher_ledger_entries: ${error.message}`);
+          });
 
-          await this.client
-            .from("tally_voucher_inventory_entries")
-            .delete()
-            .in("voucher_guid", chunk)
-            .eq("company", company);
+          await this.withRetry("delete tally_voucher_inventory_entries", async () => {
+            const { error } = await this.client!
+              .from("tally_voucher_inventory_entries")
+              .delete()
+              .in("voucher_guid", chunk)
+              .eq("company", company);
+            if (error) throw new Error(`tally_voucher_inventory_entries: ${error.message}`);
+          });
         }
 
         // Insert new entries in batches of 200
@@ -330,16 +338,19 @@ export class SupabaseSync {
       const startedAt = new Date(startedAtMs).toISOString();
       const completedAt = new Date().toISOString();
 
-      await this.client.from("tally_sync_history").insert({
-        company,
-        sync_type: syncType,
-        started_at: startedAt,
-        completed_at: completedAt,
-        row_counts: rowCounts,
-        errors: errors,
-        success,
-        duration_ms: Date.now() - startedAtMs,
-        ...(chunkCount != null ? { chunk_count: chunkCount } : {}),
+      await this.withRetry("insert tally_sync_history", async () => {
+        const { error } = await this.client!.from("tally_sync_history").insert({
+          company,
+          sync_type: syncType,
+          started_at: startedAt,
+          completed_at: completedAt,
+          row_counts: rowCounts,
+          errors: errors,
+          success,
+          duration_ms: Date.now() - startedAtMs,
+          ...(chunkCount != null ? { chunk_count: chunkCount } : {}),
+        });
+        if (error) throw new Error(error.message);
       });
     } catch (e: any) {
       console.error(`[Supabase] Failed to log sync history: ${e.message}`);
@@ -374,11 +385,18 @@ export class SupabaseSync {
     );
     if (clean.length === 0) return 0;
     try {
-      const { data, error } = await this.client.rpc("delete_orphans", {
-        p_table: table,
-        p_company: company,
-        p_key_col: keyCol,
-        p_valid_keys: clean,
+      const { data, error } = await this.withRetry(`rpc delete_orphans (${table})`, async () => {
+        const res = await this.client!.rpc("delete_orphans", {
+          p_table: table,
+          p_company: company,
+          p_key_col: keyCol,
+          p_valid_keys: clean,
+        });
+        // postgrest resolves a transient fetch failure into { error } (it does NOT throw
+        // and won't auto-retry a POST), so re-throw transient errors to trigger withRetry's
+        // backoff. Non-transient errors fall through to the best-effort handler below.
+        if (res.error && this.isTransient(res.error)) throw res.error;
+        return res;
       });
       if (error) {
         // Most likely cause: migration not applied yet. Log + continue.
@@ -419,11 +437,15 @@ export class SupabaseSync {
     // already guards this, but keep the belt-and-braces check here too.
     if (clean.length === 0) return 0;
     try {
-      const { data, error } = await this.client.rpc("delete_voucher_orphans_in_range", {
-        p_company: company,
-        p_from: toIsoDate(from),
-        p_to: toIsoDate(to),
-        p_valid_guids: clean,
+      const { data, error } = await this.withRetry("rpc delete_voucher_orphans_in_range", async () => {
+        const res = await this.client!.rpc("delete_voucher_orphans_in_range", {
+          p_company: company,
+          p_from: toIsoDate(from),
+          p_to: toIsoDate(to),
+          p_valid_guids: clean,
+        });
+        if (res.error && this.isTransient(res.error)) throw res.error; // postgrest returns fetch errors as {error}
+        return res;
       });
       if (error) {
         console.warn(`[Supabase] Voucher range cleanup skipped (${from}–${to}): ${error.message}`);
@@ -454,10 +476,14 @@ export class SupabaseSync {
     if (cleanDays.length === 0) return 0;
     const cleanGuids = (validGuids || []).filter((g): g is string => typeof g === "string" && g.length > 0);
     try {
-      const { data, error } = await this.client.rpc("delete_voucher_orphans_for_days", {
-        p_company: company,
-        p_days: cleanDays,
-        p_valid_guids: cleanGuids,
+      const { data, error } = await this.withRetry("rpc delete_voucher_orphans_for_days", async () => {
+        const res = await this.client!.rpc("delete_voucher_orphans_for_days", {
+          p_company: company,
+          p_days: cleanDays,
+          p_valid_guids: cleanGuids,
+        });
+        if (res.error && this.isTransient(res.error)) throw res.error; // postgrest returns fetch errors as {error}
+        return res;
       });
       if (error) {
         console.warn(`[Supabase] Per-day voucher prune skipped: ${error.message}`);
@@ -476,7 +502,11 @@ export class SupabaseSync {
   private async cleanupOrphanEntries(company: string): Promise<void> {
     if (!this.client) return;
     try {
-      const { data, error } = await this.client.rpc("cleanup_orphan_voucher_entries", { p_company: company });
+      const { data, error } = await this.withRetry("rpc cleanup_orphan_voucher_entries", async () => {
+        const res = await this.client!.rpc("cleanup_orphan_voucher_entries", { p_company: company });
+        if (res.error && this.isTransient(res.error)) throw res.error; // postgrest returns fetch errors as {error}
+        return res;
+      });
       if (error) {
         console.warn(`[Supabase] Orphan entry cleanup skipped: ${error.message}`);
         return;
