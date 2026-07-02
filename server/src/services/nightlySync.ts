@@ -1,5 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import ws from "ws";
+import { isTallyBusy } from "./tallyBusy.js";
+import { postTallySync } from "./localSyncClient.js";
 
 // Same WebSocket polyfill used by SupabaseSync / refreshListener.
 if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
@@ -93,20 +95,18 @@ export function startNightlySync(localPort: number, fallbackCompany: string): vo
     console.log("🌙 ──────────────────────────────────────────────────────");
 
     try {
-      const resp = await fetch(`http://localhost:${localPort}/api/tally/sync`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          company,
-          fromDate: from,
-          toDate: to,
-          mode: "full",
-          chunkStrategy: "daily",
-        }),
+      // Uses Node's http client (not fetch) so the ~90-min full-FY sync isn't
+      // aborted by undici's 5-min headersTimeout. See localSyncClient.ts.
+      const resp = await postTallySync(localPort, {
+        company,
+        fromDate: from,
+        toDate: to,
+        mode: "full",
+        chunkStrategy: "daily",
       });
 
       if (resp.ok) {
-        const result: any = await resp.json().catch(() => null);
+        const result: any = resp.json;
         if (result && result.success === false) {
           console.error(
             `🌙 [NIGHTLY] ✗ No data: ${result.error || "Tally returned zero rows — check Tally is open"}`
@@ -134,12 +134,24 @@ export function startNightlySync(localPort: number, fallbackCompany: string): vo
   // time the app is opened mid-day. First real run is at HOUR:00 on the next day.
   let lastRunDate = dateKey(new Date());
 
+  let deferLogged = false;
   const tick = () => {
     const now = new Date();
-    if (shouldRunNow(now, lastRunDate, hour)) {
-      lastRunDate = dateKey(now); // set BEFORE firing → at most one attempt per day
-      void fire();
+    if (!shouldRunNow(now, lastRunDate, hour)) return;
+    // Tally's XML port is single-threaded. If another sync (e.g. the renderer's
+    // 30-min "Today" sync, or a web refresh) is already running, don't pile on —
+    // skip this tick without marking the day done, so we retry in 60s and fire as
+    // soon as Tally is free.
+    if (isTallyBusy()) {
+      if (!deferLogged) {
+        console.log("🌙 [NIGHTLY] Tally busy with another sync — deferring, will retry each minute");
+        deferLogged = true;
+      }
+      return;
     }
+    deferLogged = false;
+    lastRunDate = dateKey(now); // set BEFORE firing → at most one attempt per day
+    void fire();
   };
 
   setInterval(tick, 60_000);

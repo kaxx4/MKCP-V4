@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
+import { postTallySync } from "./localSyncClient.js";
 
 // Same WebSocket polyfill used by SupabaseSync
 if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
@@ -158,23 +159,18 @@ function subscribeForCompany(
         // it just means the data will be fresh from the current run anyway.
         try {
           console.log(`🌐 [WEB-SYNC] → Firing Tally sync now… (id=${id})`);
-          const resp = await fetch(
-            `http://localhost:${localPort}/api/tally/sync`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                company,
-                fromDate: from,
-                toDate: to,
-                mode: "full",
-                chunkStrategy: "daily",
-              }),
-            }
-          );
+          // Uses Node's http client (not fetch) so a full-FY refresh (days=null,
+          // ~90 min) isn't aborted by undici's 5-min headersTimeout. See localSyncClient.ts.
+          const resp = await postTallySync(localPort, {
+            company,
+            fromDate: from,
+            toDate: to,
+            mode: "full",
+            chunkStrategy: "daily",
+          });
 
           if (resp.ok) {
-            const result: any = await resp.json().catch(() => null);
+            const result: any = resp.json;
             // The orchestrator returns { success:false, error } when Tally hands
             // back zero rows (wrong company / Tally closed / empty window). Don't
             // report that as success — surface it so the web doesn't show "Synced".
