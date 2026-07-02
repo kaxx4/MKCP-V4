@@ -38,6 +38,20 @@ function rangeForDays(days: unknown): { from: string; to: string; label: string 
   return { ...lastNDaysRange(n), label: `last ${n} days` };
 }
 
+/** Rank a `days` scope by width so a burst can be coalesced to the WIDEST one, which
+ *  supersets every narrower trailing window: full FY (null) > larger N > 7 > 0 (today). */
+function rankDays(days: unknown): number {
+  if (days === null || days === undefined) return Infinity;
+  return typeof days === "number" && Number.isFinite(days) && days >= 0 ? days : Infinity;
+}
+
+/** Short human label for a `days` value, for log lines. */
+function fmtDays(days: unknown): string {
+  if (days === null || days === undefined) return "full FY";
+  if (days === 0) return "today";
+  return typeof days === "number" ? `last ${days}d` : "full FY";
+}
+
 /**
  * Subscribes to `tally_refresh_commands` via Supabase Realtime.
  * When the web dashboard inserts a row for this company, we:
@@ -106,6 +120,109 @@ function subscribeForCompany(
   localPort: number,
   company: string
 ): void {
+  // ── Burst coalescing ───────────────────────────────────────────────────────
+  // Rapid commands (e.g. the user clicking "7-day" then "30-day" within seconds)
+  // are merged into ONE sync at the WIDEST requested scope, which supersets every
+  // narrower trailing window. Without this, only whichever command won the syncGuard
+  // race was honoured and the rest were silently marked done — so a "30-day" click
+  // could resolve to a 7-day pull, or vice-versa (bug report 2026-07-02).
+  type Batch = { ids: number[]; widestDays: unknown; retries: number };
+  const COALESCE_MS = 8_000;
+  const MAX_BUSY_RETRIES = 22; // ~3 min at 8s — within the web dashboard's 3-min poll window
+  let batch: Batch | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const setStatus = (ids: number[], status: string) =>
+    supabase.from("tally_refresh_commands").update({ status }).in("id", ids);
+
+  const armTimer = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void fireBatch(), COALESCE_MS);
+  };
+
+  // Merge a batch into the current buffer (or start one) and re-arm. In its own
+  // function so TS evaluates `batch` fresh — inside fireBatch the earlier `batch = null`
+  // over-narrows it (it can't see concurrent handlers reassigning across the await).
+  const requeue = (b: Batch): void => {
+    if (!batch) {
+      batch = b;
+    } else {
+      batch.ids = Array.from(new Set([...b.ids, ...batch.ids]));
+      if (rankDays(b.widestDays) > rankDays(batch.widestDays)) batch.widestDays = b.widestDays;
+      batch.retries = Math.max(batch.retries, b.retries);
+    }
+    armTimer();
+  };
+
+  async function fireBatch(): Promise<void> {
+    const b = batch;
+    batch = null;
+    timer = null;
+    if (!b) return;
+    const { ids } = b;
+    const { from, to, label } = rangeForDays(b.widestDays);
+
+    console.log("");
+    console.log("🌐 ──────────────────────────────────────────────────────");
+    console.log(`🌐 [WEB-SYNC] Firing sync for ${ids.length} coalesced command(s): [${ids.join(", ")}]`);
+    console.log(`🌐 [WEB-SYNC]   • company     : ${company}`);
+    console.log(`🌐 [WEB-SYNC]   • widest scope: ${from} → ${to}  (${label}, daily chunks)`);
+    console.log("🌐 ──────────────────────────────────────────────────────");
+
+    try {
+      // Uses Node's http client (not fetch) so a full-FY refresh (~90 min) isn't
+      // aborted by undici's 5-min headersTimeout. See localSyncClient.ts.
+      const resp = await postTallySync(localPort, {
+        company, fromDate: from, toDate: to, mode: "full", chunkStrategy: "daily",
+      });
+
+      if (resp.ok) {
+        const result: any = resp.json;
+        // The orchestrator returns { success:false } on zero rows (wrong company /
+        // Tally closed). Don't report that as success.
+        if (result && result.success === false) {
+          console.error(
+            `🌐 [WEB-SYNC] ✗ No data [${ids.join(", ")}]: ` +
+              `${result.error || "Tally returned zero rows — check the company name and that Tally is open"}`
+          );
+          await setStatus(ids, "error");
+        } else {
+          const s = result?.stats;
+          console.log(
+            s
+              ? `🌐 [WEB-SYNC] ✓ Completed [${ids.join(", ")}]: ${s.vouchers ?? 0} vouchers, ` +
+                  `${s.stockItems ?? 0} items, ${s.ledgers ?? 0} ledgers in ${s.elapsedSeconds ?? "?"}s`
+              : `🌐 [WEB-SYNC] ✓ Completed [${ids.join(", ")}]`
+          );
+          await setStatus(ids, "done");
+        }
+      } else if (resp.status === 409) {
+        // Another sync (nightly / an earlier batch) holds Tally's single-threaded port.
+        // Re-queue and retry within the web's poll window rather than dropping this
+        // batch's scope. Merge with any batch that formed while we were blocked.
+        if (b.retries < MAX_BUSY_RETRIES) {
+          b.retries++;
+          requeue(b);
+          console.log(
+            `🌐 [WEB-SYNC] ⏭ Busy — another sync running; retry ${b.retries}/${MAX_BUSY_RETRIES} ` +
+              `in ${COALESCE_MS / 1000}s [${ids.join(", ")}]`
+          );
+        } else {
+          console.log(
+            `🌐 [WEB-SYNC] ⏭ Still busy after ${MAX_BUSY_RETRIES} retries — marking done; ` +
+              `a concurrent sync is refreshing the data [${ids.join(", ")}]`
+          );
+          await setStatus(ids, "done");
+        }
+      } else {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+    } catch (err: any) {
+      console.error(`🌐 [WEB-SYNC] ✗ Failed [${ids.join(", ")}]: ${err.message}`);
+      await setStatus(ids, "error");
+    }
+  }
+
   // One channel per company so multiple desktop instances don't cross-trigger.
   const channelName = `refresh-listener-${company
     .replace(/[^a-zA-Z0-9]/g, "_")
@@ -125,91 +242,22 @@ function subscribeForCompany(
       },
       async (payload) => {
         const id: number = (payload.new as any).id;
-        const { from, to, label: rangeLabel } = rangeForDays((payload.new as any).days);
-
-        const setStatus = (status: string) =>
-          supabase
-            .from("tally_refresh_commands")
-            .update({ status })
-            .eq("id", id);
-
-        // ── Loud, distinct banner so a web-triggered sync is impossible to miss
-        //    in the log tail. Every line carries the 🌐 [WEB-SYNC] marker so the
-        //    in-app Logs panel "Remote" filter can isolate the whole lifecycle.
-        console.log("");
-        console.log("🌐 ──────────────────────────────────────────────────────");
-        console.log("🌐 [WEB-SYNC] Refresh requested from the WEB dashboard");
-        console.log(`🌐 [WEB-SYNC]   • command id : ${id}`);
-        console.log(`🌐 [WEB-SYNC]   • company    : ${company}`);
-        console.log(`🌐 [WEB-SYNC]   • range      : ${from} → ${to}  (${rangeLabel}, daily chunks)`);
-        console.log("🌐 ──────────────────────────────────────────────────────");
-
-        // Ack immediately so the web button shows "✓ Sync started" within ~1 s.
-        await setStatus("ack");
-        console.log(`🌐 [WEB-SYNC] ✓ Acknowledged (id=${id}) — web button now shows "started"`);
-
-        // Fire the same /api/tally/sync endpoint the desktop UI uses.
-        // NOTE: we pass the current FY date range + daily chunking. A bare
-        // { company } produces an empty date window in the orchestrator, which
-        // pulls masters but ZERO vouchers — so the remote refresh must scope the
-        // range exactly like the desktop "Sync Now" button does.
-        // This fetch AWAITS the full sync (it can take minutes), so the response
-        // carries the real result counts — we log them when it returns.
-        // syncGuard returns 409 if a sync is already running — that's fine,
-        // it just means the data will be fresh from the current run anyway.
-        try {
-          console.log(`🌐 [WEB-SYNC] → Firing Tally sync now… (id=${id})`);
-          // Uses Node's http client (not fetch) so a full-FY refresh (days=null,
-          // ~90 min) isn't aborted by undici's 5-min headersTimeout. See localSyncClient.ts.
-          const resp = await postTallySync(localPort, {
-            company,
-            fromDate: from,
-            toDate: to,
-            mode: "full",
-            chunkStrategy: "daily",
-          });
-
-          if (resp.ok) {
-            const result: any = resp.json;
-            // The orchestrator returns { success:false, error } when Tally hands
-            // back zero rows (wrong company / Tally closed / empty window). Don't
-            // report that as success — surface it so the web doesn't show "Synced".
-            if (result && result.success === false) {
-              console.error(
-                `🌐 [WEB-SYNC] ✗ No data (id=${id}): ` +
-                  `${result.error || "Tally returned zero rows — check the company name and that Tally is open"}`
-              );
-              await setStatus("error");
-            } else {
-              const s = result?.stats;
-              if (s) {
-                console.log(
-                  `🌐 [WEB-SYNC] ✓ Completed (id=${id}): ` +
-                    `${s.vouchers ?? 0} vouchers, ${s.stockItems ?? 0} items, ` +
-                    `${s.ledgers ?? 0} ledgers in ${s.elapsedSeconds ?? "?"}s`
-                );
-              } else {
-                console.log(`🌐 [WEB-SYNC] ✓ Completed (id=${id})`);
-              }
-              // Mark done so the web button can flip to "✓ Synced".
-              await setStatus("done");
-            }
-          } else if (resp.status === 409) {
-            // A sync is already running; it refreshes the same data. Mark done
-            // rather than leaving the row stuck at "ack" forever.
-            console.log(
-              `🌐 [WEB-SYNC] ⏭ Skipped (id=${id}) — a sync was already running; ` +
-                `data refreshes from that run`
-            );
-            await setStatus("done");
-          } else {
-            throw new Error(`HTTP ${resp.status}`);
-          }
-        } catch (err: any) {
-          console.error(`🌐 [WEB-SYNC] ✗ Failed (id=${id}): ${err.message}`);
-          // Mark error so the web button shows "✗ Failed" instead of spinning.
-          await setStatus("error");
+        const days = (payload.new as any).days;
+        // Add to the burst buffer BEFORE any await — Node runs this synchronous
+        // section to completion, so concurrent handlers can't race on `batch`.
+        if (!batch) {
+          batch = { ids: [id], widestDays: days, retries: 0 };
+        } else {
+          batch.ids.push(id);
+          if (rankDays(days) > rankDays(batch.widestDays)) batch.widestDays = days;
         }
+        armTimer();
+        console.log(
+          `🌐 [WEB-SYNC] Queued refresh id=${id} (${fmtDays(days)}) — ` +
+            `coalescing burst, firing in ${COALESCE_MS / 1000}s`
+        );
+        // Ack promptly so the web button leaves the "waiting" state.
+        await setStatus([id], "ack");
       }
     )
     .subscribe((status, err) => {
