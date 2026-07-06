@@ -405,7 +405,11 @@ export class SyncOrchestrator {
     console.log(`[SYNC] Period: ${fromDate || "all"} → ${toDate || "all"} | Mode: ${mode} | Strategy: ${chunkStrategy}`);
     console.log(`${"=".repeat(60)}`);
 
-    // AlterID check for incremental mode
+    // AlterID check for incremental mode. NOTE: unreachable from any production
+    // caller today — nightlySync.ts, refreshListener.ts, and quickSync.ts (via
+    // AgentStatus.tsx) all pass mode: "full". Don't assume this is providing a
+    // performance benefit in production; it only fires if something new starts
+    // requesting mode: "incremental".
     if (mode === "incremental") {
       onProgress({ phase: "check", step: 0, totalSteps: 1, detail: "Checking for changes (AlterID)...", timestamp: Date.now() });
       try {
