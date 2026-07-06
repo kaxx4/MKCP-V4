@@ -59,7 +59,10 @@ console.error = (...args: any[]) => {
 function syncGuard(req: express.Request, res: express.Response, next: express.NextFunction) {
   const company = req.body?.company;
   if (!company) return res.status(400).json({ success: false, error: "company required" });
-  const lockKey = `${company}_${req.path}`;
+  // One lock per company (not per company+path): all /api/tally/* sync routes
+  // share Tally's single-threaded XML port, so two different routes for the
+  // same company must serialize too, not just two calls to the same route.
+  const lockKey = `${company}`;
   if (activeSyncs.has(lockKey)) {
     return res.status(409).json({ success: false, error: "Sync already in progress for this company" });
   }

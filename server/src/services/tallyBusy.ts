@@ -6,6 +6,12 @@
 // Since an in-flight sync is itself proof Tally is reachable, the health endpoint
 // and the push agent consult this flag and report healthy WITHOUT pinging while
 // a sync is running.
+//
+// As of the syncGuard lockKey fix (company-only, not company+path), this counter
+// and syncGuard's activeSyncs mutex are scoped identically per company: any
+// syncGuard-protected route bumps `active` on entry and drops it on
+// finish/close, so isTallyBusy() is true for exactly as long as the mutex holds
+// the lock for that company — no path-level skew between the two anymore.
 
 let active = 0;
 

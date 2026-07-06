@@ -83,7 +83,34 @@ export function startNightlySync(localPort: number, fallbackCompany: string): vo
     return fallbackCompany;
   };
 
-  const fire = async () => {
+  // Best-effort failure marker, separate from the per-syncType rows the
+  // orchestrator itself writes (masters/vouchers, keyed off internal `errors`
+  // arrays, not the overall result.success/thrown-exception cases below). This
+  // is the row a human actually needs: "the nightly job didn't complete". The
+  // web dashboard's FreshnessChip reads tally_sync_history to warn when data is
+  // stale, so this row is what makes a broken nightly run visible there instead
+  // of only in this process's console.
+  const logNightlyFailure = async (company: string, message: string) => {
+    if (!supabase) return;
+    try {
+      const now = new Date().toISOString();
+      const { error } = await supabase.from("tally_sync_history").insert({
+        company,
+        sync_type: "nightly",
+        started_at: now,
+        completed_at: now,
+        row_counts: null,
+        errors: [message],
+        success: false,
+        duration_ms: 0,
+      });
+      if (error) console.error(`🌙 [NIGHTLY] Failed to log failure row: ${error.message}`);
+    } catch (e: any) {
+      console.error(`🌙 [NIGHTLY] Failed to log failure row: ${e.message}`);
+    }
+  };
+
+  const fire = async (): Promise<boolean> => {
     const company = await resolveCompany();
     const { from, to } = currentFyRange();
 
@@ -108,9 +135,10 @@ export function startNightlySync(localPort: number, fallbackCompany: string): vo
       if (resp.ok) {
         const result: any = resp.json;
         if (result && result.success === false) {
-          console.error(
-            `🌙 [NIGHTLY] ✗ No data: ${result.error || "Tally returned zero rows — check Tally is open"}`
-          );
+          const msg = result.error || "Tally returned zero rows — check Tally is open";
+          console.error(`🌙 [NIGHTLY] ✗ No data: ${msg}`);
+          await logNightlyFailure(company, msg);
+          return false;
         } else {
           const s = result?.stats;
           console.log(
@@ -119,14 +147,21 @@ export function startNightlySync(localPort: number, fallbackCompany: string): vo
                   `${s.ledgers ?? 0} ledgers in ${s.elapsedSeconds ?? "?"}s`
               : "🌙 [NIGHTLY] ✓ Completed"
           );
+          return true;
         }
       } else if (resp.status === 409) {
+        // Another sync already had the lock — not a failure of the nightly job
+        // itself, so no failure row and no retry-tomorrow: today's data still
+        // gets refreshed by whichever sync is holding the lock.
         console.log("🌙 [NIGHTLY] ⏭ Skipped — a sync was already running; data refreshes from that run");
+        return true;
       } else {
         throw new Error(`HTTP ${resp.status}`);
       }
     } catch (err: any) {
       console.error(`🌙 [NIGHTLY] ✗ Failed: ${err.message}`);
+      await logNightlyFailure(company, err.message);
+      return false;
     }
   };
 
@@ -150,8 +185,12 @@ export function startNightlySync(localPort: number, fallbackCompany: string): vo
       return;
     }
     deferLogged = false;
-    lastRunDate = dateKey(now); // set BEFORE firing → at most one attempt per day
-    void fire();
+    // Only mark today done on success. On failure, leave lastRunDate unset so
+    // the next 60s tick retries — same deferral behavior as the isTallyBusy()
+    // check above, just triggered by a failed attempt instead of a busy port.
+    void fire().then((ok) => {
+      if (ok) lastRunDate = dateKey(now);
+    });
   };
 
   setInterval(tick, 60_000);
