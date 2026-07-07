@@ -8,6 +8,12 @@ import { buildVoucherIndex, getCurrentStockIndexed, type VoucherIndex } from "..
 import { computeItemMargins, type ItemMarginData } from "../engine/financial";
 import { computePartyStats, type PartyStats } from "../utils/partyStats";
 
+/** Mass-deletion sanity check for applyDailyPull: if a fresh pull for a given
+ *  (day, voucherType) would remove more than this percentage of that day's
+ *  existing records of that type, refuse the drop for that type/day and keep
+ *  the existing records unchanged instead (see applyDailyPull below). */
+const MASS_DELETE_THRESHOLD_PCT = 40;
+
 /** Pre-computed running-balance row for a single ledger. */
 export interface LedgerTxn {
   date: string;
@@ -36,20 +42,19 @@ interface DataState {
   partyStats: PartyStats[] | null;
   setData: (d: ParsedData) => void;
   mergeData: (d: ParsedData) => void;
-  /** Replace EVERY voucher dated in [fromISO, toISO] with the freshly-pulled set:
-   *  drop all existing in-window vouchers, then add `freshVouchers`. Any voucher
-   *  deleted/converted in Tally (absent from the fresh pull) thus disappears locally.
-   *  Caller MUST only use this for a COMPLETE pull of the window (no failed chunks),
-   *  else a partial pull would wrongly delete vouchers Tally still has. */
-  replaceVouchersInRange: (freshVouchers: CanonicalVoucher[], fromISO: string, toISO: string) => void;
-  /** Replace EVERY voucher dated on one of `succeededDaysISO` with the freshly-pulled
-   *  set for those exact days: drop all existing vouchers on those days, then add
-   *  `freshVouchers` for those days. Any voucher deleted/converted in Tally on a
-   *  successfully-pulled day thus disappears locally, even when OTHER days in the
-   *  same pull failed — this mirrors the server's own per-day Supabase prune
-   *  (syncOrchestrator's pruneDays) exactly, instead of requiring the whole range
-   *  to be clean. This is what actually clears a deleted Delivery Note locally. */
-  replaceVouchersForDays: (freshVouchers: CanonicalVoucher[], succeededDaysISO: string[]) => void;
+  /** THE single voucher-clearing authority for a daily pull. Rule, no exceptions:
+   *  for each ISO date in `succeededDaysISO`, every existing voucher dated on that
+   *  day (any type) is dropped, then every voucher in `freshVouchers` dated on
+   *  that day is added back. Days not in `succeededDaysISO` are never touched.
+   *  Voucher type never determines which rule applies — the only exception is the
+   *  mass-deletion sanity check (see MASS_DELETE_THRESHOLD_PCT), applied per
+   *  (day, voucherType): if dropping would remove more than that percentage of a
+   *  type's existing count for that day, that type/day is left unchanged instead
+   *  and a "prune-guard-triggered" warning is recorded. `extraWarnings` are
+   *  appended as-is (e.g. the caller's own incomplete-lines/regression
+   *  findings) so they aren't silently dropped just because this path — not
+   *  mergeData — is what actually persists the pull. */
+  applyDailyPull: (freshVouchers: CanonicalVoucher[], succeededDaysISO: string[], extraWarnings?: ImportWarning[]) => void;
   clearData: () => void;
   refreshOverrides: () => void; // Apply current overrides to raw data
 }
@@ -381,123 +386,126 @@ export const useDataStore = create<DataState>((set, get) => ({
     }
   },
 
-  replaceVouchersInRange: (freshVouchers, fromISO, toISO) => {
-    const cur = get().rawData;
-    // No existing dataset — nothing to prune against; just load the fresh set.
-    if (!cur) {
-      get().setData({
-        company: null,
-        items: new Map(),
-        ledgers: new Map(),
-        vouchers: freshVouchers,
-        importedAt: new Date().toISOString(),
-        sourceFiles: ["tally-window-refresh"],
-        warnings: [],
-      });
-      return;
-    }
-
-    // Keep every voucher OUTSIDE the window; drop all in-window ones (they are
-    // re-added below only if Tally still has them).
-    const vMap = new Map<string, CanonicalVoucher>();
-    let droppedInRange = 0;
-    for (const v of cur.vouchers) {
-      if (v.date >= fromISO && v.date <= toISO) { droppedInRange++; continue; }
-      vMap.set(v.voucherId, v);
-    }
-    // Re-add the freshly-pulled window (authoritative for [fromISO, toISO]). In-window
-    // vouchers were just dropped above, so a collision here should only happen at a
-    // fromISO/toISO boundary edge case (date truncation putting the same voucherId in
-    // both the "kept outside window" and "fresh" sets) — guard it anyway.
-    const guardWarnings: ImportWarning[] = [];
-    for (const v of freshVouchers) {
-      const existing = vMap.get(v.voucherId);
-      if (existing && !canReplace(existing, v)) {
-        guardWarnings.push(mergeGuardWarning(v));
-        continue;
-      }
-      vMap.set(v.voucherId, v);
-    }
-
-    const removed = droppedInRange - freshVouchers.length;
-    const allVouchers = Array.from(vMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-
-    get().setData({
-      ...cur,
-      vouchers: allVouchers,
-      importedAt: new Date().toISOString(),
-      sourceFiles: [...new Set([...cur.sourceFiles, "tally-window-refresh"])],
-      warnings: [
-        ...cur.warnings,
-        {
-          severity: "info",
-          context: "window-refresh",
-          message: `Window refresh ${fromISO}–${toISO}: ${freshVouchers.length} from Tally${removed > 0 ? `, ${removed} deleted voucher(s) cleared` : ""}`,
-        },
-        ...guardWarnings,
-      ],
-    });
-  },
-
-  replaceVouchersForDays: (freshVouchers, succeededDaysISO) => {
+  applyDailyPull: (freshVouchers, succeededDaysISO, extraWarnings = []) => {
     const cur = get().rawData;
     const daySet = new Set(succeededDaysISO);
 
-    // No existing dataset — nothing to prune against; just load the fresh set.
+    // No existing dataset — nothing to prune against; just load the fresh set
+    // (restricted to the touched days, same as every other path here).
     if (!cur) {
+      const seeded = freshVouchers.filter((v) => daySet.has(v.date));
+      console.log(`[applyDailyPull] ${succeededDaysISO.length} day(s): seeding empty store with ${seeded.length} voucher(s)`);
       get().setData({
         company: null,
         items: new Map(),
         ledgers: new Map(),
-        vouchers: freshVouchers,
+        vouchers: seeded,
         importedAt: new Date().toISOString(),
-        sourceFiles: ["tally-day-refresh"],
-        warnings: [],
+        sourceFiles: ["daily-pull"],
+        warnings: extraWarnings,
       });
       return;
     }
 
-    // Keep every voucher NOT on one of the successfully-pulled days; drop the rest
-    // (they are re-added below only if Tally still has them for that day).
-    const vMap = new Map<string, CanonicalVoucher>();
-    let droppedInDays = 0;
+    // Bucket existing vouchers on a touched day by "date|voucherType" — the
+    // mass-deletion check operates at this granularity. Vouchers on untouched
+    // days are carried through unconditionally.
+    type Key = string;
+    const keyOf = (date: string, type: string): Key => `${date}|${type}`;
+    const existingByDayType = new Map<Key, CanonicalVoucher[]>();
+    const kept: CanonicalVoucher[] = [];
     for (const v of cur.vouchers) {
-      if (daySet.has(v.date)) { droppedInDays++; continue; }
-      vMap.set(v.voucherId, v);
+      if (!daySet.has(v.date)) { kept.push(v); continue; }
+      const key = keyOf(v.date, v.voucherType);
+      let arr = existingByDayType.get(key);
+      if (!arr) { arr = []; existingByDayType.set(key, arr); }
+      arr.push(v);
     }
 
-    // Re-add only freshVouchers dated on a succeeded day (safety filter — a daily-
-    // strategy pull should only ever contain vouchers from succeeded days anyway,
-    // since a failed chunk contributes nothing to the merged result).
-    const guardWarnings: ImportWarning[] = [];
-    let readded = 0;
+    const freshByDayType = new Map<Key, CanonicalVoucher[]>();
     for (const v of freshVouchers) {
-      if (!daySet.has(v.date)) continue;
-      readded++;
-      const existing = vMap.get(v.voucherId);
-      if (existing && !canReplace(existing, v)) {
-        guardWarnings.push(mergeGuardWarning(v));
+      if (!daySet.has(v.date)) continue; // safety filter — fresh should only ever cover touched days
+      const key = keyOf(v.date, v.voucherType);
+      let arr = freshByDayType.get(key);
+      if (!arr) { arr = []; freshByDayType.set(key, arr); }
+      arr.push(v);
+    }
+
+    const allKeys = new Set<Key>([...existingByDayType.keys(), ...freshByDayType.keys()]);
+    const guardWarnings: ImportWarning[] = [];
+    let totalDropped = 0;
+    let totalReadded = 0;
+    const guardTriggersByType = new Map<string, number>();
+
+    for (const key of allKeys) {
+      const sep = key.indexOf("|");
+      const day = key.slice(0, sep);
+      const type = key.slice(sep + 1);
+      const existingList = existingByDayType.get(key) ?? [];
+      const freshList = freshByDayType.get(key) ?? [];
+
+      if (existingList.length === 0) {
+        // Nothing existing of this type on this day — nothing to mass-delete, just add.
+        kept.push(...freshList);
+        totalReadded += freshList.length;
         continue;
       }
-      vMap.set(v.voucherId, v);
+
+      const freshIds = new Set(freshList.map((v) => v.voucherId));
+      const removedCount = existingList.filter((v) => !freshIds.has(v.voucherId)).length;
+      const removalPct = (removedCount / existingList.length) * 100;
+
+      if (removalPct > MASS_DELETE_THRESHOLD_PCT) {
+        // Mass-deletion sanity check tripped: refuse to drop this type on this
+        // day. Keep the existing records for that type unchanged — do not add
+        // the fresh ones either, since we're not touching this type/day at all.
+        kept.push(...existingList);
+        guardTriggersByType.set(type, (guardTriggersByType.get(type) ?? 0) + 1);
+        guardWarnings.push({
+          severity: "warn",
+          context: "prune-guard-triggered",
+          message: `Refused to prune ${type} on ${day}: fresh pull would remove ${removedCount}/${existingList.length} ` +
+            `(${removalPct.toFixed(0)}%) of existing records — over the ${MASS_DELETE_THRESHOLD_PCT}% mass-deletion threshold. Kept existing records unchanged.`,
+        });
+        continue;
+      }
+
+      // Under threshold: drop this type's existing records for this day (they're
+      // simply not re-pushed to `kept`), add the fresh ones.
+      totalDropped += existingList.length;
+      kept.push(...freshList);
+      totalReadded += freshList.length;
     }
 
-    const removed = droppedInDays - readded;
-    const allVouchers = Array.from(vMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+    const guardTriggerCount = guardTriggersByType.size > 0
+      ? Array.from(guardTriggersByType.values()).reduce((a, b) => a + b, 0)
+      : 0;
+    const byTypeSummary = Array.from(guardTriggersByType.entries())
+      .map(([t, n]) => `${t}:${n}`)
+      .join(", ");
+
+    const allVouchers = kept.sort((a, b) => a.date.localeCompare(b.date));
+
+    console.log(
+      `[applyDailyPull] ${succeededDaysISO.length} day(s): ${totalDropped} dropped, ${totalReadded} re-added` +
+      (guardTriggerCount > 0 ? `, ${guardTriggerCount} prune-guard trigger(s) [${byTypeSummary}]` : "")
+    );
 
     get().setData({
       ...cur,
       vouchers: allVouchers,
       importedAt: new Date().toISOString(),
-      sourceFiles: [...new Set([...cur.sourceFiles, "tally-day-refresh"])],
+      sourceFiles: [...new Set([...cur.sourceFiles, "daily-pull"])],
       warnings: [
         ...cur.warnings,
         {
           severity: "info",
-          context: "day-refresh",
-          message: `Per-day refresh (${succeededDaysISO.length} day(s)): ${readded} from Tally${removed > 0 ? `, ${removed} deleted voucher(s) cleared` : ""}`,
+          context: "daily-pull",
+          message: `Daily pull (${succeededDaysISO.length} day(s)): ${totalDropped} dropped, ${totalReadded} re-added` +
+            (guardTriggerCount > 0 ? `, ${guardTriggerCount} prune-guard trigger(s) [${byTypeSummary}]` : ""),
         },
         ...guardWarnings,
+        ...extraWarnings,
       ],
     });
   },
