@@ -17,18 +17,26 @@ export interface PullResult {
   cleared: number;        // in-window vouchers removed because Tally no longer has them
   elapsedSeconds: number;
   error?: string;
-  /** voucherIds that should have ledger/inventory lines (by voucherType) but came
-   *  back with none — a partial-Tally-response symptom, not a legitimate empty
-   *  voucher. Populated after the one auto-retry in quickSync's runQuickSync; if
-   *  still non-empty, the caller/UI should keep surfacing it as unresolved. */
+  /** voucherIds flagged as incomplete: either a line-bearing type (see
+   *  TYPES_REQUIRING_LINES — includes Delivery Note) that came back with zero
+   *  lines, or ANY voucher whose fresh line count regressed below what was
+   *  already stored — both are partial-Tally-response symptoms, not a
+   *  legitimate empty voucher. Populated after the one auto-retry in
+   *  quickSync's runQuickSync; if still non-empty, the caller/UI should keep
+   *  surfacing it as unresolved. */
   incompleteVoucherIds?: string[];
 }
 
 /** Voucher types that always carry at least one ledger/inventory line in Tally.
  *  A voucher of one of these types with zero lines is a parse/fetch defect, not
- *  a legitimate empty voucher (unlike e.g. a bare Quotation). */
+ *  a legitimate empty voucher (unlike e.g. a bare Quotation). Includes every
+ *  type that always has inventory lines (Delivery Note, Debit/Credit Note,
+ *  Stock Journal) in addition to the always-ledgered accounting types — a
+ *  Delivery Note with zero lines is exactly as much a partial-response symptom
+ *  as a Sales voucher with zero lines. */
 const TYPES_REQUIRING_LINES: ReadonlySet<VoucherType> = new Set([
   "Sales", "Purchase", "Receipt", "Payment", "Journal", "Contra",
+  "Delivery Note", "Debit Note", "Credit Note", "Stock Journal",
 ]);
 
 /** Vouchers of a line-bearing type with zero lines — cancelled vouchers are
@@ -37,6 +45,26 @@ function findIncompleteVouchers(vouchers: CanonicalVoucher[]): CanonicalVoucher[
   return vouchers.filter(
     (v) => !v.isCancelled && TYPES_REQUIRING_LINES.has(v.voucherType) && (v.lines?.length ?? 0) === 0
   );
+}
+
+/** Vouchers whose fresh line count is LOWER than what's already stored locally —
+ *  a partial-Tally-response symptom that isn't always exactly zero (e.g. a
+ *  voucher regressing from 5 lines to 2 on a flaky chunk). applyDailyPull has
+ *  no per-voucher completeness awareness by design (see dataStore.ts), so this
+ *  is the only thing standing between a partial fetch and a silently worse
+ *  local copy. Only flags a genuine regression against a known-good prior
+ *  count — a voucher with no prior record (brand new) is never flagged. Not
+ *  restricted to TYPES_REQUIRING_LINES: a regression is a defect for any type. */
+function findRegressedVouchers(
+  freshVouchers: CanonicalVoucher[],
+  existingLineCounts: Map<string, number>
+): CanonicalVoucher[] {
+  return freshVouchers.filter((v) => {
+    if (v.isCancelled) return false;
+    const priorCount = existingLineCounts.get(v.voucherId);
+    if (priorCount == null) return false;
+    return (v.lines?.length ?? 0) < priorCount;
+  });
 }
 
 function ymd(d: Date): string {
@@ -58,8 +86,10 @@ function toIso(yyyymmdd: string): string {
  * The GLOBAL "a sync is running" lock (tallyStore.isSyncing) is owned by the
  * caller (runQuickSync) so it spans the whole pull+push, not just the pull.
  *
- * On a CLEAN pull (no failed chunks) the window is authoritative: vouchers Tally
- * no longer has are cleared. A partial pull falls back to a safe additive merge.
+ * Each successfully-pulled DAY (not the whole range) is authoritative for
+ * itself: applyDailyPull clears that day's stale vouchers even if some other
+ * day in the same range failed. If no day can be trusted (non-daily strategy,
+ * or nothing succeeded), falls back to a safe additive merge that never deletes.
  */
 export async function pullFromTally(
   company: string,
@@ -106,41 +136,56 @@ export async function pullFromTally(
 
     const parsed = parseTransactions(result.data);
 
-    const incomplete = findIncompleteVouchers(parsed.vouchers);
+    // Load the pre-pull snapshot BEFORE applyDailyPull overwrites it — needed
+    // both for the fallback merge below and to detect a line-count regression
+    // against what was already known-good (see findRegressedVouchers).
+    const existingRaw = await loadData<unknown>("parsedData");
+    const existing = existingRaw ? deserializeParsedData(existingRaw) : null;
+    if (existing) await createBackup(existingRaw, "pre-quick-sync");
+
+    const existingLineCounts = new Map<string, number>();
+    if (existing) {
+      for (const v of existing.vouchers) existingLineCounts.set(v.voucherId, v.lines?.length ?? 0);
+    }
+
+    const zeroLine = findIncompleteVouchers(parsed.vouchers);
+    const regressed = findRegressedVouchers(parsed.vouchers, existingLineCounts);
+    const incompleteMap = new Map<string, CanonicalVoucher>();
+    for (const v of zeroLine) incompleteMap.set(v.voucherId, v);
+    for (const v of regressed) incompleteMap.set(v.voucherId, v);
+    const incomplete = Array.from(incompleteMap.values());
+
     if (incomplete.length > 0) {
       const dates = incomplete.map((v) => v.date).filter(Boolean).sort();
       console.warn(
-        `[pull] ${incomplete.length} voucher(s) came back with zero ledger/inventory lines ` +
+        `[pull] ${incomplete.length} voucher(s) came back incomplete ` +
+        `(${zeroLine.length} zero-line, ${regressed.length} line-count regression) ` +
         `(${dates[0]} → ${dates[dates.length - 1]}) — likely a partial Tally response for this chunk.`
       );
       parsed.warnings.push({
         severity: "warn",
         context: "incomplete-lines",
-        message: `${incomplete.length} voucher(s) parsed with zero lines: ${incomplete.map((v) => v.voucherNumber || v.voucherId).slice(0, 10).join(", ")}${incomplete.length > 10 ? "…" : ""}`,
+        message: `${incomplete.length} voucher(s) parsed with fewer lines than expected: ${incomplete.map((v) => v.voucherNumber || v.voucherId).slice(0, 10).join(", ")}${incomplete.length > 10 ? "…" : ""}`,
       });
     }
 
-    const existingRaw = await loadData<unknown>("parsedData");
-    const existing = existingRaw ? deserializeParsedData(existingRaw) : null;
-    if (existing) await createBackup(existingRaw, "pre-quick-sync");
-
     const before = existing?.vouchers.length ?? 0;
-    const cleanPull = base.chunksFailed === 0;
     // Days whose single-day chunk succeeded AND were actually pruned server-side
     // (see syncOrchestrator's pruneDays) — same granularity as the server's own
-    // per-day Supabase prune. Preferred over cleanPull: a day's deletions (e.g. a
-    // converted/removed Delivery Note) must clear locally even when some OTHER
-    // day in the same range failed, not only on a fully-clean whole-range pull.
+    // per-day Supabase prune. A day's deletions (e.g. a converted/removed
+    // Delivery Note) clear locally even when some OTHER day in the same range
+    // failed, since pruning is per-day, not gated on the whole range being clean.
     const succeededDaysISO = (s?.succeededDays ?? []).map(toIso);
     const ds = useDataStore.getState();
 
-    if (succeededDaysISO.length > 0 && existing) {
-      ds.replaceVouchersForDays(parsed.vouchers, succeededDaysISO);
-    } else if (cleanPull && existing) {
-      // Fallback for non-daily strategies (weekly/monthly), where the server
-      // doesn't track per-day success and only prunes on a fully-clean pull.
-      ds.replaceVouchersInRange(parsed.vouchers, toIso(fromYmd), toIso(toYmd));
+    if (succeededDaysISO.length > 0) {
+      // THE single voucher-clearing authority (see dataStore.ts). Guarded
+      // internally against mass-deletion per (day, voucherType).
+      ds.applyDailyPull(parsed.vouchers, succeededDaysISO, parsed.warnings);
     } else if (parsed.vouchers.length) {
+      // No days to safely prune (non-daily strategy, or nothing succeeded) —
+      // honest "we don't know enough to prune safely" fallback: plain additive
+      // upsert, never deletes.
       ds.mergeData({
         company: existing?.company ?? { name: company, fyStartMonth: 4 },
         items: existing?.items ?? new Map(),
@@ -152,10 +197,9 @@ export async function pullFromTally(
       });
     }
 
-    // Net count change tells us how many stale vouchers were cleared (pruned paths only).
-    const pruned = succeededDaysISO.length > 0 || cleanPull;
+    // Net count change tells us how many stale vouchers were cleared (pruned path only).
     const after = useDataStore.getState().data?.vouchers.length ?? before;
-    const cleared = pruned ? Math.max(0, (before + parsed.vouchers.length) - after) : 0;
+    const cleared = succeededDaysISO.length > 0 ? Math.max(0, (before + parsed.vouchers.length) - after) : 0;
 
     // ── Incremental edit catch-up (AlterID) ─────────────────────────────────
     // A date-windowed pull never re-fetches vouchers edited OUTSIDE [from,to], so
@@ -211,14 +255,18 @@ export async function pullFromTally(
 }
 
 /**
- * One targeted re-fetch for vouchers that came back with zero lines (see
- * findIncompleteVouchers). Re-runs the existing daily Collection query scoped to
- * just [minDate, maxDate] of the incomplete set and merges the result through
- * the same completeness-guarded mergeData (Task 1) — so a still-partial Tally
- * response can never regress what's already in the store, only improve it.
+ * One targeted re-fetch for vouchers flagged incomplete (see
+ * findIncompleteVouchers / findRegressedVouchers — zero lines on a line-bearing
+ * type, or any line-count regression vs. what was already stored). Re-runs the
+ * existing daily Collection query scoped to just [minDate, maxDate] of the
+ * incomplete set and merges the result through mergeData's completeness guard
+ * (canReplace) — so a still-partial retry response can never regress what's
+ * already in the store, only improve it. This is what backfills a voucher
+ * applyDailyPull already wrote with fewer lines than it should have, since
+ * applyDailyPull itself has no per-voucher completeness awareness by design.
  *
  * Best-effort, single-pass: never throws, never loops. Returns the voucherIds
- * still missing lines after the retry (empty if all recovered).
+ * still incomplete after the retry (empty if all recovered).
  */
 export async function retryIncompleteVouchers(
   company: string,
