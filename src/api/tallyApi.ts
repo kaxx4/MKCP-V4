@@ -25,14 +25,19 @@ export interface DayBookSyncResult {
   };
 }
 
-export async function syncMasters(company: string): Promise<MastersSyncResult> {
+/**
+ * @param origin Who triggered this sync — "manual" (default, server-side) or
+ *   "scheduled-<label>" (e.g. "scheduled-today"). Purely for log labeling
+ *   (see server's [SYNC] origin= lines) — never affects sync behavior.
+ */
+export async function syncMasters(company: string, origin?: string): Promise<MastersSyncResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 1_200_000); // 20 min — stock items XML can be very large
   try {
     const r = await fetch(`${BASE}/api/tally/sync-masters`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ company }),
+      body: JSON.stringify({ company, origin }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
@@ -45,14 +50,15 @@ export async function syncMasters(company: string): Promise<MastersSyncResult> {
   }
 }
 
-export async function syncDayBook(company: string, fromDate: string, toDate: string, chunkMode: "smart" | "monthly" | "daily" | "weekly" = "smart"): Promise<DayBookSyncResult> {
+/** @param origin see {@link syncMasters} */
+export async function syncDayBook(company: string, fromDate: string, toDate: string, chunkMode: "smart" | "monthly" | "daily" | "weekly" = "smart", origin?: string): Promise<DayBookSyncResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5_400_000); // 90 min — weekly full-FY can take 60+ min
   try {
     const r = await fetch(`${BASE}/api/tally/sync-daybook`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ company, fromDate, toDate, chunkMode }),
+      body: JSON.stringify({ company, fromDate, toDate, chunkMode, origin }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);

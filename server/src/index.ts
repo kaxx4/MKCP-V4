@@ -28,6 +28,21 @@ const activeSyncs = new Map<string, Promise<any>>();
 app.use(cors());
 app.use(express.json({ limit: "100mb" }));
 
+// ── Request logging ───────────────────────────────────────────────────────────
+// One line per request, emitted on "finish" so it carries the real status code
+// and elapsed time. Goes through console.log (below) so it lands in logBuffer —
+// same stream the root log viewer and AgentStatus.tsx's Logs panel already read,
+// no second logging path.
+app.use((req, res, next) => {
+  const start = Date.now();
+  const company = req.body?.company;
+  res.on("finish", () => {
+    const elapsed = Date.now() - start;
+    console.log(`[REQ] ${req.method} ${req.path}${company ? ` company=${company}` : ""} status=${res.statusCode} ${elapsed}ms`);
+  });
+  next();
+});
+
 // ── Log buffer + SSE streaming ────────────────────────────────────────────────
 const logBuffer: string[] = [];
 const MAX_LOGS = 500;
@@ -64,6 +79,8 @@ function syncGuard(req: express.Request, res: express.Response, next: express.Ne
   // same company must serialize too, not just two calls to the same route.
   const lockKey = `${company}`;
   if (activeSyncs.has(lockKey)) {
+    const origin = req.body?.origin || "manual";
+    console.log(`[SYNC] ✗ rejected (already in progress) origin=${origin} company=${company}`);
     return res.status(409).json({ success: false, error: "Sync already in progress for this company" });
   }
   activeSyncs.set(lockKey, Promise.resolve());
@@ -154,7 +171,9 @@ app.post("/api/tally/sync", syncGuard, async (req, res) => {
 });
 
 app.post("/api/tally/sync-masters", syncGuard, async (req, res) => {
-  const { company } = req.body;
+  const { company, origin = "manual" } = req.body;
+  const t0 = Date.now();
+  console.log(`[SYNC] origin=${origin} company=${company} route=sync-masters`);
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
   res.setTimeout(0); // No server socket timeout (see /api/tally/sync) — avoids destroying the socket mid-sync.
@@ -164,15 +183,20 @@ app.post("/api/tally/sync-masters", syncGuard, async (req, res) => {
       console.log(`[MASTERS] ${p.step}/${p.totalSteps}: ${p.detail}`);
     });
     if (!res.writableEnded) res.json(result);
+    console.log(`[SYNC] ✓ origin=${origin} company=${company} route=sync-masters items=${result.stats?.stockItems ?? 0} ledgers=${result.stats?.ledgers ?? 0} ${Date.now() - t0}ms`);
   } catch (e: any) {
     if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
+    console.log(`[SYNC] ✗ origin=${origin} company=${company} route=sync-masters error="${e.message}" ${Date.now() - t0}ms`);
   }
 });
 
 app.post("/api/tally/sync-daybook", syncGuard, async (req, res) => {
-  const { company, fromDate, toDate, chunkMode = "smart" } = req.body;
+  const { company, fromDate, toDate, chunkMode = "smart", origin = "manual" } = req.body;
   if (!fromDate || !toDate) return res.status(400).json({ success: false, error: "fromDate and toDate required (YYYYMMDD)" });
   if (fromDate.length !== 8 || toDate.length !== 8) return res.status(400).json({ success: false, error: "Invalid date format — expected YYYYMMDD" });
+
+  const t0 = Date.now();
+  console.log(`[SYNC] origin=${origin} company=${company} route=sync-daybook range=${fromDate}-${toDate}`);
 
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
@@ -186,8 +210,10 @@ app.post("/api/tally/sync-daybook", syncGuard, async (req, res) => {
       console.log(`[DAYBOOK] ${p.step}/${p.totalSteps}: ${p.detail}`);
     });
     if (!res.writableEnded) res.json(result);
+    console.log(`[SYNC] ✓ origin=${origin} company=${company} route=sync-daybook vouchers=${result.stats?.vouchers ?? 0} ${Date.now() - t0}ms`);
   } catch (e: any) {
     if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
+    console.log(`[SYNC] ✗ origin=${origin} company=${company} route=sync-daybook error="${e.message}" ${Date.now() - t0}ms`);
   }
 });
 

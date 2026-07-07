@@ -133,6 +133,21 @@ function SyncStateIndicator({
       </span>
     );
   }
+  // Skip is only shown while it's newer than the last real finish — a subsequent
+  // completed sync naturally supersedes it via this comparison, no separate
+  // "clear" action needed (single source of truth: the timestamps).
+  if (qsync.lastSkipped && (!qsync.finishedAt || qsync.lastSkipped.at > qsync.finishedAt)) {
+    const reasonLabel = qsync.lastSkipped.reason === "sync-in-progress"
+      ? "another sync was already running"
+      : qsync.lastSkipped.reason === "not-connected"
+        ? "Tally not connected"
+        : "no company configured";
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 text-amber-700">
+        <AlertTriangle size={12} /> {qsync.lastSkipped.label} sync skipped — {reasonLabel}
+      </span>
+    );
+  }
   if (qsync.finishedAt) {
     if (qsync.ok) {
       return (
@@ -514,7 +529,7 @@ export default function AgentStatus() {
     if (logFilter === "tally")    return /\[tally\]|\[DAYBOOK\]|\[SYNC\]|\[MASTERS\]|\[convert\]|\[PUSH-TEST\]/i.test(l);
     if (logFilter === "supabase") return /\[Supabase\]|\[pushAgent\]|\[Auto-push|\[Config Sync\]/i.test(l);
     if (logFilter === "remote")   return /🌐|\[WEB-SYNC\]/.test(l);  // web-triggered (Supabase) refresh
-    if (logFilter === "auto")     return /🌙|\[NIGHTLY\]/.test(l);   // scheduled nightly full-FY sync
+    if (logFilter === "auto")     return /🌙|\[NIGHTLY\]|origin=scheduled-/i.test(l);   // any of the 4 automatic triggers: nightly full-FY + the 3 scheduled quick syncs
     return true;
   });
 
@@ -957,7 +972,7 @@ export default function AgentStatus() {
                     ["tally", "Tally"],
                     ["supabase", "Supabase"],
                     ["remote", "🌐 Remote"],
-                    ["auto", "🌙 Auto"],
+                    ["auto", "⏱ Scheduled"],
                   ] as [typeof logFilter, string][]).map(([key, label]) => (
                     <button
                       key={key}
