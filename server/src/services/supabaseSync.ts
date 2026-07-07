@@ -271,13 +271,19 @@ export class SupabaseSync {
       }
 
       // Remove vouchers deleted or converted in Tally — but ONLY within the date
-      // window that was actually pulled (meta.pruneRange). A daybook/range sync
-      // pulls a SUBSET of vouchers, so deleting every GUID not in that subset
-      // would wipe the entire history outside the range. Scoping the delete to
-      // [from, to] makes a range pull authoritative for that range only and
-      // leaves all other dates untouched. Callers that push a partial set with
-      // no authoritative range (e.g. the renderer's local-store push) omit
-      // pruneRange entirely → pure upsert, no deletion.
+      // window that was actually pulled (meta.pruneDays / meta.pruneRange). A
+      // daybook/range sync pulls a SUBSET of vouchers, so deleting every GUID not
+      // in that subset would wipe the entire history outside the range. Scoping
+      // the delete to the pulled days/range makes that pull authoritative only
+      // for what it covers and leaves all other dates untouched.
+      //
+      // The only caller that omits both (a pure upsert, no deletion) is the
+      // /api/supabase/sync masters-only route's LEGACY vouchers path — as of the
+      // per-day-pruned Delivery Note fix, no current caller sends vouchers there
+      // at all (voucher pushes only ever go through the meta.pruneDays path
+      // above, from syncOrchestrator). Omitting the meta here used to be exactly
+      // how a stale, already-deleted voucher got silently re-inserted every
+      // cycle — do not resurrect an unmeta'd voucher push without pruning.
       let deleted = 0;
       if (meta?.pruneDays?.length) {
         // Per-day prune: each successfully-pulled day is authoritative for itself,

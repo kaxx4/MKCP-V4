@@ -91,6 +91,16 @@ export interface VouchersSyncResult {
     chunksSucceeded: number;
     chunksFailed: number;
     chunkDetails?: { label: string; count: number; ms: number }[];
+    /** Days (YYYYMMDD) whose single-day chunk succeeded — same list the server
+     *  uses for its own per-day Supabase prune (meta.pruneDays). Only populated
+     *  for the "daily" chunk strategy. The client uses this to clear its local
+     *  copy of the same days instead of gating on the whole range being clean. */
+    succeededDays?: string[];
+    /** Whether the server's own Supabase vouchers upload+prune actually succeeded
+     *  (false if it threw, or if the run was aborted before ever attempting it).
+     *  This is now the ONLY voucher-push confirmation the client gets — the
+     *  redundant unpruned /api/supabase/sync push no longer carries vouchers. */
+    vouchersUploadOk: boolean;
     elapsedSeconds: number;
   };
 }

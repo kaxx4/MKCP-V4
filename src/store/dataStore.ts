@@ -36,19 +36,20 @@ interface DataState {
   partyStats: PartyStats[] | null;
   setData: (d: ParsedData) => void;
   mergeData: (d: ParsedData) => void;
-  /** Replace the Delivery Note vouchers in [fromISO, toISO] with the freshly-pulled set:
-   *  drop every existing in-window DN, then re-add only the Delivery Notes from
-   *  `freshVouchers` (other voucher types in the pull are ignored — full/day-book syncs
-   *  own those). Used by the DN refresh so fulfilled/cancelled DNs that vanished from
-   *  Tally drop off Pending Orders (plain mergeData never removes stale vouchers).
-   *  Falls back to a merge if no data exists yet. */
-  replaceDeliveryNotesInRange: (freshVouchers: CanonicalVoucher[], fromISO: string, toISO: string) => void;
   /** Replace EVERY voucher dated in [fromISO, toISO] with the freshly-pulled set:
    *  drop all existing in-window vouchers, then add `freshVouchers`. Any voucher
    *  deleted/converted in Tally (absent from the fresh pull) thus disappears locally.
    *  Caller MUST only use this for a COMPLETE pull of the window (no failed chunks),
    *  else a partial pull would wrongly delete vouchers Tally still has. */
   replaceVouchersInRange: (freshVouchers: CanonicalVoucher[], fromISO: string, toISO: string) => void;
+  /** Replace EVERY voucher dated on one of `succeededDaysISO` with the freshly-pulled
+   *  set for those exact days: drop all existing vouchers on those days, then add
+   *  `freshVouchers` for those days. Any voucher deleted/converted in Tally on a
+   *  successfully-pulled day thus disappears locally, even when OTHER days in the
+   *  same pull failed — this mirrors the server's own per-day Supabase prune
+   *  (syncOrchestrator's pruneDays) exactly, instead of requiring the whole range
+   *  to be clean. This is what actually clears a deleted Delivery Note locally. */
+  replaceVouchersForDays: (freshVouchers: CanonicalVoucher[], succeededDaysISO: string[]) => void;
   clearData: () => void;
   refreshOverrides: () => void; // Apply current overrides to raw data
 }
@@ -380,63 +381,6 @@ export const useDataStore = create<DataState>((set, get) => ({
     }
   },
 
-  replaceDeliveryNotesInRange: (freshVouchers, fromISO, toISO) => {
-    const cur = get().rawData;
-    // No existing dataset — fall back to a plain merge (nothing to "replace" against).
-    if (!cur) {
-      get().mergeData({
-        company: null,
-        items: new Map(),
-        ledgers: new Map(),
-        vouchers: freshVouchers,
-        importedAt: new Date().toISOString(),
-        sourceFiles: ["delivery-note-refresh"],
-        warnings: [],
-      });
-      return;
-    }
-
-    const vMap = new Map<string, CanonicalVoucher>();
-    let droppedInRange = 0;
-    for (const v of cur.vouchers) {
-      // Drop existing in-window Delivery Notes — the fresh pull is authoritative for
-      // this window, so any DN no longer present in Tally must disappear here.
-      if (v.voucherType === "Delivery Note" && v.date >= fromISO && v.date <= toISO) {
-        droppedInRange++;
-        continue;
-      }
-      vMap.set(v.voucherId, v);
-    }
-    // Re-add ONLY the freshly pulled Delivery Notes, overwriting by voucherId. We
-    // deliberately ignore other voucher types in the pull: this is a DN-scoped refresh,
-    // and the full/day-book syncs own Sales/Purchase/Receipt/Payment — overwriting those
-    // here with a 90-day day-book chunk could clobber more-complete data.
-    let freshDN = 0;
-    for (const v of freshVouchers) {
-      if (v.voucherType !== "Delivery Note") continue;
-      freshDN++;
-      vMap.set(v.voucherId, v);
-    }
-
-    const allVouchers = Array.from(vMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-
-    const rebuilt: ParsedData = {
-      ...cur,
-      vouchers: allVouchers,
-      importedAt: new Date().toISOString(),
-      sourceFiles: [...new Set([...cur.sourceFiles, "delivery-note-refresh"])],
-      warnings: [
-        ...cur.warnings,
-        {
-          severity: "info",
-          context: "dn-refresh",
-          message: `Delivery-note refresh: replaced ${droppedInRange} in-window DN(s) with ${freshDN} from Tally`,
-        },
-      ],
-    };
-    get().setData(rebuilt);
-  },
-
   replaceVouchersInRange: (freshVouchers, fromISO, toISO) => {
     const cur = get().rawData;
     // No existing dataset — nothing to prune against; just load the fresh set.
@@ -489,6 +433,69 @@ export const useDataStore = create<DataState>((set, get) => ({
           severity: "info",
           context: "window-refresh",
           message: `Window refresh ${fromISO}–${toISO}: ${freshVouchers.length} from Tally${removed > 0 ? `, ${removed} deleted voucher(s) cleared` : ""}`,
+        },
+        ...guardWarnings,
+      ],
+    });
+  },
+
+  replaceVouchersForDays: (freshVouchers, succeededDaysISO) => {
+    const cur = get().rawData;
+    const daySet = new Set(succeededDaysISO);
+
+    // No existing dataset — nothing to prune against; just load the fresh set.
+    if (!cur) {
+      get().setData({
+        company: null,
+        items: new Map(),
+        ledgers: new Map(),
+        vouchers: freshVouchers,
+        importedAt: new Date().toISOString(),
+        sourceFiles: ["tally-day-refresh"],
+        warnings: [],
+      });
+      return;
+    }
+
+    // Keep every voucher NOT on one of the successfully-pulled days; drop the rest
+    // (they are re-added below only if Tally still has them for that day).
+    const vMap = new Map<string, CanonicalVoucher>();
+    let droppedInDays = 0;
+    for (const v of cur.vouchers) {
+      if (daySet.has(v.date)) { droppedInDays++; continue; }
+      vMap.set(v.voucherId, v);
+    }
+
+    // Re-add only freshVouchers dated on a succeeded day (safety filter — a daily-
+    // strategy pull should only ever contain vouchers from succeeded days anyway,
+    // since a failed chunk contributes nothing to the merged result).
+    const guardWarnings: ImportWarning[] = [];
+    let readded = 0;
+    for (const v of freshVouchers) {
+      if (!daySet.has(v.date)) continue;
+      readded++;
+      const existing = vMap.get(v.voucherId);
+      if (existing && !canReplace(existing, v)) {
+        guardWarnings.push(mergeGuardWarning(v));
+        continue;
+      }
+      vMap.set(v.voucherId, v);
+    }
+
+    const removed = droppedInDays - readded;
+    const allVouchers = Array.from(vMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+    get().setData({
+      ...cur,
+      vouchers: allVouchers,
+      importedAt: new Date().toISOString(),
+      sourceFiles: [...new Set([...cur.sourceFiles, "tally-day-refresh"])],
+      warnings: [
+        ...cur.warnings,
+        {
+          severity: "info",
+          context: "day-refresh",
+          message: `Per-day refresh (${succeededDaysISO.length} day(s)): ${readded} from Tally${removed > 0 ? `, ${removed} deleted voucher(s) cleared` : ""}`,
         },
         ...guardWarnings,
       ],
