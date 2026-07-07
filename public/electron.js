@@ -1,9 +1,14 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, globalShortcut, screen } = require('electron');
 
 let mainWindow = null;
+let pipWindow = null;
 let tray = null;
 let appQuitting = false;
 const APP_START = Date.now();
+
+// Default size for the Quick View (picture-in-picture) window. Named so it's
+// one place to tune, not a magic number buried in createPipWindow().
+const PIP_WINDOW_SIZE = { width: 360, height: 520 };
 
 // ── Crash auto-restart (loop-guarded) ─────────────────────────────────────────
 // A bare relaunch-on-any-error is dangerous: an error during shutdown undoes the
@@ -85,10 +90,12 @@ function setConfig(key, value) { const c = readConfig(); c[key] = value; writeCo
 // coordinates (we have seen x/y = -25600). Restoring those opens the window where
 // it can't be seen — the app looks "running but broken". These helpers validate
 // bounds on both restore and save so an off-screen rect can never stick.
-function getSafeWindowBounds() {
-  const b = getConfig('windowBounds', {}) || {};
-  const width = b.width || 1400;
-  const height = b.height || 900;
+// `configKey` lets the PiP window persist its own bounds under a separate key
+// (see below) so the two windows' saved rects never collide.
+function getSafeWindowBoundsFor(configKey, defaults) {
+  const b = getConfig(configKey, {}) || {};
+  const width = b.width || defaults.width;
+  const height = b.height || defaults.height;
   if (b.x == null || b.y == null) return { width, height }; // no position → center
 
   // The window is acceptable only if a meaningful chunk overlaps a real display's
@@ -100,23 +107,31 @@ function getSafeWindowBounds() {
     return ox >= 200 && oy >= 100;
   });
   if (!onScreen) {
-    console.warn(`[electron] saved window bounds (${b.x},${b.y}) are off-screen — centering instead`);
+    console.warn(`[electron] saved bounds for ${configKey} (${b.x},${b.y}) are off-screen — centering instead`);
     return { width, height };
   }
   return { width, height, x: b.x, y: b.y };
 }
 
-function saveWindowBounds() {
+function getSafeWindowBounds() {
+  return getSafeWindowBoundsFor('windowBounds', { width: 1400, height: 900 });
+}
+
+function saveWindowBoundsFor(win, configKey) {
   try {
-    if (!mainWindow) return;
+    if (!win) return;
     // Don't persist bounds for a minimized or hidden (in-tray) window — those
     // report meaningless coordinates that would later open the window off-screen.
-    if (mainWindow.isMinimized() || !mainWindow.isVisible()) return;
-    const b = mainWindow.getNormalBounds(); // restored rect, ignores minimized state
+    if (win.isMinimized() || !win.isVisible()) return;
+    const b = win.getNormalBounds(); // restored rect, ignores minimized state
     if (!b || b.width < 200 || b.height < 200) return;
     if (b.x < -10000 || b.y < -10000 || b.x > 50000 || b.y > 50000) return; // absurd → skip
-    setConfig('windowBounds', b);
+    setConfig(configKey, b);
   } catch {}
+}
+
+function saveWindowBounds() {
+  saveWindowBoundsFor(mainWindow, 'windowBounds');
 }
 
 // ── Wait for server ───────────────────────────────────────────────────────────
@@ -280,6 +295,73 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
+// ── Quick View (picture-in-picture) window ───────────────────────────────────
+// Small always-on-top window loading a dedicated #/pip route of the same built
+// web app. Window mechanics only — the #/pip route's content (price
+// verification, discounts, upsell, who-to-call tabs) is a separate web-side
+// React Router route, not built here. NOTE: this Electron app currently has no
+// react-router-dom dependency (App.tsx renders AgentStatus unconditionally), so
+// until that web-side route ships, #/pip resolves to the same AgentStatus
+// screen shrunk into a small window rather than a 404 — a harmless temporary
+// state, not a crash.
+function createPipWindow() {
+  const bounds = getSafeWindowBoundsFor('pipWindowBounds', PIP_WINDOW_SIZE);
+
+  pipWindow = new BrowserWindow({
+    width: bounds.width,
+    height: bounds.height,
+    ...(bounds.x != null && { x: bounds.x }),
+    ...(bounds.y != null && { y: bounds.y }),
+    minWidth: 280,
+    minHeight: 200,
+    alwaysOnTop: true,
+    frame: true, // matches mainWindow: no custom titlebar in this app, so keep native chrome
+    backgroundColor: '#ffffff',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'), // generic contextBridge API — no PiP-specific IPC needed yet
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      spellcheck: false,
+    },
+    show: false,
+  });
+
+  const startUrl = isDev
+    ? 'http://localhost:5173/#/pip'
+    : pathToFileURL(path.join(__dirname, '../dist/index.html')).href + '#/pip';
+
+  pipWindow.loadURL(startUrl).catch((err) => console.error('[pip] loadURL failed:', err));
+  pipWindow.once('ready-to-show', () => pipWindow?.show());
+
+  // Independently closable: hide instead of destroying so state (position, any
+  // in-page state) survives a close/reopen via the shortcut or tray item. This
+  // never touches app-quit logic — window-all-closed below only fires once
+  // BOTH mainWindow and pipWindow are gone, and even then it explicitly does
+  // NOT quit the app (headless sync agent keeps running).
+  pipWindow.on('close', (e) => {
+    saveWindowBoundsFor(pipWindow, 'pipWindowBounds');
+    if (!appQuitting) {
+      e.preventDefault();
+      pipWindow.hide();
+    }
+  });
+  pipWindow.on('closed', () => { pipWindow = null; });
+}
+
+function togglePipWindow() {
+  if (!pipWindow || pipWindow.isDestroyed()) {
+    createPipWindow();
+    return;
+  }
+  if (pipWindow.isVisible()) {
+    pipWindow.hide();
+  } else {
+    pipWindow.show();
+    pipWindow.focus();
+  }
+}
+
 // ── System tray ───────────────────────────────────────────────────────────────
 function createTray() {
   // Use the existing app icon, scaled to 16x16 for the tray.
@@ -315,6 +397,11 @@ function createTray() {
     {
       label: 'Drain Queue',
       click: () => fetch('http://localhost:3100/api/push-agent/drain', { method: 'POST' }).catch(() => {}),
+    },
+    { type: 'separator' },
+    {
+      label: 'Toggle Quick View',
+      click: () => togglePipWindow(),
     },
     { type: 'separator' },
     {
@@ -428,6 +515,10 @@ app.whenReady().then(() => {
   globalShortcut.register('F11', () => {
     if (mainWindow) mainWindow.setFullScreen(!mainWindow.isFullScreen());
   });
+
+  // Toggle the Quick View (PiP) window. Checked against all shortcuts registered
+  // above (Ctrl/Cmd+Q, F12, F5, F11) — no collision.
+  globalShortcut.register('CommandOrControl+Shift+P', () => togglePipWindow());
 });
 
 app.on('before-quit', () => { appQuitting = true; });

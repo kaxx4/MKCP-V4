@@ -435,26 +435,3 @@ export function convertCompanies(parsed: any): any[] {
   }));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Converter Registry — dispatch by Tally collection name
-// ─────────────────────────────────────────────────────────────────────────────
-
-const CONVERTER_MAP: Record<string, (parsed: any) => { tallymessage: any[] }> = {
-  "StockGroup": convertStockGroups,
-  "Unit": convertUnits,
-  "StockItem": convertStockItems,
-  "Ledger": convertLedgers,
-  "Godown": convertGodowns,
-  "CostCentre": convertCostCentres,
-  "PriceList": convertDealerPriceLists,
-  "Voucher": convertVouchers,
-};
-
-export function convertCollection(
-  tallyCollection: string,
-  parsed: any
-): { tallymessage: any[] } {
-  const fn = CONVERTER_MAP[tallyCollection];
-  if (!fn) throw new Error(`No converter for collection: ${tallyCollection}`);
-  return fn(parsed);
-}

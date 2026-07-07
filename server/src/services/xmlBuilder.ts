@@ -173,62 +173,6 @@ export function buildVoucherCountXml(company: string, fromDate: string, toDate: 
 </ENVELOPE>`;
 }
 
-/** List open companies */
-export function buildCompanyListXml(): string {
-  return `<ENVELOPE>
-<HEADER>
-<VERSION>1</VERSION>
-<TALLYREQUEST>Export</TALLYREQUEST>
-<TYPE>Collection</TYPE>
-<ID>List of Companies</ID>
-</HEADER>
-<BODY>
-<DESC>
-<STATICVARIABLES>
-<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-</STATICVARIABLES>
-<TDL>
-<TDLMESSAGE>
-<COLLECTION NAME="List of Companies" ISMODIFY="Yes">
-<NATIVEMETHOD>Name</NATIVEMETHOD>
-</COLLECTION>
-</TDLMESSAGE>
-</TDL>
-</DESC>
-</BODY>
-</ENVELOPE>`;
-}
-
-/** Detect active company financial year via system period variables */
-export function buildPeriodDetectXml(company: string): string {
-  return `<ENVELOPE>
-<HEADER>
-<VERSION>1</VERSION>
-<TALLYREQUEST>Export</TALLYREQUEST>
-<TYPE>Collection</TYPE>
-<ID>MKCPPeriodInfo</ID>
-</HEADER>
-<BODY>
-<DESC>
-<STATICVARIABLES>
-<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
-</STATICVARIABLES>
-<TDL>
-<TDLMESSAGE>
-<COLLECTION NAME="MKCPPeriodInfo" ISMODIFY="No">
-<TYPE>Company</TYPE>
-<NATIVEMETHOD>Name</NATIVEMETHOD>
-<NATIVEMETHOD>StartingFrom</NATIVEMETHOD>
-<NATIVEMETHOD>EndingAt</NATIVEMETHOD>
-</COLLECTION>
-</TDLMESSAGE>
-</TDL>
-</DESC>
-</BODY>
-</ENVELOPE>`;
-}
-
 /**
  * Day Book fallback XML — used when Collection returns 0 vouchers.
  * Reference: TallyPrime Integration Guide - "Exporting Transactions (Day Book)"

@@ -2,7 +2,7 @@ import { useQuickSyncStore } from "../store/quickSyncStore";
 import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
 import { useDataStore } from "../store/dataStore";
 import { useTallyStore } from "../store/tallyStore";
-import { pullFromTally } from "./tallyPull";
+import { pullFromTally, retryIncompleteVouchers } from "./tallyPull";
 import { pushAll } from "./supabasePushAll";
 
 /**
@@ -28,6 +28,24 @@ export async function runQuickSync(company: string, label: string, fromYmd: stri
     if (!tally.ok) {
       useQuickSyncStore.getState().update({ running: null, phase: null, tally, ok: false, auto, finishedAt: new Date().toISOString() });
       return;
+    }
+
+    // If any vouchers came back with zero ledger/inventory lines, attempt exactly
+    // ONE targeted re-fetch scoped to their date span before pushing — this is what
+    // turns a routine "run a full sync to backfill" into an automatic recovery.
+    // Never blocks/throws: whatever remains incomplete after this stays flagged in
+    // tally.incompleteVoucherIds for the UI's existing banner.
+    if (tally.incompleteVoucherIds?.length) {
+      const data = useDataStore.getState().data;
+      const stillIncomplete = await retryIncompleteVouchers(
+        company,
+        tally.incompleteVoucherIds,
+        data?.vouchers ?? []
+      );
+      tally.incompleteVoucherIds = stillIncomplete.length > 0 ? stillIncomplete : undefined;
+      if (stillIncomplete.length > 0) {
+        console.warn(`[quickSync] ${stillIncomplete.length} voucher(s) still missing lines after auto-retry`);
+      }
     }
 
     // Phase 2 — push the full local store (config + masters + vouchers) to Supabase.
