@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useTallyStore } from "../store/tallyStore";
+import { useQuickSyncStore } from "../store/quickSyncStore";
 import { runQuickSync } from "../services/quickSync";
 import { todayYmd, daysAgoYmd } from "../services/tallyPull";
 
@@ -29,7 +30,20 @@ export function useScheduledSyncs() {
 
   useEffect(() => {
     const fire = (label: string, from: () => string) => {
-      if (!connRef.current || !companyRef.current.trim()) return;
+      if (!connRef.current || !companyRef.current.trim()) {
+        // Same silent-skip gap as runQuickSync's collision guard — without this,
+        // a scheduled tick that can't run (Tally down, no company set) leaves
+        // the indicator unchanged, indistinguishable from the scheduler not
+        // having fired at all.
+        useQuickSyncStore.getState().update({
+          lastSkipped: {
+            label,
+            reason: !connRef.current ? "not-connected" : "no-company",
+            at: new Date().toISOString(),
+          },
+        });
+        return;
+      }
       void runQuickSync(companyRef.current, label, from(), todayYmd(), true);
     };
 

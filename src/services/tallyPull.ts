@@ -65,6 +65,7 @@ export async function pullFromTally(
   fromYmd: string,
   toYmd: string,
   strategy: "daily" | "weekly" | "monthly" = "daily",
+  origin?: string,
 ): Promise<PullResult> {
   if (!company?.trim()) {
     return { ok: false, vouchers: 0, chunksSucceeded: 0, chunksTotal: 0, chunksFailed: 0, cleared: 0, elapsedSeconds: 0, error: "No company configured" };
@@ -72,7 +73,7 @@ export async function pullFromTally(
 
   const tally = useTallyStore.getState();
   try {
-    const result = await syncDayBook(company, fromYmd, toYmd, strategy);
+    const result = await syncDayBook(company, fromYmd, toYmd, strategy, origin);
     const s = result.stats;
     const base = {
       chunksSucceeded: s?.chunksSucceeded ?? 0,
@@ -187,6 +188,7 @@ export async function retryIncompleteVouchers(
   company: string,
   incompleteVoucherIds: string[],
   parsedVouchers: CanonicalVoucher[],
+  origin?: string,
 ): Promise<string[]> {
   const incompleteSet = new Set(incompleteVoucherIds);
   const dates = parsedVouchers
@@ -202,7 +204,7 @@ export async function retryIncompleteVouchers(
   const toYmd = toIso_.replace(/-/g, "");
 
   try {
-    const result = await syncDayBook(company, fromYmd, toYmd, "daily");
+    const result = await syncDayBook(company, fromYmd, toYmd, "daily", origin);
     const reparsed = parseTransactions(result.data);
     if (reparsed.vouchers.length === 0) {
       console.warn(`[pull] Incomplete-voucher retry (${fromIso} → ${toIso_}) returned nothing — leaving as unresolved`);

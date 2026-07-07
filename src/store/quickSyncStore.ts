@@ -11,10 +11,15 @@ export interface QuickSyncState {
   ok?: boolean;
   finishedAt?: string;
   auto?: boolean;                    // true when triggered by the scheduler
+  /** Most recent scheduled sync that never ran because a guard tripped (another
+   *  sync in flight, Tally not connected, no company configured). Purely
+   *  informational — SyncStateIndicator only shows it while it's newer than
+   *  `finishedAt`, so a subsequent real sync naturally supersedes it. */
+  lastSkipped?: { label: string; reason: "sync-in-progress" | "not-connected" | "no-company"; at: string };
 }
 
 interface Store extends QuickSyncState {
-  update: (s: QuickSyncState) => void;
+  update: (s: Partial<QuickSyncState>) => void;
 }
 
 export const useQuickSyncStore = create<Store>((set) => ({

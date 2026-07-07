@@ -17,14 +17,30 @@ export async function runQuickSync(company: string, label: string, fromYmd: stri
   // GLOBAL mutex — one sync (manual OR scheduled) at a time. isSyncing is held for
   // the WHOLE pull+push so nothing else can start mid-operation. Skip if anything
   // (a manual Pull-Sync button, another quick sync) is already running.
-  if (useTallyStore.getState().isSyncing || useQuickSyncStore.getState().running) return;
+  if (useTallyStore.getState().isSyncing || useQuickSyncStore.getState().running) {
+    // Surface the skip — without this, a collided scheduled sync leaves the
+    // indicator showing whatever the in-flight sync (or stale prior state) was,
+    // making a skip indistinguishable from nothing happening at all. Only
+    // lastSkipped is touched — running/phase/finishedAt keep reflecting the
+    // sync that's actually in flight.
+    useQuickSyncStore.getState().update({
+      lastSkipped: { label, reason: "sync-in-progress", at: new Date().toISOString() },
+    });
+    return;
+  }
   useTallyStore.getState().setSyncing(true);
   const qs = useQuickSyncStore.getState();
   qs.update({ running: label, phase: "sync", auto });
 
+  // Tags every request this sync sends to the server so [SYNC] log lines can be
+  // attributed back to which trigger fired — "manual" (button) vs
+  // "scheduled-<label>" (e.g. "scheduled-today", "scheduled-last-7-days").
+  // Log-only: never read for behavior.
+  const origin = auto ? `scheduled-${label.toLowerCase().replace(/\s+/g, "-")}` : "manual";
+
   try {
     // Phase 1 — Tally → app (server also mirrors pulled vouchers to Supabase).
-    const tally = await pullFromTally(company, fromYmd, toYmd, "daily");
+    const tally = await pullFromTally(company, fromYmd, toYmd, "daily", origin);
     if (!tally.ok) {
       useQuickSyncStore.getState().update({ running: null, phase: null, tally, ok: false, auto, finishedAt: new Date().toISOString() });
       return;
@@ -40,7 +56,8 @@ export async function runQuickSync(company: string, label: string, fromYmd: stri
       const stillIncomplete = await retryIncompleteVouchers(
         company,
         tally.incompleteVoucherIds,
-        data?.vouchers ?? []
+        data?.vouchers ?? [],
+        origin
       );
       tally.incompleteVoucherIds = stillIncomplete.length > 0 ? stillIncomplete : undefined;
       if (stillIncomplete.length > 0) {
