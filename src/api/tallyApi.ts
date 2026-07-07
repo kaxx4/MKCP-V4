@@ -21,6 +21,15 @@ export interface DayBookSyncResult {
     chunksSucceeded: number;
     chunksFailed: number;
     chunkDetails?: { label: string; count: number; ms: number }[];
+    /** Days (YYYYMMDD) whose single-day chunk succeeded AND were actually pruned
+     *  server-side — same list the server used for its own per-day Supabase
+     *  prune. Only present for the daily strategy and only when the upload
+     *  succeeded. The client uses this to clear its local copy of exactly the
+     *  same days, instead of gating on the whole range being clean. */
+    succeededDays?: string[];
+    /** Whether the server's own Supabase vouchers upload+prune actually succeeded.
+     *  This is now the only voucher-push confirmation the client gets. */
+    vouchersUploadOk?: boolean;
     elapsedSeconds: number;
   };
 }

@@ -50,16 +50,22 @@ export async function pushAll(label: string): Promise<{ mastersVouchersOk: boole
 
     const items = Array.from(data.items.values());
     const ledgers = Array.from(data.ledgers.values());
-    const vouchers = data.vouchers;
 
-    console.log(`[${label}] Firing — config + ${items.length} items + ${ledgers.length} ledgers + ${vouchers.length} vouchers`);
+    // Vouchers are deliberately NOT sent here. They already have a correctly
+    // per-day-pruned push via the orchestrator's Phase-1 sync-daybook upload
+    // (see syncOrchestrator.ts). This endpoint used to also re-upload the ENTIRE
+    // local voucher array as a pure upsert with no pruning metadata — if the
+    // local store hadn't cleared a deleted voucher yet (e.g. a converted/removed
+    // Delivery Note), this second push re-inserted exactly what Phase 1 had just
+    // deleted, in the same cycle. That's the bug this fixes.
+    console.log(`[${label}] Firing — config + ${items.length} items + ${ledgers.length} ledgers (vouchers pushed separately, per-day-pruned)`);
 
-    const [configResult, voucherResp] = await Promise.allSettled([
+    const [configResult, mastersResp] = await Promise.allSettled([
       syncConfigToSupabase(company),
       fetch(SERVER_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company, items, ledgers, vouchers }),
+        body: JSON.stringify({ company, items, ledgers }),
       }).then(async (r) => {
         const j = await r.json();
         if (!r.ok || !j.success) throw new Error(j.error || `HTTP ${r.status}`);
@@ -81,17 +87,21 @@ export async function pushAll(label: string): Promise<{ mastersVouchersOk: boole
       console.warn(`[${label}] Config sync failed:`, configResult.status === "fulfilled" ? configResult.value.errors : configResult.reason);
     }
 
+    // NOTE: "vouchers" status is intentionally NOT recorded here anymore — it's
+    // now fed from tallyPull.ts's pullFromTally, reflecting the orchestrator's
+    // actual per-day-pruned upload result (see comment above), not this
+    // masters-only call. The `mastersVouchersOk` name is kept for now since
+    // quickSync.ts/AgentStatus.tsx already read it as "did phase 2 succeed";
+    // it now purely reflects the masters push outcome.
     let mastersVouchersOk: boolean;
-    if (voucherResp.status === "fulfilled") {
-      console.log(`[${label}] ✓ Masters + vouchers synced:`, voucherResp.value);
+    if (mastersResp.status === "fulfilled") {
+      console.log(`[${label}] ✓ Masters synced:`, mastersResp.value);
       status.recordResult("masters", true);
-      status.recordResult("vouchers", true);
       mastersVouchersOk = true;
     } else {
-      const errMsg = (voucherResp.reason as any)?.message || String(voucherResp.reason);
-      console.warn(`[${label}] Masters + vouchers sync rejected: ${errMsg}`);
+      const errMsg = (mastersResp.reason as any)?.message || String(mastersResp.reason);
+      console.warn(`[${label}] Masters sync rejected: ${errMsg}`);
       status.recordResult("masters", false, errMsg);
-      status.recordResult("vouchers", false, errMsg);
       mastersVouchersOk = false;
     }
 

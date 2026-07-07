@@ -337,6 +337,10 @@ export class SyncOrchestrator {
           chunksSucceeded,
           chunksFailed,
           chunkDetails,
+          // Aborted run: server never uploaded/pruned anything (see comment above),
+          // so never tell the client to prune either — client and server pruning
+          // must stay in lockstep. Omitted here regardless of strategy.
+          vouchersUploadOk: false,
           elapsedSeconds: parseFloat(elapsed),
         },
       };
@@ -387,6 +391,12 @@ export class SyncOrchestrator {
         chunksSucceeded,
         chunksFailed,
         chunkDetails,
+        // Only surfaced when the Supabase upload/prune (above) actually succeeded —
+        // if it threw, the server never pruned these days server-side, so telling
+        // the client to prune them locally would desync local vs. cloud. Client and
+        // server pruning must always stay in lockstep.
+        succeededDays: strategy === "daily" && uploadOk ? succeededDays : undefined,
+        vouchersUploadOk: uploadOk,
         elapsedSeconds: parseFloat(elapsed),
       },
     };

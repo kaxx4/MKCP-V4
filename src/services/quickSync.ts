@@ -65,7 +65,9 @@ export async function runQuickSync(company: string, label: string, fromYmd: stri
       }
     }
 
-    // Phase 2 — push the full local store (config + masters + vouchers) to Supabase.
+    // Phase 2 — push config + masters to Supabase. Vouchers already went up in
+    // Phase 1 (pullFromTally → server's per-day-pruned upload) — see
+    // supabasePushAll.ts for why they're deliberately not re-sent here.
     useQuickSyncStore.getState().update({ running: label, phase: "push", tally, auto });
     const pr = await pushAll(`quick:${label}`);
     const st = useSupabaseSyncStatusStore.getState();

@@ -264,12 +264,23 @@ app.post("/api/tally/push-batch", async (req: express.Request, res: express.Resp
 });
 
 // ── Supabase sync endpoint ─────────────────────────────────────────────────────
+// Masters (items/ledgers) only. Vouchers are deliberately NOT accepted here as
+// a routine path: this used to be a pure unguarded upsert with no pruning
+// metadata, so if the caller's local copy still held a voucher Tally (and the
+// orchestrator's per-day-pruned sync-daybook push) had already deleted, this
+// endpoint re-inserted exactly what was just pruned, every cycle. Vouchers now
+// only ever reach Supabase via that per-day-pruned path. The `vouchers` field
+// is still accepted for backward compatibility with any caller that explicitly
+// sends it (graceful no-op otherwise) — as of this fix, pushAll (the only
+// caller found repo-wide) no longer sends it.
 app.post("/api/supabase/sync", async (req: express.Request, res: express.Response) => {
-  const { company, items = [], ledgers = [], vouchers = [] } = req.body;
+  const { company, items = [], ledgers = [], vouchers } = req.body;
   if (!company) return res.status(400).json({ success: false, error: "company required" });
 
+  const hasVouchers = Array.isArray(vouchers) && vouchers.length > 0;
+
   try {
-    console.log(`[Supabase] Manual sync initiated: ${items.length} items, ${ledgers.length} ledgers, ${vouchers.length} vouchers`);
+    console.log(`[Supabase] Manual sync initiated: ${items.length} items, ${ledgers.length} ledgers${hasVouchers ? `, ${vouchers.length} vouchers (explicit caller)` : ""}`);
     // Build master messages from frontend data
     const masterMessages = [
       ...items.map((item: any) => ({
@@ -292,50 +303,51 @@ app.post("/api/supabase/sync", async (req: express.Request, res: express.Respons
       await supabaseSync.syncMasters(masterMessages, company);
     }
 
-    // Build voucher messages from frontend data
-    const voucherMessages = vouchers.map((v: any) => ({
-      guid: v.voucherId,
-      metadata: { type: "Voucher" },
-      vouchertypename: v.voucherType,
-      vouchernumber: v.voucherNumber,
-      date: v.date,
-      partyledgername: v.partyName,
-      allledgerentries: v.lines
-        .filter((l: any) => l.type === "ledger")
-        .map((l: any) => ({
-          ledgername: l.name,
-          isdeemedpositive: l.isDebit,
-          ispartyledger: false,
-          amount: l.amount,
-        })),
-      // BUGFIX (2026-05-19): canonical line type is "inventory", not "stock".
-      // Before this fix, every voucher pushed via /api/supabase/sync was stripped
-      // of its inventory entries — that's why Delivery Notes and most older
-      // vouchers showed up in the web dashboard with no item lines.
-      allinventoryentries: v.lines
-        .filter((l: any) => l.type === "inventory")
-        .map((l: any) => ({
-          stockitemname: l.itemId ?? l.name,
-          actualqty: l.qtyBase ?? l.qty,
-          billedqty: l.qtyBase ?? l.qty,
-          rate: l.ratePerBase ?? l.rate,
-          amount: l.lineAmount ?? l.amount,
-          isdeemedpositive: l.isDebit ?? false,
-        })),
-    }));
-
-    // Sync vouchers
-    if (voucherMessages.length > 0) {
+    // Vouchers: only if the caller explicitly sent a non-empty array (see
+    // route comment above — not exercised by any current caller).
+    let voucherCount = 0;
+    if (hasVouchers) {
+      const voucherMessages = vouchers.map((v: any) => ({
+        guid: v.voucherId,
+        metadata: { type: "Voucher" },
+        vouchertypename: v.voucherType,
+        vouchernumber: v.voucherNumber,
+        date: v.date,
+        partyledgername: v.partyName,
+        allledgerentries: v.lines
+          .filter((l: any) => l.type === "ledger")
+          .map((l: any) => ({
+            ledgername: l.name,
+            isdeemedpositive: l.isDebit,
+            ispartyledger: false,
+            amount: l.amount,
+          })),
+        // BUGFIX (2026-05-19): canonical line type is "inventory", not "stock".
+        // Before this fix, every voucher pushed via /api/supabase/sync was stripped
+        // of its inventory entries — that's why Delivery Notes and most older
+        // vouchers showed up in the web dashboard with no item lines.
+        allinventoryentries: v.lines
+          .filter((l: any) => l.type === "inventory")
+          .map((l: any) => ({
+            stockitemname: l.itemId ?? l.name,
+            actualqty: l.qtyBase ?? l.qty,
+            billedqty: l.qtyBase ?? l.qty,
+            rate: l.ratePerBase ?? l.rate,
+            amount: l.lineAmount ?? l.amount,
+            isdeemedpositive: l.isDebit ?? false,
+          })),
+      }));
+      voucherCount = voucherMessages.length;
       await supabaseSync.syncVouchers(voucherMessages, company);
     }
 
     console.log(`[Supabase] Manual sync completed successfully`);
     res.json({
       success: true,
-      message: `Synced ${masterMessages.length} masters and ${voucherMessages.length} vouchers to Supabase`,
+      message: `Synced ${masterMessages.length} masters${hasVouchers ? ` and ${voucherCount} vouchers` : ""} to Supabase`,
       itemsCount: items.length,
       ledgersCount: ledgers.length,
-      vouchersCount: vouchers.length,
+      vouchersCount: voucherCount,
     });
   } catch (e: any) {
     console.error(`[Supabase] Manual sync failed: ${e.message}`);

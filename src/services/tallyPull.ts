@@ -1,5 +1,6 @@
 import { useTallyStore } from "../store/tallyStore";
 import { useDataStore } from "../store/dataStore";
+import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
 import { syncDayBook, fetchChangedVouchers } from "../api/tallyApi";
 import { parseTransactions } from "../parser/transactionParser";
 import { loadData, createBackup } from "../db/idb";
@@ -72,6 +73,11 @@ export async function pullFromTally(
   }
 
   const tally = useTallyStore.getState();
+  // Tracks whether the server actually returned a voucher-push verdict, so the
+  // outer catch (network/local-step failures) never overwrites a genuine
+  // server-side success with a false one just because something AFTER the
+  // request (e.g. an IndexedDB write) threw.
+  let voucherStatusRecorded = false;
   try {
     const result = await syncDayBook(company, fromYmd, toYmd, strategy, origin);
     const s = result.stats;
@@ -81,6 +87,17 @@ export async function pullFromTally(
       chunksFailed: s?.chunksFailed ?? 0,
       elapsedSeconds: s?.elapsedSeconds ?? 0,
     };
+
+    // This is now the ONLY confirmation of the server's per-day-pruned voucher
+    // push (the redundant unpruned /api/supabase/sync push no longer carries
+    // vouchers — see supabasePushAll.ts), so the Cloud section's "Vouchers"
+    // channel is fed from here instead of from that removed path.
+    useSupabaseSyncStatusStore.getState().recordResult(
+      "vouchers",
+      s?.vouchersUploadOk ?? false,
+      s?.vouchersUploadOk ? null : (result.error || result.errors?.[0] || "Vouchers upload did not complete")
+    );
+    voucherStatusRecorded = true;
 
     const pulled = result.data?.tallymessage?.length ?? 0;
     if (!result.success && pulled === 0) {
@@ -109,9 +126,19 @@ export async function pullFromTally(
 
     const before = existing?.vouchers.length ?? 0;
     const cleanPull = base.chunksFailed === 0;
+    // Days whose single-day chunk succeeded AND were actually pruned server-side
+    // (see syncOrchestrator's pruneDays) — same granularity as the server's own
+    // per-day Supabase prune. Preferred over cleanPull: a day's deletions (e.g. a
+    // converted/removed Delivery Note) must clear locally even when some OTHER
+    // day in the same range failed, not only on a fully-clean whole-range pull.
+    const succeededDaysISO = (s?.succeededDays ?? []).map(toIso);
     const ds = useDataStore.getState();
 
-    if (cleanPull && existing) {
+    if (succeededDaysISO.length > 0 && existing) {
+      ds.replaceVouchersForDays(parsed.vouchers, succeededDaysISO);
+    } else if (cleanPull && existing) {
+      // Fallback for non-daily strategies (weekly/monthly), where the server
+      // doesn't track per-day success and only prunes on a fully-clean pull.
       ds.replaceVouchersInRange(parsed.vouchers, toIso(fromYmd), toIso(toYmd));
     } else if (parsed.vouchers.length) {
       ds.mergeData({
@@ -125,9 +152,10 @@ export async function pullFromTally(
       });
     }
 
-    // Net count change tells us how many stale vouchers were cleared (clean pull only).
+    // Net count change tells us how many stale vouchers were cleared (pruned paths only).
+    const pruned = succeededDaysISO.length > 0 || cleanPull;
     const after = useDataStore.getState().data?.vouchers.length ?? before;
-    const cleared = cleanPull ? Math.max(0, (before + parsed.vouchers.length) - after) : 0;
+    const cleared = pruned ? Math.max(0, (before + parsed.vouchers.length) - after) : 0;
 
     // ── Incremental edit catch-up (AlterID) ─────────────────────────────────
     // A date-windowed pull never re-fetches vouchers edited OUTSIDE [from,to], so
@@ -170,6 +198,14 @@ export async function pullFromTally(
       incompleteVoucherIds: incomplete.length > 0 ? incomplete.map((v) => v.voucherId) : undefined,
     };
   } catch (e: any) {
+    // Only record a failure if we never got a server verdict at all (network
+    // failure, timeout, abort before the response). If the request already
+    // succeeded and something AFTER it threw (e.g. a local IndexedDB write),
+    // the earlier recordResult(true) above must not be overwritten — the
+    // Supabase push itself was fine.
+    if (!voucherStatusRecorded) {
+      useSupabaseSyncStatusStore.getState().recordResult("vouchers", false, e?.message || String(e));
+    }
     return { ok: false, vouchers: 0, chunksSucceeded: 0, chunksTotal: 0, chunksFailed: 0, cleared: 0, elapsedSeconds: 0, error: e?.message || String(e) };
   }
 }
