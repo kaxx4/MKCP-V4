@@ -107,6 +107,61 @@ function Pill({ ok, label }: { ok: boolean | null; label: string }) {
   );
 }
 
+/** Compact, always-visible sync-state indicator — idle / syncing(phase) / succeeded /
+ *  failed(actual error). Reads only from stores already populated by every sync path
+ *  (quickSyncStore for quick-sync, tallyStore.isSyncing for manual full/masters/daybook
+ *  triggers) — no new store. */
+function SyncStateIndicator({
+  isSyncing, syncingLabel, qsync,
+}: {
+  isSyncing: boolean;
+  syncingLabel: string | null;
+  qsync: import("./store/quickSyncStore").QuickSyncState;
+}) {
+  if (qsync.running) {
+    const phaseLabel = qsync.phase === "push" ? "Pushing to Supabase…" : "Pulling from Tally…";
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-50 text-blue-700">
+        <Loader2 size={12} className="animate-spin" /> Syncing · {phaseLabel}
+      </span>
+    );
+  }
+  if (isSyncing) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-50 text-blue-700">
+        <Loader2 size={12} className="animate-spin" /> Syncing{syncingLabel ? ` · ${syncingLabel}` : ""}
+      </span>
+    );
+  }
+  if (qsync.finishedAt) {
+    if (qsync.ok) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-green-50 text-green-700">
+          <CheckCircle size={12} /> Synced {fmt(qsync.finishedAt)}
+        </span>
+      );
+    }
+    const errMsg = qsync.tally && !qsync.tally.ok
+      ? qsync.tally.error || "Tally pull failed"
+      : qsync.push && !qsync.push.ok
+        ? qsync.push.vouchersErr || qsync.push.configErr || "Supabase push failed"
+        : "Sync failed";
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-red-50 text-red-700 max-w-[360px] truncate"
+        title={errMsg}
+      >
+        <XCircle size={12} className="shrink-0" /> Failed · {errMsg}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-neutral-100 text-neutral-500">
+      <Clock size={12} /> Idle
+    </span>
+  );
+}
+
 function Badge({ label, color }: { label: string; color: "green" | "red" | "yellow" | "blue" | "gray" }) {
   const cls = {
     green: "bg-green-100 text-green-800",
@@ -471,14 +526,17 @@ export default function AgentStatus() {
           <h1 className="text-xl font-bold text-neutral-900">MKCP Sync Agent</h1>
           <p className="text-xs text-neutral-500 mt-0.5">{company}</p>
         </div>
-        <button
-          onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
-          disabled={polling}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-600 disabled:opacity-50"
-        >
-          <RefreshCw size={13} className={polling ? "animate-spin" : ""} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <SyncStateIndicator isSyncing={isSyncing} syncingLabel={syncing} qsync={qsync} />
+          <button
+            onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
+            disabled={polling}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-600 disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={polling ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mx-auto">

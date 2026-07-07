@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ParsedData, CanonicalVoucher } from "../types/canonical";
+import type { ParsedData, CanonicalVoucher, ImportWarning } from "../types/canonical";
 import { applyOverridesToItems } from "../utils/applyOverrides";
 import { useOverrideStore } from "./overrideStore";
 import { generatePredictions, scorePredictions, generateItemForecasts, type PredictionSnapshot } from "../engine/prediction";
@@ -51,6 +51,41 @@ interface DataState {
   replaceVouchersInRange: (freshVouchers: CanonicalVoucher[], fromISO: string, toISO: string) => void;
   clearData: () => void;
   refreshOverrides: () => void; // Apply current overrides to raw data
+}
+
+/** Line count used to judge which of two same-voucherId records is "more complete".
+ *  CanonicalVoucher stores both ledger and inventory rows in one unified `lines`
+ *  array (each tagged type: "ledger" | "inventory"), so total length is the count. */
+function lineCount(v: CanonicalVoucher): number {
+  return v.lines?.length ?? 0;
+}
+
+/** True if `a` has strictly more lines than `b`. Used to refuse a merge/replace
+ *  that would silently drop ledger/inventory rows a voucher previously had —
+ *  e.g. a chunk re-fetch that hit a partial/failed Tally response. */
+function isMoreComplete(a: CanonicalVoucher, b: CanonicalVoucher): boolean {
+  return lineCount(a) > lineCount(b);
+}
+
+/** Decide whether `incoming` may replace `existing` for the same voucherId.
+ *  Allowed when incoming is at least as complete, or existing had zero lines
+ *  and incoming has some. Refused only when incoming would strictly REGRESS
+ *  a voucher that previously had lines down to fewer (most dangerously, to zero). */
+function canReplace(existing: CanonicalVoucher, incoming: CanonicalVoucher): boolean {
+  const existingLines = lineCount(existing);
+  const incomingLines = lineCount(incoming);
+  if (incomingLines >= existingLines) return true;
+  return existingLines === 0 && incomingLines > 0;
+}
+
+/** Build sync-logs-visible warning for a refused replace. */
+function mergeGuardWarning(v: CanonicalVoucher): { severity: "warn"; context: "merge-guard"; message: string } {
+  return {
+    severity: "warn",
+    context: "merge-guard",
+    message: `Kept existing (more complete) record for voucher ${v.voucherNumber || v.voucherId} ` +
+      `(${v.date}) — incoming pull had fewer/zero ledger+inventory lines; discarded to avoid data loss.`,
+  };
 }
 
 /** Build a stock map for every item in one pass.
@@ -227,16 +262,24 @@ export const useDataStore = create<DataState>((set, get) => ({
     for (const v of cur.vouchers) {
       vMap.set(v.voucherId, v);
     }
-    // New vouchers overwrite duplicates (same voucherId)
+    // New vouchers overwrite duplicates (same voucherId) — unless doing so would
+    // strictly regress a voucher's ledger/inventory line count (see canReplace).
     let newCount = 0;
     let dupeCount = 0;
+    const guardWarnings: ImportWarning[] = [];
     for (const v of newData.vouchers) {
-      if (vMap.has(v.voucherId)) {
+      const existing = vMap.get(v.voucherId);
+      if (existing) {
         dupeCount++;
+        if (canReplace(existing, v)) {
+          vMap.set(v.voucherId, v);
+        } else {
+          guardWarnings.push(mergeGuardWarning(v));
+        }
       } else {
         newCount++;
+        vMap.set(v.voucherId, v);
       }
-      vMap.set(v.voucherId, v); // always take newest version
     }
 
     // Sort vouchers by date for optimal access
@@ -258,6 +301,7 @@ export const useDataStore = create<DataState>((set, get) => ({
           context: "merge",
           message: `Merged: ${newCount} new vouchers, ${dupeCount} duplicates skipped/updated`
         },
+        ...guardWarnings,
       ],
     };
     get().setData(mergedRawData);
@@ -417,8 +461,19 @@ export const useDataStore = create<DataState>((set, get) => ({
       if (v.date >= fromISO && v.date <= toISO) { droppedInRange++; continue; }
       vMap.set(v.voucherId, v);
     }
-    // Re-add the freshly-pulled window (authoritative for [fromISO, toISO]).
-    for (const v of freshVouchers) vMap.set(v.voucherId, v);
+    // Re-add the freshly-pulled window (authoritative for [fromISO, toISO]). In-window
+    // vouchers were just dropped above, so a collision here should only happen at a
+    // fromISO/toISO boundary edge case (date truncation putting the same voucherId in
+    // both the "kept outside window" and "fresh" sets) — guard it anyway.
+    const guardWarnings: ImportWarning[] = [];
+    for (const v of freshVouchers) {
+      const existing = vMap.get(v.voucherId);
+      if (existing && !canReplace(existing, v)) {
+        guardWarnings.push(mergeGuardWarning(v));
+        continue;
+      }
+      vMap.set(v.voucherId, v);
+    }
 
     const removed = droppedInRange - freshVouchers.length;
     const allVouchers = Array.from(vMap.values()).sort((a, b) => a.date.localeCompare(b.date));
@@ -435,6 +490,7 @@ export const useDataStore = create<DataState>((set, get) => ({
           context: "window-refresh",
           message: `Window refresh ${fromISO}–${toISO}: ${freshVouchers.length} from Tally${removed > 0 ? `, ${removed} deleted voucher(s) cleared` : ""}`,
         },
+        ...guardWarnings,
       ],
     });
   },

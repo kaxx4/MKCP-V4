@@ -65,19 +65,3 @@ export const useCallingListStore = create<CallingListState>()(
     { name: "mkcycles-calling-list" }
   )
 );
-
-/** Export calling list as CSV string */
-export function exportCallingListCSV(entries: CallingListEntry[]): string {
-  const headers = ["Party Name", "Phone", "Email", "Items", "Quantities", "Note", "Called", "Called At"];
-  const rows = entries.map(e => [
-    e.partyName,
-    e.phone ?? "",
-    e.email ?? "",
-    e.items.map(i => i.itemName).join("; "),
-    e.items.map(i => `${i.suggestedQty} ${i.baseUnit}`).join("; "),
-    e.note ?? "",
-    e.called ? "Yes" : "No",
-    e.calledAt ?? "",
-  ]);
-  return [headers, ...rows].map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
-}
