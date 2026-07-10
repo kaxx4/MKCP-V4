@@ -1,5 +1,13 @@
 # Design System Master File
 
+> ⚠️ **NON-AUTHORITATIVE — DO NOT FOLLOW.** This file is auto-generated boilerplate
+> that does NOT reflect the shipping design system. It describes a dark-mode, Fira-font,
+> amber-accent marketing "price list" landing page (hero/FAQ/free-trial/CTA) that does
+> not exist in this product. The real system is **light mode, IBM Plex Sans/Mono,
+> `#2563eb` blue accent**, defined in `tailwind.config.js` + `src/index.css`.
+> Conforming code to this file will BREAK visual consistency. See AUDIT_DESIGN_CONSISTENCY.md.
+> Kept only for history; regenerate from the real config before treating as a spec.
+
 > **LOGIC:** When building a specific page, first check `design-system/pages/[page-name].md`.
 > If that file exists, its rules **override** this Master file.
 > If not, strictly follow the rules below.

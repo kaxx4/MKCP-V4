@@ -761,6 +761,12 @@ export class SupabaseSync {
 
   // ── Sync configuration data (local-only stores) ────────────────────────────
 
+  /**
+   * @deprecated discount_rules is WEB-OWNED (web always holds priority). This
+   * writer uses the old normalized schema and calls deleteOrphans, which would
+   * clobber web-created rules. It is no longer called from /api/supabase/sync-config.
+   * Do not re-wire without reconciling with web migration 0021 (jsonb blob schema).
+   */
   async syncDiscountRules(rules: any[], company: string): Promise<void> {
     if (!this.client) return;
     if (!rules || rules.length === 0) return;
@@ -791,6 +797,11 @@ export class SupabaseSync {
     }
   }
 
+  /**
+   * @deprecated order_groups is WEB-OWNED (web always holds priority). No longer
+   * called from /api/supabase/sync-config; the web writes this table as a jsonb
+   * `data` blob (see web migration 0021). Do not re-wire without reconciling schemas.
+   */
   async syncOrderGroups(groups: any[], company: string): Promise<void> {
     if (!this.client) return;
     if (!groups || groups.length === 0) return;

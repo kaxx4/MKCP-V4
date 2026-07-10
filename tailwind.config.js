@@ -42,6 +42,7 @@ module.exports = {
           200: "#bbf7d0",
           300: "#86efac",
           400: "#4ade80",
+          500: "#22c55e",
           DEFAULT: "#16a34a",
           600: "#15803d",
           700: "#166534",
@@ -53,9 +54,11 @@ module.exports = {
           200: "#fecaca",
           300: "#fca5a5",
           400: "#f87171",
+          500: "#ef4444",
           DEFAULT: "#dc2626",
           600: "#b91c1c",
           700: "#991b1b",
+          800: "#8a1a1a",
           900: "#7f1d1d",
         },
         warn: {
@@ -64,20 +67,26 @@ module.exports = {
           200: "#fde68a",
           300: "#fcd34d",
           400: "#fbbf24",
+          500: "#f59e0b",
           DEFAULT: "#d97706",
           600: "#b45309",
           700: "#92400e",
+          800: "#7c3d0f",
           900: "#78350f",
         },
+        // info: aligned to the web repo's blue ramp. Was a teal/cyan/green ramp
+        // (DEFAULT #0891b2) that read as a second "success"; the web already
+        // fixed this to blue. Kept in sync so badge-info/alert-info render the
+        // same colour in both apps. See AUDIT_DESIGN_CONSISTENCY.md M-8.
         info: {
-          50: "#ecfdf5",
-          100: "#d1fae5",
-          200: "#a7f3d0",
-          300: "#6ee7b7",
-          400: "#2dd4bf",
-          DEFAULT: "#0891b2",
-          600: "#0369a1",
-          700: "#0c4a6e",
+          50: "#eff6ff",
+          100: "#dbeafe",
+          200: "#bfdbfe",
+          300: "#93c5fd",
+          400: "#60a5fa",
+          DEFAULT: "#1d4ed8",
+          600: "#1e40af",
+          700: "#1e3a8a",
         },
 
         // ─── Neutral / Text Colors (Grayscale) ──────────────────────

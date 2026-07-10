@@ -1,5 +1,13 @@
 # Design System Master File
 
+> ⚠️ **NON-AUTHORITATIVE — DO NOT FOLLOW.** This file is auto-generated boilerplate
+> that does NOT reflect the shipping design system. It describes a dark-mode (OLED),
+> Fira Sans/Code, green/amber-accent marketing product that neither MKCP app resembles.
+> The real system is **light mode, IBM Plex Sans/Mono, `#2563eb` blue accent**, defined
+> in `tailwind.config.js` + `src/index.css` (and the web repo's `components/mobile/tokens.ts`).
+> Conforming code to this file will BREAK visual consistency. See AUDIT_DESIGN_CONSISTENCY.md.
+> Kept only for history; regenerate from the real config before treating as a spec.
+
 > **LOGIC:** When building a specific page, first check `design-system/pages/[page-name].md`.
 > If that file exists, its rules **override** this Master file.
 > If not, strictly follow the rules below.
