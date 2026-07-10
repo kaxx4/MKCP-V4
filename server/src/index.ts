@@ -387,8 +387,11 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
     // Sync each table in parallel — Promise.allSettled means one failure doesn't break others.
     // Each entry is labeled so we can report exactly which table failed.
     const syncTasks: Array<{ label: string; promise: Promise<void> }> = [
-      { label: "discount_rules", promise: discountRules.length > 0 ? supabaseSync.syncDiscountRules(discountRules, company) : Promise.resolve() },
-      { label: "order_groups", promise: orderGroups.length > 0 ? supabaseSync.syncOrderGroups(orderGroups, company) : Promise.resolve() },
+      // discount_rules & order_groups are WEB-OWNED (web always holds priority).
+      // The desktop must not write them: its writer uses the old normalized
+      // schema and calls deleteOrphans, which would overwrite/delete rules the
+      // web created. These are intentionally skipped here so the web remains the
+      // single source of truth. See web migration 0021_discount_order_web_owned.sql.
       { label: "unit_overrides", promise: Object.keys(unitOverrides).length > 0 ? supabaseSync.syncUnitOverrides(unitOverrides, company) : Promise.resolve() },
       { label: "rate_overrides", promise: rateOverrides.length > 0 ? supabaseSync.syncRateOverrides(rateOverrides, company) : Promise.resolve() },
       { label: "gst_overrides", promise: Object.keys(gstOverrides).length > 0 ? supabaseSync.syncGstOverrides(gstOverrides, company) : Promise.resolve() },
@@ -425,8 +428,10 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
     res.json({
       success: true,
       message: "Configuration data synced to Supabase",
-      discountRulesCount: discountRules.length,
-      orderGroupsCount: orderGroups.length,
+      // discount_rules & order_groups are web-owned and intentionally not written
+      // by the desktop, so report 0 written regardless of what was received.
+      discountRulesCount: 0,
+      orderGroupsCount: 0,
       unitOverridesCount: Object.keys(unitOverrides).length,
       rateOverridesCount: rateOverrides.length,
       gstOverridesCount: Object.keys(gstOverrides).length,
