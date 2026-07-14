@@ -52,6 +52,20 @@ function fmtDays(days: unknown): string {
   return typeof days === "number" ? `last ${days}d` : "full FY";
 }
 
+// How long a `pending`/`ack` command can sit unresolved before we treat it as
+// dead (desktop crashed mid-sync in a prior session) and sweep it to "error"
+// on the next startup. Set comfortably above the worst-case full-FY sync
+// (~90 min, see the AbortController timeout in src/api/tallyApi.ts) so we
+// never mis-mark a genuinely still-running sync from a previous process.
+const STALE_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+// How often we re-check `tally_companies.name` and, if it changed (e.g. an
+// FY-rollover rename happening while this process stays up), tear down the
+// old Realtime subscription and resubscribe under the new name. Resolving
+// once at startup only survives renames across app *restarts* — this closes
+// the same-session gap.
+const COMPANY_RECHECK_MS = 30 * 60 * 1000; // 30 minutes
+
 /**
  * Subscribes to `tally_refresh_commands` via Supabase Realtime.
  * When the web dashboard inserts a row for this company, we:
@@ -63,10 +77,11 @@ function fmtDays(days: unknown): string {
  *
  * The company we listen for is resolved from `tally_companies.name` — the SAME
  * source the web dashboard's useCompany() reads — so the Realtime filter is
- * guaranteed to match what the web inserts into tally_refresh_commands.company,
- * and it survives FY-rollover renames (e.g. the "- (from 1-Apr-26)" suffix
- * changing next year) without a code change. `fallbackCompany` (the TALLY_COMPANY
- * env / literal) is used only if that lookup returns nothing.
+ * guaranteed to match what the web inserts into tally_refresh_commands.company.
+ * It's re-checked every COMPANY_RECHECK_MS so a rename (e.g. the FY-rollover
+ * "- (from 1-Apr-26)" suffix) is picked up even mid-session, not just across
+ * app restarts. `fallbackCompany` (the TALLY_COMPANY env / literal) is used
+ * only if the lookup returns nothing.
  *
  * Call once from index.ts inside the app.listen callback.
  */
@@ -87,11 +102,9 @@ export function startRefreshListener(localPort: number, fallbackCompany: string)
     realtime: { params: { eventsPerSecond: 2 } },
   });
 
-  // Resolve the company from the live source of truth, then subscribe. If the
-  // lookup fails (table empty / network), fall back to the passed literal so the
-  // listener still comes up.
-  void (async () => {
-    let company = fallbackCompany;
+  /** Resolve company from the live source of truth; fall back to the passed
+   *  literal if the lookup fails (table empty / network). */
+  async function resolveCompany(): Promise<string> {
     try {
       const { data, error } = await supabase
         .from("tally_companies")
@@ -99,27 +112,72 @@ export function startRefreshListener(localPort: number, fallbackCompany: string)
         .order("synced_at", { ascending: false, nullsFirst: false })
         .limit(1)
         .maybeSingle();
-      if (!error && data?.name) {
-        company = data.name;
-        if (company !== fallbackCompany) {
-          console.log(
-            `🌐 [WEB-SYNC] Resolved company from tally_companies: "${company}" ` +
-              `(fallback was "${fallbackCompany}")`
-          );
-        }
-      }
+      if (!error && data?.name) return data.name as string;
     } catch {
-      /* keep fallbackCompany */
+      /* fall through to fallbackCompany */
     }
-    subscribeForCompany(supabase, localPort, company);
-  })();
+    return fallbackCompany;
+  }
+
+  /** Sweep rows this instance can now see are dead from a prior crashed
+   *  session (stuck at pending/ack past STALE_MS) so they don't sit
+   *  invisible forever — see docs/... gap analysis, "no reaper" finding. */
+  async function sweepStaleCommands(company: string): Promise<void> {
+    try {
+      const cutoff = new Date(Date.now() - STALE_MS).toISOString();
+      const { data, error } = await supabase
+        .from("tally_refresh_commands")
+        .update({ status: "error" })
+        .in("status", ["pending", "ack"])
+        .eq("company", company)
+        .lt("created_at", cutoff)
+        .select("id");
+      if (error) {
+        console.warn(`🌐 [WEB-SYNC] Stale-command sweep failed: ${error.message}`);
+      } else if (data && data.length > 0) {
+        console.log(
+          `🌐 [WEB-SYNC] Swept ${data.length} stale command(s) from a prior session ` +
+            `(company="${company}")`
+        );
+      }
+    } catch (err: any) {
+      console.warn(`🌐 [WEB-SYNC] Stale-command sweep failed: ${err.message}`);
+    }
+  }
+
+  let currentCompany: string | null = null;
+  let currentChannel: ReturnType<typeof subscribeForCompany> | null = null;
+
+  async function resolveAndSubscribe(): Promise<void> {
+    const company = await resolveCompany();
+    if (company === currentCompany) return;
+
+    if (currentCompany !== null && company !== currentCompany) {
+      console.log(
+        `🌐 [WEB-SYNC] Company changed "${currentCompany}" → "${company}" — resubscribing`
+      );
+    } else if (company !== fallbackCompany) {
+      console.log(
+        `🌐 [WEB-SYNC] Resolved company from tally_companies: "${company}" ` +
+          `(fallback was "${fallbackCompany}")`
+      );
+    }
+
+    if (currentChannel) supabase.removeChannel(currentChannel);
+    currentCompany = company;
+    await sweepStaleCommands(company);
+    currentChannel = subscribeForCompany(supabase, localPort, company);
+  }
+
+  void resolveAndSubscribe();
+  setInterval(() => void resolveAndSubscribe(), COMPANY_RECHECK_MS);
 }
 
 function subscribeForCompany(
   supabase: SupabaseClient,
   localPort: number,
   company: string
-): void {
+): ReturnType<SupabaseClient["channel"]> {
   // ── Burst coalescing ───────────────────────────────────────────────────────
   // Rapid commands (e.g. the user clicking "7-day" then "30-day" within seconds)
   // are merged into ONE sync at the WIDEST requested scope, which supersets every
@@ -228,7 +286,7 @@ function subscribeForCompany(
     .replace(/[^a-zA-Z0-9]/g, "_")
     .toLowerCase()}`;
 
-  supabase
+  return supabase
     .channel(channelName)
     .on(
       "postgres_changes",
