@@ -13,6 +13,12 @@ const YELLOW = '\x1b[33m';
 const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
 
+// Optional CLI arg: config file to build with (defaults to the production
+// config). Lets `npm run build:test` reuse this whole pipeline against
+// electron-builder.test.json5 (distinct appId → installs side-by-side
+// instead of overwriting the production app).
+const CONFIG_FILE = process.argv[2] || 'electron-builder.json5';
+
 function step(msg) { console.log(`\n${CYAN}▶ ${msg}${RESET}`); }
 function ok(msg) { console.log(`${GREEN}✓${RESET} ${msg}`); }
 function fail(msg) { console.error(`${RED}✗ ${msg}${RESET}`); }
@@ -30,10 +36,10 @@ function run(cmd, opts = {}) {
   }
 }
 
-/** Read output dir from electron-builder.json5 using regex (avoids full JSON5 parse) */
+/** Read output dir from the active config using regex (avoids full JSON5 parse) */
 function getOutputDir() {
   try {
-    const raw = readFileSync(join(ROOT, 'electron-builder.json5'), 'utf8');
+    const raw = readFileSync(join(ROOT, CONFIG_FILE), 'utf8');
     // Extract: output: "someValue" — works with or without quoted keys
     const m = raw.match(/output\s*:\s*["']([^"']+)["']/);
     return m ? m[1] : 'release';
@@ -84,7 +90,7 @@ async function clearOutputDir(outDir) {
 
 async function main() {
   console.log(`\n${YELLOW}════════════════════════════════════════${RESET}`);
-  console.log('  MK Cycles Dashboard – Production Build');
+  console.log(`  MK Cycles Dashboard – Build (${CONFIG_FILE})`);
   console.log(`${YELLOW}════════════════════════════════════════${RESET}\n`);
 
   const outputDir = getOutputDir();
@@ -126,8 +132,8 @@ async function main() {
   ok('Server devDeps pruned — installer will be ~100 MB smaller');
 
   // Step 4: Run electron-builder
-  step('Building Electron installer...');
-  run('npx electron-builder --win --config electron-builder.json5');
+  step(`Building Electron installer (${CONFIG_FILE})...`);
+  run(`npx electron-builder --win --config ${CONFIG_FILE}`);
 
   // Step 4.5: Restore server devDependencies so the workspace stays usable for development.
   step('Restoring server dev-dependencies for development...');
