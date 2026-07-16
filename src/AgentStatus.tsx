@@ -268,6 +268,7 @@ export default function AgentStatus() {
 
   const [health, setHealth] = useState<TallyHealth | null>(null);
   const [pushStatus, setPushStatus] = useState<PushAgentStatus | null>(null);
+  const [pushStatusUnreachable, setPushStatusUnreachable] = useState(false);
   const [polling, setPolling] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [draining, setDraining] = useState(false);
@@ -345,6 +346,10 @@ export default function AgentStatus() {
       setHealth(h);
       if (h != null) setConnected(!!h.connected);
       setPushStatus(p);
+      // A completed poll with no payload = the local server is down/unreachable,
+      // not "still loading" — track it so the queue card can say so instead of
+      // showing an infinite "Loading…" that's indistinguishable from a hang.
+      setPushStatusUnreachable(p == null);
     } finally {
       setPolling(false);
     }
@@ -924,6 +929,11 @@ export default function AgentStatus() {
                   </div>
                 )}
               </>
+            ) : pushStatusUnreachable ? (
+              <p className="text-xs text-red-600 py-2 flex items-center gap-1.5">
+                <AlertTriangle size={12} className="flex-shrink-0" />
+                Push agent unreachable — the local server on {BASE.replace(/^https?:\/\//, "")} isn't responding. Restart the app if this persists.
+              </p>
             ) : (
               <p className="text-xs text-neutral-400 py-2">Loading push agent status…</p>
             )}
