@@ -16,6 +16,7 @@
     "build:proxy": "cd server && npm run build",
     "generate-icon": "node scripts/generate-icon.js",
     "build:prod": "node scripts/generate-icon.js && node scripts/build-prod.js",
+    "build:test": "node scripts/generate-icon.js && node scripts/build-prod.js electron-builder.test.json5",
     "preview": "vite preview",
     "setup": "node scripts/setup.js",
     "test:unit": "node scripts/test.js",
