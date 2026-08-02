@@ -89,14 +89,22 @@ export function startRefreshListener(localPort: number, fallbackCompany: string)
   if (started) return;
   started = true;
 
-  // Reuse the same credentials SupabaseSync uses — hardcoded fallbacks are
-  // fine here because they're already in the codebase.
+  // Service-role key must come from the env — no hardcoded fallback. A
+  // literal key used to sit here (and in supabaseSync.ts's constructor) and
+  // was committed and pushed to the repo; treat it as a dead credential
+  // going forward regardless of rotation status, and fail closed instead of
+  // ever silently reusing a value that's sat in git history.
   const url =
     process.env.SUPABASE_URL ||
     "https://vmkytsytxlofjyeotmgb.supabase.co";
-  const key =
-    process.env.SUPABASE_SERVICE_KEY ||
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZta3l0c3l0eGxvZmp5ZW90bWdiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODY0MjAyMCwiZXhwIjoyMDk0MjE4MDIwfQ.W-LfPU_GMCFafIWjHt0n5bs1oC08IX7IuXLj6TVY1BU";
+  const key = process.env.SUPABASE_SERVICE_KEY;
+  if (!key) {
+    console.error(
+      "🌐 [WEB-SYNC] SUPABASE_SERVICE_KEY not set — remote refresh listener disabled " +
+        "(the web dashboard's 'refresh now' button won't reach this desktop instance)"
+    );
+    return;
+  }
 
   const supabase = createClient(url, key, {
     realtime: { params: { eventsPerSecond: 2 } },

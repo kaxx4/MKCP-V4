@@ -30,9 +30,10 @@
   ],
   extraResources: [
     {
+      // See electron-builder.json5's matching entry for why ".env" is here.
       from: "server",
       to: "server",
-      filter: ["dist/**/*", "package.json", "node_modules/**/*"],
+      filter: ["dist/**/*", "package.json", "node_modules/**/*", ".env"],
     },
   ],
   extraMetadata: {

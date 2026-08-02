@@ -36,9 +36,20 @@
     {
       // Server runs in the main process via require(process.resourcesPath/server/dist/index.js)
       // — it lives OUTSIDE the asar so it can resolve its own node_modules at runtime.
+      //
+      // ".env" is bundled from the LOCAL, gitignored server/.env on the build
+      // machine (never committed) — public/electron.js's loadPackagedEnv()
+      // reads it from resourcesPath/server/.env at startup. This replaces a
+      // hardcoded Supabase service-role key that used to live directly in
+      // electron.js as the "packaged builds can't read server/.env" fallback;
+      // that literal got committed to git and must be treated as dead
+      // regardless of rotation status. Make sure the build machine's
+      // server/.env has real values before running build:prod — a missing
+      // file just means Supabase-dependent features self-disable (see
+      // loadPackagedEnv()'s warning), it won't fail the build or crash the app.
       from: "server",
       to: "server",
-      filter: ["dist/**/*", "package.json", "node_modules/**/*"],
+      filter: ["dist/**/*", "package.json", "node_modules/**/*", ".env"],
     },
   ],
   extraMetadata: {
