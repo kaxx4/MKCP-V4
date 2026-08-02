@@ -184,11 +184,42 @@ async function killPortProcess(port) {
 // ── Start Express server ──────────────────────────────────────────────────────
 // Uses dynamic import() — loads the server ESM module directly into the Electron
 // main process; no child process, no Windows spawn API.
+// dotenv can't read server/.env from inside the asar, and the packaged app has
+// no OS-level env vars set for it — a literal Supabase service-role key used
+// to sit inline here as the fallback, which meant it got committed and pushed
+// to the repo. That key must be treated as dead going forward regardless of
+// rotation status: a service-role key bypasses RLS entirely, so a leaked one
+// is a full-DB read/write credential. Read the SAME values from an actual
+// server/.env file instead — bundled into the installer via electron-builder's
+// extraResources (see electron-builder.json5), never committed to git
+// (server/.env is gitignored). No `dotenv` require here: the Electron main
+// process doesn't have that package on its own module path (it's the
+// server workspace's dependency, not the root app's), and the format is
+// simple enough not to need it.
+function loadPackagedEnv() {
+  const envPath = isDev
+    ? path.join(__dirname, '../server/.env')
+    : path.join(process.resourcesPath, 'server/.env');
+  if (!fs.existsSync(envPath)) {
+    console.warn(`[server] No .env found at ${envPath} — Supabase-dependent features (sync, remote refresh, push agent) will self-disable until one is provided.`);
+    return;
+  }
+  const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\r$/, ''); // tolerate CRLF
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/);
+    if (!m) continue;
+    const [, key, rawValue] = m;
+    // Same precedence dotenv uses: never override a value already set
+    // (e.g. by a real OS-level env var at launch).
+    if (process.env[key] === undefined) {
+      process.env[key] = rawValue.replace(/^["']|["']$/g, '');
+    }
+  }
+}
+
 async function startExpressServer() {
-  // Set Supabase env vars before the server loads (critical for production builds
-  // where dotenv won't find the .env file in the app package)
-  process.env.SUPABASE_URL = process.env.SUPABASE_URL || "https://vmkytsytxlofjyeotmgb.supabase.co";
-  process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZta3l0c3l0eGxvZmp5ZW90bWdiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODY0MjAyMCwiZXhwIjoyMDk0MjE4MDIwfQ.W-LfPU_GMCFafIWjHt0n5bs1oC08IX7IuXLj6TVY1BU";
+  loadPackagedEnv();
 
   // Enable the Supabase → Tally push-queue drain agent in the packaged app.
   // Server reads this at module load (index.ts) to call startPushAgent().
@@ -197,7 +228,7 @@ async function startExpressServer() {
   // Fallback company for the remote-refresh listener. The listener actually
   // resolves the company from tally_companies.name (the same source the web's
   // useCompany() reads), so this literal is only used if that lookup returns
-  // nothing. dotenv can't read server/.env from inside the asar, so set it here.
+  // nothing.
   process.env.TALLY_COMPANY = process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
 
   const serverDist = isDev

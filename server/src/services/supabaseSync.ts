@@ -52,8 +52,15 @@ export class SupabaseSync {
   private client: SupabaseClient | null;
 
   constructor() {
+    // Service-role key must come from the env — no hardcoded fallback. A
+    // literal key used to sit here (and in refreshListener.ts), got committed
+    // and pushed to the repo, and must be treated as a rotated/dead credential
+    // going forward: even a private repo's git history keeps it, and a
+    // service-role key bypasses RLS entirely, so a leaked one is a full-DB
+    // read/write credential, not a "speed bump" like the client-side
+    // MKC_API_SECRET. Fail closed instead of silently reusing it.
     const url = process.env.SUPABASE_URL || "https://vmkytsytxlofjyeotmgb.supabase.co";
-    const key = process.env.SUPABASE_SERVICE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZta3l0c3l0eGxvZmp5ZW90bWdiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODY0MjAyMCwiZXhwIjoyMDk0MjE4MDIwfQ.W-LfPU_GMCFafIWjHt0n5bs1oC08IX7IuXLj6TVY1BU";
+    const key = process.env.SUPABASE_SERVICE_KEY;
 
     if (!url || !key) {
       console.warn("[Supabase] Missing Supabase credentials — sync disabled");
