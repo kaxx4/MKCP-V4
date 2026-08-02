@@ -35,6 +35,7 @@ lerna-debug.log*
 
 # Data files
 Transactions.json
+Master.json
 public/sample/masters.json
 public/sample/transactions.json
 
@@ -53,3 +54,8 @@ TALLY_TEST*/
 release/
 release_new/
 release*/
+
+# Known-unused scaffold/backup directories — never tracked, but a broad
+# `git add -A` would happily stage them without this.
+server_backup_/
+my-app/
