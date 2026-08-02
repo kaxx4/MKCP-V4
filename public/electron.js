@@ -416,18 +416,40 @@ function createTray() {
     { type: 'separator' },
     {
       label: 'Sync Now',
-      click: () => {
+      // Previously fetch(...).catch(() => {}) — a failure here (Tally closed,
+      // network blip, a 409 lock conflict) produced zero feedback for the one
+      // action someone actually takes when they suspect data is stale. Surface
+      // it the same way the in-window sync buttons do (see AgentStatus.tsx).
+      click: async () => {
         const company = readConfig().companyName || 'M.K.CYCLES (P) LTD.';
-        fetch('http://localhost:3100/api/tally/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ company, mode: 'smart' }),
-        }).catch(() => {});
+        try {
+          const resp = await fetch('http://localhost:3100/api/tally/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company, mode: 'smart' }),
+          });
+          if (!resp.ok) {
+            const body = await resp.text().catch(() => '');
+            dialog.showErrorBox('Sync failed', `Tally sync returned HTTP ${resp.status}.\n${body.slice(0, 500)}`);
+          }
+        } catch (err) {
+          dialog.showErrorBox('Sync failed', `Couldn't reach the local sync server: ${err.message}`);
+        }
       },
     },
     {
       label: 'Drain Queue',
-      click: () => fetch('http://localhost:3100/api/push-agent/drain', { method: 'POST' }).catch(() => {}),
+      click: async () => {
+        try {
+          const resp = await fetch('http://localhost:3100/api/push-agent/drain', { method: 'POST' });
+          if (!resp.ok) {
+            const body = await resp.text().catch(() => '');
+            dialog.showErrorBox('Drain queue failed', `Push agent returned HTTP ${resp.status}.\n${body.slice(0, 500)}`);
+          }
+        } catch (err) {
+          dialog.showErrorBox('Drain queue failed', `Couldn't reach the local sync server: ${err.message}`);
+        }
+      },
     },
     { type: 'separator' },
     {
