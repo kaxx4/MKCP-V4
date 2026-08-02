@@ -2,11 +2,7 @@ import { create } from "zustand";
 import type { ParsedData, CanonicalVoucher, ImportWarning } from "../types/canonical";
 import { applyOverridesToItems } from "../utils/applyOverrides";
 import { useOverrideStore } from "./overrideStore";
-import { generatePredictions, scorePredictions, generateItemForecasts, type PredictionSnapshot } from "../engine/prediction";
-import { saveToStore, loadFromStore } from "../db/idb";
-import { buildVoucherIndex, getCurrentStockIndexed, type VoucherIndex } from "../engine/inventory";
-import { computeItemMargins, type ItemMarginData } from "../engine/financial";
-import { computePartyStats, type PartyStats } from "../utils/partyStats";
+import { buildVoucherIndex } from "../engine/inventory";
 
 /** Mass-deletion sanity check for applyDailyPull: if a fresh pull for a given
  *  (day, voucherType) would remove more than this percentage of that day's
@@ -14,32 +10,9 @@ import { computePartyStats, type PartyStats } from "../utils/partyStats";
  *  the existing records unchanged instead (see applyDailyPull below). */
 const MASS_DELETE_THRESHOLD_PCT = 40;
 
-/** Pre-computed running-balance row for a single ledger. */
-export interface LedgerTxn {
-  date: string;
-  voucherNumber: string;
-  type: string;
-  debit: number;
-  credit: number;
-  running: number;
-}
-
 interface DataState {
   data: ParsedData | null;
   rawData: ParsedData | null; // Store original data without overrides
-  voucherIndex: VoucherIndex;
-  /** Pre-computed item margins — populated in background after each data load.
-   *  Null until the first background computation finishes. */
-  itemMargins: Map<string, ItemMarginData> | null;
-  /** Current stock per itemId — populated synchronously after every setData/mergeData.
-   *  Replaces O(items × vouchers) loops in Dashboard/Orders/Alerts/Reports pages. */
-  stockMap: Map<string, number>;
-  /** Sorted transaction history with running balance per ledgerId — populated
-   *  in idle callback. Replaces O(vouchers × lines) recompute per ledger click. */
-  ledgerTransactionMap: Map<string, LedgerTxn[]>;
-  /** Pre-computed party RFM/churn/prediction stats — populated in idle callback.
-   *  Null until first compute finishes. Eliminates Outreach page's 1-2s mount freeze. */
-  partyStats: PartyStats[] | null;
   setData: (d: ParsedData) => void;
   mergeData: (d: ParsedData) => void;
   /** THE single voucher-clearing authority for a daily pull. Rule, no exceptions:
@@ -94,112 +67,23 @@ function mergeGuardWarning(v: CanonicalVoucher): { severity: "warn"; context: "m
   };
 }
 
-/** Build a stock map for every item in one pass.
- *  Calls the existing `getCurrentStockIndexed` engine function (untouched). */
-function buildStockMap(items: Map<string, any>, voucherIndex: VoucherIndex): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const item of items.values()) {
-    map.set(item.itemId, getCurrentStockIndexed(item, voucherIndex));
-  }
-  return map;
-}
-
-/** Build per-ledger transaction history with running balance.
- *  Single pass through all vouchers: O(vouchers × lines) once total,
- *  vs the previous per-ledger-click recompute. */
-function buildLedgerTransactionMap(
-  vouchers: CanonicalVoucher[],
-  ledgers: Map<string, any>
-): Map<string, LedgerTxn[]> {
-  // Bucket lines by ledgerId in date order
-  const buckets = new Map<string, Array<{ v: CanonicalVoucher; debit: number; credit: number }>>();
-
-  // Pre-sort vouchers once
-  const sorted = [...vouchers]
-    .filter((v) => !v.isCancelled)
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  for (const v of sorted) {
-    for (const line of v.lines) {
-      if (line.type !== "ledger" || !line.ledgerId) continue;
-      const debit = line.isDebit ? (line.amount ?? 0) : 0;
-      const credit = !line.isDebit ? (line.amount ?? 0) : 0;
-      const arr = buckets.get(line.ledgerId);
-      if (arr) arr.push({ v, debit, credit });
-      else buckets.set(line.ledgerId, [{ v, debit, credit }]);
-    }
-  }
-
-  // Compute running balance per bucket
-  const result = new Map<string, LedgerTxn[]>();
-  for (const [ledgerId, rows] of buckets) {
-    const ledger = ledgers.get(ledgerId);
-    let running = ledger?.openingBalance ?? 0;
-    const txns: LedgerTxn[] = new Array(rows.length);
-    for (let i = 0; i < rows.length; i++) {
-      const { v, debit, credit } = rows[i];
-      running += debit - credit;
-      txns[i] = {
-        date: v.date,
-        voucherNumber: v.voucherNumber,
-        type: v.voucherType,
-        debit,
-        credit,
-        running,
-      };
-    }
-    result.set(ledgerId, txns);
-  }
-  return result;
-}
-
 export const useDataStore = create<DataState>((set, get) => ({
   data: null,
   rawData: null,
-  voucherIndex: new Map(),
-  itemMargins: null,
-  stockMap: new Map(),
-  ledgerTransactionMap: new Map(),
-  partyStats: null,
 
   setData: (rawData) => {
     // Store raw data and apply overrides
     const { units, rates } = useOverrideStore.getState();
     const itemsWithOverrides = applyOverridesToItems(rawData.items, units, rates);
     const newData = { ...rawData, items: itemsWithOverrides };
-    const voucherIndex = buildVoucherIndex(newData.vouchers);
-    // Pre-compute stock map synchronously (cheap with voucherIndex — ~559 lookups)
-    const stockMap = buildStockMap(itemsWithOverrides, voucherIndex);
 
-    set({
-      rawData,
-      data: newData,
-      voucherIndex,
-      stockMap,
-      itemMargins: null, // reset — will be re-populated below
-      ledgerTransactionMap: new Map(), // reset — populated in idle callback below
-      partyStats: null, // reset — populated in idle callback below
-    });
-
-    // Single idle callback computes all three heavy derived values and writes
-    // them in one set() call — prevents 3 separate render cascades.
-    const computeIdle = () => {
-      const ledgerTransactionMap = buildLedgerTransactionMap(newData.vouchers, newData.ledgers);
-      const partyStats = computePartyStats(newData.vouchers, newData.ledgers);
-      const margins = computeItemMargins(newData.items, newData.vouchers);
-      const itemMargins = new Map(margins.map((m) => [m.itemId, m]));
-      set({ ledgerTransactionMap, partyStats, itemMargins });
-    };
-    if (typeof requestIdleCallback === "function") {
-      requestIdleCallback(computeIdle, { timeout: 3000 });
-    } else {
-      setTimeout(computeIdle, 100);
-    }
+    set({ rawData, data: newData });
 
     // Run audit in development mode (Phase 5.1)
     if ((import.meta as any).env?.DEV) {
       // Dynamically import audit module to avoid circular dependencies
       import("../engine/audit").then(({ auditAllItems }) => {
+        const voucherIndex = buildVoucherIndex(newData.vouchers);
         const auditResults = auditAllItems(newData.items, newData.vouchers, voucherIndex);
         const failures = auditResults.filter((r) => Math.abs(r.discrepancy) > 1e-9);
         if (failures.length > 0) {
@@ -224,25 +108,14 @@ export const useDataStore = create<DataState>((set, get) => ({
     }
   },
 
-  clearData: () => set({
-    data: null,
-    rawData: null,
-    voucherIndex: new Map(),
-    itemMargins: null,
-    stockMap: new Map(),
-    ledgerTransactionMap: new Map(),
-    partyStats: null,
-  }),
+  clearData: () => set({ data: null, rawData: null }),
 
   refreshOverrides: () => {
-    const { rawData, voucherIndex } = get();
+    const { rawData } = get();
     if (!rawData) return;
     const { units, rates } = useOverrideStore.getState();
     const itemsWithOverrides = applyOverridesToItems(rawData.items, units, rates);
-    // Stock depends on item units/rates only via display conversion (stock is qtyBase),
-    // but rebuild for correctness so any consumer reading from cache stays consistent.
-    const stockMap = buildStockMap(itemsWithOverrides, voucherIndex);
-    set({ data: { ...rawData, items: itemsWithOverrides }, stockMap });
+    set({ data: { ...rawData, items: itemsWithOverrides } });
   },
 
   mergeData: (newData) => {
@@ -311,79 +184,6 @@ export const useDataStore = create<DataState>((set, get) => ({
       ],
     };
     get().setData(mergedRawData);
-
-    // Auto-regenerate predictions after merge (Task 3E)
-    // Defer to idle callback / setTimeout so we don't block the UI render
-    const deferredPredictions = () => (async () => {
-      try {
-        const { units, rates } = useOverrideStore.getState();
-        const itemsWithOverrides = applyOverridesToItems(items, units, rates);
-
-        // Load previous predictions for accuracy scoring
-        const prevSnapshot = await loadFromStore<PredictionSnapshot>("predictions", "latest");
-
-        // Generate new predictions for both types
-        const salesPredictions = generatePredictions(allVouchers, itemsWithOverrides, "Sales");
-        const purchasePredictions = generatePredictions(allVouchers, itemsWithOverrides, "Purchase");
-        const allPredictions = [...salesPredictions, ...purchasePredictions];
-
-        // Generate item-level forecasts and inventory alerts
-        const { forecasts: itemForecasts, alerts: inventoryAlerts } = generateItemForecasts(
-          allVouchers, itemsWithOverrides
-        );
-
-        const newSnapshot: PredictionSnapshot = {
-          generatedAt: new Date().toISOString(),
-          predictions: allPredictions,
-          itemForecasts,
-          inventoryAlerts,
-        };
-
-        // Score previous predictions against new actuals
-        if (prevSnapshot && prevSnapshot.predictions.length > 0) {
-          // Build a party→voucherType map for O(1) lookup instead of O(n*m)
-          const partyTypeMap = new Map<string, "Sales" | "Purchase">();
-          for (const v of allVouchers) {
-            if (v.isCancelled || !v.partyLedgerId) continue;
-            if (v.voucherType === "Sales" || v.voucherType === "Purchase") {
-              if (!partyTypeMap.has(v.partyLedgerId)) {
-                partyTypeMap.set(v.partyLedgerId, v.voucherType);
-              }
-            }
-          }
-
-          const salesAccuracy = scorePredictions(
-            prevSnapshot.predictions.filter(p => partyTypeMap.get(p.partyLedgerId) === "Sales"),
-            allVouchers,
-            "Sales"
-          );
-          const purchaseAccuracy = scorePredictions(
-            prevSnapshot.predictions.filter(p => partyTypeMap.get(p.partyLedgerId) === "Purchase"),
-            allVouchers,
-            "Purchase"
-          );
-          const allAccuracy = [...salesAccuracy, ...purchaseAccuracy];
-          const today = new Date().toISOString().slice(0, 10);
-          await saveToStore("predictions", `accuracy_${today}`, allAccuracy);
-
-          // Save to prediction history (last 10 snapshots)
-          const history = (await loadFromStore<PredictionSnapshot[]>("predictions", "history")) ?? [];
-          history.push(prevSnapshot);
-          if (history.length > 10) history.splice(0, history.length - 10);
-          await saveToStore("predictions", "history", history);
-        }
-
-        // Save new predictions
-        await saveToStore("predictions", "latest", newSnapshot);
-      } catch {
-        // Silently fail - predictions are non-critical
-      }
-    })();
-    if (typeof requestIdleCallback === "function") {
-      requestIdleCallback(deferredPredictions);
-    } else {
-      setTimeout(deferredPredictions, 100);
-    }
   },
 
   applyDailyPull: (freshVouchers, succeededDaysISO, extraWarnings = []) => {
