@@ -59,3 +59,7 @@ release*/
 # `git add -A` would happily stage them without this.
 server_backup_/
 my-app/
+
+# Python bytecode from skill scripts
+__pycache__/
+*.pyc
