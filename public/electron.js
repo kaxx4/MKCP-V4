@@ -231,6 +231,13 @@ async function startExpressServer() {
   // nothing.
   process.env.TALLY_COMPANY = process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
 
+  // Local folder the file-transfer sync (server/src/services/fileTransferSync.ts)
+  // downloads incoming web-pushed files into. Set via Settings -> "Choose folder"
+  // (see the pick-sync-folder IPC handler below); empty until the operator
+  // configures one, in which case the server just logs and leaves the transfer
+  // pending rather than failing.
+  process.env.MKC_SYNC_FOLDER = getConfig('syncFolderPath', '') || '';
+
   const serverDist = isDev
     ? path.join(__dirname, '../server/dist/index.js')
     : path.join(process.resourcesPath, 'server/dist/index.js');
@@ -526,6 +533,35 @@ ipcMain.handle('discount-rules:import', async () => {
   } catch (e) {
     return { ok: false, reason: e.message };
   }
+});
+
+// ── File transfer (web ↔ desktop) ──────────────────────────────────────────
+// Folder picker for where incoming web-pushed files get saved. Stored via the
+// existing get-settings/set-setting config (see readConfig/setConfig above)
+// under 'syncFolderPath', and re-read into MKC_SYNC_FOLDER on next app start
+// (startExpressServer runs once at boot) -- changing it takes effect after a
+// restart, same as every other env-derived setting here.
+ipcMain.handle('pick-sync-folder', async () => {
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a folder for incoming files',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (canceled || filePaths.length === 0) return { ok: false, reason: 'canceled' };
+  setConfig('syncFolderPath', filePaths[0]);
+  process.env.MKC_SYNC_FOLDER = filePaths[0]; // effective immediately, not just next restart
+  return { ok: true, path: filePaths[0] };
+});
+
+// File picker for pushing a local file TO the web dashboard — the renderer
+// gets a path back and POSTs it to the local server's /api/file-transfer/push,
+// which reads it directly (both run in the same machine/process tree).
+ipcMain.handle('pick-file-to-push', async () => {
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a file to send to the web dashboard',
+    properties: ['openFile'],
+  });
+  if (canceled || filePaths.length === 0) return { ok: false, reason: 'canceled' };
+  return { ok: true, path: filePaths[0] };
 });
 
 app.on('second-instance', () => {

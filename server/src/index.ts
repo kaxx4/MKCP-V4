@@ -11,6 +11,7 @@ import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import { startRefreshListener } from "./services/refreshListener.js";
 import { startNightlySync } from "./services/nightlySync.js";
+import { startFileTransferSync, pushFileToWeb, listRecentTransfers } from "./services/fileTransferSync.js";
 import type { SyncPlan, PushVoucherRequest, PushBatchRequest } from "./types.js";
 
 const app = express();
@@ -653,6 +654,9 @@ const httpServer = app.listen(PORT, () => {
 
   // Nightly automatic full-FY sync at 00:00 local (configurable via NIGHTLY_SYNC_*).
   startNightlySync(PORT, company);
+
+  // Two-way file handoff with the web dashboard (see server/src/services/fileTransferSync.ts).
+  startFileTransferSync();
 });
 
 httpServer.on('error', (err: NodeJS.ErrnoException) => {
@@ -698,3 +702,26 @@ app.post("/api/push-agent/requeue", async (req: express.Request, res: express.Re
 if (process.env.PUSH_AGENT_ENABLED === "true") {
   startPushAgent({ tallyUrl: TALLY });
 }
+
+// ── File transfer (web ↔ desktop) ────────────────────────────────────────────
+// Incoming (web -> desktop) is handled entirely by fileTransferSync's own
+// Realtime listener (started above) -- these two routes cover the AgentStatus
+// UI's read (status panel) and the outgoing (desktop -> web) push, which needs
+// a local file path picked via a native dialog in the renderer first.
+app.get("/api/file-transfer/status", async (req, res) => {
+  const company = String(req.query.company || process.env.TALLY_COMPANY || "");
+  if (!company) return res.status(400).json({ error: "company query param required" });
+  const rows = await listRecentTransfers(company);
+  res.json({ rows });
+});
+
+app.post("/api/file-transfer/push", async (req: express.Request, res: express.Response) => {
+  const { company, filePath, note } = req.body as { company?: string; filePath?: string; note?: string };
+  if (!company || !filePath) return res.status(400).json({ error: "company and filePath required" });
+  try {
+    const result = await pushFileToWeb(company, filePath, note || null);
+    res.json({ ok: true, id: result.id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});

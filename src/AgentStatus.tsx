@@ -3,7 +3,7 @@ import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 import {
   Wifi, WifiOff, RefreshCw, Cloud, CloudOff, CheckCircle, XCircle,
   Clock, Activity, ChevronDown, ChevronUp, Settings, Database,
-  AlertTriangle, Loader2, RotateCcw, ChevronRight,
+  AlertTriangle, Loader2, RotateCcw, ChevronRight, Send, Upload, Download,
 } from "lucide-react";
 import { useTallyStore } from "./store/tallyStore";
 import { useSupabaseSyncStatusStore } from "./store/supabaseSyncStatusStore";
@@ -63,6 +63,17 @@ interface PushLogRow {
   last_error: string | null;
   line_errors: string[] | null;
   resolved_at: string;
+}
+
+interface FileTransferRow {
+  id: string;
+  direction: "web_to_desktop" | "desktop_to_web";
+  filename: string;
+  status: "pending" | "downloaded" | "dismissed";
+  note: string | null;
+  size_bytes: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 interface FailedQueueRow {
@@ -273,6 +284,12 @@ export default function AgentStatus() {
   const [syncing, setSyncing] = useState<string | null>(null);
   const [draining, setDraining] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showFileTransfer, setShowFileTransfer] = useState(false);
+  const [syncFolder, setSyncFolder] = useState<string>("");
+  const [transfers, setTransfers] = useState<FileTransferRow[]>([]);
+  const [pushingFile, setPushingFile] = useState(false);
+  const [transferNote, setTransferNote] = useState("");
+  const [transferBusy, setTransferBusy] = useState<string | null>(null);
   const [syncHistory, setSyncHistory] = useState<SyncHistoryRow[]>([]);
   const [pushLog, setPushLog] = useState<PushLogRow[]>([]);
   const [failedJobs, setFailedJobs] = useState<FailedQueueRow[]>([]);
@@ -394,6 +411,78 @@ export default function AgentStatus() {
     const id = setInterval(() => void fetchLogs(), 2000);
     return () => clearInterval(id);
   }, [showLogs, fetchLogs]);
+
+  // ── File transfer — only while that panel is open, same convention as Logs ─
+  const fetchTransfers = useCallback(async () => {
+    if (!companyName) return;
+    try {
+      const resp = await fetch(`${BASE}/api/file-transfer/status?company=${encodeURIComponent(companyName)}`);
+      if (!resp.ok) return;
+      const body = await resp.json();
+      setTransfers(body.rows ?? []);
+    } catch {
+      // server not reachable — leave the last-known list showing rather than clearing it
+    }
+  }, [companyName]);
+
+  useEffect(() => {
+    if (!showFileTransfer) return;
+    void fetchTransfers();
+    const id = setInterval(() => void fetchTransfers(), 10_000);
+    return () => clearInterval(id);
+  }, [showFileTransfer, fetchTransfers]);
+
+  useEffect(() => {
+    if (!showFileTransfer || !(window as any).electronAPI?.getSettings) return;
+    (window as any).electronAPI.getSettings().then((s: any) => setSyncFolder(s?.syncFolderPath || ""));
+  }, [showFileTransfer]);
+
+  const chooseSyncFolder = useCallback(async () => {
+    const api = (window as any).electronAPI;
+    if (!api?.pickSyncFolder) return;
+    const res = await api.pickSyncFolder();
+    if (res?.ok) {
+      setSyncFolder(res.path);
+      toast("Incoming files will be saved here from now on", "success");
+    }
+  }, [toast]);
+
+  const pushFileToWeb = useCallback(async () => {
+    const api = (window as any).electronAPI;
+    if (!api?.pickFileToPush || !companyName) return;
+    const picked = await api.pickFileToPush();
+    if (!picked?.ok) return;
+    setPushingFile(true);
+    try {
+      const resp = await fetch(`${BASE}/api/file-transfer/push`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company: companyName, filePath: picked.path, note: transferNote || undefined }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${resp.status}`);
+      }
+      toast("Sent to the web dashboard", "success");
+      setTransferNote("");
+      void fetchTransfers();
+    } catch (err: any) {
+      toast(`Couldn't send that file: ${err.message}`, "error");
+    } finally {
+      setPushingFile(false);
+    }
+  }, [companyName, transferNote, toast, fetchTransfers]);
+
+  const dismissTransfer = useCallback(async (id: string) => {
+    if (!sbRead) return;
+    setTransferBusy(id);
+    try {
+      await sbRead.from("file_transfers").update({ status: "dismissed" }).eq("id", id);
+      void fetchTransfers();
+    } finally {
+      setTransferBusy(null);
+    }
+  }, [fetchTransfers]);
 
   // Keep the log box pinned to the bottom unless the user scrolled up.
   useEffect(() => {
@@ -1095,6 +1184,82 @@ export default function AgentStatus() {
 
                 <div className="sm:col-span-2">
                   <Btn variant="primary" onClick={applySettings}>Save settings</Btn>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── File transfer ────────────────────────────────────── */}
+        <div className="md:col-span-2">
+          <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+            <button
+              className="flex items-center gap-2 px-4 py-3 border-b border-neutral-100 bg-neutral-50 w-full text-left"
+              onClick={() => setShowFileTransfer(v => !v)}
+            >
+              <Send size={15} className="text-neutral-500" />
+              <h2 className="font-semibold text-sm text-neutral-700 flex-1">File transfer</h2>
+              {transfers.some(t => t.status === "pending" && t.direction === "web_to_desktop") && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">new</span>
+              )}
+              {showFileTransfer ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
+            </button>
+            {showFileTransfer && (
+              <div className="px-4 py-4 space-y-4">
+                <div>
+                  <p className="text-xs text-neutral-500 mb-1">Incoming files save to</p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 text-xs bg-neutral-50 border border-neutral-200 rounded-lg px-3 py-1.5 truncate">
+                      {syncFolder || "not configured — files will wait until you choose one"}
+                    </code>
+                    <Btn onClick={() => void chooseSyncFolder()}>Choose folder</Btn>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs text-neutral-500 mb-1">Send a file to the web dashboard</p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="flex-1 border border-neutral-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Note (optional)"
+                      value={transferNote}
+                      onChange={e => setTransferNote(e.target.value)}
+                    />
+                    <Btn variant="primary" onClick={() => void pushFileToWeb()} disabled={pushingFile}>
+                      {pushingFile ? "Sending…" : "Choose file & send"}
+                    </Btn>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs text-neutral-500 mb-1">Recent transfers</p>
+                  {transfers.length === 0 ? (
+                    <p className="text-xs text-neutral-400">Nothing yet.</p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                      {transfers.map(t => (
+                        <div key={t.id} className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg bg-neutral-50">
+                          {t.direction === "web_to_desktop" ? <Download size={12} className="text-blue-500 flex-shrink-0" /> : <Upload size={12} className="text-emerald-500 flex-shrink-0" />}
+                          <span className="flex-1 truncate">{t.filename}</span>
+                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                            t.status === "pending" ? "bg-amber-100 text-amber-700"
+                            : t.status === "downloaded" ? "bg-emerald-100 text-emerald-700"
+                            : "bg-neutral-200 text-neutral-500"
+                          }`}>{t.status}</span>
+                          {t.direction === "web_to_desktop" && t.status === "pending" && (
+                            <button
+                              className="text-neutral-400 hover:text-neutral-600"
+                              onClick={() => void dismissTransfer(t.id)}
+                              disabled={transferBusy === t.id}
+                              title="Dismiss"
+                            >
+                              <XCircle size={13} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
