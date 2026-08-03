@@ -11,4 +11,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     export: (payload)  => ipcRenderer.invoke('discount-rules:export', payload),
     import: ()         => ipcRenderer.invoke('discount-rules:import'),
   },
+  pickSyncFolder: () => ipcRenderer.invoke('pick-sync-folder'),
+  pickFileToPush: () => ipcRenderer.invoke('pick-file-to-push'),
 });
