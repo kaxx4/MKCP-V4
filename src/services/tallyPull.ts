@@ -25,6 +25,11 @@ export interface PullResult {
    *  quickSync's runQuickSync; if still non-empty, the caller/UI should keep
    *  surfacing it as unresolved. */
   incompleteVoucherIds?: string[];
+  /** Pre-pull line counts for every voucher already in the store, keyed by
+   *  voucherId — the same map findRegressedVouchers checks against. Exposed
+   *  so retryIncompleteVouchers can tell "still short of what it USED to
+   *  have" from "recovered", not just "zero lines vs. not zero". */
+  priorLineCounts?: Map<string, number>;
 }
 
 /** Voucher types that always carry at least one ledger/inventory line in Tally.
@@ -240,6 +245,7 @@ export async function pullFromTally(
     return {
       ok: true, vouchers: parsed.vouchers.length, cleared, ...base,
       incompleteVoucherIds: incomplete.length > 0 ? incomplete.map((v) => v.voucherId) : undefined,
+      priorLineCounts: existingLineCounts,
     };
   } catch (e: any) {
     // Only record a failure if we never got a server verdict at all (network
@@ -273,6 +279,7 @@ export async function retryIncompleteVouchers(
   incompleteVoucherIds: string[],
   parsedVouchers: CanonicalVoucher[],
   origin?: string,
+  priorLineCounts?: Map<string, number>,
 ): Promise<string[]> {
   const incompleteSet = new Set(incompleteVoucherIds);
   const dates = parsedVouchers
@@ -308,9 +315,19 @@ export async function retryIncompleteVouchers(
       warnings: [],
     });
 
-    const stillIncomplete = findIncompleteVouchers(
-      useDataStore.getState().data?.vouchers.filter((v) => incompleteSet.has(v.voucherId)) ?? []
-    ).map((v) => v.voucherId);
+    // Zero-line check alone would report a voucher "recovered" the moment it
+    // has ANY lines, even if it's still short of its pre-pull known-good
+    // count (e.g. regressed 5 -> 2, retry produces 3: still wrong, but not
+    // zero). Re-run findRegressedVouchers against the SAME prior-count
+    // baseline the original incomplete-detection used, when the caller
+    // provided one (pullFromTally's return does) — falls back to zero-line-
+    // only if it wasn't passed, so this stays backward compatible.
+    const retriedSubset = useDataStore.getState().data?.vouchers.filter((v) => incompleteSet.has(v.voucherId)) ?? [];
+    const stillIncompleteIds = new Set(findIncompleteVouchers(retriedSubset).map((v) => v.voucherId));
+    if (priorLineCounts && priorLineCounts.size > 0) {
+      for (const v of findRegressedVouchers(retriedSubset, priorLineCounts)) stillIncompleteIds.add(v.voucherId);
+    }
+    const stillIncomplete = Array.from(stillIncompleteIds);
 
     console.log(
       `[pull] Incomplete-voucher retry: ${incompleteVoucherIds.length - stillIncomplete.length}/${incompleteVoucherIds.length} recovered`
