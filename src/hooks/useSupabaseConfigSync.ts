@@ -136,11 +136,26 @@ export async function syncConfigToSupabase(company: string = DEFAULT_COMPANY): P
   const status = useSupabaseSyncStatusStore.getState();
   try {
     const payload = buildSyncPayload(company);
-    const response = await fetch(SERVER_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    // No timeout here used to mean a hung response left this promise
+    // permanently unsettled -- since config sync is awaited (directly or via
+    // runQuickSync's sequential pull-then-push), a stuck local server
+    // response could silently lock up the whole sync pipeline with no error
+    // ever surfacing. 30s comfortably covers a config payload (this is
+    // metadata/overrides, not the full voucher set) while still failing
+    // fast enough to unblock the caller.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    let response: Response;
+    try {
+      response = await fetch(SERVER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       const err = await response.text();

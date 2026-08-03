@@ -57,7 +57,8 @@ export async function runQuickSync(company: string, label: string, fromYmd: stri
         company,
         tally.incompleteVoucherIds,
         data?.vouchers ?? [],
-        origin
+        origin,
+        tally.priorLineCounts
       );
       tally.incompleteVoucherIds = stillIncomplete.length > 0 ? stillIncomplete : undefined;
       if (stillIncomplete.length > 0) {

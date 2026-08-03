@@ -113,12 +113,26 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
           const body = Buffer.concat(chunks).toString("utf-8");
           console.log(`[tally] ✓ ${label}: ${totalBytes} bytes in ${ms}ms`);
 
-          if (body.includes("<LINEERROR>")) {
-            const err = body.match(/<LINEERROR>([^<]*)/)?.[1] || "unknown";
-            console.error(`[tally] ✗  TALLY ERROR: ${err}`);
-          }
+          const lineError = body.includes("<LINEERROR>")
+            ? body.match(/<LINEERROR>([^<]*)/)?.[1] || "unknown"
+            : null;
+          if (lineError) console.error(`[tally] ✗  TALLY ERROR: ${lineError}`);
 
           if (rawMode) return settle(() => resolve(body));
+
+          // A LINEERROR response used to be resolved same as a real success —
+          // every convertX() in converters/convert.ts falls through its
+          // "no DATA node" branch for this exact shape (no ENVELOPE.BODY.DATA
+          // on an error response), returning `{ tallymessage: [] }` — visually
+          // identical to a legitimately empty collection. That silently
+          // reported failed pulls (wrong company name, Tally not ready, an
+          // invalid TDL request) as "0 rows synced" instead of a sync
+          // failure. Reject here instead, once, at the source — every
+          // consumer's existing catch/retry handling picks it up from there.
+          if (lineError) {
+            settle(() => reject(new Error(`Tally reported an error: ${lineError}`)));
+            return;
+          }
 
           try {
             const parsed = xmlParser.parse(body);
