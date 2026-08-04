@@ -182,8 +182,9 @@ async function killPortProcess(port) {
 }
 
 // ── Start Express server ──────────────────────────────────────────────────────
-// Uses dynamic import() — loads the server ESM module directly into the Electron
-// main process; no child process, no Windows spawn API.
+// Loads the built CJS server bundle straight into the Electron main process with
+// require() — no child process, no Windows spawn API. (This said "dynamic
+// import()" long after the code stopped doing that; see the require() call below.)
 // dotenv can't read server/.env from inside the asar, and the packaged app has
 // no OS-level env vars set for it — a literal Supabase service-role key used
 // to sit inline here as the fallback, which meant it got committed and pushed
