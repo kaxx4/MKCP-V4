@@ -1,3 +1,4 @@
+import { classifyTransfer, contentTypeFor, readHead } from "./fileTransferKind.js";
 import { createClient, type SupabaseClient, type RealtimeChannel } from "@supabase/supabase-js";
 import ws from "ws";
 import fs from "fs";
@@ -155,7 +156,15 @@ export async function pushFileToWeb(company: string, filePath: string, note: str
   const safe = filename.replace(/[^\w.\-]+/g, "_");
   const storagePath = `desktop-to-web/${Date.now()}-${safe}`;
 
-  const up = await client.storage.from(BUCKET).upload(storagePath, buf, { upsert: false });
+  // contentType is NOT optional in practice: supabase-js falls back to
+  // text/plain, which made every JSON and XML sent up download as a .txt the
+  // web dashboard and Tally both reject.
+  const mime = contentTypeFor(filename);
+  const kind = classifyTransfer(filename, readHead(buf));
+
+  const up = await client.storage
+    .from(BUCKET)
+    .upload(storagePath, buf, { upsert: false, contentType: mime });
   if (up.error) throw up.error;
 
   const ins = await client
@@ -165,6 +174,8 @@ export async function pushFileToWeb(company: string, filePath: string, note: str
       direction: "desktop_to_web",
       filename,
       storage_path: storagePath,
+      mime,
+      kind,
       size_bytes: buf.length,
       note,
       created_by: "desktop-agent",
