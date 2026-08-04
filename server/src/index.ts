@@ -10,7 +10,10 @@ import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import { startRefreshListener } from "./services/refreshListener.js";
 import { startNightlySync } from "./services/nightlySync.js";
-import { startFileTransferSync, pushFileToWeb, listRecentTransfers } from "./services/fileTransferSync.js";
+import {
+  startFileTransferSync, pushFileToWeb, listRecentTransfers,
+  startWatchFolder, watchFolderStatus,
+} from "./services/fileTransferSync.js";
 import type { SyncPlan } from "./types.js";
 
 const app = express();
@@ -497,6 +500,8 @@ const httpServer = app.listen(PORT, () => {
 
   // Two-way file handoff with the web dashboard (see server/src/services/fileTransferSync.ts).
   startFileTransferSync();
+  // Outbound half: anything dropped in the watch folder is sent up automatically.
+  startWatchFolder(company);
 });
 
 httpServer.on('error', (err: NodeJS.ErrnoException) => {
@@ -552,6 +557,20 @@ app.get("/api/file-transfer/status", async (req, res) => {
   if (!company) return res.status(400).json({ error: "company query param required" });
   const rows = await listRecentTransfers(company);
   res.json({ rows });
+});
+
+app.get("/api/file-transfer/watch", (_req, res) => {
+  res.json(watchFolderStatus());
+});
+
+/** Restart the watcher after the operator picks a different folder — the env
+ *  var is updated in-process by electron.js, but chokidar has already bound
+ *  to the old path and has to be rebuilt. */
+app.post("/api/file-transfer/watch/restart", (req: express.Request, res: express.Response) => {
+  const company =
+    String(req.body?.company || process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)");
+  const result = startWatchFolder(company);
+  res.status(result.ok ? 200 : 400).json(result);
 });
 
 app.post("/api/file-transfer/push", async (req: express.Request, res: express.Response) => {
