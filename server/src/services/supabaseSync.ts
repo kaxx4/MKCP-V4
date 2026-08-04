@@ -117,10 +117,6 @@ export class SupabaseSync {
         .filter((m) => m.metadata?.type === "Ledger")
         .map((m) => this.mapLedger(m, company))
         .filter(Boolean);
-      const priceLists = messages
-        .filter((m) => m.metadata?.type === "Price List")
-        .map((m) => this.mapPriceList(m, company))
-        .filter(Boolean);
       const companies = messages
         .filter((m) => m.metadata?.type === "Company")
         .map((m) => this.mapCompany(m))
@@ -134,7 +130,6 @@ export class SupabaseSync {
         this.upsertBatch("tally_cost_centres", costCentres),
         this.batchAndUpsert("tally_stock_items", items),
         this.batchAndUpsert("tally_ledgers", ledgers),
-        this.batchAndUpsert("tally_price_lists", priceLists),
         this.upsertBatch("tally_companies", companies, "name"),
       ]);
 
@@ -148,7 +143,7 @@ export class SupabaseSync {
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(
-        `[Supabase] ✓ Masters synced: ${groups.length} groups, ${units.length} units, ${godowns.length} godowns, ${costCentres.length} cost centres, ${items.length} items, ${ledgers.length} ledgers, ${priceLists.length} price lists (${elapsed}s)`
+        `[Supabase] ✓ Masters synced: ${groups.length} groups, ${units.length} units, ${godowns.length} godowns, ${costCentres.length} cost centres, ${items.length} items, ${ledgers.length} ledgers (${elapsed}s)`
       );
 
       await this.logSyncHistory(company, "masters", t0, {
@@ -158,7 +153,6 @@ export class SupabaseSync {
         costCentres: costCentres.length,
         items: items.length,
         ledgers: ledgers.length,
-        priceLists: priceLists.length,
       }, errors.length === 0 ? null : errors);
     } catch (e: any) {
       const msg = `[Supabase] Masters sync error: ${e.message}`;
@@ -719,18 +713,6 @@ export class SupabaseSync {
     };
   }
 
-  private mapPriceList(m: any, company: string): any {
-    if (!m.name) return null;
-    return {
-      guid: this.safeGuid(m.guid, company, m.name),
-      company,
-      name: m.name,
-      parent: m.parent || "PriceList",
-      items: m.items || null,
-      synced_at: new Date().toISOString(),
-    };
-  }
-
   private mapVoucher(m: any, company: string): any {
     // Synthetic GUID from voucher components if no real GUID exists
     const fallbackKey = [m.vouchertypename, m.date, m.vouchernumber, m.partyledgername]
@@ -767,82 +749,9 @@ export class SupabaseSync {
   }
 
   // ── Sync configuration data (local-only stores) ────────────────────────────
-
-  /**
-   * @deprecated discount_rules is WEB-OWNED (web always holds priority). This
-   * writer uses the old normalized schema and calls deleteOrphans, which would
-   * clobber web-created rules. It is no longer called from /api/supabase/sync-config.
-   * Do not re-wire without reconciling with web migration 0021 (jsonb blob schema).
-   */
-  async syncDiscountRules(rules: any[], company: string): Promise<void> {
-    if (!this.client) return;
-    if (!rules || rules.length === 0) return;
-
-    const t0 = Date.now();
-    try {
-      const mapped = rules.map((r, idx) => ({
-        id: r.id || `rule_${company}_${idx}_${Date.now()}`,
-        company,
-        name: r.name || `Rule ${idx + 1}`,
-        category: r.category,
-        discount_type: r.discountType,
-        discount_value: r.discountValue,
-        conditions: r.conditions || {},
-        priority: r.priority || idx,
-        enabled: r.enabled !== false,
-        synced_at: new Date().toISOString(),
-      }));
-
-      // discount_rules has PRIMARY KEY (id) — onConflict must match a unique constraint
-      await this.upsertBatch("discount_rules", mapped, "id");
-      await this.deleteOrphans("discount_rules", company, "id", mapped.map(r => r.id));
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      console.log(`[Supabase] ✓ Synced ${mapped.length} discount rules (${elapsed}s)`);
-    } catch (e: any) {
-      console.error(`[Supabase] Discount rules sync failed: ${e.message}`);
-      throw e;
-    }
-  }
-
-  /**
-   * @deprecated order_groups is WEB-OWNED (web always holds priority). No longer
-   * called from /api/supabase/sync-config; the web writes this table as a jsonb
-   * `data` blob (see web migration 0021). Do not re-wire without reconciling schemas.
-   */
-  async syncOrderGroups(groups: any[], company: string): Promise<void> {
-    if (!this.client) return;
-    if (!groups || groups.length === 0) return;
-
-    const t0 = Date.now();
-    try {
-      const mapped = groups.map((g) => ({
-        id: g.id,
-        company,
-        name: g.name,
-        description: g.description || "",
-        color: g.color || "#3b82f6",
-        tags: g.tags || [],
-        item_ids: g.itemIds || [],
-        lines: g.lines || {},
-        created_at: g.createdAt,
-        updated_at: g.updatedAt,
-        synced_at: new Date().toISOString(),
-      }));
-
-      // order_groups has PRIMARY KEY (id); batch to stay under REST payload limits
-      const BATCH = 50; // smaller batch since `lines` JSONB can be large
-      for (let i = 0; i < mapped.length; i += BATCH) {
-        const batch = mapped.slice(i, i + BATCH);
-        await this.upsertBatch("order_groups", batch, "id");
-      }
-      await this.deleteOrphans("order_groups", company, "id", mapped.map(r => r.id));
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      console.log(`[Supabase] ✓ Synced ${mapped.length} order groups (${elapsed}s)`);
-    } catch (e: any) {
-      console.error(`[Supabase] Order groups sync failed: ${e.message}`);
-      throw e;
-    }
-  }
+  // Note: discount_rules and order_groups are WEB-OWNED (web always holds
+  // priority, jsonb `data` blob schema per web migration 0021) — the desktop
+  // does not write them. See /api/supabase/sync-config for the full task list.
 
   async syncUnitOverrides(overrides: Record<string, any>, company: string): Promise<void> {
     if (!this.client) return;
