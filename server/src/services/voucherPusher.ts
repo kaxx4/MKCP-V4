@@ -209,30 +209,3 @@ export async function pushVoucherToTally(
   const responseText = typeof rawResponse === "string" ? rawResponse : JSON.stringify(rawResponse);
   return parseImportResponse(responseText);
 }
-
-/** Push multiple vouchers to Tally — returns per-voucher results */
-export async function pushBatchToTally(
-  tallyUrl: string,
-  company: string,
-  payloads: VoucherPayload[]
-): Promise<{ results: PushResult[]; successCount: number; errorCount: number }> {
-  const results: PushResult[] = [];
-  for (const payload of payloads) {
-    try {
-      const result = await pushVoucherToTally(tallyUrl, company, payload);
-      results.push(result);
-    } catch (e: any) {
-      results.push({
-        success: false,
-        created: 0,
-        errors: 1,
-        lastVoucherId: null,
-        lineErrors: [e.message],
-        rawResponse: "",
-      });
-    }
-  }
-  const successCount = results.filter(r => r.success).length;
-  const errorCount = results.length - successCount;
-  return { results, successCount, errorCount };
-}
