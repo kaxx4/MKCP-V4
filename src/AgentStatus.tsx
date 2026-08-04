@@ -286,6 +286,7 @@ export default function AgentStatus() {
   const [showSettings, setShowSettings] = useState(false);
   const [showFileTransfer, setShowFileTransfer] = useState(false);
   const [syncFolder, setSyncFolder] = useState<string>("");
+  const [watchFolder, setWatchFolder] = useState<string>("");
   const [transfers, setTransfers] = useState<FileTransferRow[]>([]);
   const [pushingFile, setPushingFile] = useState(false);
   const [transferNote, setTransferNote] = useState("");
@@ -434,8 +435,23 @@ export default function AgentStatus() {
 
   useEffect(() => {
     if (!showFileTransfer || !(window as any).electronAPI?.getSettings) return;
-    (window as any).electronAPI.getSettings().then((s: any) => setSyncFolder(s?.syncFolderPath || ""));
+    (window as any).electronAPI.getSettings().then((s: any) => {
+      setSyncFolder(s?.syncFolderPath || "");
+      setWatchFolder(s?.watchFolderPath || "");
+    });
   }, [showFileTransfer]);
+
+  const chooseWatchFolder = useCallback(async () => {
+    const api = (window as any).electronAPI;
+    if (!api?.pickWatchFolder) return;
+    const res = await api.pickWatchFolder();
+    if (res?.ok) {
+      setWatchFolder(res.path);
+      toast("Anything dropped in this folder will be sent up automatically", "success");
+    } else if (res?.reason && res.reason !== "canceled") {
+      toast(res.reason, "error");
+    }
+  }, [toast]);
 
   const chooseSyncFolder = useCallback(async () => {
     const api = (window as any).electronAPI;
@@ -1214,6 +1230,21 @@ export default function AgentStatus() {
                     </code>
                     <Btn onClick={() => void chooseSyncFolder()}>Choose folder</Btn>
                   </div>
+                </div>
+
+                <div>
+                  <p className="text-xs text-neutral-500 mb-1">
+                    Watch folder — drop a Tally export here and it uploads itself
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 text-xs bg-neutral-50 border border-neutral-200 rounded-lg px-3 py-1.5 truncate">
+                      {watchFolder || "not configured — nothing is being watched"}
+                    </code>
+                    <Btn onClick={() => void chooseWatchFolder()}>Choose folder</Btn>
+                  </div>
+                  <p className="text-[11px] text-neutral-400 mt-1">
+                    Must be a different folder from the one above, or files would loop back and forth.
+                  </p>
                 </div>
 
                 <div>

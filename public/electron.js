@@ -237,6 +237,11 @@ async function startExpressServer() {
   // configures one, in which case the server just logs and leaves the transfer
   // pending rather than failing.
   process.env.MKC_SYNC_FOLDER = getConfig('syncFolderPath', '') || '';
+  // Outbound half: a folder the operator drops Tally exports into, which the
+  // server watches and uploads automatically. Deliberately a DIFFERENT folder
+  // from the one above — the agent writes incoming files there, so watching it
+  // would send every download straight back where it came from.
+  process.env.MKC_WATCH_FOLDER = getConfig('watchFolderPath', '') || '';
 
   const serverDist = isDev
     ? path.join(__dirname, '../server/dist/index.js')
@@ -550,6 +555,33 @@ ipcMain.handle('pick-sync-folder', async () => {
   setConfig('syncFolderPath', filePaths[0]);
   process.env.MKC_SYNC_FOLDER = filePaths[0]; // effective immediately, not just next restart
   return { ok: true, path: filePaths[0] };
+});
+
+ipcMain.handle('pick-watch-folder', async () => {
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a folder to watch for Tally exports',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (canceled || filePaths.length === 0) return { ok: false, reason: 'canceled' };
+  const chosen = filePaths[0];
+  const downloads = getConfig('syncFolderPath', '');
+  if (downloads && path.resolve(downloads) === path.resolve(chosen)) {
+    return { ok: false, reason: 'That is already the folder incoming files are saved to. Pick a different one, or files would loop back and forth.' };
+  }
+  setConfig('watchFolderPath', chosen);
+  process.env.MKC_WATCH_FOLDER = chosen;
+  // chokidar has already bound to the old path, so the server needs to rebuild
+  // the watcher rather than just re-read the env var.
+  try {
+    await fetch('http://127.0.0.1:3100/api/file-transfer/watch/restart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  } catch (err) {
+    console.warn('[watch-folder] Chosen, but the server did not restart its watcher:', err.message);
+  }
+  return { ok: true, path: chosen };
 });
 
 // File picker for pushing a local file TO the web dashboard — the renderer

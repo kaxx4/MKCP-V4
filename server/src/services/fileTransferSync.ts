@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient, type RealtimeChannel } from "@supaba
 import ws from "ws";
 import fs from "fs";
 import path from "path";
+import chokidar, { type FSWatcher } from "chokidar";
 
 // Same WebSocket polyfill used by SupabaseSync / refreshListener.
 if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
@@ -172,6 +173,150 @@ export async function pushFileToWeb(company: string, filePath: string, note: str
     .single();
   if (ins.error) throw ins.error;
   return { id: (ins.data as { id: string }).id };
+}
+
+// ─── Inbound watcher: drop a file in a folder, it appears on the web ────────
+//
+// The operator exports a price list (or anything else) out of Tally into a
+// watched folder on this machine; it is uploaded automatically instead of
+// being carried across by hand.
+
+/** Filename of the ledger, kept inside the watched folder itself. */
+const SENT_LEDGER = ".mkc-sent.json";
+
+let watcher: FSWatcher | null = null;
+let watchedDir: string | null = null;
+let watchCompany = "";
+
+/**
+ * Files already uploaded, keyed by `name:size:mtime`.
+ *
+ * chokidar reports every pre-existing file on startup, which is what lets a
+ * file dropped while the agent was down still get picked up — but without a
+ * ledger it would also re-upload the entire folder on every restart. Keying on
+ * size+mtime rather than name alone means re-exporting a fresh price list over
+ * the old one is correctly treated as new.
+ */
+function ledgerPath(dir: string): string {
+  return path.join(dir, SENT_LEDGER);
+}
+
+function readLedger(dir: string): Set<string> {
+  try {
+    const raw = fs.readFileSync(ledgerPath(dir), "utf8");
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set(); // absent or corrupt — worst case is one duplicate upload
+  }
+}
+
+function writeLedger(dir: string, seen: Set<string>): void {
+  try {
+    // Keep the tail only; this is a dedupe guard, not an audit trail.
+    const arr = [...seen].slice(-500);
+    fs.writeFileSync(ledgerPath(dir), JSON.stringify(arr), "utf8");
+  } catch (err: any) {
+    console.warn(`[file-watch] Couldn't write the sent-ledger: ${err.message}`);
+  }
+}
+
+function fileKey(filePath: string): string | null {
+  try {
+    const st = fs.statSync(filePath);
+    if (!st.isFile() || st.size === 0) return null;
+    return `${path.basename(filePath)}:${st.size}:${Math.round(st.mtimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
+async function onWatchedFile(filePath: string): Promise<void> {
+  const dir = watchedDir;
+  if (!dir) return;
+  const base = path.basename(filePath);
+  if (base.startsWith(".")) return; // our own ledger, and OS cruft
+
+  const key = fileKey(filePath);
+  if (!key) return;
+  const seen = readLedger(dir);
+  if (seen.has(key)) return;
+
+  try {
+    const { id } = await pushFileToWeb(watchCompany, filePath, "Picked up from the watch folder");
+    seen.add(key);
+    writeLedger(dir, seen);
+    console.log(`[file-watch] ✓ Sent "${base}" to the web dashboard (${id})`);
+  } catch (err: any) {
+    // Deliberately NOT recorded in the ledger — a failed upload should be
+    // retried on the next restart rather than silently dropped.
+    console.error(`[file-watch] Failed to send "${base}": ${err.message}`);
+  }
+}
+
+/**
+ * Start (or restart) watching the configured folder.
+ *
+ * Safe to call repeatedly — the operator can change the folder at runtime and
+ * this tears the old watcher down first. Called on boot and from the
+ * folder-picker IPC handler.
+ */
+export function startWatchFolder(company: string): { ok: boolean; reason?: string; dir?: string } {
+  watchCompany = company;
+  if (watcher) {
+    void watcher.close();
+    watcher = null;
+    watchedDir = null;
+  }
+
+  const dir = process.env.MKC_WATCH_FOLDER;
+  if (!dir) return { ok: false, reason: "no folder configured" };
+
+  // The download folder is where THIS agent writes incoming files. Watching it
+  // would upload every file the moment it arrived, straight back to where it
+  // came from — an endless round trip. Refuse rather than let that start.
+  const syncDir = process.env.MKC_SYNC_FOLDER;
+  if (syncDir && path.resolve(syncDir) === path.resolve(dir)) {
+    const reason = "the watch folder cannot be the same as the download folder — files would loop back and forth";
+    console.error(`[file-watch] ${reason}`);
+    return { ok: false, reason };
+  }
+
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err: any) {
+    return { ok: false, reason: `folder isn't usable: ${err.message}` };
+  }
+
+  watchedDir = dir;
+  watcher = chokidar.watch(dir, {
+    depth: 0, // the drop folder itself, not a tree
+    ignoreInitial: false, // so a file dropped while the agent was down is still caught
+    // Tally writes its export progressively; uploading mid-write would ship a
+    // truncated file. Wait for the size to hold steady before touching it.
+    awaitWriteFinish: { stabilityThreshold: 2000, pollInterval: 300 },
+  });
+
+  watcher.on("add", (p) => void onWatchedFile(p));
+  watcher.on("change", (p) => void onWatchedFile(p));
+  watcher.on("error", (err: unknown) =>
+    console.error(`[file-watch] Watcher error: ${err instanceof Error ? err.message : String(err)}`)
+  );
+
+  console.log(`[file-watch] ✓ Watching ${dir} for files to send to the web dashboard`);
+  return { ok: true, dir };
+}
+
+export function stopWatchFolder(): void {
+  if (watcher) {
+    void watcher.close();
+    watcher = null;
+    watchedDir = null;
+  }
+}
+
+export function watchFolderStatus(): { watching: boolean; dir: string | null } {
+  return { watching: watcher !== null, dir: watchedDir };
 }
 
 /** Recent transfers for this company, both directions — for AgentStatus.tsx
