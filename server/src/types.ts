@@ -73,7 +73,6 @@ export interface MastersSyncResult {
     ledgers: number;
     godowns: number;
     costCentres: number;
-    dealerPriceLists: number;
     elapsedSeconds: number;
   };
 }
@@ -141,16 +140,6 @@ export interface VoucherPayload {
   isInvoice: boolean;
   ledgerEntries: LedgerEntry[];
   inventoryEntries?: InventoryEntry[];
-}
-
-export interface PushVoucherRequest {
-  company: string;
-  voucher: VoucherPayload;
-}
-
-export interface PushBatchRequest {
-  company: string;
-  vouchers: VoucherPayload[];
 }
 
 export interface PushResult {

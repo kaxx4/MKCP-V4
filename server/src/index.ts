@@ -6,13 +6,12 @@ import { convertCompanies } from "./converters/convert.js";
 import { SyncOrchestrator } from "./services/syncOrchestrator.js";
 import { ChangeDetector } from "./services/changeDetector.js";
 import { SupabaseSync } from "./services/supabaseSync.js";
-import { pushVoucherToTally, pushBatchToTally, buildVoucherImportXml, parseImportResponse } from "./services/voucherPusher.js";
 import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import { startRefreshListener } from "./services/refreshListener.js";
 import { startNightlySync } from "./services/nightlySync.js";
 import { startFileTransferSync, pushFileToWeb, listRecentTransfers } from "./services/fileTransferSync.js";
-import type { SyncPlan, PushVoucherRequest, PushBatchRequest } from "./types.js";
+import type { SyncPlan } from "./types.js";
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "3100", 10);
@@ -239,31 +238,6 @@ app.post("/api/tally/changed-vouchers", syncGuard, async (req, res) => {
   }
 });
 
-// ── Voucher push endpoints ─────────────────────────────────────────────────────
-app.post("/api/tally/push-voucher", async (req: express.Request, res: express.Response) => {
-  const { company, voucher } = req.body as PushVoucherRequest;
-  if (!company) return res.status(400).json({ success: false, error: "company required" });
-  if (!voucher) return res.status(400).json({ success: false, error: "voucher payload required" });
-  try {
-    const result = await pushVoucherToTally(TALLY, company, voucher);
-    res.json(result);
-  } catch (e: any) {
-    res.status(500).json({ success: false, created: 0, errors: 1, lineErrors: [e.message], rawResponse: "" });
-  }
-});
-
-app.post("/api/tally/push-batch", async (req: express.Request, res: express.Response) => {
-  const { company, vouchers } = req.body as PushBatchRequest;
-  if (!company) return res.status(400).json({ success: false, error: "company required" });
-  if (!Array.isArray(vouchers) || vouchers.length === 0) return res.status(400).json({ success: false, error: "vouchers array required" });
-  try {
-    const result = await pushBatchToTally(TALLY, company, vouchers);
-    res.json(result);
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
 // ── Supabase sync endpoint ─────────────────────────────────────────────────────
 // Masters (items/ledgers) only. Vouchers are deliberately NOT accepted here as
 // a routine path: this used to be a pure unguarded upsert with no pruning
@@ -453,140 +427,6 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
   }
 });
 
-// ── Push-test: convenience endpoint that builds payload from simple inputs ───────
-// Accepts: { company, voucherType, date, partyName, ledgerName, items[], voucherNumber?, narration?, dryRun? }
-// Returns: push result + the exact XML sent (for debugging)
-app.post("/api/tally/push-test", async (req: express.Request, res: express.Response) => {
-  const {
-    company, voucherType = "Sales", date,
-    partyName, ledgerName,
-    items = [], voucherNumber, narration, dryRun = false,
-  } = req.body;
-
-  if (!company)   return res.status(400).json({ success: false, error: "company required" });
-  if (!partyName) return res.status(400).json({ success: false, error: "partyName required" });
-  if (!date)      return res.status(400).json({ success: false, error: "date required (YYYY-MM-DD)" });
-
-  const totalAmount = (items as any[]).reduce((s: number, i: any) => s + (Number(i.qty) * Number(i.rate)), 0);
-  // Normalize for branching — but preserve the ORIGINAL string so VCHTYPE/VOUCHERTYPENAME
-  // match exactly what Tally has configured in the open company (e.g. "SALES" not "Sales")
-  const vt = String(voucherType).trim().toUpperCase();
-  const isSales        = vt === "SALES" || vt.startsWith("SALES");
-  const isPurchase     = vt === "PURCHASE" || vt.startsWith("PURCHASE");
-  const isDeliveryNote = vt.includes("DELIVERY");
-
-  try {
-    let payload: any;
-
-    if (isSales) {
-      if (!ledgerName) return res.status(400).json({ success: false, error: "ledgerName (sales account) required for Sales" });
-      payload = {
-        voucherType: voucherType,   // exact name the company uses, e.g. "SALES"
-        date, voucherNumber, narration,
-        partyLedgerName: partyName,
-        isInvoice: true,
-        ledgerEntries: [
-          {
-            ledgerName: partyName,
-            amount: totalAmount,
-            isDeemedPositive: true,   // Dr customer
-            isPartyLedger: true,
-            billAllocations: voucherNumber
-              ? [{ name: voucherNumber, billType: "New Ref", amount: totalAmount }]
-              : [],
-          },
-          {
-            ledgerName,
-            amount: totalAmount,
-            isDeemedPositive: false,  // Cr sales account
-            isPartyLedger: false,
-          },
-        ],
-        inventoryEntries: (items as any[]).map((i: any) => ({
-          stockItemName: i.name,
-          quantity: Number(i.qty),
-          unit: i.unit || "Nos",
-          rate: Number(i.rate),
-          amount: Number(i.qty) * Number(i.rate),  // positive = outward
-          isDeemedPositive: false,                  // outward
-          salesLedgerName: ledgerName,
-        })),
-      };
-    } else if (isPurchase) {
-      if (!ledgerName) return res.status(400).json({ success: false, error: "ledgerName (purchase account) required for Purchase" });
-      payload = {
-        voucherType: voucherType,   // exact name the company uses, e.g. "Purchase"
-        date, voucherNumber, narration,
-        partyLedgerName: partyName,
-        isInvoice: true,
-        ledgerEntries: [
-          {
-            ledgerName,
-            amount: totalAmount,
-            isDeemedPositive: true,   // Dr purchase account
-            isPartyLedger: false,
-          },
-          {
-            ledgerName: partyName,
-            amount: totalAmount,
-            isDeemedPositive: false,  // Cr supplier
-            isPartyLedger: true,
-            billAllocations: voucherNumber
-              ? [{ name: voucherNumber, billType: "New Ref", amount: totalAmount }]
-              : [],
-          },
-        ],
-        inventoryEntries: (items as any[]).map((i: any) => ({
-          stockItemName: i.name,
-          quantity: Number(i.qty),
-          unit: i.unit || "Nos",
-          rate: Number(i.rate),
-          amount: -(Number(i.qty) * Number(i.rate)), // negative = inward
-          isDeemedPositive: true,                     // inward
-          salesLedgerName: ledgerName,
-        })),
-      };
-    } else if (isDeliveryNote) {
-      payload = {
-        voucherType: voucherType,   // exact name; defaults to "Delivery Note"
-        date, voucherNumber, narration,
-        partyLedgerName: partyName,
-        isInvoice: false,
-        ledgerEntries: [],  // inventory voucher — no accounting balance needed
-        inventoryEntries: (items as any[]).map((i: any) => ({
-          stockItemName: i.name,
-          quantity: Number(i.qty),
-          unit: i.unit || "Nos",
-          rate: Number(i.rate),
-          amount: Number(i.qty) * Number(i.rate), // positive = outward
-          isDeemedPositive: false,                 // outward
-          salesLedgerName: "",                     // no accounting allocation for pure delivery
-        })),
-      };
-    } else {
-      return res.status(400).json({ success: false, error: "voucherType must be Sales, Purchase, or Delivery Note" });
-    }
-
-    const sentXml = buildVoucherImportXml(company, payload);
-    console.log(`[PUSH-TEST] ${voucherType} | ${date} | party="${partyName}" | total=${totalAmount} | dryRun=${dryRun}`);
-
-    if (dryRun) {
-      return res.json({ success: true, dryRun: true, sentXml, payload, created: 0, errors: 0, lineErrors: [], rawResponse: "" });
-    }
-
-    const rawResponse = await tallyPost(TALLY, sentXml, 30_000, true);
-    const responseText = typeof rawResponse === "string" ? rawResponse : JSON.stringify(rawResponse);
-    const result = parseImportResponse(responseText);
-    console.log(`[PUSH-TEST] Result: created=${result.created} errors=${result.errors} success=${result.success}`);
-    if (result.lineErrors.length) console.error(`[PUSH-TEST] Errors: ${result.lineErrors.join("; ")}`);
-
-    res.json({ ...result, sentXml, payload });
-  } catch (e: any) {
-    console.error(`[PUSH-TEST] Exception: ${e.message}`);
-    res.status(500).json({ success: false, error: e.message, created: 0, errors: 1, lineErrors: [e.message], rawResponse: "" });
-  }
-});
-
 // ── Legacy raw import endpoint (backward compat) ───────────────────────────────
 app.post("/api/tally/import", express.text({ type: "application/xml" }), async (req, res) => {
   try {
@@ -697,8 +537,7 @@ app.post("/api/push-agent/requeue", async (req: express.Request, res: express.Re
 });
 
 // Start the drain loop only when explicitly enabled, so it can be turned off without
-// a code change. The agent is an ADDITIONAL consumer of Tally — the manual
-// /api/tally/push-voucher and /push-batch endpoints above are unchanged.
+// a code change.
 if (process.env.PUSH_AGENT_ENABLED === "true") {
   startPushAgent({ tallyUrl: TALLY });
 }

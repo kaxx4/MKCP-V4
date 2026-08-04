@@ -58,7 +58,7 @@ export class SyncOrchestrator {
     let stocks = { tallymessage: [] as any[] };
     let ledgers = { tallymessage: [] as any[] };
     if (!signal?.aborted) {
-      // Dealer price lists removed from this wave — the PriceList collection query
+      // Dealer price lists are NOT fetched — the PriceList collection query
       // crashes TallyPrime (ECONNRESET / 5-minute timeout) which then prevents all
       // subsequent voucher fetches. Stock items + ledgers only.
       emit("masters", 2, 8, "Fetching stock items + ledgers...");
@@ -113,7 +113,7 @@ export class SyncOrchestrator {
         data: { tallymessage: [] },
         stats: {
           stockGroups: 0, units: 0, stockItems: 0, ledgers: 0,
-          godowns: 0, costCentres: 0, dealerPriceLists: 0,
+          godowns: 0, costCentres: 0,
           elapsedSeconds: parseFloat(elapsed),
         },
       };
@@ -145,7 +145,6 @@ export class SyncOrchestrator {
         ledgers: ledgers.tallymessage.length,
         godowns: godowns.tallymessage.length,
         costCentres: costCentres.tallymessage.length,
-        dealerPriceLists: 0,
         elapsedSeconds: parseFloat(elapsed),
       },
     };

@@ -243,44 +243,6 @@ export function convertLedgers(parsed: any): { tallymessage: any[] } {
   };
 }
 
-export function convertDealerPriceLists(parsed: any): { tallymessage: any[] } {
-  // "List of Price Lists" collection response:
-  //   ENVELOPE.BODY.DATA.COLLECTION.PRICELIST[]
-  const root = dig(parsed,
-    ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
-    ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
-    ["ENVELOPE", "BODY", "DATA"],
-    ["ENVELOPE", "BODY"],
-  );
-
-  const priceLists = arr(root?.PRICELIST ?? root?.["PRICELIST.LIST"]);
-  console.log(`[convert] Dealer price lists: ${priceLists.length}`);
-
-  return {
-    tallymessage: priceLists.map((pl: any) => {
-      const name = pl["@_NAME"] || txt(pl.NAME);
-      if (!name) return null;
-
-      const items = arr(pl.PRICELISTITEM ?? pl["PRICELISTITEM.LIST"]).map((item: any) => ({
-        itemName: txt(item.STOCKITEMNAME) || txt(item.NAME),
-        itemGuid: txt(item.STOCKITEMGUID) || txt(item.GUID),
-        priceRate: txt(item.RATE, "0"),
-        unitRate: txt(item.UNITRATE) || txt(item.RATE, "0"),
-        dealerDiscount: txt(item.DEALERDISCOUNT, "0"),
-        barcode: txt(item.BARCODE),
-      })).filter((i: any) => i.itemName);
-
-      return {
-        metadata: { type: "Price List", name },
-        name,
-        parent: txt(pl.PARENT, "PriceList"),
-        items,
-        guid: txt(pl.GUID),
-      };
-    }).filter(Boolean),
-  };
-}
-
 export function convertVouchers(parsed: any): { tallymessage: any[] } {
   // "Day Book" response structure:
   //   ENVELOPE.BODY.DATA.TALLYMESSAGE[] (array of messages, each containing VOUCHERs)
