@@ -58,10 +58,25 @@ test('package.json has build:server script', () => {
   assert(pkg.scripts?.['build:server'], 'build:server script missing');
 });
 
-test('electron.js uses utilityProcess.fork (not process.execPath spawn)', () => {
+test('electron.js loads the server in-process, never by spawning a binary', () => {
   const content = readFileSync('public/electron.js', 'utf8');
-  assert(content.includes('utilityProcess.fork'), 'electron.js must use utilityProcess.fork() to start the server');
-  assert(!content.includes('process.execPath'), 'electron.js must NOT use process.execPath (spawns Electron binary, not Node)');
+  // This asserted utilityProcess.fork() for a design that was never shipped —
+  // it has been failing since before the file-transfer work, against code that
+  // is correct. What it was really guarding is the SECOND assertion: on Windows,
+  // process.execPath is the Electron binary, not Node, so spawning it relaunches
+  // the whole app instead of starting the server. That trap is real and stays.
+  assert(
+    /require\(\s*serverDist\s*\)/.test(content),
+    'electron.js must require() the built server bundle directly into the main process'
+  );
+  assert(
+    !content.includes('process.execPath'),
+    'electron.js must NOT use process.execPath (spawns the Electron binary, not Node)'
+  );
+  assert(
+    !content.includes('utilityProcess.fork'),
+    'the server runs in-process; reintroducing a child process needs the packaging and .env story revisited'
+  );
 });
 
 test('preload.js uses contextBridge', () => {
