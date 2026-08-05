@@ -65,6 +65,19 @@ interface PushLogRow {
   resolved_at: string;
 }
 
+/** Deliberate port of web-dashboard/src/lib/fileTransferKind.ts's label map —
+ *  the two repos can't share a module, so this list is duplicated. Keep it in
+ *  step: the server-side classifier (server/src/services/fileTransferKind.ts)
+ *  is what actually writes `kind` onto the row; this is display-only. */
+type FileTransferKind = "price_list" | "purchase_xml" | "packing_list" | "sales_order" | "unknown";
+const KIND_LABEL: Record<FileTransferKind, string> = {
+  price_list: "Price list",
+  purchase_xml: "Purchase / in-transit XML",
+  packing_list: "Packing list",
+  sales_order: "Sales order",
+  unknown: "File",
+};
+
 interface FileTransferRow {
   id: string;
   direction: "web_to_desktop" | "desktop_to_web";
@@ -74,6 +87,7 @@ interface FileTransferRow {
   size_bytes: number | null;
   created_at: string;
   updated_at: string;
+  kind: FileTransferKind;
 }
 
 interface FailedQueueRow {
@@ -1271,7 +1285,17 @@ export default function AgentStatus() {
                       {transfers.map(t => (
                         <div key={t.id} className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg bg-neutral-50">
                           {t.direction === "web_to_desktop" ? <Download size={12} className="text-blue-500 flex-shrink-0" /> : <Upload size={12} className="text-emerald-500 flex-shrink-0" />}
-                          <span className="flex-1 truncate">{t.filename}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="truncate">{t.filename}</div>
+                            <div className="flex items-center gap-1.5 text-[10px] text-neutral-400">
+                              {t.kind && t.kind !== "unknown" && (
+                                <span className="px-1 py-0.5 rounded bg-neutral-200 text-neutral-600 font-medium">
+                                  {KIND_LABEL[t.kind]}
+                                </span>
+                              )}
+                              <span>{fmt(t.created_at)}</span>
+                            </div>
+                          </div>
                           <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
                             t.status === "pending" ? "bg-amber-100 text-amber-700"
                             : t.status === "downloaded" ? "bg-emerald-100 text-emerald-700"
