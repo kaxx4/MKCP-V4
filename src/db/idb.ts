@@ -91,3 +91,33 @@ export async function loadBackup(key: string): Promise<unknown> {
   return val?.data;
 }
 
+export async function deleteBackup(key: string): Promise<void> {
+  const db = await getDB();
+  await db.delete("backups", key);
+}
+
+/**
+ * Keep only the `keepCount` most recent backups, deleting the rest.
+ *
+ * createBackup() has always inserted under a fresh timestamped key with no
+ * corresponding deletion anywhere in the codebase — every 5-minute
+ * usePersistenceMonitor tick added a full ~100-500MB dataset copy to
+ * IndexedDB, forever, with nothing ever pruning it. Left running for weeks
+ * on a machine that's on all day, that's a multi-GB (confirmed: tens of GB)
+ * unbounded leak. This is the missing other half of that write path.
+ */
+export async function pruneBackups(keepCount: number): Promise<number> {
+  const all = await listBackups(); // already sorted newest-first
+  const toDelete = all.slice(keepCount);
+  await Promise.all(toDelete.map((b) => deleteBackup(b.key)));
+  return toDelete.length;
+}
+
+/** Every key currently in a store, for a one-time cleanup sweep. */
+export async function clearStore(storeName: string): Promise<number> {
+  const db = await getDB();
+  const keys = await db.getAllKeys(storeName);
+  await Promise.all(keys.map((k) => db.delete(storeName, k)));
+  return keys.length;
+}
+

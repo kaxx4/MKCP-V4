@@ -7,7 +7,7 @@
 
 import { useEffect, useRef } from "react";
 import { useDataStore } from "../store/dataStore";
-import { saveData, createBackup } from "../db/idb";
+import { saveData, createBackup, pruneBackups, clearStore } from "../db/idb";
 import { serializeParsedData } from "../utils/serialize";
 
 interface PersistenceConfig {
@@ -15,6 +15,14 @@ interface PersistenceConfig {
   verbose?: boolean; // Log persistence events
   onDataChanged?: () => void; // Callback when data changes
 }
+
+// Max backups kept in IndexedDB at any time. createBackup() has always
+// inserted under a fresh key with nothing ever deleting old ones — left
+// running for weeks this grew the `backups` store into tens of GB. Prune
+// after every new backup, and run a one-time aggressive sweep on first
+// mount to reclaim whatever's already accumulated.
+const MAX_BACKUPS = 10;
+const CLEANUP_DONE_KEY = "mkc_backup_cleanup_20260814";
 
 /**
  * Hook that monitors data store and ensures persistence to IndexedDB
@@ -71,10 +79,15 @@ export function usePersistenceMonitor(config: PersistenceConfig = {}) {
 
   // Periodic auto-backup (5-min default). Reads data imperatively via getState()
   // so the interval is stable — it doesn't restart every time data changes.
+  const lastBackupKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const scheduledBackup = () => {
       const current = useDataStore.getState().data;
       if (!current || current.vouchers.length === 0) return;
+
+      // Skip if nothing changed since the last backup — previously every
+      // tick backed up unconditionally even when idle.
+      if (current.importedAt === lastBackupKeyRef.current) return;
 
       const performBackup = async () => {
         try {
@@ -82,8 +95,13 @@ export function usePersistenceMonitor(config: PersistenceConfig = {}) {
             serializeParsedData(current),
             `auto_backup_${new Date().toISOString()}`
           );
+          lastBackupKeyRef.current = current.importedAt;
           if (verbose) {
             console.log(`[PERSIST] ✓ Auto-backup created: ${backupKey}`);
+          }
+          const pruned = await pruneBackups(MAX_BACKUPS);
+          if (verbose && pruned > 0) {
+            console.log(`[PERSIST] ✓ Pruned ${pruned} old backup(s)`);
           }
         } catch (err) {
           console.warn("[PERSIST] ⚠️ Auto-backup failed:", err);
@@ -102,6 +120,28 @@ export function usePersistenceMonitor(config: PersistenceConfig = {}) {
       if (backupIntervalRef.current) clearInterval(backupIntervalRef.current);
     };
   }, [autoBackupInterval, verbose]);
+
+  // One-time cleanup: reclaim IndexedDB space already accumulated by the
+  // unbounded backup leak (and any stale raw-upload entries from the old
+  // jsonUploads writer, which no longer exists in this codebase).
+  useEffect(() => {
+    if (localStorage.getItem(CLEANUP_DONE_KEY)) return;
+    (async () => {
+      try {
+        const prunedBackups = await pruneBackups(MAX_BACKUPS);
+        const clearedUploads = await clearStore("jsonUploads");
+        localStorage.setItem(CLEANUP_DONE_KEY, "1");
+        if (verbose || prunedBackups > 0 || clearedUploads > 0) {
+          console.log(
+            `[PERSIST] ✓ One-time cleanup: removed ${prunedBackups} old backup(s), ${clearedUploads} stale upload entrie(s)`
+          );
+        }
+      } catch (err) {
+        console.warn("[PERSIST] ⚠️ One-time cleanup failed:", err);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 }
 
 export default usePersistenceMonitor;
