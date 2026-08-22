@@ -805,7 +805,15 @@ export default function AgentStatus() {
             </div>
             <div className="flex gap-2 flex-wrap mb-2">
               <Btn variant="primary"
-                onClick={() => triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "full", chunkStrategy: "daily" }, "Full sync")}
+                onClick={() => {
+                  // Full FY is the heaviest, slowest sync on this panel — a
+                  // one-click "Sync Now" right next to the narrower Masters/
+                  // Daybook buttons was too easy to hit by accident. Mirrors
+                  // the same confirmation the web app's RefreshTallyButton
+                  // added for its own "Full year" option.
+                  if (!window.confirm("Pull the FULL current financial year from Tally? This is the slowest option — Masters or Daybook sync is usually what you actually want.")) return;
+                  triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "full", chunkStrategy: "daily" }, "Full sync");
+                }}
                 disabled={!!syncing || isSyncing || !connected}>
                 {syncing === "Full sync" ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                 Sync Now
