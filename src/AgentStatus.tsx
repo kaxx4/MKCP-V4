@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { PendingPushes } from "./PendingPushes";
 import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 import {
   Wifi, WifiOff, RefreshCw, Cloud, CloudOff, CheckCircle, XCircle,
@@ -676,6 +677,13 @@ export default function AgentStatus() {
             Refresh
           </button>
         </div>
+      </div>
+
+      {/* Above the status grid on purpose: this is the only thing on this screen
+          that BLOCKS something, and a pending approval buried under status
+          cards is a voucher that never gets booked. */}
+      <div className="max-w-5xl mx-auto">
+        <PendingPushes />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mx-auto">
