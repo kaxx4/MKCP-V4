@@ -9,6 +9,7 @@ import { SupabaseSync } from "./services/supabaseSync.js";
 import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import { startRefreshListener } from "./services/refreshListener.js";
+import { startPushListener, listPendingPushes, approvePush, rejectPush } from "./services/pushListener.js";
 import { startNightlySync } from "./services/nightlySync.js";
 import {
   startFileTransferSync, pushFileToWeb, listRecentTransfers,
@@ -445,6 +446,28 @@ app.post("/api/tally/import", express.text({ type: "application/xml" }), async (
   }
 });
 
+// ── Web voucher pushes (awaiting approval on THIS machine) ──────────────────────
+// The web dashboard queues a voucher; nothing reaches Tally until it is
+// approved here. The renderer polls this the same way it polls /progress.
+app.get("/api/tally/pending-pushes", (_req, res) => {
+  res.json(listPendingPushes());
+});
+
+app.post("/api/tally/pending-pushes/:id/approve", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "bad id" });
+  const result = await approvePush(id);
+  // 200 with ok:false — Tally rejecting a voucher is an ANSWER, not a
+  // transport failure, and the UI needs the message either way.
+  res.status(200).json(result);
+});
+
+app.post("/api/tally/pending-pushes/:id/reject", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "bad id" });
+  res.status(200).json(await rejectPush(id));
+});
+
 // ── Debug endpoints ─────────────────────────────────────────────────────────────
 app.post("/api/tally/debug", async (req, res) => {
   const { company, xml: customXml } = req.body;
@@ -494,6 +517,10 @@ const httpServer = app.listen(PORT, () => {
   const company =
     process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
   startRefreshListener(PORT, company);
+
+  // Voucher pushes FROM the web dashboard. Separate listener, separate table,
+  // separate endpoints — the refresh path above is untouched by it on purpose.
+  startPushListener(company, TALLY);
 
   // Nightly automatic full-FY sync at 00:00 local (configurable via NIGHTLY_SYNC_*).
   startNightlySync(PORT, company);
