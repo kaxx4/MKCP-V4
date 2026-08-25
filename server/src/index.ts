@@ -366,20 +366,30 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
     // Sync each table in parallel — Promise.allSettled means one failure doesn't break others.
     // Each entry is labeled so we can report exactly which table failed.
     const syncTasks: Array<{ label: string; promise: Promise<void> }> = [
-      // discount_rules & order_groups are WEB-OWNED (web always holds priority).
-      // The desktop must not write them: its writer uses the old normalized
-      // schema and calls deleteOrphans, which would overwrite/delete rules the
-      // web created. These are intentionally skipped here so the web remains the
-      // single source of truth. See web migration 0021_discount_order_web_owned.sql.
-      { label: "unit_overrides", promise: Object.keys(unitOverrides).length > 0 ? supabaseSync.syncUnitOverrides(unitOverrides, company) : Promise.resolve() },
-      { label: "rate_overrides", promise: rateOverrides.length > 0 ? supabaseSync.syncRateOverrides(rateOverrides, company) : Promise.resolve() },
-      { label: "gst_overrides", promise: Object.keys(gstOverrides).length > 0 ? supabaseSync.syncGstOverrides(gstOverrides, company) : Promise.resolve() },
-      { label: "item_category_overrides", promise: Object.keys(itemCategoryOverrides).length > 0 ? supabaseSync.syncItemCategoryOverrides(itemCategoryOverrides, company) : Promise.resolve() },
-      { label: "category_colors", promise: Object.keys(categoryColors).length > 0 ? supabaseSync.syncCategoryColors(categoryColors, company) : Promise.resolve() },
-      { label: "vendor_group_assignments", promise: Object.keys(vendorGroupAssignments).length > 0 ? supabaseSync.syncVendorGroupAssignments(vendorGroupAssignments, company) : Promise.resolve() },
+      // WEB-OWNED tables (web always holds priority) — the desktop must not
+      // write these: its writer used the old normalized schema / a stale
+      // local snapshot and called deleteOrphans, which would overwrite/
+      // delete data the web app just created. Intentionally skipped here so
+      // the web remains the single source of truth:
+      //   discount_rules, order_groups        — see web migration 0021_discount_order_web_owned.sql
+      //   item_category_overrides, category_colors — same feature as discount_rules
+      //     (the web dashboard's Discount Rules page — Item Assignments +
+      //     Color tabs); missed when the above exclusion was first added,
+      //     which meant every scheduled quick-sync silently reverted
+      //     whatever the web app had just written. Fixed 2026-08-25.
+      //   tally_price_list_imports            — the web dashboard's Price List
+      //     page (apiUploadPriceList) is the only current writer; the
+      //     desktop's local price-list store has no UI left to populate it,
+      //     so it only ever pushed a stale/empty snapshot. Fixed 2026-08-25.
+      //   unit_overrides, gst_overrides, rate_overrides, vendor_group_assignments
+      //     — same mechanism, found when the operator asked to check the
+      //     other tables this bug could hit. None of the four have an
+      //     editing UI anywhere in this desktop app (their store setters
+      //     have zero callers beyond a one-time boot restore); the web
+      //     dashboard's Edit Units / Price List / Vendors pages are the only
+      //     real writers. Fixed 2026-08-25.
       { label: "item_notes", promise: Object.keys(itemNotes).length > 0 ? supabaseSync.syncItemNotes(itemNotes, company) : Promise.resolve() },
       { label: "calling_list_entries", promise: callingList.length > 0 ? supabaseSync.syncCallingList(callingList, company) : Promise.resolve() },
-      { label: "tally_price_list_imports", promise: Object.keys(tallyPriceListImports).length > 0 ? supabaseSync.syncTallyPriceListImports(tallyPriceListImports, tallyPriceListImportedAt, company) : Promise.resolve() },
       { label: "voucher_overrides", promise: Object.keys(voucherOverrides).length > 0 ? supabaseSync.syncVoucherOverrides(voucherOverrides, company) : Promise.resolve() },
       { label: "app_settings", promise: Object.keys(appSettings).length > 0 ? supabaseSync.syncAppSettings(appSettings, company) : Promise.resolve() },
       // order_draft_lines always fires — empty array means "clear the cloud draft"
@@ -407,19 +417,20 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
     res.json({
       success: true,
       message: "Configuration data synced to Supabase",
-      // discount_rules & order_groups are web-owned and intentionally not written
-      // by the desktop, so report 0 written regardless of what was received.
+      // These tables are web-owned and intentionally not written by the
+      // desktop (see the syncTasks comment above), so report 0 written
+      // regardless of what was received.
       discountRulesCount: 0,
       orderGroupsCount: 0,
-      unitOverridesCount: Object.keys(unitOverrides).length,
-      rateOverridesCount: rateOverrides.length,
-      gstOverridesCount: Object.keys(gstOverrides).length,
-      itemCategoryOverridesCount: Object.keys(itemCategoryOverrides).length,
-      categoryColorsCount: Object.keys(categoryColors).length,
-      vendorGroupAssignmentsCount: Object.keys(vendorGroupAssignments).length,
+      itemCategoryOverridesCount: 0,
+      categoryColorsCount: 0,
+      tallyPriceListImportsCount: 0,
+      unitOverridesCount: 0,
+      rateOverridesCount: 0,
+      gstOverridesCount: 0,
+      vendorGroupAssignmentsCount: 0,
       itemNotesCount: Object.keys(itemNotes).length,
       callingListCount: callingList.length,
-      tallyPriceListImportsCount: Object.keys(tallyPriceListImports).length,
       voucherOverridesCount: Object.keys(voucherOverrides).length,
       appSettingsCount: Object.keys(appSettings).length,
       orderDraftLinesCount: orderDraftLines.length,

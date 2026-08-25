@@ -753,189 +753,33 @@ export class SupabaseSync {
   // priority, jsonb `data` blob schema per web migration 0021) — the desktop
   // does not write them. See /api/supabase/sync-config for the full task list.
 
-  async syncUnitOverrides(overrides: Record<string, any>, company: string): Promise<void> {
-    if (!this.client) return;
-    if (!overrides || Object.keys(overrides).length === 0) return;
+  // NOTE: syncUnitOverrides, syncGstOverrides, syncRateOverrides, and
+  // syncVendorGroupAssignments (below) were removed (2026-08-25) — same
+  // reasoning as syncItemCategoryOverrides/syncCategoryColors/
+  // syncTallyPriceListImports above. None of the four have an active editing
+  // UI anywhere in this desktop app (verified: their store setters —
+  // setUnitOverride/setRateOverride/setGstOverride in overrideStore.ts,
+  // assignItem/batchAssignItems in vendorGroupStore.ts — have zero callers
+  // outside the stores themselves and a one-time boot restore from a bundled
+  // defaults JSON / IndexedDB cache). The web dashboard's Edit Units, Price
+  // List, and Vendors pages are the only places a person actually changes
+  // this data. Every scheduled quick-sync (SyncAgent, always running,
+  // multiple devices) was re-pushing that stale/default snapshot and calling
+  // deleteOrphans, silently reverting whatever the web app had just written.
 
-    const t0 = Date.now();
-    try {
-      const mapped = Object.entries(overrides).map(([itemId, override]: [string, any]) => ({
-        item_id: itemId,
-        company,
-        pkg_unit: override.pkgUnit,
-        units_per_pkg: override.unitsPerPkg,
-        source: override.source || "manual",
-        confidence: override.confidence || 1,
-        updated_at: override.updatedAt || new Date().toISOString(),
-        synced_at: new Date().toISOString(),
-      }));
-
-      // unit_overrides has UNIQUE(company, item_id); SERIAL id is just for PK
-      const BATCH = 200;
-      for (let i = 0; i < mapped.length; i += BATCH) {
-        const batch = mapped.slice(i, i + BATCH);
-        await this.upsertBatch("unit_overrides", batch, "company,item_id");
-      }
-      await this.deleteOrphans("unit_overrides", company, "item_id", mapped.map(r => r.item_id));
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      console.log(`[Supabase] ✓ Synced ${mapped.length} unit overrides (${elapsed}s)`);
-    } catch (e: any) {
-      console.error(`[Supabase] Unit overrides sync failed: ${e.message}`);
-      throw e;
-    }
-  }
-
-  async syncGstOverrides(overrides: Record<string, any>, company: string): Promise<void> {
-    if (!this.client) return;
-    if (!overrides || Object.keys(overrides).length === 0) return;
-
-    const t0 = Date.now();
-    try {
-      const mapped = Object.values(overrides).map((ov: any) => ({
-        item_id: ov.itemId,
-        company,
-        gst_pct: ov.gstPct,
-        updated_at: ov.updatedAt || new Date().toISOString(),
-        synced_at: new Date().toISOString(),
-      }));
-
-      // gst_overrides has UNIQUE(company, item_id)
-      const BATCH = 200;
-      for (let i = 0; i < mapped.length; i += BATCH) {
-        const batch = mapped.slice(i, i + BATCH);
-        await this.upsertBatch("gst_overrides", batch, "company,item_id");
-      }
-      await this.deleteOrphans("gst_overrides", company, "item_id", mapped.map(r => r.item_id));
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      console.log(`[Supabase] ✓ Synced ${mapped.length} GST overrides (${elapsed}s)`);
-    } catch (e: any) {
-      console.error(`[Supabase] GST overrides sync failed: ${e.message}`);
-      throw e;
-    }
-  }
-
-  async syncRateOverrides(overrides: any[], company: string): Promise<void> {
-    if (!this.client) return;
-    if (!overrides || overrides.length === 0) return;
-
-    const t0 = Date.now();
-    try {
-      const mapped = overrides.map((r) => ({
-        item_id: r.itemId,
-        company,
-        unit_rate: r.unitRate,
-        pkg_rate: r.pkgRate,
-        updated_at: r.updatedAt || new Date().toISOString(),
-        synced_at: new Date().toISOString(),
-      }));
-
-      // rate_overrides has UNIQUE(company, item_id)
-      const BATCH = 200;
-      for (let i = 0; i < mapped.length; i += BATCH) {
-        const batch = mapped.slice(i, i + BATCH);
-        await this.upsertBatch("rate_overrides", batch, "company,item_id");
-      }
-      await this.deleteOrphans("rate_overrides", company, "item_id", mapped.map(r => r.item_id));
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      console.log(`[Supabase] ✓ Synced ${mapped.length} rate overrides (${elapsed}s)`);
-    } catch (e: any) {
-      console.error(`[Supabase] Rate overrides sync failed: ${e.message}`);
-      throw e;
-    }
-  }
-
-  async syncItemCategoryOverrides(overrides: Record<string, string>, company: string): Promise<void> {
-    if (!this.client) return;
-    if (!overrides || Object.keys(overrides).length === 0) return;
-
-    const t0 = Date.now();
-    try {
-      const mapped = Object.entries(overrides).map(([itemId, categoryId]) => ({
-        item_id: itemId,
-        company,
-        category_id: categoryId,
-        updated_at: new Date().toISOString(),
-        synced_at: new Date().toISOString(),
-      }));
-
-      const BATCH = 200;
-      for (let i = 0; i < mapped.length; i += BATCH) {
-        const batch = mapped.slice(i, i + BATCH);
-        const { error } = await this.client.from("item_category_overrides").upsert(batch, {
-          onConflict: "company,item_id",
-        });
-        if (error) throw new Error(error.message);
-      }
-      await this.deleteOrphans("item_category_overrides", company, "item_id", mapped.map(r => r.item_id));
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      console.log(`[Supabase] ✓ Synced ${mapped.length} item category overrides (${elapsed}s)`);
-    } catch (e: any) {
-      console.error(`[Supabase] Item category overrides sync failed: ${e.message}`);
-      throw e;
-    }
-  }
-
-  async syncCategoryColors(colors: Record<string, string>, company: string): Promise<void> {
-    if (!this.client) return;
-    if (!colors || Object.keys(colors).length === 0) return;
-
-    const t0 = Date.now();
-    try {
-      const mapped = Object.entries(colors).map(([categoryId, color]) => ({
-        category_id: categoryId,
-        company,
-        color,
-        updated_at: new Date().toISOString(),
-        synced_at: new Date().toISOString(),
-      }));
-
-      const BATCH = 200;
-      for (let i = 0; i < mapped.length; i += BATCH) {
-        const batch = mapped.slice(i, i + BATCH);
-        const { error } = await this.client.from("category_colors").upsert(batch, {
-          onConflict: "company,category_id",
-        });
-        if (error) throw new Error(error.message);
-      }
-      await this.deleteOrphans("category_colors", company, "category_id", mapped.map(r => r.category_id));
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      console.log(`[Supabase] ✓ Synced ${mapped.length} category colors (${elapsed}s)`);
-    } catch (e: any) {
-      console.error(`[Supabase] Category colors sync failed: ${e.message}`);
-      throw e;
-    }
-  }
-
-  async syncVendorGroupAssignments(assignments: Record<string, string>, company: string): Promise<void> {
-    if (!this.client) return;
-    if (!assignments || Object.keys(assignments).length === 0) return;
-
-    const t0 = Date.now();
-    try {
-      const mapped = Object.entries(assignments).map(([itemId, vendorGroupId]) => ({
-        item_id: itemId,
-        company,
-        vendor_group_id: vendorGroupId,
-        updated_at: new Date().toISOString(),
-        synced_at: new Date().toISOString(),
-      }));
-
-      const BATCH = 200;
-      for (let i = 0; i < mapped.length; i += BATCH) {
-        const batch = mapped.slice(i, i + BATCH);
-        const { error } = await this.client.from("vendor_group_assignments").upsert(batch, {
-          onConflict: "company,item_id",
-        });
-        if (error) throw new Error(error.message);
-      }
-      await this.deleteOrphans("vendor_group_assignments", company, "item_id", mapped.map(r => r.item_id));
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      console.log(`[Supabase] ✓ Synced ${mapped.length} vendor group assignments (${elapsed}s)`);
-    } catch (e: any) {
-      console.error(`[Supabase] Vendor group assignments sync failed: ${e.message}`);
-      throw e;
-    }
-  }
+  // NOTE: syncItemCategoryOverrides and syncCategoryColors were removed
+  // (2026-08-25). Both are part of the SAME web-owned "discount rules"
+  // feature as discount_rules/order_groups (the Item Assignments + Color
+  // tabs on the web dashboard's Discount Rules page) but were missed when
+  // that exclusion was first added below — this file's own writer used the
+  // desktop's stale local copy of these overrides and called deleteOrphans,
+  // which silently deleted/reverted whatever the web app had just written
+  // every time a scheduled quick-sync ran. Root-caused from the web side as
+  // "discounts keep getting reset" — see web-dashboard's config_edit_log
+  // (migration 0050/0051) for the write-attribution trail that made the
+  // periodic revert visible. Fixed the same way discount_rules/order_groups
+  // were: the desktop simply stops writing these two tables. See the
+  // "web-owned" comment on the syncTasks list in index.ts.
 
   async syncItemNotes(notes: Record<string, { itemId: string; note: string; updatedAt: string }>, company: string): Promise<void> {
     if (!this.client) return;
@@ -1009,39 +853,15 @@ export class SupabaseSync {
     }
   }
 
-  async syncTallyPriceListImports(entries: Record<string, any>, importedAt: string | null, company: string): Promise<void> {
-    if (!this.client) return;
-    if (!entries || Object.keys(entries).length === 0) return;
-
-    const t0 = Date.now();
-    try {
-      // Store keys by .toUpperCase() — normalize to prevent case-insensitive duplicates
-      const mapped = Object.values(entries).map((e: any) => ({
-        item_name: (e.itemName || "").toUpperCase(),
-        company,
-        selling_rate: e.sellingRate,
-        cost_price: e.costPrice || null,
-        unit: e.unit,
-        imported_at: importedAt || new Date().toISOString(),
-        synced_at: new Date().toISOString(),
-      }));
-
-      const BATCH = 200;
-      for (let i = 0; i < mapped.length; i += BATCH) {
-        const batch = mapped.slice(i, i + BATCH);
-        const { error } = await this.client.from("tally_price_list_imports").upsert(batch, {
-          onConflict: "company,item_name",
-        });
-        if (error) throw new Error(error.message);
-      }
-      await this.deleteOrphans("tally_price_list_imports", company, "item_name", mapped.map(r => r.item_name));
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-      console.log(`[Supabase] ✓ Synced ${mapped.length} tally price list imports (${elapsed}s)`);
-    } catch (e: any) {
-      console.error(`[Supabase] Tally price list imports sync failed: ${e.message}`);
-      throw e;
-    }
-  }
+  // NOTE: syncTallyPriceListImports was removed (2026-08-25) — same reasoning
+  // as syncItemCategoryOverrides/syncCategoryColors above. The web dashboard's
+  // Price List page (PriceList.tsx → apiUploadPriceList) is the only current,
+  // user-facing way to import a price list; useTallyPriceListStore on the
+  // desktop side has no UI writer left (nothing calls setPriceList), so it
+  // only ever held a stale/empty local snapshot. Every scheduled quick-sync
+  // pushed that stale snapshot and called deleteOrphans, silently deleting
+  // rows the web app had just uploaded — reported as "I upload a JSON but it
+  // doesn't sync across devices."
 
   async syncAppSettings(settings: Record<string, any>, company: string): Promise<void> {
     if (!this.client) return;
