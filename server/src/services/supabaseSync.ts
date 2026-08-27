@@ -611,6 +611,34 @@ export class SupabaseSync {
     return g || `${company}|${fallbackKey}`;
   }
 
+  /**
+   * A master row is only authoritative if Tally gave us its real GUID.
+   *
+   * Why this guard exists — it cost 464 phantom ledgers and ~470 phantom stock
+   * items in production, found 2026-08-27:
+   *
+   * `POST /api/supabase/sync` (called by the desktop's scheduled `pushAll`)
+   * forwards the CANONICAL masters held in the browser. Canonical ids are
+   * `normalizeId(name)` — the NAME, not Tally's GUID. `safeGuid` happily
+   * accepted that as a guid, so every quick sync inserted a second row per
+   * master keyed on the name, alongside the real row keyed on
+   * `353d02e0-63aa-11d7-...`. Because the upsert key IS the guid, the two can
+   * never reconcile: `tally_ledgers` went to 947 rows for 483 names, all stubs
+   * carrying `parent: "Unsorted"` and NULL gstin/credit_period/opening_balance.
+   *
+   * The damage is silent — the readers dedupe (`ledgerRichness` / `richness` in
+   * the web app's dataset.ts) so the UI looked fine, while every raw SQL join
+   * against those tables quietly DOUBLED. That is how a GSTR-1 reconciliation
+   * came back at exactly 2x the filed figure.
+   *
+   * A master without a real GUID is a phantom, so we skip it rather than
+   * invent an id for it. Genuine Tally master syncs always carry a GUID, so
+   * this is inert on the real path.
+   */
+  private hasRealGuid(m: any): boolean {
+    return !!(m?.guid || "").trim();
+  }
+
   private mapCompany(m: any): any {
     return {
       name: m.name,
@@ -672,6 +700,7 @@ export class SupabaseSync {
 
   private mapStockItem(m: any, company: string): any {
     if (!m.name) return null;
+    if (!this.hasRealGuid(m)) return null; // see hasRealGuid — phantom-master guard
     return {
       guid: this.safeGuid(m.guid, company, m.name),
       company,
@@ -701,6 +730,7 @@ export class SupabaseSync {
 
   private mapLedger(m: any, company: string): any {
     if (!m.name) return null;
+    if (!this.hasRealGuid(m)) return null; // see hasRealGuid — phantom-master guard
     return {
       guid: this.safeGuid(m.guid, company, m.name),
       company,
@@ -727,6 +757,11 @@ export class SupabaseSync {
     const ledgerArr = normalizeTallyEntries(m.allledgerentries, "ledgerentries");
     const inventoryArr = normalizeTallyEntries(m.allinventoryentries, "inventoryentries");
 
+    // `transport` is absent on anything not produced by the current converter
+    // (an older cached payload, a hand-built row in a test). Default to an empty
+    // object so every field below resolves to null instead of throwing.
+    const t = (m.transport ?? {}) as Record<string, any>;
+
     return {
       guid: this.safeGuid(m.guid, company, fallbackKey),
       company,
@@ -744,6 +779,29 @@ export class SupabaseSync {
       is_optional: m.isoptional === true,
       ledger_entries: ledgerArr.length > 0 ? ledgerArr : null,
       inventory_entries: inventoryArr.length > 0 ? inventoryArr : null,
+
+      // E-way bill / delivery fields (migration 025). Extracted by
+      // convert.ts extractVoucherTransport; nearly always null on vouchers that
+      // never moved goods, which is normal and not a sync failure.
+      //
+      // Every key is emitted unconditionally, even when the whole block is
+      // absent. PostgREST builds one INSERT column list per batch and rejects a
+      // batch whose objects have differing key sets, so a conditional spread
+      // here would fail the moment one voucher in a 200-row chunk had an e-way
+      // bill and another did not — which is the normal case, not the edge case.
+      ewb_number: t.ewb_number ?? null,
+      ewb_valid_until: t.ewb_valid_until ?? null,
+      vehicle_number: t.vehicle_number ?? null,
+      transport_mode: t.transport_mode ?? null,
+      transport_distance_km: t.transport_distance_km ?? null,
+      consignee_pincode: t.consignee_pincode ?? null,
+      consignee_place: t.consignee_place ?? null,
+      consignee_state: t.consignee_state ?? null,
+      ship_to_place: t.ship_to_place ?? null,
+      dispatch_from_place: t.dispatch_from_place ?? null,
+      party_gstin: t.party_gstin ?? null,
+      place_of_supply: t.place_of_supply ?? null,
+
       synced_at: new Date().toISOString(),
     };
   }
