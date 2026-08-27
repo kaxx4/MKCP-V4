@@ -33,6 +33,90 @@ function stripCtrl(s: string): string {
   return s.replace(/&#\d+;\s*/g, "").replace(/[\x00-\x1f]\s*/g, "").trim();
 }
 
+/** Pick a node under either the bare key or Tally's `KEY.LIST` spelling. */
+function listOf(obj: any, key: string): any[] {
+  if (!obj || typeof obj !== "object") return [];
+  return arr(obj[`${key}.LIST`] ?? obj[key]);
+}
+
+/**
+ * Parse a Tally numeric that may carry padding or a unit suffix.
+ * The e-way bill DISTANCE arrives as `" 104"` — leading space, sometimes an
+ * empty string. Returns null rather than 0 for "absent", so a missing distance
+ * is never mistaken for a zero-kilometre trip.
+ */
+function num(v: any): number | null {
+  const t = txt(v).replace(/[^\d.\-]/g, "");
+  if (!t) return null;
+  const n = parseFloat(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+export interface VoucherTransport {
+  ewb_number: string | null;
+  ewb_valid_until: string | null;
+  vehicle_number: string | null;
+  transport_mode: string | null;
+  transport_distance_km: number | null;
+  consignee_pincode: string | null;
+  consignee_place: string | null;
+  consignee_state: string | null;
+  ship_to_place: string | null;
+  dispatch_from_place: string | null;
+  party_gstin: string | null;
+  place_of_supply: string | null;
+}
+
+/**
+ * Pull the e-way bill / delivery block off a voucher.
+ *
+ * Tally has always exported this; the sync just never read it. Verified
+ * 2026-08-27 against a real Day Book export ("MKCP SALES 2526.json", FY25-26):
+ * 603 of 1,432 vouchers carry an EWAYBILLDETAILS block, each with exactly one
+ * TRANSPORTDETAILS child, and no voucher carries two different vehicles — so
+ * the "last vehicle wins" rule below never actually has to arbitrate. It is
+ * written that way anyway because Part-B can legitimately be updated mid-transit
+ * (a breakdown, a transhipment), and if that ever appears in the data the LAST
+ * update is the operative vehicle, not the first.
+ *
+ * Everything returns null when absent. Most vouchers — counter sales, receipts,
+ * journals — have no e-way bill at all, and that is not an error condition.
+ */
+export function extractVoucherTransport(v: any): VoucherTransport {
+  const ewb = listOf(v, "EWAYBILLDETAILS").find((e) => e && typeof e === "object");
+
+  let vehicle: string | null = null;
+  let mode: string | null = null;
+  let distance: number | null = null;
+  for (const td of listOf(ewb, "TRANSPORTDETAILS")) {
+    if (!td || typeof td !== "object") continue;
+    // Last non-empty value wins — see the Part-B note above.
+    vehicle = txt(td.VEHICLENUMBER) || vehicle;
+    mode = txt(td.TRANSPORTMODE) || mode;
+    distance = num(td.DISTANCE) ?? distance;
+  }
+
+  const s = (x: any): string | null => txt(x) || null;
+
+  return {
+    ewb_number: s(ewb?.BILLNUMBER),
+    ewb_valid_until: s(ewb?.VALIDUPTO),
+    vehicle_number: vehicle || null,
+    transport_mode: mode || null,
+    transport_distance_km: distance,
+    // Prefer the e-way bill's own consignee pincode (what was actually declared
+    // to the portal) over the voucher header's, falling back when there is no
+    // e-way bill but the party address still carries one.
+    consignee_pincode: s(ewb?.CONSIGNEEPINCODE) ?? s(v.CONSIGNEEPINCODE) ?? s(v.PARTYPINCODE),
+    consignee_place: s(ewb?.CONSIGNEEPLACE) ?? s(v.CONSIGNEEMAILINGNAME),
+    consignee_state: s(v.CONSIGNEESTATENAME) ?? s(ewb?.SHIPPEDTOSTATE),
+    ship_to_place: s(v.SHIPTOPLACE),
+    dispatch_from_place: s(v.DISPATCHFROMPLACE),
+    party_gstin: s(v.PARTYGSTIN),
+    place_of_supply: s(v.PLACEOFSUPPLY),
+  };
+}
+
 /** Walk multiple possible paths in the parsed XML to find the data */
 function dig(obj: any, ...paths: string[][]): any {
   for (const path of paths) {
@@ -293,6 +377,19 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
     const dates = Object.entries(dateCounts).sort((a, b) => a[0].localeCompare(b[0]));
     console.log(`[convert] Voucher dates: ${dates.map(([d, c]) => `${d}(${c})`).join(", ")}`);
     console.log(`[convert] Voucher types: ${Object.entries(typeCounts).map(([t, c]) => `${t}: ${c}`).join(", ")}`);
+
+    // Transport coverage. Logged because the failure mode here is SILENT: if a
+    // Tally build or export path stops emitting EWAYBILLDETAILS, every field
+    // just becomes null and the sync still reports success. A zero here means
+    // the block is missing, not that no goods moved.
+    let withEwb = 0, withVehicle = 0, withDistance = 0;
+    for (const v of allVouchers) {
+      const t = extractVoucherTransport(v);
+      if (t.ewb_number) withEwb++;
+      if (t.vehicle_number) withVehicle++;
+      if (t.transport_distance_km != null) withDistance++;
+    }
+    console.log(`[convert] Transport: ${withEwb} e-way bills, ${withVehicle} vehicles, ${withDistance} distances (of ${allVouchers.length} vouchers)`);
   }
 
   return {
@@ -372,6 +469,9 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
         // Drives incremental "re-pull anything changed" sync (any date), so edits
         // to old vouchers propagate. 0 when Tally omits it (older builds).
         alterid: parseInt(txt(v.ALTERID) || txt(v["@_ALTERID"]) || "0", 10) || 0,
+        // E-way bill / delivery block. Always present in the export, dropped by
+        // this converter until 2026-08-27 — see extractVoucherTransport.
+        transport: extractVoucherTransport(v),
         iscancelled: txt(v.ISCANCELLED) === "Yes",
         isoptional: txt(v.ISOPTIONAL) === "Yes",
         effectivedate: txt(v.EFFECTIVEDATE) || txt(v.DATE),
