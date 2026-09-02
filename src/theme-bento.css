@@ -1,0 +1,203 @@
+/* ══════════════════════════════════════════════════════════════════
+   BENTO — the reference direction, light mode, applied as a theme layer.
+
+   Derived from the supplied dashboard/editorial references: a light grey
+   ground carrying white cards,
+   white cards with a hairline instead of a shadow, oversized numerals, black
+   pill controls, and large radii. The saturated colour blocks the references
+   use were tried and removed at the user's direction — the figures carry the
+   emphasis on their own. No gradients and no depth anywhere — separation comes from colour
+   and from the hairline, which is what makes the references read as printed
+   rather than as chrome.
+
+   Implemented as an override layer, not a Tailwind config change: the base
+   app is already light, so this only needs to restate the ground, flatten
+   the surfaces, and add the block vocabulary. `[data-theme="bento"] .foo`
+   outranks `.foo`, so nothing here needs !important, and removing the
+   attribute restores the original system exactly.
+
+   CANONICAL COPY. The same file ships in mkcycles-dashboard/src/. Edit this
+   one and copy it across; they must not drift.
+
+   Contrast, all verified with check_contrast.py:
+     ink #0f0f10 on grey #f2f2f4 17.14:1 · muted #5c5c63 on grey 5.93:1
+     dim #68686f on grey 4.95:1 · ink on white 19.16:1 · white on ink 19.16:1
+   Nothing below is under 4.5:1 against its own ground.
+   ══════════════════════════════════════════════════════════════════ */
+
+[data-theme="bento"] {
+  /* Light grey ground with white cards layered on top — the separation the
+     old design had. A neutral grey, deliberately not the warm beige that was
+     tried and rejected. With no colour left in the palette, this tonal step is
+     the only thing giving the layout depth, so it does more work than usual. */
+  --paper:  #f2f2f4;
+  --card:   #ffffff;
+  --sub:    #f7f7f8;  /* nested row inside a card */
+  --rest:   #ebebee;  /* chip hover */
+
+  --ink:      #0f0f10;
+  --ink-mute: #5c5c63; /* 5.78:1 on paper */
+  --ink-dim:  #68686f; /* 4.95:1 on the grey ground — placeholders must clear AA too */
+
+  --line:   rgba(0, 0, 0, 0.11);
+  --line-2: rgba(0, 0, 0, 0.16);
+
+  /* No accent hue at all. Colour blocks, then the lime chip, then the brand
+     blue were each removed in turn at the user's direction. Selection and
+     emphasis are carried by ink weight and by the black fill, not by hue.
+     Status colour (success / danger / warn) survives ONLY on figures and
+     badges, where it encodes meaning rather than decorating chrome. */
+
+  /* Geist — a neutral grotesque that stays invisible at 12px in a table and
+     still has presence at 44px on a block. Mono is the matched companion and
+     is used ONLY where digits must align in a column. */
+  --font-sans: "Geist Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Consolas, monospace;
+
+  color-scheme: light;
+}
+
+[data-theme="bento"] body,
+[data-theme="bento"] .font-sans { font-family: var(--font-sans); }
+
+/* Split numerals. Table columns get mono + tabular so the rupee amounts line
+   up on the decimal; display figures get the sans, where proportional digits
+   avoid the gappy look equal-width digits give a number like "498". */
+[data-theme="bento"] .font-mono,
+[data-theme="bento"] table { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+[data-theme="bento"] thead th { font-family: var(--font-sans); }
+
+/* ── ground ──────────────────────────────────────────────────────── */
+[data-theme="bento"] body,
+[data-theme="bento"] .bg-bg-page { background-color: var(--paper); }
+[data-theme="bento"] .bg-bg-sub,
+[data-theme="bento"] .bg-neutral-50 { background-color: var(--sub); }
+
+/* ── surfaces: flat, hairlined, generously rounded ───────────────── */
+[data-theme="bento"] .card,
+[data-theme="bento"] .bento-card,
+[data-theme="bento"] .card-elevated,
+[data-theme="bento"] .card-interactive {
+  background-color: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: none;
+  border-radius: 22px;
+}
+/* Hover lifts by colour, not by shadow — a drop shadow is the single most
+   reliable "generic dashboard" tell and none of the references use one. */
+[data-theme="bento"] .card-interactive:hover,
+[data-theme="bento"] .card-elevated:hover {
+  box-shadow: none;
+  border-color: var(--line-2);
+  transform: none;
+}
+
+/* ── controls: everything is a pill ──────────────────────────────── */
+[data-theme="bento"] .filter-chip {
+  background-color: transparent;
+  border-color: var(--line-2);
+  color: var(--ink-mute);
+  font-weight: 600;
+}
+[data-theme="bento"] .filter-chip:hover {
+  background-color: var(--rest);
+  border-color: var(--line-2);
+  color: var(--ink);
+}
+[data-theme="bento"] .filter-chip-active,
+[data-theme="bento"] .filter-chip-active:hover {
+  background-color: var(--ink);
+  border-color: var(--ink);
+  color: #ffffff;
+}
+
+/* The primary action is a black pill. The references use black for the one
+   thing they want pressed and reserve the bright hues for surfaces, so the
+   loudest colour on the page is never also the button. */
+[data-theme="bento"] .btn-primary {
+  background-color: var(--ink);
+  color: #ffffff;
+  box-shadow: none;
+}
+[data-theme="bento"] .btn-primary:hover { background-color: #2b2b30; }
+[data-theme="bento"] .btn-secondary {
+  background-color: transparent;
+  border-color: var(--line-2);
+  color: var(--ink);
+  box-shadow: none;
+}
+[data-theme="bento"] .btn-secondary:hover { background-color: var(--rest); }
+
+[data-theme="bento"] .form-input,
+[data-theme="bento"] .form-select,
+[data-theme="bento"] .search-input {
+  background-color: var(--card);
+  border-color: var(--line-2);
+  border-radius: 9999px;
+  box-shadow: none;
+}
+
+/* ── type ────────────────────────────────────────────────────────── */
+[data-theme="bento"] .page-title {
+  color: var(--ink);
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+}
+[data-theme="bento"] .page-subtitle { color: var(--ink-mute); }
+
+/* ── the KPI figure ─────────────────────────────────────────────────
+   A figure that IS the card — the one move kept from the references after the
+   colour blocks were removed. Set in the sans, not the mono: at display size
+   equal-width digits leave visible gaps inside a number like "498", so the
+   tabular treatment that is correct in a table column is wrong here.       */
+[data-theme="bento"] .stat-figure {
+  font-family: var(--font-sans);
+  font-size: clamp(26px, 2.6vw, 34px);
+  line-height: 0.98;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  font-variant-numeric: proportional-nums;
+}
+
+/* ── no brand hue in the chrome ─────────────────────────────────────
+   The accent blue was used for party names, voucher numbers, list dots, rail
+   markers and icons — none of which is conveying state, all of which was
+   reading as noise once the surfaces went white. Neutralised to ink here
+   rather than edited across ~40 files, so a single line reverts it.
+
+   Deliberately NOT neutralised: .text-success-*, .text-danger-*, .text-warn-*
+   on figures and badges. Those encode meaning and removing them would cost
+   information, not decoration.                                            */
+[data-theme="bento"] .text-accent,
+[data-theme="bento"] .text-accent-700,
+[data-theme="bento"] .text-accent-800 { color: var(--ink); }
+[data-theme="bento"] .bg-accent { background-color: var(--ink); color: #ffffff; }
+[data-theme="bento"] .border-accent { border-color: var(--ink); }
+[data-theme="bento"] .bg-accent-soft { background-color: var(--sub); }
+[data-theme="bento"] .ring-accent { --tw-ring-color: var(--ink); }
+
+/* Date fields render their placeholder in the UA accent on some builds. */
+[data-theme="bento"] input[type="date"] { color: var(--ink); }
+[data-theme="bento"] input[type="date"]::-webkit-datetime-edit-text,
+[data-theme="bento"] input[type="date"]::-webkit-datetime-edit-day-field,
+[data-theme="bento"] input[type="date"]::-webkit-datetime-edit-month-field,
+[data-theme="bento"] input[type="date"]::-webkit-datetime-edit-year-field { color: var(--ink-dim); }
+
+/* The quick-capture control was an animated blue->violet gradient. A moving
+   gradient is the loudest thing an interface can do and it survived every
+   other hue being removed only because it lives in a CSS class rather than a
+   utility. Flat ink, no animation. */
+[data-theme="bento"] .quick-capture-fab,
+[data-theme="bento"] .quick-capture-shortcut {
+  background: var(--ink);
+  animation: none;
+}
+
+/* ── density guard ───────────────────────────────────────────────────
+   Deliberate scope limit. The references are generous everywhere; this app
+   is a daily operations tool where the table is the product. Colour and
+   scale stop at the header and the KPI strip — table rows keep their
+   existing compact metrics so the same number of rows stays on screen. */
+[data-theme="bento"] table { font-variant-numeric: tabular-nums; }
+[data-theme="bento"] thead th { color: var(--ink-mute); letter-spacing: 0.04em; }
