@@ -289,15 +289,33 @@ export class SupabaseSync {
       if (meta?.pruneDays?.length) {
         // Per-day prune: each successfully-pulled day is authoritative for itself,
         // so deletions (incl. old Delivery Notes) clear even if other days failed.
-        // Empty days are pruned too (their stale rows have no matching pulled GUID).
-        deleted = await this.deleteVoucherOrphansForDays(company, meta.pruneDays, Array.from(voucherGuids));
+        // Empty days are pruned too (their stale rows have no matching pulled GUID) —
+        // UNLESS the mass-deletion guard (migration 026) refuses a wide, mostly-
+        // empty batch; see deleteVoucherOrphansForDays below.
+        const r = await this.deleteVoucherOrphansForDays(company, meta.pruneDays, Array.from(voucherGuids));
+        deleted = r.deleted;
+        if (r.guardTripped) {
+          const msg = `Mass-deletion guard refused per-day prune across ${meta.pruneDays.length} day(s) — ` +
+            `too much of the existing data would have been removed for too little fresh data pulled back. ` +
+            `Nothing was deleted; existing vouchers on these days were left untouched.`;
+          console.warn(`[Supabase] ⚠ ${msg}`);
+          errors.push(msg);
+        }
       } else if (meta?.pruneRange?.from && meta?.pruneRange?.to) {
-        deleted = await this.deleteVoucherOrphansInRange(
+        const r = await this.deleteVoucherOrphansInRange(
           company,
           meta.pruneRange.from,
           meta.pruneRange.to,
           Array.from(voucherGuids)
         );
+        deleted = r.deleted;
+        if (r.guardTripped) {
+          const msg = `Mass-deletion guard refused range prune for ${meta.pruneRange.from}–${meta.pruneRange.to} — ` +
+            `too much of the existing data would have been removed for too little fresh data pulled back. ` +
+            `Nothing was deleted; existing vouchers in this range were left untouched.`;
+          console.warn(`[Supabase] ⚠ ${msg}`);
+          errors.push(msg);
+        }
       }
       if (deleted > 0) {
         // Clean up child rows whose parent was just deleted.
@@ -426,23 +444,27 @@ export class SupabaseSync {
    * This is how a range sync propagates Tally deletions/conversions to the cloud
    * WITHOUT touching vouchers dated outside the pulled window.
    *
-   * Uses an RPC (migration 017) so the GUID list ships in the POST body — a plain
-   * .not("guid","in",...) DELETE would put hundreds of 36-char GUIDs in the URL
-   * query string and overflow the length limit. Best-effort: a missing migration
-   * or any error logs a warning and returns 0 (never throws, never over-deletes).
+   * Uses an RPC (migration 017, mass-deletion-guarded by 026) so the GUID list
+   * ships in the POST body — a plain .not("guid","in",...) DELETE would put
+   * hundreds of 36-char GUIDs in the URL query string and overflow the length
+   * limit. Best-effort: a missing migration or any error logs a warning and
+   * returns { deleted: 0 } (never throws, never over-deletes). The RPC itself
+   * returns -1 (mapped to guardTripped: true here) when it refused a prune that
+   * would have removed too much of the existing range for too little confirmed
+   * fresh data — see migration 026's header for the incident that motivated it.
    */
   private async deleteVoucherOrphansInRange(
     company: string,
     from: string,
     to: string,
     validGuids: string[]
-  ): Promise<number> {
-    if (!this.client) return 0;
+  ): Promise<{ deleted: number; guardTripped: boolean }> {
+    if (!this.client) return { deleted: 0, guardTripped: false };
     const clean = (validGuids || []).filter((g): g is string => typeof g === "string" && g.length > 0);
     // Empty valid set is ambiguous (genuinely-empty range vs failed pull) — refuse
     // to delete-all-in-range. The early `vouchers.length === 0` return upstream
     // already guards this, but keep the belt-and-braces check here too.
-    if (clean.length === 0) return 0;
+    if (clean.length === 0) return { deleted: 0, guardTripped: false };
     try {
       const { data, error } = await this.withRetry("rpc delete_voucher_orphans_in_range", async () => {
         const res = await this.client!.rpc("delete_voucher_orphans_in_range", {
@@ -456,31 +478,41 @@ export class SupabaseSync {
       });
       if (error) {
         console.warn(`[Supabase] Voucher range cleanup skipped (${from}–${to}): ${error.message}`);
-        return 0;
+        return { deleted: 0, guardTripped: false };
       }
       const n = typeof data === "number" ? data : 0;
+      if (n === -1) return { deleted: 0, guardTripped: true };
       if (n > 0) console.log(`[Supabase] ⌫ Removed ${n} voucher(s) deleted in Tally within ${from}–${to}`);
-      return n;
+      return { deleted: n, guardTripped: false };
     } catch (e: any) {
       console.warn(`[Supabase] Voucher range cleanup error: ${e?.message || e}`);
-      return 0;
+      return { deleted: 0, guardTripped: false };
     }
   }
 
   /**
    * Delete vouchers on the given days whose GUID isn't in the just-pulled set.
-   * One RPC for all days (migration 019). Each day must be one we pulled cleanly;
-   * an empty pulled set for a day means that day is empty in Tally now, so its
-   * stale rows are removed. Best-effort: a missing migration warns and returns 0.
+   * One RPC for all days (migration 019, mass-deletion-guarded by 026). Each day
+   * must be one we pulled cleanly; an empty pulled set for a day normally means
+   * that day is empty in Tally now, so its stale rows are removed — UNLESS the
+   * batch spans more than a few days and would remove most of what's on file,
+   * in which case the RPC refuses (returns -1, mapped to guardTripped: true
+   * here) rather than trusting an all-empty response across a wide window. See
+   * migration 026's header for the incident that motivated this. Best-effort: a
+   * missing migration warns and returns { deleted: 0 }.
    */
-  private async deleteVoucherOrphansForDays(company: string, days: string[], validGuids: string[]): Promise<number> {
-    if (!this.client) return 0;
+  private async deleteVoucherOrphansForDays(
+    company: string,
+    days: string[],
+    validGuids: string[]
+  ): Promise<{ deleted: number; guardTripped: boolean }> {
+    if (!this.client) return { deleted: 0, guardTripped: false };
     // Days arrive as YYYYMMDD (chunk dates) — convert to ISO to match the stored
     // tally_vouchers.date column (normalized to ISO above).
     const cleanDays = (days || [])
       .filter((d): d is string => typeof d === "string" && /^\d{8}$/.test(d))
       .map((d) => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`);
-    if (cleanDays.length === 0) return 0;
+    if (cleanDays.length === 0) return { deleted: 0, guardTripped: false };
     const cleanGuids = (validGuids || []).filter((g): g is string => typeof g === "string" && g.length > 0);
     try {
       const { data, error } = await this.withRetry("rpc delete_voucher_orphans_for_days", async () => {
@@ -494,14 +526,15 @@ export class SupabaseSync {
       });
       if (error) {
         console.warn(`[Supabase] Per-day voucher prune skipped: ${error.message}`);
-        return 0;
+        return { deleted: 0, guardTripped: false };
       }
       const n = typeof data === "number" ? data : 0;
+      if (n === -1) return { deleted: 0, guardTripped: true };
       if (n > 0) console.log(`[Supabase] ⌫ Removed ${n} voucher(s) deleted in Tally across ${cleanDays.length} day(s)`);
-      return n;
+      return { deleted: n, guardTripped: false };
     } catch (e: any) {
       console.warn(`[Supabase] Per-day voucher prune error: ${e?.message || e}`);
-      return 0;
+      return { deleted: 0, guardTripped: false };
     }
   }
 
