@@ -6,6 +6,7 @@ import { convertCompanies } from "./converters/convert.js";
 import { SyncOrchestrator } from "./services/syncOrchestrator.js";
 import { ChangeDetector } from "./services/changeDetector.js";
 import { SupabaseSync } from "./services/supabaseSync.js";
+import { RealtimeSync } from "./services/realtimeSync.js";
 import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import { startRefreshListener } from "./services/refreshListener.js";
@@ -25,11 +26,33 @@ const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const changeDetector = new ChangeDetector();
 const orchestrator = new SyncOrchestrator(TALLY, changeDetector);
 const supabaseSync = new SupabaseSync();
+const realtime = new RealtimeSync(TALLY, orchestrator, supabaseSync);
 
 // Duplicate sync lock
 const activeSyncs = new Map<string, Promise<any>>();
 
-app.use(cors());
+/**
+ * This process can write to the books, so it does not accept requests from any
+ * origin a browser happens to be on. Allowed: the Electron renderer (no Origin
+ * header at all), anything on localhost, and the deployed dashboard. Extra
+ * origins can be added via ALLOWED_ORIGINS as a comma-separated list.
+ */
+const EXTRA_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",").map(s => s.trim()).filter(Boolean);
+const originAllowed = (origin: string) =>
+  /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin) ||
+  /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin) ||
+  EXTRA_ORIGINS.includes(origin);
+
+app.use(cors({
+  origin(origin, cb) {
+    // No Origin header: same-origin, curl, or the Electron renderer.
+    if (!origin || originAllowed(origin)) return cb(null, true);
+    console.warn(`[security] blocked cross-origin request from ${origin}`);
+    cb(new Error(`Origin ${origin} is not allowed`));
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: "100mb" }));
 
 // ── Request logging ───────────────────────────────────────────────────────────
@@ -442,19 +465,27 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
   }
 });
 
-// ── Legacy raw import endpoint (backward compat) ───────────────────────────────
+/**
+ * Detect a write envelope. Only `Import Data` changes the books; `Export` is a
+ * read. Checked with a loose regex because the header may be formatted freely.
+ */
+const isImportEnvelope = (xml: string) => /<TALLYREQUEST>\s*Import\s*Data\s*<\/TALLYREQUEST>/i.test(xml);
+
+const WRITE_PATH_MESSAGE =
+  "Raw XML writes are disabled. Every voucher must go through the push_queue → safePush path, " +
+  "which resolves master names, runs the preflight guard, serialises access to Tally's " +
+  "single-threaded port, then reads the voucher back and diffs it field by field. " +
+  "A raw write skips all of that: a bill reference belonging to another party, for example, is " +
+  "silently rewritten by Tally from 'Agst Ref' to 'New Ref' — creating a liability instead of " +
+  "clearing one — while still reporting created=1. Only the read-back catches it.";
+
+// ── Legacy raw import endpoint ────────────────────────────────────────────────
+// Kept as an explicit refusal rather than deleted, so anything still pointing
+// here fails loudly and visibly instead of silently losing its voucher.
 app.post("/api/tally/import", express.text({ type: "application/xml" }), async (req, res) => {
-  try {
-    const xml = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
-    lastRawXml = { request: xml, response: "", timestamp: new Date().toISOString(), label: "import-voucher" };
-    const response = await tallyPost(TALLY, xml, 30_000, true);
-    const responseText = typeof response === "string" ? response : JSON.stringify(response);
-    lastRawXml.response = responseText.slice(0, 50_000);
-    res.setHeader("Content-Type", "application/xml");
-    res.status(200).send(responseText);
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
+  const xml = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+  console.warn(`[security] refused raw /api/tally/import from ${req.ip} (${xml.length} bytes)`);
+  return res.status(410).json({ error: "Endpoint retired.", detail: WRITE_PATH_MESSAGE });
 });
 
 // ── Web voucher pushes (awaiting approval on THIS machine) ──────────────────────
@@ -483,6 +514,12 @@ app.post("/api/tally/pending-pushes/:id/reject", async (req, res) => {
 app.post("/api/tally/debug", async (req, res) => {
   const { company, xml: customXml } = req.body;
   if (!company && !customXml) return res.status(400).json({ error: "company or xml required" });
+  // A debug endpoint that accepts arbitrary XML will execute an Import envelope
+  // as readily as an Export one. Reads only.
+  if (typeof customXml === "string" && isImportEnvelope(customXml)) {
+    console.warn(`[security] refused an Import envelope on /api/tally/debug from ${req.ip}`);
+    return res.status(403).json({ error: "This endpoint is read-only.", detail: WRITE_PATH_MESSAGE });
+  }
   try {
     const xml = customXml ?? HEALTH_XML;
     const raw = await tallyPost(TALLY, xml, 60_000, true);
@@ -584,6 +621,27 @@ app.post("/api/push-agent/requeue", async (req: express.Request, res: express.Re
 if (process.env.PUSH_AGENT_ENABLED === "true") {
   startPushAgent({ tallyUrl: TALLY });
 }
+
+/**
+ * Near-real-time pull. Off unless explicitly enabled, because it costs time on
+ * Tally's single-threaded port (~4s per voucher scan) and that is time a person
+ * working in Tally would otherwise have.
+ */
+if (process.env.REALTIME_SYNC_ENABLED === "true") {
+  void realtime.start();
+}
+
+app.get("/api/realtime/status", (_req, res) => res.json(realtime.getStatus()));
+
+app.post("/api/realtime/start", async (_req, res) => {
+  await realtime.start();
+  res.json(realtime.getStatus());
+});
+
+app.post("/api/realtime/stop", (_req, res) => {
+  realtime.stop();
+  res.json(realtime.getStatus());
+});
 
 // ── File transfer (web ↔ desktop) ────────────────────────────────────────────
 // Incoming (web -> desktop) is handled entirely by fileTransferSync's own

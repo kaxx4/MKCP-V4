@@ -112,12 +112,58 @@ export interface BillAllocation {
   amount: number;
 }
 
+/**
+ * Bank instrument detail. Without it Tally opens the "Bank Allocation" prompt on
+ * every voucher touching a bank ledger — 1,275 of this company's real vouchers
+ * carry one, so it is the norm. `instrumentNumber` is the UTR or cheque number,
+ * i.e. exactly what a bank statement or screenshot provides.
+ */
+export interface BankAllocation {
+  /** Tally only ever stores: "Cheque/DD" | "Cheque" | "Cash" | "Others". */
+  transactionType: string;
+  transferMode: string;        // e.g. NEFT, RTGS
+  instrumentNumber: string;    // UTR / cheque number
+  favouring: string;           // party the instrument is drawn in favour of
+  instrumentDate?: string;     // YYYY-MM-DD; defaults to the voucher date
+}
+
 export interface LedgerEntry {
   ledgerName: string;
   amount: number;
   isDeemedPositive: boolean;  // true = Debit side
+  /**
+   * Emit this exact value as `<AMOUNT>`, instead of deriving the sign from
+   * `isDeemedPositive`.
+   *
+   * Normally sign and side move together — debit is a negative amount, credit a
+   * positive one. Some real lines break that pairing. `TRADE DISCOUNTS / H.C.`,
+   * on 66% of this company's sales, is written by Tally itself as
+   * `ISDEEMEDPOSITIVE=No` with a NEGATIVE amount: a *negative credit*, which
+   * reduces the credit side rather than adding to the debit side. The usual
+   * expression cannot produce that pair, so a discounted invoice built here
+   * could never match the shape of the books.
+   *
+   * Only set this when replaying a shape Tally itself produces. `amount` must
+   * still carry the magnitude, because the Dr/Cr balance check and the
+   * read-back diff both use it.
+   */
+  signedAmount?: number;
+  /**
+   * Mark this line as appropriating to GST, so Tally folds it into the
+   * assessable value instead of treating it as a plain expense.
+   *
+   * Without it a `TRADE DISCOUNTS / H.C.` line does not reduce taxable value:
+   * Tally computes expected tax on the GROSS stock amount, disagrees with the
+   * tax actually on the voucher, and files it under GSTR-1's "Mismatch between
+   * Expected Tax Amount and Modified Tax Amount". The voucher still balances and
+   * still reads back correctly — only the return shows the problem.
+   *
+   * Real discounted invoices in this company carry it as `Goods`.
+   */
+  appropriateToGst?: "Goods" | "Services";
   isPartyLedger: boolean;
   billAllocations?: BillAllocation[];
+  bankAllocation?: BankAllocation;
 }
 
 export interface InventoryEntry {
@@ -128,10 +174,43 @@ export interface InventoryEntry {
   amount: number;
   isDeemedPositive: boolean;  // false = outward (sales)
   salesLedgerName: string;
+  /** Required when the company tracks godowns/batches — without a batch
+   *  allocation Tally can't place the stock and rejects the whole voucher
+   *  with EXCEPTIONS=1 and no error text. Defaults to "Primary Batch". */
+  godownName?: string;
+  batchName?: string;
 }
 
 export interface VoucherPayload {
-  voucherType: "Sales" | "Purchase" | "Receipt" | "Payment" | "Credit Note" | "Debit Note" | "Journal" | "Delivery Note" | "Receipt Note";
+  /**
+   * Caller-assigned identity, written as the VOUCHER tag's `REMOTEID` attribute.
+   *
+   * This is what makes a voucher correctable. Tally addresses Alter and Delete by
+   * REMOTEID, and **a voucher created without one can only ever be created** —
+   * `ACTION="Alter"` on it silently performs a Create instead, returning
+   * `created=1` (which reads as success) while duplicating real financial data.
+   *
+   * Always set it. A stable key such as `{type}|{number}|{company}|{date}` also
+   * makes a re-pushed voucher idempotent rather than duplicated.
+   */
+  remoteId?: string;
+  /** Create (default), Alter or Delete. Alter and Delete REQUIRE `remoteId`. */
+  action?: "Create" | "Alter" | "Delete";
+  /**
+   * Permit an Alter or Delete against a voucher in a GST period that has already
+   * been filed.
+   *
+   * Altering such a voucher silently changes a return that has been submitted.
+   * The guard refuses by default; this is the deliberate override, and it should
+   * only ever be set by a person who knows the return will be revised.
+   */
+  allowFiledPeriodEdit?: boolean;
+  /**
+   * "Sales Order Note" and "Contra" are both in daily use here and were being
+   * cast in at call sites, which defeats the point of the union.
+   */
+  voucherType: "Sales" | "Purchase" | "Receipt" | "Payment" | "Contra" | "Credit Note"
+    | "Debit Note" | "Journal" | "Sales Order Note" | "Delivery Note" | "Receipt Note";
   date: string;               // YYYY-MM-DD
   voucherNumber?: string;
   reference?: string;

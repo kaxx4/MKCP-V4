@@ -45,6 +45,12 @@ export const MASTER_COLLECTIONS: CollectionDef[] = [
     fetch: [
       "Name", "Parent", "Category", "BaseUnits", "AdditionalUnits", "Denominator",
       "OpeningBalance", "OpeningRate", "OpeningValue",
+      // The converter reads CLOSINGBALANCE/CLOSINGRATE/CLOSINGVALUE with a "0"
+      // default (converters/convert.ts). They were missing from this fetch list,
+      // so Tally never sent them and every stock item landed in Supabase with
+      // closing_rate = "0" — which is why four modules disagreed about stock
+      // value. services/tallyMasters.ts already proves Tally serves these.
+      "ClosingBalance", "ClosingRate", "ClosingValue",
       "GSTApplicable", "GSTTypeOfSupply", "GSTDetails", "HSNDetails", "GUID",
     ],
     timeout: 900_000,

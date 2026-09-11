@@ -63,3 +63,7 @@ my-app/
 # Python bytecode from skill scripts
 __pycache__/
 *.pyc
+
+# Exploration artefacts — large raw Tally dumps, regenerable by scripts/explore-*.ts
+server/exploration-*.json
+server/.voucher-cache.xml
