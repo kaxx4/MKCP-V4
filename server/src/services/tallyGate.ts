@@ -31,6 +31,20 @@ let consecutiveFailures = 0;
 const SETTLE_MS = 120;
 /** After this many transport failures in a row, stop trying entirely. */
 const BREAK_AFTER = 2;
+/**
+ * How long to wait between recovery probes while the circuit is open.
+ *
+ * The probe is what closes the circuit, and something has to run it. Doing so
+ * on every rejected call would hammer a port that is probably behind a dialog —
+ * the exact thing breaking the circuit was meant to stop — so a write arriving
+ * at an open gate triggers at most one probe per cooldown, and every other
+ * caller in that window is refused immediately as before.
+ */
+const RECOVERY_PROBE_COOLDOWN_MS = 15_000;
+
+let lastProbeAt = 0;
+/** Shared so concurrent callers arriving at an open gate run ONE probe, not N. */
+let inFlightProbe: Promise<boolean> | null = null;
 
 export class TallyUnavailableError extends Error {
   constructor(reason: string) {
@@ -70,7 +84,17 @@ export async function probe(tallyUrl: string, timeoutMs = 10_000): Promise<boole
  */
 export async function withTally<T>(tallyUrl: string, label: string, fn: () => Promise<T>): Promise<T> {
   if (state === "open") {
-    throw new TallyUnavailableError(lastFailure?.reason ?? "a previous request failed");
+    // Give recovery a chance before refusing. Until this existed the circuit
+    // was a one-way door: `withTally` was the only thing that ever OPENED it,
+    // and the only route to `tryRecover` was `assertWritable`, whose one
+    // non-script caller (bulkEntry) is unreachable. So two consecutive
+    // transport failures made every later safePush throw until the process was
+    // restarted — including the failures that happen routinely when an
+    // operator has Tally showing a dialog and then clears it.
+    await maybeRecover(tallyUrl);
+    if (state === "open") {
+      throw new TallyUnavailableError(lastFailure?.reason ?? "a previous request failed");
+    }
   }
 
   const run = chain.then(async () => {
@@ -107,15 +131,38 @@ export async function withTally<T>(tallyUrl: string, label: string, fn: () => Pr
  */
 export async function tryRecover(tallyUrl: string): Promise<boolean> {
   if (state === "closed") return true;
+  if (inFlightProbe) return inFlightProbe;
+
+  lastProbeAt = Date.now();
   state = "probing";
-  const alive = await probe(tallyUrl);
-  if (alive) {
-    console.log("[tallyGate] probe succeeded — circuit closed, writes resume.");
-    resetGate();
-    return true;
-  }
-  state = "open";
-  return false;
+  inFlightProbe = (async () => {
+    try {
+      const alive = await probe(tallyUrl);
+      if (alive) {
+        console.log("[tallyGate] probe succeeded — circuit closed, writes resume.");
+        resetGate();
+        return true;
+      }
+      state = "open";
+      return false;
+    } finally {
+      inFlightProbe = null;
+    }
+  })();
+  return inFlightProbe;
+}
+
+/**
+ * Rate-limited recovery, for callers that hit an open gate on the way to doing
+ * real work. Probing on EVERY refused write would queue requests behind the
+ * dialog we are trying to stay off; probing on a timer would run forever in a
+ * process nobody is using. Once per cooldown, driven by real demand, is both.
+ */
+async function maybeRecover(tallyUrl: string): Promise<void> {
+  if (state !== "open") return;
+  if (inFlightProbe) { await inFlightProbe; return; }
+  if (Date.now() - lastProbeAt < RECOVERY_PROBE_COOLDOWN_MS) return;
+  await tryRecover(tallyUrl);
 }
 
 /**

@@ -980,13 +980,24 @@ export class SupabaseSync {
     }
   }
 
+  /**
+   * Clear the cloud draft. Separated from {@link syncOrderDraftLines} because
+   * an empty array used to mean "wipe everything", and that is far too
+   * destructive a thing to express by omission — the desktop's draft store has
+   * no writers, so every call was the empty one and the wipe was the ONLY
+   * reachable branch. Clearing is now something a caller has to ask for.
+   */
+  async clearOrderDraftLines(company: string): Promise<void> {
+    if (!this.client) return;
+    try {
+      await this.client.from("order_draft_lines").delete().eq("company", company);
+    } catch { /* swallow — clean-slate is best-effort */ }
+  }
+
   async syncOrderDraftLines(lines: any[], company: string): Promise<void> {
     if (!this.client) return;
     if (!lines || lines.length === 0) {
-      // If draft is empty, wipe any old rows so the cloud reflects local truth.
-      try {
-        await this.client.from("order_draft_lines").delete().eq("company", company);
-      } catch { /* swallow — clean-slate is best-effort */ }
+      // Deliberately a no-op, NOT a wipe — see clearOrderDraftLines above.
       return;
     }
 

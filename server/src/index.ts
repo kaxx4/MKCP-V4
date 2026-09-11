@@ -415,8 +415,21 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
       { label: "calling_list_entries", promise: callingList.length > 0 ? supabaseSync.syncCallingList(callingList, company) : Promise.resolve() },
       { label: "voucher_overrides", promise: Object.keys(voucherOverrides).length > 0 ? supabaseSync.syncVoucherOverrides(voucherOverrides, company) : Promise.resolve() },
       { label: "app_settings", promise: Object.keys(appSettings).length > 0 ? supabaseSync.syncAppSettings(appSettings, company) : Promise.resolve() },
-      // order_draft_lines always fires — empty array means "clear the cloud draft"
-      { label: "order_draft_lines", promise: supabaseSync.syncOrderDraftLines(orderDraftLines, company) },
+      //   order_draft_lines — same mechanism as the four above, and the last
+      //     one left unguarded. It used to fire unconditionally on the reading
+      //     that "an empty array means clear the cloud draft". That reading is
+      //     only safe if the desktop can ever produce a NON-empty one, and it
+      //     cannot: `orderDraftLines` comes from `useOrderStore.getState().lines`
+      //     (useSupabaseConfigSync.ts:87), whose `setLine`/`removeLine` have
+      //     zero callers anywhere in the renderer. So the array is always `[]`,
+      //     the DELETE branch is the only reachable one, and the upsert below it
+      //     is dead code.
+      //     Nothing is being lost today — no writer means no rows to lose — but
+      //     this is a landmine for the web-app order desk: the moment anything
+      //     there writes the table, a scheduled quick-sync would wipe it within
+      //     30 minutes, which is exactly the bug fixed for the tables above on
+      //     2026-08-25. Guarded now, while it is still harmless.
+      { label: "order_draft_lines", promise: orderDraftLines.length > 0 ? supabaseSync.syncOrderDraftLines(orderDraftLines, company) : Promise.resolve() },
     ];
 
     // Run sync tasks sequentially — firing 14 tasks in parallel overwhelms Supabase's
