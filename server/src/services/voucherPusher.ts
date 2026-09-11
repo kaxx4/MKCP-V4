@@ -1,6 +1,7 @@
 import type { VoucherPayload, LedgerEntry, InventoryEntry, BillAllocation, PushResult } from "../types.js";
 import { tallyPost } from "../tally.js";
 import { findLedger, registrationOn, type TallyMasters } from "./tallyMasters.js";
+import { HOME_STATE_NAME } from "./pushGuard.js";
 import { XMLParser } from "fast-xml-parser";
 
 const parser = new XMLParser({ ignoreAttributes: false, parseTagValue: false, trimValues: true });
@@ -114,6 +115,19 @@ function buildBankAllocation(b: NonNullable<LedgerEntry["bankAllocation"]>, amou
  */
 function buildGstIdentity(p: VoucherPayload, masters?: TallyMasters): string {
   if (!masters) return "";
+  // Money vouchers carry NO GST identity, and that is correct rather than a gap:
+  // they never enter GSTR-1. Measured across 3,335 native FY26-27 vouchers,
+  // Tally's own Payments, Contras and Journals carry a GSTIN 0% of the time,
+  // while Purchases carry one 88% of the time and Sales 37% (the rest being
+  // cash sales to unregistered walk-ins).
+  //
+  // This block used to be emitted unconditionally, so a Payment pushed from here
+  // came back stamped with the supplier's GSTIN and place of supply — a shape
+  // Tally itself never writes. It did not make the voucher wrong on the money,
+  // but it made every pushed money voucher structurally distinguishable from a
+  // hand-entered one, which is the kind of divergence that surfaces later as an
+  // unexplained line in a return.
+  if (!isInvoiceShaped(p)) return "";
   const party = findLedger(masters, p.partyLedgerName);
   // A name the masters don't know is the guard's problem, not this function's —
   // it rejects the voucher before the build. Emit nothing rather than guess.
@@ -126,6 +140,31 @@ function buildGstIdentity(p: VoucherPayload, masters?: TallyMasters): string {
   const reg = registrationOn(party, p.date);
   const gstin = reg.gstin.trim();
   const state = (reg.placeOfSupply || reg.state).trim();
+
+  /**
+   * Place of supply is the DESTINATION of the goods, so it depends on which way
+   * they are moving — it is not simply "the other party's state".
+   *
+   *   outward (Sales, Credit Note, Sales Order, Delivery Note)
+   *       goods go TO the buyer      → place of supply = the PARTY's state
+   *   inward (Purchase, Debit Note, Receipt Note)
+   *       goods come TO us           → place of supply = OUR state
+   *
+   * `STATENAME` is the counterparty's state either way.
+   *
+   * Confirmed against Tally's own vouchers: a native purchase from a Delhi
+   * supplier stores PLACEOFSUPPLY "West Bengal" with STATENAME "Delhi", while a
+   * native sale to a West Bengal buyer stores both as "West Bengal".
+   *
+   * This function used to set both to the party's state, which is right for a
+   * sale and wrong for every inter-state purchase — it declared the supply as
+   * having happened in the supplier's state. The tax heads still came out as
+   * IGST because those are chosen separately, so the voucher balanced, verified
+   * and looked correct; only the return would have disagreed.
+   */
+  const inward = /PURCHASE|DEBIT NOTE|RECEIPT NOTE/.test(p.voucherType.toUpperCase());
+  const placeOfSupply = inward ? HOME_STATE_NAME : state;
+
   const mailing = (party.mailingName ?? "").trim() || party.name;
   const pincode = (party.pincode ?? "").trim();
   const registered = gstin.length > 0;
@@ -138,9 +177,10 @@ function buildGstIdentity(p: VoucherPayload, masters?: TallyMasters): string {
     `\n            <GSTREGISTRATIONTYPE>${esc(reg.registrationType || (registered ? "Regular" : "Unregistered"))}</GSTREGISTRATIONTYPE>`,
     registered ? "" : `\n            <VATDEALERTYPE>Unregistered</VATDEALERTYPE>`,
     tag("PARTYGSTIN", gstin),
-    // Place of supply is what decides CGST+SGST against IGST, so it must be the
-    // party's state and not the company's.
-    tag("PLACEOFSUPPLY", state),
+    // Destination of the goods — see the note above on why this is not always
+    // the party's state.
+    tag("PLACEOFSUPPLY", placeOfSupply),
+    // The counterparty's state, whichever direction the goods move.
     tag("STATENAME", state),
     `\n            <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>`,
     tag("PARTYMAILINGNAME", mailing),

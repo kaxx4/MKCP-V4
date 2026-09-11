@@ -19,8 +19,17 @@ import { type TallyMasters, findLedger, findItem, isMiss, gstRateFor } from "./t
 export interface GuardResult { ok: boolean; errors: string[]; warnings: string[]; }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-/** M.K.CYCLES is registered in West Bengal; anything else is interstate. */
-const HOME_STATE = "WEST BENGAL";
+/**
+ * M.K.CYCLES is registered in West Bengal; anything else is interstate.
+ *
+ * Exported so `voucherPusher` resolves place of supply against the SAME state
+ * this guard checks the tax heads against. Two copies of "which state are we"
+ * that drifted apart would let a voucher pass the guard as intra-state while
+ * being stamped as inter-state, or the reverse.
+ */
+export const HOME_STATE = "WEST BENGAL";
+/** The same state, spelled the way Tally stores it in PLACEOFSUPPLY. */
+export const HOME_STATE_NAME = "West Bengal";
 /** Voucher types that carry stock but no Dr/Cr to balance. */
 const NON_ACCOUNTING = new Set(["Receipt Note", "Material In", "Material Out", "Stock Journal", "Physical Stock"]);
 /** Tally overwrites PARTYLEDGERNAME on these with the bank/cash ledger, so the
