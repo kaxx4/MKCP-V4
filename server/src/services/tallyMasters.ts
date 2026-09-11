@@ -40,8 +40,28 @@ export interface MasterItem {
   denominator: number;
   closingRate: number;
   closingStock: number;
-  /** CGST rate from the item's OWN GST details; 0 when it inherits. */
+  /**
+   * COMBINED GST rate from the item's OWN GST details; 0 when it inherits.
+   *
+   * ⚠ This used to hold the CGST duty head alone, while being named for the
+   * total — and CGST is HALF an intra-state rate. Tally publishes three heads
+   * per item (verified 2026-09-12 via scripts/explore-gst-heads.ts):
+   *
+   *     CGST 6 · SGST/UTGST 6 · IGST 12
+   *
+   * so IGST is the combined figure and CGST+SGST reproduces it. Reading CGST
+   * and calling it the rate understates every tax computed from it by half. No
+   * live money was affected — the only consumer tested it for zero — but
+   * regenerating the web app's GST master off this field reported 478 of 479
+   * rates as "changed" (18→9, 12→6), which is what surfaced it.
+   */
   gstRate: number;
+  /** The individual heads, kept so a caller can see the split rather than infer it. */
+  cgstRate: number;
+  sgstRate: number;
+  igstRate: number;
+  /** Every dated revision, oldest first — see revisionOn / gstRateFor. */
+  gstRevisions: GstRevision[];
   /** Stock group, i.e. where an inherited rate comes from. */
   parent: string;
   /** Tally's own word for where the rate resolves from, e.g. "As per Company/Stock Group". */
@@ -52,7 +72,13 @@ export interface MasterItem {
 export interface MasterStockGroup {
   name: string;
   parent: string;
+  /** COMBINED rate as at today — see the warning on MasterItem.gstRate. */
   gstRate: number;
+  cgstRate: number;
+  sgstRate: number;
+  igstRate: number;
+  /** Every dated revision, oldest first. 16 of 22 groups carry three. */
+  gstRevisions: GstRevision[];
 }
 
 export interface TallyMasters {
@@ -178,14 +204,13 @@ export async function loadMasters(
     const b = m[0];
     const name = field(b, "NAME");
     if (!name) continue;
-    const cgst = /<GSTRATEDUTYHEAD>\s*CGST\s*<\/GSTRATEDUTYHEAD>[\s\S]{0,300}?<GSTRATE>([^<]*)<\/GSTRATE>/.exec(b);
     items.set(name, {
       name,
       baseUnit: field(b, "BASEUNITS") || "PC",
       denominator: leadingNumber(field(b, "DENOMINATOR")) || 1,
       closingRate: leadingNumber(field(b, "CLOSINGRATE")),
       closingStock: leadingNumber(field(b, "CLOSINGBALANCE")),
-      gstRate: cgst ? parseFloat(cgst[1]) || 0 : 0,
+      ...gstRates(b),
       parent: field(b, "PARENT"),
       gstRateSource: field(b, "SRCOFGSTDETAILS"),
     });
@@ -216,12 +241,10 @@ export async function loadMasters(
     const name = nameAttr ? unescapeXml(nameAttr[1]).trim() : "";
     const b = m[2];
     if (!name) continue;
-    // The rate lives at STATEWISEDETAILS.LIST > RATEDETAILS.LIST, keyed by duty head.
-    const cgst = /<GSTRATEDUTYHEAD>\s*CGST\s*<\/GSTRATEDUTYHEAD>[\s\S]{0,300}?<GSTRATE>([^<]*)<\/GSTRATE>/.exec(b);
     stockGroups.set(name, {
       name,
       parent: field(b, "PARENT"),
-      gstRate: cgst ? parseFloat(cgst[1]) || 0 : 0,
+      ...gstRates(b),
     });
   }
 
@@ -328,10 +351,118 @@ export function registrationOn(led: MasterLedger, isoDate: string): {
  * Resolution order, matching Tally: the item's own rate, then its stock group's,
  * then walking up the group tree, then nothing.
  */
-export function gstRateFor(m: TallyMasters, itemName: string): { rate: number; source: string } {
+/**
+ * Read every dated GST revision off an item or stock-group block.
+ *
+ * ── Rates are DATED, and Tally keeps every revision ───────────────────────
+ * Each object carries one GSTDETAILS.LIST per rate change, stamped with
+ * APPLICABLEFROM. The BICYCLE ( 87120010 ) group holds three:
+ *
+ *     from 20170701   CGST 6    SGST 6    IGST 12
+ *     from 20220401   CGST 6    SGST 6    IGST 12
+ *     from 20250922   CGST 2.5  SGST 2.5  IGST 5     ← current
+ *
+ * Bicycles and parts moved to 5% on 22 September 2025. Taking the FIRST block —
+ * which is what this code used to do — returns the 2017 rate, wrong by more
+ * than double and wrong for over a year. 16 of 22 stock groups carry three
+ * revisions, so this is the normal case, not an edge one.
+ *
+ * ── And the head matters as much as the date ──────────────────────────────
+ * Rates live at GSTDETAILS.LIST > STATEWISEDETAILS.LIST > RATEDETAILS.LIST, one
+ * RATEDETAILS block per duty head. IGST is the COMBINED rate; CGST and SGST are
+ * halves of it. Reading CGST and calling it "the GST rate" understates every
+ * figure derived from it by half. IGST is preferred because Tally publishes it
+ * directly; CGST+SGST is the fallback for a master declaring only the
+ * intra-state pair.
+ *
+ * Note `<GSTRATE> 6</GSTRATE>` — Tally pads values with a leading space, so
+ * captures are trimmed before parsing.
+ */
+export interface GstRevision {
+  /** ISO date the rate took effect, "YYYY-MM-DD"; "" when undated. */
+  from: string;
+  /** Combined rate — IGST, or CGST+SGST when IGST is absent. */
+  rate: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  /** Tally's own word, e.g. "Taxable", "Exempt", "Nil Rated". */
+  taxability: string;
+}
+
+function dutyHead(block: string, name: string): number {
+  const m = new RegExp(
+    `<GSTRATEDUTYHEAD>\\s*${name}\\s*</GSTRATEDUTYHEAD>[\\s\\S]{0,300}?<GSTRATE>\\s*([^<]*?)\\s*</GSTRATE>`,
+    "i",
+  ).exec(block);
+  return m ? parseFloat(m[1]) || 0 : 0;
+}
+
+function gstRevisions(block: string): GstRevision[] {
+  const out: GstRevision[] = [];
+  for (const [, b] of block.matchAll(/<GSTDETAILS\.LIST>([\s\S]*?)<\/GSTDETAILS\.LIST>/g)) {
+    const raw = /<APPLICABLEFROM>\s*([^<]*?)\s*<\/APPLICABLEFROM>/.exec(b)?.[1] ?? "";
+    const cgst = dutyHead(b, "CGST");
+    // The head is spelled "SGST/UTGST"; named in full rather than relying on a
+    // prefix match.
+    const sgst = dutyHead(b, "SGST/UTGST") || dutyHead(b, "SGST");
+    const igst = dutyHead(b, "IGST");
+    out.push({
+      from: /^\d{8}$/.test(raw) ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}` : "",
+      rate: igst || cgst + sgst,
+      cgst, sgst, igst,
+      taxability: /<TAXABILITY>\s*([^<]*?)\s*<\/TAXABILITY>/.exec(b)?.[1] ?? "",
+    });
+  }
+  // Oldest first, so "the latest not after a date" is a simple scan.
+  return out.sort((a, b) => a.from.localeCompare(b.from));
+}
+
+/** The revision in force on a date — the newest one NOT AFTER it. */
+export function revisionOn(revisions: GstRevision[], asOf?: string): GstRevision | undefined {
+  let best: GstRevision | undefined;
+  for (const r of revisions) {
+    if (asOf && r.from && r.from > asOf) continue;
+    if (!best || r.from >= best.from) best = r;
+  }
+  return best;
+}
+
+/** Flatten revisions into the fields a caller reads directly, as at today. */
+function gstRates(block: string): {
+  gstRate: number; cgstRate: number; sgstRate: number; igstRate: number; gstRevisions: GstRevision[];
+} {
+  const revisions = gstRevisions(block);
+  const now = revisionOn(revisions, new Date().toISOString().slice(0, 10));
+  return {
+    gstRate: now?.rate ?? 0,
+    cgstRate: now?.cgst ?? 0,
+    sgstRate: now?.sgst ?? 0,
+    igstRate: now?.igst ?? 0,
+    gstRevisions: revisions,
+  };
+}
+
+/**
+ * The GST rate for an item, as at a date.
+ *
+ * `asOf` defaults to today. Pass the VOUCHER's date when pricing one: a voucher
+ * backdated across 22 September 2025 must be rated at the rate that applied
+ * then, not at today's.
+ *
+ * Resolution order is Tally's own: the item's own declaration, then up the
+ * stock-group tree. Only 36 of 489 items declare a rate; 453 inherit.
+ */
+export function gstRateFor(
+  m: TallyMasters,
+  itemName: string,
+  asOf?: string,
+): { rate: number; source: string; revision?: GstRevision } {
   const item = m.items.get(itemName);
   if (!item) return { rate: 0, source: "unknown item" };
-  if (item.gstRate > 0) return { rate: item.gstRate, source: "item" };
+
+  const own = revisionOn(item.gstRevisions, asOf);
+  if (own && own.rate > 0) return { rate: own.rate, source: "item", revision: own };
 
   // Walk up the stock-group tree; guard against a cycle in the master data.
   let groupName = item.parent;
@@ -340,7 +471,8 @@ export function gstRateFor(m: TallyMasters, itemName: string): { rate: number; s
     seen.add(groupName);
     const g = m.stockGroups.get(groupName);
     if (!g) break;
-    if (g.gstRate > 0) return { rate: g.gstRate, source: `stock group "${g.name}"` };
+    const r = revisionOn(g.gstRevisions, asOf);
+    if (r && r.rate > 0) return { rate: r.rate, source: `stock group "${g.name}"`, revision: r };
     groupName = g.parent;
   }
   return { rate: 0, source: item.gstRateSource || "none found" };
