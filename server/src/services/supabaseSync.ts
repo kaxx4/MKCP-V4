@@ -981,6 +981,94 @@ export class SupabaseSync {
   }
 
   /**
+   * Mirror Tally's dated price list.
+   *
+   * ⚠ Depends on migration 027, which has NOT been applied. Until it is, this
+   * throws "relation does not exist" — verify with
+   * `scripts/verify-supabase-tables.ts` before trusting it, because an
+   * unverified Supabase seam is exactly how this codebase's dead features
+   * happened.
+   *
+   * The whole catalogue is 4,254 rows and costs 0.18s to read from Tally, so
+   * it is upserted wholesale rather than diffed. Keyed on
+   * (company, item_name, price_level, effective_from) — a rate that has not
+   * changed upserts onto itself, so re-running is free rather than duplicating.
+   *
+   * NEVER deletes. A price list is a history: a row missing from today's pull
+   * means Tally no longer reports that revision, not that the price never
+   * existed. Pruning it would silently rewrite what a backdated voucher is
+   * priced at.
+   */
+  async syncPriceList(
+    entries: Array<{
+      itemName: string; priceLevel: string; priceLevelRaw: string;
+      date: string; rate: number; unit: string; discountPct: number;
+    }>,
+    company: string,
+  ): Promise<void> {
+    if (!this.client || !entries.length) return;
+    const t0 = Date.now();
+    const mapped = entries.map((e) => ({
+      company,
+      item_name: e.itemName,
+      price_level: e.priceLevel,
+      price_level_raw: e.priceLevelRaw,
+      effective_from: e.date,
+      rate: e.rate,
+      unit: e.unit,
+      discount_pct: e.discountPct,
+      synced_at: new Date().toISOString(),
+    }));
+    await this.batchAndUpsertOn("tally_price_list", mapped, "company,item_name,price_level,effective_from");
+    console.log(`[Supabase] ✓ Synced ${mapped.length} price-list entries (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+  }
+
+  /**
+   * Mirror Tally's dated GST rates, for items AND stock groups.
+   *
+   * Both scopes, because a rate resolves item-first then up the stock-group
+   * tree: only 36 of 489 items declare their own, 453 inherit. Storing just
+   * the item level loses the rate for 93% of the catalogue.
+   *
+   * ⚠ Also depends on migration 027. Same caveat as above.
+   */
+  async syncGstRates(
+    rows: Array<{
+      scope: "item" | "stock_group"; name: string; effectiveFrom: string;
+      gstRate: number; cgst: number; sgst: number; igst: number;
+      taxability: string; parent?: string;
+    }>,
+    company: string,
+  ): Promise<void> {
+    if (!this.client || !rows.length) return;
+    const t0 = Date.now();
+    const mapped = rows.map((r) => ({
+      company,
+      scope: r.scope,
+      name: r.name,
+      effective_from: r.effectiveFrom,
+      gst_rate: r.gstRate,
+      cgst_rate: r.cgst,
+      sgst_rate: r.sgst,
+      igst_rate: r.igst,
+      taxability: r.taxability || null,
+      parent: r.parent || null,
+      synced_at: new Date().toISOString(),
+    }));
+    await this.batchAndUpsertOn("tally_gst_rates", mapped, "company,scope,name,effective_from");
+    console.log(`[Supabase] ✓ Synced ${mapped.length} GST rate rows (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+  }
+
+  /** batchAndUpsert, but with an explicit conflict target rather than `guid`. */
+  private async batchAndUpsertOn(table: string, rows: any[], conflictCol: string): Promise<void> {
+    if (!this.client || rows.length === 0) return;
+    const BATCH_SIZE = 200;
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      await this.upsertBatch(table, rows.slice(i, i + BATCH_SIZE), conflictCol);
+    }
+  }
+
+  /**
    * Clear the cloud draft. Separated from {@link syncOrderDraftLines} because
    * an empty array used to mean "wipe everything", and that is far too
    * destructive a thing to express by omission — the desktop's draft store has
