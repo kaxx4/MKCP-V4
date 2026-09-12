@@ -216,6 +216,24 @@ export interface VoucherPayload {
   reference?: string;
   narration?: string;
   partyLedgerName: string;
+  /**
+   * Declare the place of supply when the party ledger cannot carry one.
+   *
+   * The single real case is a counter sale billed to the shared `Cash` ledger.
+   * That ledger has no state — it cannot have one, since it is not a party — so
+   * Tally cannot derive a place of supply and the voucher lands in GSTR-1 under
+   * "GST Registration Details of the Party are invalid or not specified". About
+   * a third of this company's sales are cash, so without this they cannot be
+   * pushed at all.
+   *
+   * Accepted on OUTWARD vouchers only, where the place of supply and the
+   * counterparty's state are the same thing. On an inward voucher the place of
+   * supply is always ours and carries no information about the supplier, so the
+   * guard REFUSES it there rather than ignoring it.
+   *
+   * A ledger that already has a state always wins; this never overrides Tally.
+   */
+  placeOfSupply?: string;
   isInvoice: boolean;
   ledgerEntries: LedgerEntry[];
   inventoryEntries?: InventoryEntry[];

@@ -30,6 +30,51 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const HOME_STATE = "WEST BENGAL";
 /** The same state, spelled the way Tally stores it in PLACEOFSUPPLY. */
 export const HOME_STATE_NAME = "West Bengal";
+
+/**
+ * Which way are the goods moving?
+ *
+ *   outward — they go TO the counterparty (Sales, Credit Note, orders, dispatch)
+ *   inward  — they come TO us (Purchase, Debit Note, Receipt Note)
+ *
+ * This decides where the place of supply comes from, so the guard and the
+ * builder must answer it identically. It used to be an inline regex in
+ * `voucherPusher` alone.
+ */
+export function isInwardSupply(voucherType: string): boolean {
+  return /PURCHASE|DEBIT NOTE|RECEIPT NOTE/.test(voucherType.toUpperCase());
+}
+
+export type StateSource = "ledger" | "payload" | "none";
+
+/**
+ * The counterparty's state for this voucher, and where it came from.
+ *
+ * Normally the ledger master carries it. It is allowed to come from the payload
+ * instead for exactly one real case: a counter sale billed to the shared `Cash`
+ * ledger, which has no state and cannot be given one without misdescribing every
+ * other voucher that uses it. About a third of this company's sales are cash, so
+ * without this they could not be pushed at all.
+ *
+ * `placeOfSupply` may only stand in on an OUTWARD voucher, where the place of
+ * supply and the counterparty's state are the same thing (the goods go to the
+ * buyer). On an inward voucher the place of supply is always ours and says
+ * nothing about the supplier, so it is refused rather than quietly ignored —
+ * see `guardVoucher`.
+ *
+ * The ledger always wins when it has a state: a payload must not be able to
+ * re-describe a party Tally already knows.
+ */
+export function resolvePartyState(
+  p: Pick<VoucherPayload, "voucherType" | "placeOfSupply">,
+  ledgerState: string | undefined | null,
+): { state: string; source: StateSource } {
+  const onLedger = (ledgerState ?? "").trim();
+  if (onLedger) return { state: onLedger, source: "ledger" };
+  const declared = (p.placeOfSupply ?? "").trim();
+  if (declared && !isInwardSupply(p.voucherType)) return { state: declared, source: "payload" };
+  return { state: "", source: "none" };
+}
 /** Voucher types that carry stock but no Dr/Cr to balance. */
 const NON_ACCOUNTING = new Set(["Receipt Note", "Material In", "Material Out", "Stock Journal", "Physical Stock"]);
 /** Tally overwrites PARTYLEDGERNAME on these with the bank/cash ledger, so the
@@ -102,7 +147,38 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters): GuardResult {
     errors.push(party.suggestion
       ? `Party ledger "${p.partyLedgerName}" does not exist — Tally spells it "${party.suggestion}".`
       : `Party ledger "${p.partyLedgerName}" does not exist.`);
-  } else if (!party.state) {
+  }
+
+  // ── Place of supply, when the ledger cannot carry one ─────────────────────
+  const partyState = isMiss(party) ? "" : party.state;
+  const resolved = resolvePartyState(p, partyState);
+  const declared = (p.placeOfSupply ?? "").trim();
+
+  if (declared && isInwardSupply(p.voucherType)) {
+    // On an inward voucher the place of supply is always OUR state, so a declared
+    // one says nothing about the supplier and cannot stand in for their state.
+    // Accepting and ignoring it would let a caller believe they had supplied the
+    // missing information.
+    errors.push(`placeOfSupply is not accepted on ${p.voucherType}: goods are coming TO us, so the place of supply is always ${HOME_STATE_NAME}. It cannot supply the supplier's state — set that on their ledger in Tally.`);
+  }
+  if (declared && partyState && declared.toUpperCase() !== partyState.trim().toUpperCase()) {
+    // Tally's own master is the authority. A payload disagreeing with it is a
+    // bug in the caller, not an override.
+    errors.push(`placeOfSupply "${declared}" contradicts the state on ledger "${!isMiss(party) ? party.name : p.partyLedgerName}" (${partyState}). The ledger is authoritative — remove placeOfSupply.`);
+  }
+  if (resolved.source === "payload") {
+    // A typo here is not cosmetic: it decides CGST+SGST vs IGST. Check it against
+    // the states this company's own ledgers actually use rather than a hardcoded
+    // list, so it stays true as the book grows.
+    const known = new Set<string>([HOME_STATE_NAME.toUpperCase()]);
+    for (const l of m.ledgers.values()) if (l.state) known.add(l.state.trim().toUpperCase());
+    if (!known.has(resolved.state.toUpperCase())) {
+      errors.push(`placeOfSupply "${resolved.state}" is not a state any ledger in this company uses — check the spelling. It decides CGST+SGST vs IGST, so a typo mis-taxes the voucher silently.`);
+    } else {
+      warnings.push(`Place of supply "${resolved.state}" comes from the payload, not from ledger "${p.partyLedgerName}" — that ledger has no state of its own.`);
+    }
+  }
+  if (!isMiss(party) && resolved.source === "none") {
     // Without a state Tally cannot decide CGST+SGST vs IGST, and books it wrong silently.
     warnings.push(`Party "${party.name}" has no state on its ledger master — the tax head cannot be derived from it.`);
   }
@@ -233,8 +309,13 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters): GuardResult {
   // Verified across 455 real purchases with no exception: Punjab/UP/Delhi → IGST,
   // West Bengal → CGST+SGST. Getting this wrong produces a voucher that looks
   // perfect on screen and files wrong in GSTR-1, which is only found at return time.
-  if (!isMiss(party) && party.state) {
-    const interstate = party.state.trim().toUpperCase() !== HOME_STATE;
+  if (!isMiss(party) && resolved.state) {
+    const interstate = resolved.state.trim().toUpperCase() !== HOME_STATE;
+    // Name the party when the state is theirs, and the declaration when it is
+    // not — "Cash is in West Bengal" would be a confusing thing to read.
+    const because = resolved.source === "payload"
+      ? `This voucher declares its place of supply as ${resolved.state}`
+      : `Party "${party.name}" is in ${resolved.state}`;
     const names = [
       ...(p.ledgerEntries ?? []).map(e => e.ledgerName),
       ...(p.inventoryEntries ?? []).map(i => i.salesLedgerName).filter(Boolean) as string[],
@@ -245,10 +326,10 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters): GuardResult {
     const usesCentralAccount = names.some(n => /GST\s*CENTRAL/i.test(n));
 
     if (interstate && (usesLocalPair || usesWbAccount)) {
-      errors.push(`Party "${party.name}" is in ${party.state}, so this is an interstate transaction — it must use IGST and the "( GST CENTRAL )" account, not CGST/SGST or "( GST W.B. )".`);
+      errors.push(`${because}, so this is an interstate transaction — it must use IGST and the "( GST CENTRAL )" account, not CGST/SGST or "( GST W.B. )".`);
     }
     if (!interstate && (usesIgst || usesCentralAccount)) {
-      errors.push(`Party "${party.name}" is in ${party.state}, so this is a local transaction — it must use CGST+SGST and the "( GST W.B. )" account, not IGST or "( GST CENTRAL )".`);
+      errors.push(`${because}, so this is a local transaction — it must use CGST+SGST and the "( GST W.B. )" account, not IGST or "( GST CENTRAL )".`);
     }
   }
 
@@ -269,8 +350,8 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters): GuardResult {
     // A party with no state has no place of supply, so the supply cannot be
     // classified at all. A party with no GSTIN is legitimately B2C — allowed,
     // but worth saying out loud since it changes which return table it lands in.
-    if (!party.state) {
-      errors.push(`Party "${party.name}" has no state on its ledger master, so Tally cannot determine the place of supply — the voucher would land in GSTR-1 under "GST Registration Details of the Party are invalid or not specified". Set the state in Tally first.`);
+    if (!resolved.state) {
+      errors.push(`Party "${party.name}" has no state on its ledger master, so Tally cannot determine the place of supply — the voucher would land in GSTR-1 under "GST Registration Details of the Party are invalid or not specified". Set the state in Tally, or declare placeOfSupply on the voucher if this ledger cannot carry one (as the shared Cash ledger cannot).`);
     }
     if (!party.gstin) {
       warnings.push(`Party "${party.name}" has no GSTIN, so this files as an unregistered (B2C) supply rather than B2B.`);

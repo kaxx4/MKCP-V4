@@ -1,7 +1,7 @@
 import type { VoucherPayload, LedgerEntry, InventoryEntry, BillAllocation, PushResult } from "../types.js";
 import { tallyPost } from "../tally.js";
 import { findLedger, registrationOn, type TallyMasters } from "./tallyMasters.js";
-import { HOME_STATE_NAME } from "./pushGuard.js";
+import { HOME_STATE_NAME, isInwardSupply, resolvePartyState } from "./pushGuard.js";
 import { XMLParser } from "fast-xml-parser";
 
 const parser = new XMLParser({ ignoreAttributes: false, parseTagValue: false, trimValues: true });
@@ -139,7 +139,11 @@ function buildGstIdentity(p: VoucherPayload, masters?: TallyMasters): string {
   // registration that did not apply when it was raised.
   const reg = registrationOn(party, p.date);
   const gstin = reg.gstin.trim();
-  const state = (reg.placeOfSupply || reg.state).trim();
+  // The counterparty's state, which the payload may supply when the ledger has
+  // none — the shared `Cash` ledger of a counter sale. The guard has already
+  // refused anything where that stand-in is not legitimate, and both read the
+  // SAME resolver so the voucher is stamped with exactly what was approved.
+  const state = resolvePartyState(p, (reg.placeOfSupply || reg.state).trim()).state;
 
   /**
    * Place of supply is the DESTINATION of the goods, so it depends on which way
@@ -162,8 +166,7 @@ function buildGstIdentity(p: VoucherPayload, masters?: TallyMasters): string {
    * IGST because those are chosen separately, so the voucher balanced, verified
    * and looked correct; only the return would have disagreed.
    */
-  const inward = /PURCHASE|DEBIT NOTE|RECEIPT NOTE/.test(p.voucherType.toUpperCase());
-  const placeOfSupply = inward ? HOME_STATE_NAME : state;
+  const placeOfSupply = isInwardSupply(p.voucherType) ? HOME_STATE_NAME : state;
 
   const mailing = (party.mailingName ?? "").trim() || party.name;
   const pincode = (party.pincode ?? "").trim();
