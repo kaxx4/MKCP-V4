@@ -17,6 +17,7 @@ import type { TallyMasters } from "./tallyMasters.js";
 import { loadOpenBills, billsForParty, allocateFIFO, receivableBills, payableBills, type OpenBill } from "./billSettlement.js";
 import { safePush } from "./safePush.js";
 import type { VoucherPayload } from "../types.js";
+import { remoteIdFor } from "./remoteId.js";
 
 export interface BankPlanRow {
   source: ExtractedBankRow;
@@ -113,12 +114,23 @@ export function planFromBankRows(
     // real money, or (as here) gets rejected with no reason given.
     const ref = (row.reference ?? "").trim();
     const prefix = kind === "receipt" ? "R" : "P";
+    const voucherType = kind === "receipt" ? "Receipt" : "Payment";
+    const voucherNumber = ref
+      ? `BANK/${prefix}/${ref}`
+      : `BANK/${prefix}/${row.date.replace(/-/g, "")}/${i + 1}`;
     const payload: VoucherPayload = {
-      voucherType: kind === "receipt" ? "Receipt" : "Payment",
+      /* Without this the voucher is PERMANENT — it can never be corrected,
+         converted or deleted, because Tally offers no other handle. A bank
+         import is exactly where that bites: a misread narration books money
+         against the wrong party, and the fix would be impossible.
+
+         Built from the same stable key the web app uses, so a re-import of the
+         same statement ALTERS the voucher it already made instead of booking
+         the money a second time. The UTR is what makes it stable. */
+      remoteId: remoteIdFor({ voucherType, voucherNumber, date: row.date }),
+      voucherType,
       date: row.date,
-      voucherNumber: ref
-        ? `BANK/${prefix}/${ref}`
-        : `BANK/${prefix}/${row.date.replace(/-/g, "")}/${i + 1}`,
+      voucherNumber,
       narration: row.description.slice(0, 200),
       partyLedgerName: party,
       isInvoice: false,
