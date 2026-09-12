@@ -37,13 +37,6 @@ export interface AlterIdSnapshot {
   fetchedAt: string;
 }
 
-export interface VoucherBatch {
-  from: string;              // YYYYMMDD
-  to: string;                // YYYYMMDD
-  label: string;
-  estimatedCount: number;
-}
-
 export interface SyncResult {
   success: boolean;
   errors?: string[];
