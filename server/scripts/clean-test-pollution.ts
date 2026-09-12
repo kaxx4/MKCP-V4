@@ -12,7 +12,6 @@
  *   npx tsx scripts/clean-test-pollution.ts --delete   # actually remove
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { safePush } from "../src/services/safePush.js";

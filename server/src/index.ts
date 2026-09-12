@@ -13,6 +13,10 @@ import { startRefreshListener } from "./services/refreshListener.js";
 import { startPushListener, listPendingPushes, approvePush, rejectPush } from "./services/pushListener.js";
 import { startNightlySync } from "./services/nightlySync.js";
 import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
+import { planBankRows, pushBankPlan, type BankPlan } from "./services/bankToReceipts.js";
+import type { ExtractedBankRow } from "./services/extraction.js";
+import { loadMasters } from "./services/tallyMasters.js";
+import { withTally } from "./services/tallyGate.js";
 import {
   startFileTransferSync, pushFileToWeb, listRecentTransfers,
   startWatchFolder, watchFolderStatus,
@@ -616,6 +620,71 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
 app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()));
 
 // Trigger an immediate drain tick from the status window's "Drain Now" button.
+/* ── Bank statement → receipts and payments ────────────────────────────────
+ *
+ * `bankToReceipts` has been complete for a long time and had no route, so
+ * nothing could reach it. This is that route.
+ *
+ * Deliberately TWO endpoints, not one. Planning reads Tally and decides nothing
+ * that anyone has to live with; pushing books real money against real bills. A
+ * single "import my statement" call would collapse the step where a person
+ * looks at what is about to happen — and the thing they are looking for is the
+ * one this cannot get right alone: which party a bank narration refers to.
+ *
+ * Rows the planner cannot resolve come back carrying a `question` and are never
+ * pushed. That is the module's own rule; the routes only expose it.
+ */
+app.post("/api/bank/plan", async (req, res) => {
+  const { company, rows, bankLedger, learnedPayers } = req.body as {
+    company?: string;
+    rows?: ExtractedBankRow[];
+    bankLedger?: string;
+    learnedPayers?: Record<string, string>;
+  };
+  if (!company) return res.status(400).json({ error: "company required" });
+  if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: "rows required" });
+
+  // Reading open bills touches Tally's single-threaded port, so it queues
+  // behind any sync in flight rather than contending with it.
+  if (isTallyBusy()) return res.status(409).json({ error: "Tally is busy with a sync — try again in a moment" });
+
+  try {
+    const masters = await loadMasters(TALLY, company);
+    const plan = await planBankRows(
+      TALLY, company, rows, masters,
+      bankLedger || "HDFC BANK",
+      learnedPayers ? new Map(Object.entries(learnedPayers)) : undefined,
+    );
+    res.json({ ok: true, plan });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/bank/push", async (req, res) => {
+  const { company, plan } = req.body as { company?: string; plan?: BankPlan };
+  if (!company) return res.status(400).json({ error: "company required" });
+  if (!plan || !Array.isArray(plan.rows)) return res.status(400).json({ error: "plan required" });
+  if (isTallyBusy()) return res.status(409).json({ error: "Tally is busy with a sync — try again in a moment" });
+
+  /* The plan is echoed back by the caller rather than recomputed here, so what
+     a person approved on screen is exactly what is booked. Re-planning would
+     re-read open bills, and a bill settled in the seconds between review and
+     approval would silently change the allocation out from under them.
+
+     Through the gate: every voucher goes via safePush, which guards, pushes and
+     diffs the stored voucher — and the circuit breaker stops a run dead rather
+     than hammering a Tally that has started refusing. */
+  try {
+    const result = await withTally(TALLY, "bank statement push", () =>
+      pushBankPlan(TALLY, company, plan),
+    );
+    res.json({ ok: true, ...result });
+  } catch (e: any) {
+    res.status(503).json({ error: e.message });
+  }
+});
+
 app.post("/api/push-agent/drain", (_req, res) => {
   drainNow();
   res.json({ ok: true, drainedAt: new Date().toISOString() });

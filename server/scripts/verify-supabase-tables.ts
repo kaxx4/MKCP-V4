@@ -69,7 +69,11 @@ const H = (s: string) => console.log(`\n\x1b[1m── ${s} ${"─".repeat(Math.m
   }
 
   const company = convertCompanies(await tallyPost(U, HEALTH_XML, 10_000))[0]!.name;
-  const sync = new SupabaseSync(url, key);
+  /* SupabaseSync reads its own credentials from the environment — it takes no
+     arguments. Passing them was silently wrong until scripts/ was typechecked
+     for the first time (tsconfig.scripts.json); `tsc` covers only `src`, so
+     every harness in this folder was unchecked TypeScript. */
+  const sync = new SupabaseSync();
 
   // ── Price list ──────────────────────────────────────────────────────────
   H("PRICE LIST");
