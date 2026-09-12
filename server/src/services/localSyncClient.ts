@@ -18,16 +18,23 @@ export interface LocalSyncResponse {
  * and leaving a truncated FY uploaded to Supabase. http.request has no header
  * timeout, so the long-running self-call completes normally.
  *
- * Used by both the nightly scheduler and the web-refresh listener.
+ * Used by the nightly scheduler, the scheduled quick syncs and the web-refresh
+ * listener.
+ *
+ * `path` selects which sync route to call. It defaults to `/api/tally/sync`
+ * (whole-plan sync) so existing callers are unchanged; the scheduled quick
+ * syncs pass `/api/tally/sync-daybook`, which is the route the renderer's own
+ * quick sync has always used. They take DIFFERENT date formats — see
+ * scheduledSyncs.ts — so the route and the dates have to be chosen together.
  */
-export function postTallySync(port: number, body: object): Promise<LocalSyncResponse> {
+export function postTallySync(port: number, body: object, path = "/api/tally/sync"): Promise<LocalSyncResponse> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const req = http.request(
       {
         host: "127.0.0.1",
         port,
-        path: "/api/tally/sync",
+        path,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -53,7 +60,7 @@ export function postTallySync(port: number, body: object): Promise<LocalSyncResp
     // Safety cap well above the longest realistic full-FY sync (~90 min) so a
     // genuinely hung server can't block forever, without aborting normal syncs.
     req.setTimeout(2 * 60 * 60 * 1000, () =>
-      req.destroy(new Error("local /api/tally/sync request timed out after 2h"))
+      req.destroy(new Error(`local ${path} request timed out after 2h`))
     );
     req.on("error", reject);
     req.write(payload);
