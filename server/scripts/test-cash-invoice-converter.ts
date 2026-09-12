@@ -157,29 +157,17 @@ async function remove(company: string, number: string): Promise<boolean> {
       created.push(payNum);
       const res = await safePush(U, company, payload);
 
-      /* ⚠ A WALK-IN CANNOT GO THROUGH THE QUEUE YET, and the guard is right.
-         The "Cash" ledger carries no state, so Tally cannot derive a place of
-         supply, and the voucher lands in GSTR-1's incomplete-information
-         bucket. The file path does NOT catch this — it has no guard at all —
-         which is exactly the difference the queue is meant to make.
+      /* A walk-in used to be REFUSED here, and the guard was right to refuse it:
+         the shared "Cash" ledger carries no state, so Tally could not derive a
+         place of supply and the voucher would land in GSTR-1's incomplete-
+         information bucket. The file path never caught this — it has no guard
+         at all — which is the whole difference the queue makes.
 
-         About a third of this company's sales are cash, so this blocks the
-         migration until one of two things happens, and both are the owner's
-         call rather than something to slip in overnight:
-           · set a state on the Cash ledger in Tally (it is West Bengal — every
-             counter sale happens in the shop), or
-           · give VoucherPayload an explicit placeOfSupply that overrides the
-             party master, on both sides of the contract.
-         Asserted as a KNOWN REFUSAL so this script stays green and the
-         constraint stays visible, rather than being quietly skipped. */
-      if (!ledger) {
-        const why = (res.errors ?? []).join("; ");
-        ok(`${payNum}: the guard refuses a walk-in, correctly`,
-          !res.ok && /has no state/i.test(why),
-          "Cash has no state → no place of supply → GSTR-1 exception. See the note in this file.");
-        continue;
-      }
-
+         The payload now declares `placeOfSupply` instead, so the information
+         Tally needs is present without misdescribing the Cash ledger (which is
+         not a party and cannot truthfully hold a state). This assertion is the
+         one that matters: about a third of this company's sales are cash, and
+         until it passed none of them could go through the guarded path. */
       ok(`${payNum} pushed through safePush`, res.ok,
         res.ok ? "guarded and read back" : (res.errors ?? []).concat(res.differences ?? []).join("; ").slice(0, 120));
       if (!await healthy()) throw new Error("Tally stopped answering");
@@ -210,6 +198,20 @@ async function remove(company: string, number: string): Promise<boolean> {
       ok(ledger ? "tax heads follow the party's state" : "a walk-in is taxed locally (CGST+SGST, never IGST)",
         heads.length > 0 && !heads.some((h) => /IGST/i.test(h)),
         heads.join(", "));
+
+      /* The reason the whole thing exists. A voucher can balance, read back
+         identical and still be unfilable, because GSTR-1 classifies on fields
+         the diff never compares. So check the stored PLACEOFSUPPLY directly —
+         and check it on the QUEUE voucher, since that is the path being proven.
+
+         For the walk-in this is the field that was missing entirely; for the
+         registered party it must still be THEIR state, proving the declaration
+         did not leak in and overwrite a ledger that already had one. */
+      const pos = fld(b, "PLACEOFSUPPLY");
+      const want = ledger ? (party.state ?? "").trim() : "West Bengal";
+      ok(ledger ? "place of supply is still the party's own state" : "the walk-in carries a place of supply at all",
+        pos.trim().toUpperCase() === want.toUpperCase(),
+        `stored "${pos}", expected "${want}"`);
     }
   } finally {
     H("CLEANING UP");
