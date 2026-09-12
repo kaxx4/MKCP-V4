@@ -12,6 +12,7 @@ import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.
 import { startRefreshListener } from "./services/refreshListener.js";
 import { startPushListener, listPendingPushes, approvePush, rejectPush } from "./services/pushListener.js";
 import { startNightlySync } from "./services/nightlySync.js";
+import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
 import {
   startFileTransferSync, pushFileToWeb, listRecentTransfers,
   startWatchFolder, watchFolderStatus,
@@ -237,6 +238,11 @@ app.post("/api/tally/sync-daybook", syncGuard, async (req, res) => {
       console.log(`[DAYBOOK] ${p.step}/${p.totalSteps}: ${p.detail}`);
     });
     if (!res.writableEnded) res.json(result);
+    // Mark the clock for EVERY caller — the renderer's scheduler, the nightly
+    // job, a person pressing Sync. The server-side scheduler stands down when a
+    // window was refreshed recently, so while the Electron window is open the
+    // two schedulers cooperate instead of pulling Tally twice as often.
+    noteDaybookSync(company);
     console.log(`[SYNC] ✓ origin=${origin} company=${company} route=sync-daybook vouchers=${result.stats?.vouchers ?? 0} ${Date.now() - t0}ms`);
   } catch (e: any) {
     if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
@@ -585,6 +591,9 @@ const httpServer = app.listen(PORT, () => {
 
   // Nightly automatic full-FY sync at 00:00 local (configurable via NIGHTLY_SYNC_*).
   startNightlySync(PORT, company);
+  // The recurring quick syncs, which used to run only while the Electron window
+  // was open — see scheduledSyncs.ts.
+  startScheduledSyncs(PORT, company);
 
   // Two-way file handoff with the web dashboard (see server/src/services/fileTransferSync.ts).
   startFileTransferSync();

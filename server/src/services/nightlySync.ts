@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import ws from "ws";
 import { isTallyBusy } from "./tallyBusy.js";
 import { postTallySync } from "./localSyncClient.js";
+import { resolveSyncCompany } from "./scheduledSyncs.js";
 
 // Same WebSocket polyfill used by SupabaseSync / refreshListener.
 if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
@@ -67,21 +68,11 @@ export function startNightlySync(localPort: number, fallbackCompany: string): vo
   const key = process.env.SUPABASE_SERVICE_KEY;
   const supabase = key ? createClient(url, key) : null;
 
-  const resolveCompany = async (): Promise<string> => {
-    if (!supabase) return fallbackCompany;
-    try {
-      const { data, error } = await supabase
-        .from("tally_companies")
-        .select("name")
-        .order("synced_at", { ascending: false, nullsFirst: false })
-        .limit(1)
-        .maybeSingle();
-      if (!error && data?.name) return data.name as string;
-    } catch {
-      /* fall through to fallback */
-    }
-    return fallbackCompany;
-  };
+  /* One definition of "which company", shared with the scheduled syncs — see
+     resolveSyncCompany. Two inlined copies of this lookup are two chances to
+     drift onto different companies, which shows up as a mirror that is fresh
+     for one and stale for another with nothing saying why. */
+  const resolveCompany = () => resolveSyncCompany(fallbackCompany);
 
   // Best-effort failure marker, separate from the per-syncType rows the
   // orchestrator itself writes (masters/vouchers, keyed off internal `errors`
