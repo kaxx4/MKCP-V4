@@ -428,6 +428,18 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
       const simpleIE = arr(v["INVENTORYENTRIES.LIST"] ?? v.INVENTORYENTRIES);
       const ie = allIE.length > 0 ? allIE : simpleIE;
 
+      /* ── Identity ──────────────────────────────────────────────────────
+         MASTERID is Tally's own, and it is STABLE ACROSS AN ALTER — proven
+         live: a voucher altered in place kept 249387 while its ALTERID moved.
+         ALTERID bumps on every change and is the incremental-sync watermark;
+         not storing it is why incremental sync has never been reachable.
+
+         REMOTEID is deliberately NOT read here. Tally does not export it —
+         asked for it on four vouchers including two this app had pushed hours
+         earlier with an explicit one, and it came back on 0 of 4. Our identity
+         is recorded when we WRITE, never learned by reading. */
+      const masterId = Number(txt(v.MASTERID)) || null;
+
       // Voucher-level party name — the authoritative source for party identification.
       // Individual ledger entries may BOTH have ISPARTYLEDGER=Yes (e.g. party + bank
       // in Receipt/Payment vouchers), so we use PARTYLEDGERNAME to disambiguate.
@@ -480,6 +492,12 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
       }));
 
       return {
+        /* Tally's own identity, and STABLE ACROSS AN ALTER — proven live: a
+           voucher altered in place kept masterId 249387 while its alterId
+           moved. `alterid` below was already converted; it simply was never
+           stored. */
+        masterid: masterId,
+
         metadata: { type: "Voucher" },
         date: txt(v.DATE) || txt(v["@_DATE"]),
         guid: txt(v.GUID) || txt(v["@_GUID"]),
