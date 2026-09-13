@@ -1,6 +1,10 @@
 -- Migration 027: the price list and GST rates, mirrored from Tally.
 --
--- ⚠ NOT YET APPLIED. Written, committed, and left for the owner to run.
+-- APPLIED 13-Sep-2026 as Supabase migration `tally_price_list_and_gst_rates`
+-- (version 20260913174523). Verified against the live schema after applying,
+-- not against this file — P5: CREATE TABLE IF NOT EXISTS is a no-op, not an
+-- upgrade, so the object is what gets confirmed. The mirror now holds 4,254
+-- price entries and 106 GST rates.
 --
 -- ── Why these are new tables rather than the existing ones ─────────────────
 --
