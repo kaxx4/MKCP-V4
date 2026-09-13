@@ -817,6 +817,11 @@ export class SupabaseSync {
       voucher_type: m.vouchertypename,
       party_ledger_name: m.partyledgername,
       narration: m.narration,
+      /* Tally's own identity (stable across an Alter) and its change counter.
+         remote_id is NOT set here — Tally does not export it, so it is written
+         when we push and backfilled from push_queue, never learned by reading. */
+      master_id: m.masterid ?? null,
+      alter_id: m.alterid ?? null,
       reference: m.reference ?? null,   // mirror Tally <REFERENCE> for push-agent reconciliation (see migration 012)
       is_cancelled: m.iscancelled === true,
       is_optional: m.isoptional === true,
