@@ -57,6 +57,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { postTallySync } from "./localSyncClient.js";
 import { refuseSharedWrite } from "./tallyRole.js";
+import { supabaseClient } from "./supabaseClient.js";
 
 let started = false;
 
@@ -106,11 +107,9 @@ export function fyStartYmd(): string {
  * saying why.
  */
 export async function resolveSyncCompany(fallback: string): Promise<string> {
-  const url = process.env.SUPABASE_URL || "https://vmkytsytxlofjyeotmgb.supabase.co";
-  const key = process.env.SUPABASE_SERVICE_KEY;
-  if (!key) return fallback;
+  const supabase = supabaseClient();
+  if (!supabase) return fallback;
   try {
-    const supabase = createClient(url, key);
     const { data, error } = await supabase
       .from("tally_companies")
       .select("name")

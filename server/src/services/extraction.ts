@@ -70,6 +70,13 @@ export type Resolution<T> =
 /** Confidence below which nothing is booked without a human, regardless of match quality. */
 export const REVIEW_THRESHOLD = 0.85;
 
+/* Company suffixes, which never distinguish one trading party from another and
+   are spelled differently by the bank and by Tally. */
+const COMPANY_SUFFIX = new Set([
+  "LTD", "LIMITED", "PVT", "PRIVATE", "CORP", "CORPN", "CORPORATION",
+  "COMPANY", "INDIA", "ENTERPRISE", "ENTERPRISES",
+]);
+
 const norm = (s: string) =>
   s.toUpperCase()
    .replace(/["'`]/g, "")
@@ -230,6 +237,28 @@ export function resolveInvoice(
  * when several do. Money moved against the wrong party is invisible on screen
  * and painful to unwind, so a question is always the cheaper outcome.
  */
+/**
+ * Do these words appear together, in order, somewhere in the narration?
+ *
+ * Other words may sit between them — a bank writes "M S NEW ASHOK CYCLE
+ * STORES" and "SOURAV CYCLE LTD" — but they must run forward without
+ * restarting, which is what tells a printed name from words that happen to be
+ * scattered through the routing noise.
+ */
+function contiguousRun(tokenList: string[], required: string[]): boolean {
+  if (required.length < 2) return false;
+  for (let start = 0; start <= tokenList.length - required.length; start++) {
+    let i = start, r = 0, gap = 0;
+    while (i < tokenList.length && r < required.length) {
+      if (tokenList[i] === required[r]) { r++; gap = 0; }
+      else if (r > 0 && ++gap > 2) break;   // a couple of filler words is fine
+      i++;
+    }
+    if (r === required.length) return true;
+  }
+  return false;
+}
+
 export function resolvePayerFromNarration(
   description: string,
   ledgerNames: Iterable<string>,
@@ -239,13 +268,106 @@ export function resolvePayerFromNarration(
   const learnedHit = learned?.get(hay);
   if (learnedHit) return { status: "resolved", value: learnedHit, how: "learned" };
 
+  /* WHOLE TOKENS, NOT SUBSTRINGS.
+     This used to ask whether each ledger word appeared ANYWHERE in the
+     narration, and a real HDFC narration is full of things that contain them:
+
+       NEFT CR-UTIB0004696-...-NETBANK, MUM-HDFCH01261596960
+
+     "hdfc" sits inside HDFCH01261596960 and "bank" inside NETBANK, so the
+     ledger "HDFC BANK" matched — and an unfamiliar party resolved to OUR OWN
+     BANK ACCOUNT. The resulting voucher would debit and credit the same ledger
+     while looking perfectly ordinary. Confirmed against the owner's real
+     statement in scripts/test-bank-narrations.ts.
+
+     `norm` already splits on every non-alphanumeric, so the tokens are the
+     words the bank actually printed. IFSC codes and reference strings become
+     tokens of their own and stop colliding with short ledger words. */
+  const tokenList = hay.split(" ").filter(Boolean);
+  const tokens = new Set(tokenList);
+
+  /* A BRACKETED TOWN IS A DISAMBIGUATOR, NOT PART OF THE TRADING NAME.
+     This company's ledgers read "NEW ASHOK CYCLE STORES (MIDNAPUR)" — the
+     bracket tells two branches apart. A bank never prints it: the statement says
+     "RTGS CR-PUNB0035000-M S NEW ASHOK CYCLE STORES-KOLKATA". Requiring every
+     word meant those rows matched nothing and every one of them came back as a
+     question, which is safe but useless at the volume this runs at.
+
+     So bracketed words are optional. They still SCORE when present, which is
+     what decides between two branches of the same name; and when the narration
+     names neither branch, both match equally and the resolver asks — which is
+     exactly the right question to put to a person. */
   const matches: Array<{ name: string; score: number }> = [];
+  const requiredWordsOf = new Map<string, string[]>();
+
   for (const name of ledgerNames) {
+    const bracketed = new Set(
+      [...name.matchAll(/\(([^)]*)\)/g)]
+        .flatMap(m => norm(m[1]).split(" "))
+        .filter(w => w.length > 2),
+    );
     const words = norm(name).split(" ").filter(w => w.length > 2);
-    if (!words.length) continue;
-    const hits = words.filter(w => hay.includes(w)).length;
-    // Every significant word of the ledger name must be present.
-    if (hits === words.length) matches.push({ name, score: words.length });
+    /* A COMPANY SUFFIX IS NEVER WHAT DISTINGUISHES A PARTY.
+       "ASIAN BIKES (P) LTD" on the statement is "ASIAN BIKES PRIVATE LIMITED"
+       in Tally; requiring "private" and "limited" meant no match at all. Two
+       parties that differ ONLY by suffix would now tie — and tie means ask,
+       which is the right outcome for that. */
+    const required = words.filter(w => !bracketed.has(w) && !COMPANY_SUFFIX.has(w));
+    if (!required.length) continue;
+    requiredWordsOf.set(name, required);
+    if (!required.every(w => tokens.has(w))) continue;
+    // Score on everything that matched, so a named branch beats an unnamed one.
+    let score = words.filter(w => tokens.has(w)).length;
+
+    /* A NAME THE BANK PRINTED IS CONTIGUOUS. Scattered words are a coincidence.
+           CHQ DEP - CTS CLG2 - NEW TOWN BANK HOUSE: SOURAV CYCLE :BANK OF BARODA
+       "SOURAV CYCLE" sits there as two adjacent words. "CYCLE HOUSE" also
+       matched — "cycle" from the party and "house" from "BANK HOUSE", eleven
+       words apart — and the two tied, so a plainly correct match became a
+       question. Contiguity separates a printed name from a coincidence, and it
+       is worth more than any number of scattered words. */
+    if (contiguousRun(tokenList, required)) score += 100;
+
+    matches.push({ name, score });
+  }
+
+  /* SOME BANKS SEND THE NAME WITH THE SPACES REMOVED.
+     Real IMPS lines from this account read:
+         IMPS-609414663918-RADHAGOBINDAGHOSHCYCLESTORES-BARB-...
+         IMPS-609513299107-DEYCYCLESTORES-UBIN-...
+     There are no word boundaries to match on, so token matching sees nothing —
+     IMPS resolved at 26% while NEFT, which prints spaces, managed 69%.
+
+     So when nothing matched, try again with both sides squashed. This is a
+     substring test, which is exactly what caused "HDFC BANK" to fall out of
+     "NETBANK …-HDFCH01261596960" — so it is deliberately narrow:
+       · only as a FALLBACK, when whole-token matching found nothing at all;
+       · only for names long enough that a chance collision is implausible;
+       · and every candidate still has to be the ONE match, or it asks. */
+  if (matches.length === 0) {
+    const squashedHay = hay.replace(/\s+/g, "");
+    for (const [name, required] of requiredWordsOf) {
+      /* The REQUIRED words only — squashing the whole name folds the bracketed
+         town in, and "RADHAGOBINDAGHOSHCYCLESTORESKAPATHAT" appears in no
+         narration ever written. The bank prints the trading name alone. */
+      const squashed = required.join("");
+      if (squashed.length < 12) continue;
+
+      // The bank sent the name with spaces removed.
+      if (squashedHay.includes(squashed)) { matches.push({ name, score: squashed.length }); continue; }
+
+      /* THE BANK TRUNCATED IT. Cheque narrations cut the name mid-word:
+             CHQ PAID-TRANSFER IN-WASAN ENGINEERING C
+         against "Wasan Engineering Corpn.". Accepting a PREFIX handles that,
+         and 12 characters of an exact prefix is a great deal of agreement —
+         but it is still looser than the rest of this function, so it only runs
+         when nothing else matched at all, and a tie still asks. */
+      const cut = /[-:]\s*([^-:]{12,})$/.exec(hay.trim());
+      const tail = cut ? cut[1].replace(/\s+/g, "") : "";
+      if (tail.length >= 12 && squashed.startsWith(tail)) {
+        matches.push({ name, score: tail.length });
+      }
+    }
   }
 
   if (matches.length === 1) return { status: "resolved", value: matches[0].name, how: "normalised" };

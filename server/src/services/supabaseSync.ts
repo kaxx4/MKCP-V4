@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
+import { supabaseClient } from "./supabaseClient.js";
 
 // Polyfill WebSocket for Node.js 20 (Supabase needs it for realtime)
 if (typeof globalThis !== 'undefined' && !globalThis.WebSocket) {
@@ -69,14 +70,12 @@ export class SupabaseSync {
     }
 
     try {
-      this.client = createClient(url, key, {
-        auth: { persistSession: false },
-        realtime: {
-          params: {
-            eventsPerSecond: 10,
-          },
-        },
-      });
+      /* Through the one chokepoint, so OFFLINE MODE reaches every writer at
+         once. This class is the main one — masters, vouchers, config, and the
+         prunes — so a machine holding a duplicate company must not get a live
+         client here under any circumstances. See supabaseClient.ts. */
+      this.client = supabaseClient({ realtime: { params: { eventsPerSecond: 10 } } });
+      if (!this.client) return;
       console.log("[Supabase] Client initialized");
     } catch (err: any) {
       console.error(`[Supabase] Failed to initialize client: ${err.message}`);

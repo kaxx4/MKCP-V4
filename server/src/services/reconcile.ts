@@ -13,6 +13,7 @@
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { tallyPost } from "../tally.js";
+import { requireSupabase } from "./supabaseClient.js";
 
 export interface DayTypeCount { date: string; voucherType: string; tally: number; supabase: number; }
 export interface ReconcileReport {
@@ -41,11 +42,10 @@ const tallyDate = (iso: string) => {
   return `${d}-${MONTHS[m - 1]}-${y}`;
 };
 
+/* Throws rather than degrading: reconcile exists to REPORT a gap, and one that
+   silently reports nothing is worse than one that says it cannot run. */
 function supa(): SupabaseClient {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error("SUPABASE_URL / SUPABASE_SERVICE_KEY are not configured.");
-  return createClient(url, key, { auth: { persistSession: false } });
+  return requireSupabase("Reconciliation");
 }
 
 /**

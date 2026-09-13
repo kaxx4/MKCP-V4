@@ -26,6 +26,7 @@ import ws from "ws";
 import { tallyPost } from "../tally.js";
 import { withTally, TallyUnavailableError } from "./tallyGate.js";
 import { isTallyBusy } from "./tallyBusy.js";
+import { supabaseClient } from "./supabaseClient.js";
 
 if (typeof (globalThis as any).WebSocket === "undefined") {
   (globalThis as any).WebSocket = ws;
@@ -196,7 +197,8 @@ export function startPushListener(company: string, tally: string): void {
     return;
   }
 
-  client = createClient(url, key, { realtime: { params: { eventsPerSecond: 2 } } });
+  client = supabaseClient({ realtime: { params: { eventsPerSecond: 2 } } });
+  if (!client) return;   // offline, or no service key — see supabaseClient.ts
 
   client
     .channel("tally-push-commands")
