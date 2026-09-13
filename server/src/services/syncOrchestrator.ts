@@ -13,6 +13,7 @@ import { PARALLEL_MASTERS, SEQUENTIAL_MASTERS, TRANSACTION_COLLECTIONS } from ".
 import type { ChangeDetector } from "./changeDetector.js";
 import { SupabaseSync } from "./supabaseSync.js";
 import { fetchPriceList } from "./tallyPriceList.js";
+import { fetchGstRates } from "./tallyGstRates.js";
 
 export class SyncOrchestrator {
   private supabase = new SupabaseSync();
@@ -116,6 +117,18 @@ export class SyncOrchestrator {
       } catch (e: any) {
         errors.push(`Price list: ${e?.message ?? e}`);
         console.error(`[MASTERS] ✗ Price list: ${e?.message ?? e}`);
+      }
+
+      /* GST rates, which replace a checked-in JSON that could only be changed
+         by editing the repo and redeploying. Separate try: a price-list failure
+         must not cost us the rates, or the other way round. */
+      try {
+        const gstRows = await fetchGstRates(this.tallyUrl, company);
+        await this.supabase.syncGstRates(gstRows, company);
+        console.log(`[MASTERS] ✓ GST rates: ${gstRows.length} declared rates`);
+      } catch (e: any) {
+        errors.push(`GST rates: ${e?.message ?? e}`);
+        console.error(`[MASTERS] ✗ GST rates: ${e?.message ?? e}`);
       }
     }
 
