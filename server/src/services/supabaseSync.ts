@@ -894,6 +894,14 @@ export class SupabaseSync {
          when we push and backfilled from push_queue, never learned by reading. */
       master_id: m.masterid ?? null,
       alter_id: m.alterid ?? null,
+      /* The IRP clock. `|| null` not `?? null`: Tally sends an EMPTY string for
+         an unregistered invoice, and "" stored in a text column is non-null —
+         which would read as "registered, with a blank number" to every query
+         that asks `WHERE irn IS NULL`. That is the same empty-string-vs-null
+         confusion that made costing_method look landed on 492 rows. */
+      irn: m.irn || null,
+      irn_ack_no: m.irnackno || null,
+      irn_ack_date: m.irnackdate || null,
       reference: m.reference ?? null,   // mirror Tally <REFERENCE> for push-agent reconciliation (see migration 012)
       is_cancelled: m.iscancelled === true,
       is_optional: m.isoptional === true,

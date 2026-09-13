@@ -88,6 +88,14 @@ export const TRANSACTION_COLLECTIONS: CollectionDef[] = [
     fetch: [
       "Guid", "Date", "VoucherTypeName", "VoucherNumber", "Reference", "Narration",
       "PartyLedgerName", "IsCancelled", "IsOptional", "EffectiveDate", "AlterID", "MasterId",
+      /* E-invoice registration. Tally emits these as self-closing empty tags on
+         an invoice with no IRN yet — proven with a NATIVEMETHOD * probe, and
+         that emptiness IS the signal: an e-invoice must reach the IRP within 30
+         days of the invoice date or it can never be registered, and the buyer
+         loses their input tax credit. The app never calls the IRP (a hard scope
+         boundary); it only needs to NOTICE. It cannot notice without these.
+         server/scripts/probe-irn-fields.ts, 14-Sep-2026. */
+      "IRN", "IRNAckNo", "IRNAckDate",
       // Sub-lists WITHOUT .* wildcards — wildcards crash TallyPrime ("incorrect object type").
       // Requesting the parent key is enough: TallyPrime returns all standard sub-fields automatically.
       "AllLedgerEntries",
