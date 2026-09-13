@@ -21,7 +21,7 @@ import type { VoucherPayload } from "./types.js";
 import { planBankRows, pushBankPlan, type BankPlan } from "./services/bankToReceipts.js";
 import type { ExtractedBankRow } from "./services/extraction.js";
 import { loadMasters } from "./services/tallyMasters.js";
-import { withTally } from "./services/tallyGate.js";
+
 import {
   startFileTransferSync, pushFileToWeb, listRecentTransfers,
   startWatchFolder, watchFolderStatus,
@@ -684,9 +684,9 @@ app.post("/api/bank/push", async (req, res) => {
      diffs the stored voucher — and the circuit breaker stops a run dead rather
      than hammering a Tally that has started refusing. */
   try {
-    const result = await withTally(TALLY, "bank statement push", () =>
-      pushBankPlan(TALLY, company, plan),
-    );
+    /* NOT wrapped in withTally — pushBankPlan calls safePush, which goes
+       through the gate itself, and nesting the gate deadlocks. */
+    const result = await pushBankPlan(TALLY, company, plan);
     res.json({ ok: true, ...result });
   } catch (e: any) {
     res.status(503).json({ error: e.message });
@@ -782,8 +782,9 @@ app.post("/api/local/push", async (req, res) => {
     const company = String(req.body?.company ?? "")
       || convertCompanies(await tallyPost(TALLY, HEALTH_XML, 10_000))[0]?.name;
     if (!company) return res.status(503).json({ error: "No company open in Tally" });
-    const result = await withTally(TALLY, `local ${payload.action ?? "Create"}`, () =>
-      safePush(TALLY, company, payload));
+    /* NOT wrapped in withTally — safePush goes through the gate itself, and
+       nesting the gate deadlocks (the inner call queues behind the outer). */
+    const result = await safePush(TALLY, company, payload);
     res.json({
       ok: result.ok,
       stage: result.stage,
