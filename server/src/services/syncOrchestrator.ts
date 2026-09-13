@@ -12,6 +12,7 @@ import {
 import { PARALLEL_MASTERS, SEQUENTIAL_MASTERS, TRANSACTION_COLLECTIONS } from "../config/collections.js";
 import type { ChangeDetector } from "./changeDetector.js";
 import { SupabaseSync } from "./supabaseSync.js";
+import { fetchPriceList } from "./tallyPriceList.js";
 
 export class SyncOrchestrator {
   private supabase = new SupabaseSync();
@@ -58,9 +59,15 @@ export class SyncOrchestrator {
     let stocks = { tallymessage: [] as any[] };
     let ledgers = { tallymessage: [] as any[] };
     if (!signal?.aborted) {
-      // Dealer price lists are NOT fetched — the PriceList collection query
-      // crashes TallyPrime (ECONNRESET / 5-minute timeout) which then prevents all
-      // subsequent voucher fetches. Stock items + ledgers only.
+      // The price list IS fetched — see below, after the masters land.
+      //
+      // This comment used to say the PriceList collection "crashes TallyPrime
+      // (ECONNRESET / 5-minute timeout)". THAT IS NOT TRUE, and it is the
+      // reason the price list was exported and re-imported by hand for months
+      // while a complete, correct, tested puller sat in tallyPriceList.ts with
+      // zero callers. Measured against the live company: 490 items, 1.3 MB,
+      // 0.18 seconds. Guardrail G9 — a comment asserting a constraint carries
+      // its evidence, or it is a hypothesis.
       emit("masters", 2, 8, "Fetching stock items + ledgers...");
       const stocksDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "StockItem")!;
       const ledgersDef = SEQUENTIAL_MASTERS.find(d => d.tallyCollection === "Ledger")!;
@@ -92,6 +99,25 @@ export class SyncOrchestrator {
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`[MASTERS] Done in ${elapsed}s`);
+
+    /* ── The price list and GST rates ──────────────────────────────────────
+       Pulled here rather than in their own sync because they are masters, they
+       are cheap (0.18s and 0.06s), and the alternative was a human exporting
+       from Tally and importing a JSON by hand.
+
+       Failures are collected, never thrown: a price list that did not come back
+       must not take a masters sync down with it. */
+    if (!signal?.aborted) {
+      emit("masters", 7, 8, "Fetching price list + GST rates...");
+      try {
+        const priceRows = await fetchPriceList(this.tallyUrl, company);
+        await this.supabase.syncPriceList(priceRows, company);
+        console.log(`[MASTERS] ✓ Price list: ${priceRows.length} dated entries`);
+      } catch (e: any) {
+        errors.push(`Price list: ${e?.message ?? e}`);
+        console.error(`[MASTERS] ✗ Price list: ${e?.message ?? e}`);
+      }
+    }
 
     const mastersList = [
       { metadata: { type: "Company", name: company }, name: company, fystart: 4 },
