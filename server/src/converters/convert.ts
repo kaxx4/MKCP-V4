@@ -482,14 +482,52 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
         };
       });
 
-      const inventoryentries = ie.map((e: any) => ({
-        stockitemname: txt(e.STOCKITEMNAME),
-        actualqty: txt(e.ACTUALQTY) || txt(e.BILLEDQTY, "0"),
-        billedqty: txt(e.BILLEDQTY) || txt(e.ACTUALQTY, "0"),
-        rate: txt(e.RATE, "0"),
-        amount: txt(e.AMOUNT, "0"),
-        isdeemedpositive: txt(e.ISDEEMEDPOSITIVE) === "Yes",
-      }));
+      const inventoryentries = ie.map((e: any) => {
+        /* ── The location key (Phase 2.4) ────────────────────────────────────
+           Where the goods physically are. Tally carries it on
+           BATCHALLOCATIONS.LIST, which this converter has always ignored, so
+           tally_voucher_inventory_entries had no godown or batch column at all
+           and the only godown reference in the whole web app is a hardcoded
+           "Main Location" string in VoucherLines.tsx.
+
+           Today that costs nothing — the company has ONE godown, and all 132
+           batch allocations on a sampled day read "Main Location" /
+           "Primary Batch". It costs everything the day a second godown opens,
+           because every historical row would be unattributable. Schema now,
+           UI later: carry the key from the start.
+
+           An inventory line may split across SEVERAL godowns, so the whole
+           list is kept as well as the primary — taking only the first would
+           silently lose the split, which is the shape of defect this project
+           keeps finding. */
+        const allocs = arr(e["BATCHALLOCATIONS.LIST"] ?? e.BATCHALLOCATIONS).map((b: any) => ({
+          godownname: txt(b.GODOWNNAME),
+          batchname: txt(b.BATCHNAME),
+          destinationgodownname: txt(b.DESTINATIONGODOWNNAME),
+          batchid: parseInt(txt(b.BATCHID) || "0", 10) || null,
+          amount: txt(b.AMOUNT, "0"),
+          actualqty: txt(b.ACTUALQTY) || txt(b.BILLEDQTY, "0"),
+          billedqty: txt(b.BILLEDQTY) || txt(b.ACTUALQTY, "0"),
+        }));
+
+        return {
+          stockitemname: txt(e.STOCKITEMNAME),
+          actualqty: txt(e.ACTUALQTY) || txt(e.BILLEDQTY, "0"),
+          billedqty: txt(e.BILLEDQTY) || txt(e.ACTUALQTY, "0"),
+          rate: txt(e.RATE, "0"),
+          amount: txt(e.AMOUNT, "0"),
+          isdeemedpositive: txt(e.ISDEEMEDPOSITIVE) === "Yes",
+
+          // The primary allocation, promoted to columns so the common case is
+          // queryable without opening the JSON.
+          godownname: allocs[0]?.godownname ?? "",
+          batchname: allocs[0]?.batchname ?? "",
+          destinationgodownname: allocs[0]?.destinationgodownname ?? "",
+          // True when the line really is split — the case columns cannot hold.
+          issplitacrossgodowns: new Set(allocs.map((a) => a.godownname).filter(Boolean)).size > 1,
+          batchallocations: allocs,
+        };
+      });
 
       return {
         /* Tally's own identity, and STABLE ACROSS AN ALTER — proven live: a

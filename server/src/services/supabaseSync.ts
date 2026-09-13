@@ -226,6 +226,17 @@ export class SupabaseSync {
               rate: ie.rate,
               amount: ie.amount,
               is_deemed_positive: ie.isdeemedpositive === true,
+              /* The location key (Phase 2.4). Tally carries godown and batch on
+                 BATCHALLOCATIONS.LIST for every inventory line; this table had
+                 nowhere to put them, so the mirror could not say where anything
+                 physically was. `?? null` rather than `?? ""` — a row whose
+                 allocation Tally did not send must read as "no key", not as an
+                 empty godown name. */
+              godown_name: ie.godownname || null,
+              batch_name: ie.batchname || null,
+              destination_godown_name: ie.destinationgodownname || null,
+              batch_allocations: ie.batchallocations?.length ? ie.batchallocations : null,
+              is_split_across_godowns: ie.issplitacrossgodowns === true,
               synced_at: new Date().toISOString(),
             });
           }
