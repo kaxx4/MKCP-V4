@@ -249,8 +249,19 @@ export interface VoucherPayload {
 }
 
 export interface PushResult {
+  /**
+   * True when Tally did SOMETHING — created, altered or deleted.
+   *
+   * It used to mean "created > 0", which reported every successful Alter and
+   * every successful Delete as a failure. `safePush` was unaffected because it
+   * counts ALTERED and DELETED out of the raw response itself, but any other
+   * caller reading this field would have been misled.
+   */
   success: boolean;
   created: number;
+  /** An Alter, and also a Cancel — Tally reports a cancel as an alteration. */
+  altered: number;
+  deleted: number;
   errors: number;
   lastVoucherId: string | null;
   lineErrors: string[];

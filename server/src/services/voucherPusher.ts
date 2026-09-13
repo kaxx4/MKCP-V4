@@ -349,6 +349,8 @@ export function parseImportResponse(rawXml: string): PushResult {
   }
 
   let created = 0;
+  let altered = 0;
+  let deleted = 0;
   let errCount = lineErrors.length;
   let lastVchId: string | null = null;
 
@@ -363,12 +365,20 @@ export function parseImportResponse(rawXml: string): PushResult {
 
     if (importResult) {
       created  = parseInt(String(importResult.CREATED  ?? "0"), 10) || 0;
+      // ALTERED covers both an Alter and a Cancel: Tally reports a cancel as an
+      // alteration, never under a count of its own.
+      altered  = parseInt(String(importResult.ALTERED  ?? "0"), 10) || 0;
+      deleted  = parseInt(String(importResult.DELETED  ?? "0"), 10) || 0;
       errCount = parseInt(String(importResult.ERRORS   ?? "0"), 10);
       lastVchId = importResult.LASTVCHID ? String(importResult.LASTVCHID) : null;
     } else {
       // Fallback: regex scan — handles any Tally version quirks
       const createdMatch = rawXml.match(/<CREATED>(\d+)<\/CREATED>/);
       if (createdMatch) created = parseInt(createdMatch[1], 10) || 0;
+      const alteredMatch = rawXml.match(/<ALTERED>(\d+)<\/ALTERED>/);
+      if (alteredMatch) altered = parseInt(alteredMatch[1], 10) || 0;
+      const deletedMatch = rawXml.match(/<DELETED>(\d+)<\/DELETED>/);
+      if (deletedMatch) deleted = parseInt(deletedMatch[1], 10) || 0;
       const errorsMatch = rawXml.match(/<ERRORS>(\d+)<\/ERRORS>/);
       if (errorsMatch) errCount = parseInt(errorsMatch[1], 10);
       const lastVchMatch = rawXml.match(/<LASTVCHID>([^<]+)<\/LASTVCHID>/);
@@ -379,8 +389,12 @@ export function parseImportResponse(rawXml: string): PushResult {
     if (lineErrors.length > 0 && errCount === 0) errCount = lineErrors.length;
 
     return {
-      success: created > 0 && errCount === 0 && lineErrors.length === 0,
+      // Tally DID something. An Alter reports ALTERED=1 CREATED=0 and a Delete
+      // reports DELETED=1 CREATED=0 — reading only CREATED called both failures.
+      success: (created > 0 || altered > 0 || deleted > 0) && errCount === 0 && lineErrors.length === 0,
       created,
+      altered,
+      deleted,
       errors: errCount,
       lastVoucherId: lastVchId,
       lineErrors,
@@ -390,6 +404,8 @@ export function parseImportResponse(rawXml: string): PushResult {
     return {
       success: false,
       created: 0,
+      altered: 0,
+      deleted: 0,
       errors: 1,
       lastVoucherId: null,
       lineErrors: lineErrors.length > 0 ? lineErrors : ["Failed to parse Tally response"],
