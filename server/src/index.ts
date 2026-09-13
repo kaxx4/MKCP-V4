@@ -13,7 +13,11 @@ import { startRefreshListener } from "./services/refreshListener.js";
 import { startPushListener, listPendingPushes, approvePush, rejectPush } from "./services/pushListener.js";
 import { startNightlySync } from "./services/nightlySync.js";
 import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
-import { announceRole } from "./services/tallyRole.js";
+import { announceRole, tallyRole } from "./services/tallyRole.js";
+import { isOffline, offlineReason } from "./services/supabaseClient.js";
+import { vouchersOnDay } from "./services/localSession.js";
+import { safePush } from "./services/safePush.js";
+import type { VoucherPayload } from "./types.js";
 import { planBankRows, pushBankPlan, type BankPlan } from "./services/bankToReceipts.js";
 import type { ExtractedBankRow } from "./services/extraction.js";
 import { loadMasters } from "./services/tallyMasters.js";
@@ -684,6 +688,110 @@ app.post("/api/bank/push", async (req, res) => {
       pushBankPlan(TALLY, company, plan),
     );
     res.json({ ok: true, ...result });
+  } catch (e: any) {
+    res.status(503).json({ error: e.message });
+  }
+});
+
+/* ── Local session ────────────────────────────────────────────────────────
+ *
+ * A full round trip against the Tally on THIS machine, with Supabase out of the
+ * picture entirely — see supabaseClient.ts. It is what makes the dummy company
+ * useful: every write path the rebuild added can be exercised end to end, and
+ * nothing can reach the shared mirror while it is.
+ *
+ * These routes deliberately do NOT read or write Supabase. The write still goes
+ * through `safePush`, so it is guarded, serialised and read back exactly as a
+ * queued push would be — testing an easier path than the real one would prove
+ * nothing.
+ */
+app.get("/api/local/status", async (_req, res) => {
+  try {
+    const companies = convertCompanies(await tallyPost(TALLY, HEALTH_XML, 10_000));
+    res.json({
+      ok: true,
+      role: tallyRole(),
+      offline: isOffline(),
+      offlineReason: offlineReason(),
+      filedThrough: process.env.MKCP_FILED_THROUGH || null,
+      company: companies[0]?.name ?? null,
+      companies: companies.map((c) => c.name),
+      tallyUrl: TALLY,
+    });
+  } catch (e: any) {
+    res.status(503).json({ ok: false, error: `Tally is not answering on ${TALLY}: ${e.message}` });
+  }
+});
+
+app.get("/api/local/vouchers", async (req, res) => {
+  const date = String(req.query.date ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: "date=YYYY-MM-DD required" });
+  }
+  if (isTallyBusy()) return res.status(409).json({ error: "Tally is busy — try again in a moment" });
+  try {
+    const company = String(req.query.company ?? "")
+      || convertCompanies(await tallyPost(TALLY, HEALTH_XML, 10_000))[0]?.name;
+    if (!company) return res.status(503).json({ error: "No company open in Tally" });
+    const vouchers = await vouchersOnDay(TALLY, company, date);
+    res.json({ ok: true, company, date, count: vouchers.length, vouchers });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** Ledgers and items, for pickers. Names must match Tally EXACTLY — a
+ *  near-miss is dropped silently rather than refused. */
+app.get("/api/local/masters", async (req, res) => {
+  if (isTallyBusy()) return res.status(409).json({ error: "Tally is busy — try again in a moment" });
+  try {
+    const company = String(req.query.company ?? "")
+      || convertCompanies(await tallyPost(TALLY, HEALTH_XML, 10_000))[0]?.name;
+    if (!company) return res.status(503).json({ error: "No company open in Tally" });
+    const m = await loadMasters(TALLY, company);
+    res.json({
+      ok: true,
+      company,
+      ledgers: [...m.ledgers.values()].map((l) => ({
+        name: l.name, parent: l.parent, state: l.state, gstin: l.gstin,
+      })),
+      items: [...m.items.values()].map((i) => ({
+        name: i.name, baseUnit: i.baseUnit, closingRate: i.closingRate, closingStock: i.closingStock,
+      })),
+      voucherTypes: [...m.voucherTypes],
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Create, alter, cancel or delete one voucher against the local Tally.
+ *
+ * Through `safePush` — guarded, serialised and read back. The whole point of a
+ * dummy session is to exercise the REAL path; a route that posted raw XML would
+ * be testing something the app never does.
+ */
+app.post("/api/local/push", async (req, res) => {
+  const payload = req.body?.payload as VoucherPayload | undefined;
+  if (!payload || !payload.voucherType) {
+    return res.status(400).json({ error: "payload required" });
+  }
+  if (isTallyBusy()) return res.status(409).json({ error: "Tally is busy — try again in a moment" });
+  try {
+    const company = String(req.body?.company ?? "")
+      || convertCompanies(await tallyPost(TALLY, HEALTH_XML, 10_000))[0]?.name;
+    if (!company) return res.status(503).json({ error: "No company open in Tally" });
+    const result = await withTally(TALLY, `local ${payload.action ?? "Create"}`, () =>
+      safePush(TALLY, company, payload));
+    res.json({
+      ok: result.ok,
+      stage: result.stage,
+      voucherId: result.voucherId,
+      errors: result.errors,
+      warnings: result.warnings,
+      differences: result.differences,
+    });
   } catch (e: any) {
     res.status(503).json({ error: e.message });
   }

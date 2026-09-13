@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
 import { postTallySync } from "./localSyncClient.js";
+import { supabaseClient } from "./supabaseClient.js";
 
 // Same WebSocket polyfill used by SupabaseSync
 if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
@@ -106,9 +107,12 @@ export function startRefreshListener(localPort: number, fallbackCompany: string)
     return;
   }
 
-  const supabase = createClient(url, key, {
-    realtime: { params: { eventsPerSecond: 2 } },
-  });
+  const maybeClient = supabaseClient({ realtime: { params: { eventsPerSecond: 2 } } });
+  if (!maybeClient) return;   // offline, or no service key — see supabaseClient.ts
+  /* Re-bound non-null. The helpers below are hoisted FUNCTION DECLARATIONS, and
+     TypeScript will not carry a narrowing into one of those — it cannot prove
+     when they are called. */
+  const supabase = maybeClient;
 
   /** Resolve company from the live source of truth; fall back to the passed
    *  literal if the lookup fails (table empty / network). */

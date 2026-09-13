@@ -3,6 +3,8 @@ import ws from "ws";
 import { isTallyBusy } from "./tallyBusy.js";
 import { postTallySync } from "./localSyncClient.js";
 import { resolveSyncCompany } from "./scheduledSyncs.js";
+import { supabaseClient } from "./supabaseClient.js";
+import { refuseSharedWrite } from "./tallyRole.js";
 
 // Same WebSocket polyfill used by SupabaseSync / refreshListener.
 if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
@@ -55,6 +57,10 @@ export function startNightlySync(localPort: number, fallbackCompany: string): vo
     console.log("🌙 [NIGHTLY] Disabled (NIGHTLY_SYNC_ENABLED=false)");
     return;
   }
+  /* A duplicate company has nothing to mirror. Offline, the upload is a no-op —
+     so this would be a 90-minute full-FY pull that hammers Tally's
+     single-threaded port every midnight and writes nothing at the end of it. */
+  if (refuseSharedWrite("Nightly sync")) return;
   started = true;
 
   const hourRaw = parseInt(process.env.NIGHTLY_SYNC_HOUR ?? "0", 10);
@@ -64,9 +70,9 @@ export function startNightlySync(localPort: number, fallbackCompany: string): vo
   // uses (tally_companies.name). We only build a client if a service key is
   // present in the env (electron.js sets it in packaged builds); otherwise we
   // fall back to the literal — no third hardcoded secret.
-  const url = process.env.SUPABASE_URL || "https://vmkytsytxlofjyeotmgb.supabase.co";
-  const key = process.env.SUPABASE_SERVICE_KEY;
-  const supabase = key ? createClient(url, key) : null;
+  /* Null when offline or unconfigured — the nightly job still runs against
+     Tally, it just cannot log a failure row. See supabaseClient.ts. */
+  const supabase = supabaseClient();
 
   /* One definition of "which company", shared with the scheduled syncs — see
      resolveSyncCompany. Two inlined copies of this lookup are two chances to

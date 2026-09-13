@@ -25,6 +25,7 @@ import { safePush } from "./safePush.js";
 import { isTallyBusy } from "./tallyBusy.js";
 import type { VoucherPayload, PushResult } from "../types.js";
 import { refuseSharedWrite } from "./tallyRole.js";
+import { supabaseClient } from "./supabaseClient.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────────
 const POLL_MS = 4000;          // fallback/heartbeat tick
@@ -395,7 +396,8 @@ export function startPushAgent(opts: { tallyUrl: string }): void {
   }
 
   try {
-    client = createClient(url, key, { auth: { persistSession: false } });
+    client = supabaseClient();
+    if (!client) return;   // offline, or no service key — see supabaseClient.ts
   } catch (err: any) {
     console.error(`[pushAgent] Failed to init Supabase client: ${err.message}`);
     return;
