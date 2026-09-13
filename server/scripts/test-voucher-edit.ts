@@ -62,6 +62,7 @@ async function vouchersToday(company: string): Promise<string[]> {
 <NATIVEMETHOD>Date</NATIVEMETHOD><NATIVEMETHOD>VoucherNumber</NATIVEMETHOD>
 <NATIVEMETHOD>VoucherTypeName</NATIVEMETHOD><NATIVEMETHOD>MasterId</NATIVEMETHOD>
 <NATIVEMETHOD>IsCancelled</NATIVEMETHOD><NATIVEMETHOD>PartyLedgerName</NATIVEMETHOD>
+<NATIVEMETHOD>Narration</NATIVEMETHOD>
 <FILTER>MkVeF</FILTER></COLLECTION>
 <SYSTEM TYPE="Formulae" NAME="MkVeF">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${STAMP}</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
@@ -107,6 +108,7 @@ async function remove(company: string, remoteId: string): Promise<void> {
     { cwd: WEB, stdio: "inherit", shell: true });
 
   const create: VoucherPayload = JSON.parse(readFileSync(join(dir, "ve.create.json"), "utf8"));
+  const alter: VoucherPayload = JSON.parse(readFileSync(join(dir, "ve.alter.json"), "utf8"));
   const cancel: VoucherPayload = JSON.parse(readFileSync(join(dir, "ve.cancel.json"), "utf8"));
 
   // Recorded BEFORE the push, so cleanup runs even if something throws part way.
@@ -133,6 +135,29 @@ async function remove(company: string, remoteId: string): Promise<void> {
     if (before.length !== 1) throw new Error("nothing to cancel");
     const masterId = fld(before[0], "MASTERID");
     ok("and is not cancelled", /^no$/i.test(fld(before[0], "ISCANCELLED")), fld(before[0], "ISCANCELLED"));
+
+    H("ALTER — correcting the narration");
+    /* Narration moves no money and changes no period, which makes it the right
+       field to prove the Alter path with. It is ALSO the one field safePush's
+       read-back diff does not compare — it checks ledger entries, bills and
+       stock — so if Tally quietly discarded the new text nothing downstream
+       would notice. Checked directly here for exactly that reason. */
+    const pAlt = await safePush(U, company, alter);
+    ok(`${number} altered`, pAlt.ok,
+      pAlt.ok ? "guarded and read back" : (pAlt.errors ?? []).concat(pAlt.differences ?? []).join("; ").slice(0, 140));
+
+    const altered = mine(await vouchersToday(company), number);
+    ok("still exactly one voucher — altered, not duplicated", altered.length === 1,
+      `${altered.length} found`);
+    if (altered.length === 1) {
+      ok("the narration actually changed in the books",
+        fld(altered[0], "NARRATION") === alter.narration,
+        `stored "${fld(altered[0], "NARRATION")}"`);
+      ok("it kept its MASTERID through the alter",
+        fld(altered[0], "MASTERID") === masterId,
+        `${masterId} → ${fld(altered[0], "MASTERID")}`);
+      ok("and its number", fld(altered[0], "VOUCHERNUMBER") === number);
+    }
 
     H("CANCEL");
     const p2 = await safePush(U, company, cancel);
