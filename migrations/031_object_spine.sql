@@ -1,0 +1,69 @@
+-- Migration 031: the object spine — orders, bills, loads, instruments.
+--
+-- APPLIED 13-Sep-2026 as Supabase migration
+-- `object_spine_orders_bills_loads_instruments` (version 20260913...).
+-- Confirmed on the live schema: 4 tables (25/24/20/19 columns) and 2 views.
+--
+-- ── Why these tables exist ────────────────────────────────────────────────
+--
+-- The app is organised by DATA TYPE — invoices, ledgers, prices. The business
+-- is organised by THINGS THAT HAVE A LIFE. The Tally mirror stays the ledger of
+-- record; these carry the states Tally does not model.
+--
+-- Orders is the clearest case. The app models two states (pending, billed) and
+-- the three it is missing are exactly where the work happens: `loaded` is the
+-- warehouse's whole job, `delivered` is where discrepancies are found,
+-- `settled` is where collections live.
+--
+-- ── Two rules every table here obeys ──────────────────────────────────────
+--
+-- 1. DERIVED AND TYPED ARE SEPARATE COLUMNS (G10). Every row records what the
+--    derivation computed AND, separately, what a person said. A re-run
+--    overwrites the first and never the second. Hand adjustment is frequent
+--    here, and a recomputation that eats a correction destroys confidence in
+--    every number on the screen. Read `effective_state` from the _v views:
+--    reading `state` directly silently ignores the operator.
+--
+--    Verified by doing it, 13-Sep-2026: an operator_state of 'closed' was set
+--    on a bill the derivation called 'part_settled', the full derivation was
+--    re-run, and the override survived — 948 rows before and after, no
+--    duplicates, effective_state still 'closed'.
+--
+-- 2. THE EVIDENCE TRAVELS WITH THE ROW. `derived_from` says what produced this
+--    state, including when a fallback was used. A derived object with no stated
+--    basis is an assertion, and this codebase has been burned by assertions
+--    that looked like facts.
+--
+-- ── On the company key ────────────────────────────────────────────────────
+--
+-- These key on `company` (text), matching every existing table, NOT on the
+-- stable company_id of Phase 0.1. Deliberate: a half-and-half schema is worse
+-- than a consistent one, and the company_id change should be a single sweep
+-- rather than a boundary someone has to remember. Tally renames the company
+-- every 1 April and has already forked the key once.
+--
+-- The DDL as applied is reproduced below; see the Supabase migration for the
+-- authoritative copy.
+
+-- (Body identical to the applied migration. Tables: mkcp_orders, mkcp_bills,
+--  mkcp_loads, mkcp_instruments. Views: mkcp_orders_v, mkcp_bills_v — each
+--  exposing effective_state = COALESCE(operator_state, state) and
+--  operator_disagrees.)
+--
+-- Derivation: server/scripts/derive-objects.ts (dry run by default, --write to
+-- upsert). First pass, 13-Sep-2026: 948 bills from 1,941 named allocations —
+-- 83 raised, 20 ageing, 125 part-settled, 720 closed; 492 receivable, 456
+-- payable; ₹1,33,36,762 open. Closed bills net to ₹1 across 720 rows, which is
+-- the arithmetic checking itself.
+--
+-- What that first pass is NOT sure about, recorded rather than smoothed:
+--   106  settled against a bill never raised in this mirror. The examples name
+--        themselves — 1349/25-26, 1345/25-26, 1347/25-26 — PRIOR-YEAR bills;
+--        the mirror holds FY26-27 only. Stored with a NULL raised_amount
+--        rather than an invented opening figure.
+--     1  settled for more than raised (S.K CYCLES / B456). A real question for
+--        the operator, not a rounding artifact.
+--   948  no BILLCREDITPERIOD, so all fell back to the 20-day modal — because
+--        the mirror predates the converter fix that reads it. Every such row
+--        says so in derived_from, and a re-run after a full voucher sync
+--        collapses this to near zero.
