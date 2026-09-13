@@ -82,6 +82,9 @@ export async function probe(tallyUrl: string, timeoutMs = 10_000): Promise<boole
  * Tally *answered* (a rejected voucher) should be returned normally by `fn`, not
  * thrown, so it does not look like the port died.
  */
+/** The label of the call currently executing, or null. See the nesting note. */
+let inside: string | null = null;
+
 export async function withTally<T>(tallyUrl: string, label: string, fn: () => Promise<T>): Promise<T> {
   if (state === "open") {
     // Give recovery a chance before refusing. Until this existed the circuit
@@ -97,9 +100,26 @@ export async function withTally<T>(tallyUrl: string, label: string, fn: () => Pr
     }
   }
 
+  /* NESTING THIS DEADLOCKS, so say so instead of hanging.
+     Calls are serialised through `chain`: the outer call holds it until `fn`
+     resolves, so a `withTally` INSIDE `fn` queues behind a link that can never
+     advance, and the request simply stops — no error, no timeout until the
+     client gives up. That is exactly what two new routes did by wrapping
+     `safePush`, which already goes through this gate itself.
+     Single-threaded, and `fn` runs exclusively, so a flag is enough to tell a
+     nested call from a merely concurrent one. */
+  if (inside) {
+    throw new Error(
+      `withTally("${label}") was called inside withTally("${inside}"). ` +
+      `Nesting deadlocks — the inner call queues behind the outer, which cannot finish. ` +
+      `safePush and pushBankPlan already go through the gate; call them directly.`,
+    );
+  }
+
   const run = chain.then(async () => {
     // Re-check inside the queue: the request ahead of us may have broken it.
     if (state === "open") throw new TallyUnavailableError(lastFailure?.reason ?? "a previous request failed");
+    inside = label;
     try {
       const out = await fn();
       consecutiveFailures = 0;
@@ -113,6 +133,7 @@ export async function withTally<T>(tallyUrl: string, label: string, fn: () => Pr
       }
       throw e;
     } finally {
+      inside = null;
       if (SETTLE_MS > 0) await new Promise(r => setTimeout(r, SETTLE_MS));
     }
   });
