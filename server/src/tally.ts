@@ -1,6 +1,7 @@
 import * as http from "node:http";
 import { URL } from "node:url";
 import { XMLParser } from "fast-xml-parser";
+import { recordTallyCall, classify, truncateForLog } from "./services/tallyLog.js";
 
 // ─────────────────────────────────────────────────────────────────────
 // XML Parser ───────────────────────────────────────────────────────────
@@ -117,6 +118,44 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
             ? body.match(/<LINEERROR>([^<]*)/)?.[1] || "unknown"
             : null;
           if (lineError) console.error(`[tally] ✗  TALLY ERROR: ${lineError}`);
+
+          /* ── The exception log (guardrail P8) ──────────────────────────────
+             Recorded HERE because this is the single chokepoint every request
+             shape passes through — reads and writes alike. Today a read failure
+             leaves only a console line naming the chunk, and a write failure
+             loses its request XML entirely, so there is no record anywhere of
+             WHICH shapes fail. Full bodies are kept on a failure only; a
+             success keeps a digest, because 3,000 successful vouchers a day
+             would bury the interesting rows. Never throws. */
+          {
+            const verdict = classify(body);
+            const num = (tag: string) => {
+              const m = body.match(new RegExp(`<${tag}>(\d+)</${tag}>`, "i"));
+              return m ? Number(m[1]) : undefined;
+            };
+            const isImport = /<TALLYREQUEST>\s*Import/i.test(xml);
+            const bad = verdict.outcome !== "ok";
+            recordTallyCall({
+              at: new Date().toISOString(),
+              label,
+              kind: isImport ? "Import" : (xml.match(/<TYPE>([^<]+)<\/TYPE>/i)?.[1] ?? "Collection"),
+              objectType: xml.match(/<COLLECTION[^>]*>\s*<TYPE>([^<]+)<\/TYPE>/i)?.[1],
+              fields: [...xml.matchAll(/<NATIVEMETHOD>([^<]+)<\/NATIVEMETHOD>/gi)].map((m) => m[1]),
+              filter: xml.match(/<SYSTEM[^>]*NAME="[^"]*"[^>]*>([\s\S]*?)<\/SYSTEM>/i)?.[1],
+              timeoutMs,
+              elapsedMs: ms,
+              bytesIn: totalBytes,
+              outcome: verdict.outcome,
+              note: verdict.note,
+              created: num("CREATED"),
+              altered: num("ALTERED"),
+              deleted: num("DELETED"),
+              errors: num("ERRORS"),
+              exceptions: num("EXCEPTIONS"),
+              lineErrors: lineError ? [lineError] : undefined,
+              ...(bad ? { requestXml: truncateForLog(xml), responseXml: truncateForLog(body) } : {}),
+            });
+          }
 
           if (rawMode) return settle(() => resolve(body));
 
