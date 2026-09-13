@@ -222,6 +222,17 @@ export interface ReadOutcome<T> {
   emptyFromTally: boolean;
   /** True when Tally returned a payload our parser could not read. */
   unparsed: boolean;
+  /**
+   * True when the response has no DATA node at all — an error-shaped
+   * envelope, not a result.
+   *
+   * This was the hole in the guardrail. Without it, a response carrying no
+   * DATA node produced `emptyFromTally: false, unparsed: false, rows: []` and
+   * a note reading "0 row(s)." — which is precisely the undifferentiated
+   * silence G7 exists to abolish, reported by the function written to abolish
+   * it. Found by the edge-case catalogue, 13-Sep-2026.
+   */
+  noDataNode: boolean;
   bytes: number;
   note: string;
 }
@@ -234,19 +245,27 @@ export function readCollection<T>(
   const blocks = blocksOf(xml, tag);
   const rows = blocks.map(parse).filter((r): r is T => r !== null);
   const hasDataNode = /<DATA>/i.test(xml);
+  const noDataNode = !hasDataNode;
   const emptyFromTally = hasDataNode && blocks.length === 0;
   const unparsed = blocks.length > 0 && rows.length === 0;
+  const lineError = xml.match(/<LINEERROR>([^<]*)/)?.[1];
 
   return {
     rows,
     emptyFromTally,
     unparsed,
+    noDataNode,
     bytes: xml.length,
-    note: unparsed
-      ? `Tally returned ${blocks.length} <${tag}> block(s) and the parser read none of them. ` +
-        `This is a PARSER failure, not an empty result.`
-      : emptyFromTally
-        ? `Tally returned no <${tag}> objects. The request reached it and the answer was empty.`
-        : `${rows.length} row(s).`,
+    note: lineError
+      ? `Tally reported an error: ${lineError}. Nothing was read, and nothing was empty.`
+      : noDataNode
+        ? `The response has no <DATA> node — this is an error-shaped envelope, not a result. ` +
+          `Every convertX() returns an empty array for this shape, which looks identical to success.`
+        : unparsed
+          ? `Tally returned ${blocks.length} <${tag}> block(s) and the parser read none of them. ` +
+            `This is a PARSER failure, not an empty result.`
+          : emptyFromTally
+            ? `Tally returned no <${tag}> objects. The request reached it and the answer was empty.`
+            : `${rows.length} row(s).`,
   };
 }
