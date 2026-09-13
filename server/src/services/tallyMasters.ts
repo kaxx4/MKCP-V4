@@ -226,7 +226,7 @@ export async function loadMasters(
    * The response also opens with a COUNT summary (`<STOCKGROUP>28</STOCKGROUP>`)
    * that is not an object at all; requiring the attribute skips it.
    *
-   * The  matters: the tag is `<STOCKGROUP NAME="..." RESERVEDNAME="">`, and a
+   * The \b matters: the tag is `<STOCKGROUP NAME="..." RESERVEDNAME="">`, and a
    * greedy `[^>]*NAME="` happily matches the tail of RESERVEDNAME instead,
    * capturing an empty string and dropping every group on the floor.
    */
