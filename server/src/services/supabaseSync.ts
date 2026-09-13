@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
 import { supabaseClient } from "./supabaseClient.js";
+import { emitMirrorChanges } from "./mirrorSignal.js";
 
 // Polyfill WebSocket for Node.js 20 (Supabase needs it for realtime)
 if (typeof globalThis !== 'undefined' && !globalThis.WebSocket) {
@@ -205,6 +206,31 @@ export class SupabaseSync {
       for (let i = 0; i < vouchers.length; i += BATCH_SIZE) {
         const batch = vouchers.slice(i, i + BATCH_SIZE);
         await this.upsertBatch("tally_vouchers", batch);
+      }
+
+      /* ── Say WHICH vouchers moved (Phase 4.2) ────────────────────────────
+         Emitted AFTER the upsert, never before: a client that reacts instantly
+         must not be sent looking for a row that has not landed. Never throws,
+         and stays silent above a ceiling — a full sync rewrites every voucher,
+         and 2,792 individual hints would cost more than the single reload they
+         were meant to replace. A client that misses or ignores all of this does
+         exactly what it does today. See services/mirrorSignal.ts. */
+      const signal = await emitMirrorChanges(
+        this.client,
+        company,
+        vouchers.map((v: any) => ({
+          table: "tally_vouchers",
+          pk: String(v.guid),
+          // Upserts, so an existing voucher is an update and a new one an
+          // insert — indistinguishable from here, and the client treats both
+          // the same way (fetch that row). "update" is the honest label for
+          // "this row now differs from what you hold".
+          op: "update" as const,
+          version: typeof v.alter_id === "number" ? v.alter_id : null,
+        })),
+      );
+      if (signal.suppressed || signal.emitted === 0) {
+        console.log(`[Supabase] mirror signals: ${signal.note}`);
       }
 
       // Extract and sync denormalized ledger and inventory entries
