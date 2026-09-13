@@ -474,11 +474,44 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
           isdeemedpositive: txt(e.ISDEEMEDPOSITIVE) === "Yes",
           ispartyledger,
           amount: txt(e.AMOUNT, "0"),
-          billallocations: arr(e["BILLALLOCATIONS.LIST"] ?? e.BILLALLOCATIONS).map((b: any) => ({
-            name: txt(b.NAME),
-            billtype: txt(b.BILLTYPE, "New Ref"),
-            amount: txt(b.AMOUNT, "0"),
-          })),
+          /* ── Bill allocations ────────────────────────────────────────────
+             Measured on 1-Sep-2026: Tally returned 300 BILLALLOCATIONS.LIST
+             blocks and only **32 were populated**. The rest are the empty
+             placeholder shape — the same one that makes a wide voucher pull
+             return unpopulated entry lists.
+
+             This code turned every one of those placeholders into a bill:
+             `txt(b.NAME)` gave "", `txt(b.BILLTYPE, "New Ref")` INVENTED a
+             bill type, and `txt(b.AMOUNT, "0")` invented an amount. The
+             mirror's consequence, measured: 7,621 "New Ref" lines of which
+             **6,779 have a blank name** — roughly 89% phantoms. Anything
+             counting receivables from this table was counting mostly noise,
+             and the Bill object could not be derived at all.
+
+             Two changes. Placeholders are dropped rather than materialised,
+             and BILLTYPE is no longer defaulted — "New Ref" means "this raises
+             a new receivable", which is far too consequential a thing to
+             assume about a block that said nothing.
+
+             Also now read, because the Bill object needs them and Tally has
+             been sending them all along: BILLDATE, BILLID, and
+             BILLCREDITPERIOD — credit terms live on the ALLOCATION, not on the
+             party, which is why a party-level credit period never matched. */
+          billallocations: arr(e["BILLALLOCATIONS.LIST"] ?? e.BILLALLOCATIONS)
+            .map((b: any) => ({
+              name: txt(b.NAME),
+              billtype: txt(b.BILLTYPE),
+              amount: txt(b.AMOUNT),
+              billdate: txt(b.BILLDATE),
+              billid: parseInt(txt(b.BILLID) || "0", 10) || null,
+              // "14 Days" / "20 Days" as Tally writes it. Kept verbatim rather
+              // than parsed to a number here — the domain layer owns that.
+              creditperiod: txt(b.BILLCREDITPERIOD),
+            }))
+            /* A block with no name AND no type AND no amount is a placeholder,
+               not a bill. Requiring a TYPE specifically: a real allocation
+               always states whether it raises, settles, or sits on account. */
+            .filter((b: any) => b.billtype !== "" || b.name !== "" || b.amount !== ""),
         };
       });
 
