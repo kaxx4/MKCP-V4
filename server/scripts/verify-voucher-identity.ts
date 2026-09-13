@@ -31,6 +31,7 @@ import { buildCollectionXml } from "../src/services/xmlBuilder.js";
 import { convertVouchers } from "../src/converters/convert.js";
 import { TRANSACTION_COLLECTIONS } from "../src/config/collections.js";
 import { SupabaseSync } from "../src/services/supabaseSync.js";
+import { announceVerifyContext } from "../src/services/verifyContext.js";
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";
@@ -67,8 +68,17 @@ async function main(): Promise<void> {
     process.exit(fails === 0 ? 0 : 1);
   }
 
-  console.log("\n  Syncing via SupabaseSync.syncVouchers…");
-  await new SupabaseSync().syncVouchers(vs, COMPANY);
+  /* This script used to call syncVouchers and then count rows, which is only
+     a real check when this process can actually write. Under
+     MKCP_TALLY_ROLE=sandbox the sync is a silent no-op and the counts come
+     from whatever the separately-running agent happened to have written — a
+     green result nobody earned. See services/verifyContext.ts. */
+  console.log("");
+  const ctx = announceVerifyContext("landing check");
+  if (ctx.canWrite) {
+    console.log("  Syncing via SupabaseSync.syncVouchers…");
+    await new SupabaseSync().syncVouchers(vs, COMPANY);
+  }
 
   const sb = createClient(SB_URL, SB_KEY, { auth: { persistSession: false } });
 

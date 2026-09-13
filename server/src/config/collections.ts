@@ -52,6 +52,14 @@ export const MASTER_COLLECTIONS: CollectionDef[] = [
       // value. services/tallyMasters.ts already proves Tally serves these.
       "ClosingBalance", "ClosingRate", "ClosingValue",
       "GSTApplicable", "GSTTypeOfSupply", "GSTDetails", "HSNDetails", "GUID",
+      // convertStockItems reads these four (convert.ts:279-282) and mapStockItem
+      // writes them to four Supabase columns — but they were never in this list,
+      // so Tally was never asked and all four columns were permanently empty.
+      // Guardrail G4. Probed one field at a time before adding, because a bad
+      // fetch field can crash TallyPrime: all four are served and populated on
+      // 489 of 489 items (server/scripts/probe-stockitem-fields.ts, 13-Sep-2026 —
+      // "Avg. Cost", "Avg. Price", "No", "No").
+      "CostingMethod", "ValuationMethod", "IsBatchWiseOn", "IsCostCentresOn",
     ],
     timeout: 900_000,
     parallel: false,

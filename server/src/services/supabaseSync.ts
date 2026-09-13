@@ -666,6 +666,20 @@ export class SupabaseSync {
    * A master without a real GUID is a phantom, so we skip it rather than
    * invent an id for it. Genuine Tally master syncs always carry a GUID, so
    * this is inert on the real path.
+   *
+   * ── Extended to every master type, 13-Sep-2026 ───────────────────────────
+   *
+   * It guarded only stock items and ledgers, which is where the damage had
+   * been SEEN — but the same `POST /api/supabase/sync` path forwards stock
+   * groups, units, godowns and cost centres from the browser with exactly the
+   * same name-derived canonical ids, so those four could still create
+   * name-keyed phantoms. They had not yet, which is not the same as being
+   * safe. Guardrail G5.
+   *
+   * Verified inert before extending it: every master type Tally serves carries
+   * a real GUID — stock groups 22/22, units 9/9, godowns 1/1, ledgers 482/482,
+   * stock items 489/489, cost centres 0 of 0 (this company has none). So the
+   * guard drops nothing real and blocks only the browser-forwarded path.
    */
   private hasRealGuid(m: any): boolean {
     return !!(m?.guid || "").trim();
@@ -680,6 +694,7 @@ export class SupabaseSync {
 
   private mapStockGroup(m: any, company: string): any {
     if (!m.name) return null;
+    if (!this.hasRealGuid(m)) return null; // see hasRealGuid — phantom-master guard
     return {
       guid: this.safeGuid(m.guid, company, m.name),
       company,
@@ -692,6 +707,7 @@ export class SupabaseSync {
 
   private mapUnit(m: any, company: string): any {
     if (!m.name) return null;
+    if (!this.hasRealGuid(m)) return null; // see hasRealGuid — phantom-master guard
     return {
       guid: this.safeGuid(m.guid, company, m.name),
       company,
@@ -708,6 +724,7 @@ export class SupabaseSync {
 
   private mapGodown(m: any, company: string): any {
     if (!m.name) return null;
+    if (!this.hasRealGuid(m)) return null; // see hasRealGuid — phantom-master guard
     return {
       guid: this.safeGuid(m.guid, company, m.name),
       company,
@@ -720,6 +737,7 @@ export class SupabaseSync {
 
   private mapCostCentre(m: any, company: string): any {
     if (!m.name) return null;
+    if (!this.hasRealGuid(m)) return null; // see hasRealGuid — phantom-master guard
     return {
       guid: this.safeGuid(m.guid, company, m.name),
       company,
