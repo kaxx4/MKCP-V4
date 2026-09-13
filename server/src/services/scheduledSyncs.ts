@@ -36,9 +36,15 @@
  *   Last 7 days  every SCHEDULED_SYNC_WEEK_MINUTES    (default off)
  *   This FY      every SCHEDULED_SYNC_FY_MINUTES      (default off)
  *
- * The defaults match what the renderer shipped with, so moving this changes the
- * cadence for nobody. `0` disables one, as it always did. The FY window is off
- * by default because it is heavy — the nightly job already covers it.
+ * The intervals match what the renderer shipped with, so enabling this changes
+ * the cadence for nobody. `0` disables one, as it always did. The FY window is
+ * off by default because it is heavy — the nightly job already covers it.
+ *
+ * ⚠ THE WHOLE THING IS OFF UNLESS SCHEDULED_SYNC_ENABLED=true, and refuses
+ * outright on a machine declared MKCP_TALLY_ROLE=sandbox. Two machines share
+ * one Supabase mirror and a Tally duplicate carries the same company name as
+ * the original, so a sync from the wrong machine overwrites real vouchers with
+ * a copy's — and nothing downstream can tell. See tallyRole.ts.
  *
  * ── Collisions are already handled ────────────────────────────────────────
  *
@@ -50,6 +56,7 @@
  */
 import { createClient } from "@supabase/supabase-js";
 import { postTallySync } from "./localSyncClient.js";
+import { refuseSharedWrite } from "./tallyRole.js";
 
 let started = false;
 
@@ -182,6 +189,8 @@ export async function runScheduledWindow(
   /* Stand down if this window was already refreshed recently — by the renderer's
      own scheduler, by the nightly job, or by someone pressing Sync. Half the
      interval, so a genuinely due tick still fires while a duplicate does not. */
+  if (refuseSharedWrite(`Scheduled sync "${w.label}"`)) return "skipped";
+
   const since = minutesSinceDaybookSync(company);
   if (since < w.everyMinutes / 2) {
     console.log(`⏱  [SCHEDULED] ⏭ ${w.label} skipped — synced ${since.toFixed(0)}m ago`);
@@ -234,8 +243,18 @@ export async function runScheduledWindow(
  */
 export function startScheduledSyncs(port: number, fallbackCompany: string): void {
   if (started) return;
-  if ((process.env.SCHEDULED_SYNC_ENABLED ?? "true").toLowerCase() === "false") {
-    console.log("⏱  [SCHEDULED] Disabled (SCHEDULED_SYNC_ENABLED=false)");
+  /* A COPY OF THE COMPANY MUST NEVER SYNC. Two machines share one mirror and a
+     Tally duplicate carries the same name as the original, so a sync from here
+     would overwrite the real company's vouchers with a copy's — see tallyRole. */
+  if (refuseSharedWrite("Scheduled syncs")) return;
+
+  /* OPT-IN, not opt-out. This was default-on when written, which was wrong: the
+     real machine already syncs through the renderer's own scheduler, so
+     defaulting on adds nothing there while arming a duplicate machine to
+     overwrite the mirror the moment someone starts the agent on it.
+     Turning it on is a deliberate act on the machine that holds the books. */
+  if ((process.env.SCHEDULED_SYNC_ENABLED ?? "false").toLowerCase() !== "true") {
+    console.log("⏱  [SCHEDULED] Off. Set SCHEDULED_SYNC_ENABLED=true on the machine holding the real books.");
     return;
   }
   started = true;
