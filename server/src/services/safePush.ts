@@ -75,7 +75,7 @@ function vouchersOnDateXml(company: string, isoDate: string): string {
 <TYPE>Voucher</TYPE>
 <NATIVEMETHOD>Date</NATIVEMETHOD><NATIVEMETHOD>VoucherNumber</NATIVEMETHOD>
 <NATIVEMETHOD>VoucherTypeName</NATIVEMETHOD><NATIVEMETHOD>Narration</NATIVEMETHOD>
-<NATIVEMETHOD>PartyLedgerName</NATIVEMETHOD>
+<NATIVEMETHOD>PartyLedgerName</NATIVEMETHOD><NATIVEMETHOD>IsCancelled</NATIVEMETHOD>
 <NATIVEMETHOD>AllLedgerEntries</NATIVEMETHOD><NATIVEMETHOD>LedgerEntries</NATIVEMETHOD>
 <NATIVEMETHOD>AllInventoryEntries</NATIVEMETHOD>
 <FILTER>MkVerifyDate</FILTER>
@@ -222,7 +222,8 @@ export async function safePush(
   }
 
   const succeeded =
-    action === "Alter" ? count("ALTERED") > 0 :
+    // Cancel comes back as an alteration, not as its own count.
+    action === "Alter" || action === "Cancel" ? count("ALTERED") > 0 :
     action === "Delete" ? count("DELETED") > 0 :
     result.success || createBecameAlter;
 
@@ -280,6 +281,29 @@ export async function safePush(
     return { ok: false, stage: "verify", voucherId: result.lastVoucherId,
       errors: [`Tally reported the voucher created (id ${result.lastVoucherId}) but it could not be found on read-back.`],
       warnings: guard.warnings, differences: [], requestXml: xml, responseXml, pushResult: result };
+  }
+
+  /* A CANCEL IS VERIFIED BY THE STORED FLAG, NEVER BY THE RESPONSE.
+     `ACTION="Alter"` carrying <ISCANCELLED>Yes</ISCANCELLED> returns altered=1
+     and leaves the voucher ISCANCELLED=No — accepted and discarded (proved in
+     scripts/test-cancel-voucher.ts). Only `ACTION="Cancel"` does anything,
+     and the two are indistinguishable from the response alone. So this reads
+     the flag back rather than trusting a count.
+
+     Diffing the fields would be wrong here as well: a cancelled voucher keeps
+     its number and its place in the sequence but is no longer a posting, so it
+     is SUPPOSED to differ from the payload that addressed it. */
+  if (action === "Cancel") {
+    const isCancelled = /^yes$/i.test(fld(mine, "ISCANCELLED"));
+    return {
+      ok: isCancelled,
+      stage: isCancelled ? "done" : "verify",
+      voucherId: result.lastVoucherId,
+      errors: isCancelled ? [] : [
+        `Tally reported the cancel as applied, but the voucher reads back ISCANCELLED="${fld(mine, "ISCANCELLED") || "(absent)"}". It is still a live posting and still in GSTR-1.`,
+      ],
+      warnings: guard.warnings, differences: [], requestXml: xml, responseXml, pushResult: result,
+    };
   }
 
   const differences = diffStored(payload, mine);

@@ -104,14 +104,18 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters): GuardResult {
 
   // ── A filed return must not change underneath itself ──────────────────────
   const action0 = p.action ?? "Create";
-  if ((action0 === "Alter" || action0 === "Delete") && FILED_THROUGH && p.date <= FILED_THROUGH) {
+  /* Cancel belongs with Alter and Delete everywhere below: it changes a filed
+     return exactly as much as they do (a cancelled invoice leaves GSTR-1), and
+     it needs a REMOTEID exactly as much, because Tally has no other handle. */
+  const CHANGES_EXISTING = new Set(["Alter", "Cancel", "Delete"]);
+  if (CHANGES_EXISTING.has(action0) && FILED_THROUGH && p.date <= FILED_THROUGH) {
     if (!p.allowFiledPeriodEdit) {
       errors.push(`${action0} refused: ${p.date} falls in a GST period already filed (through ${FILED_THROUGH}). Changing it would alter a submitted return. Set allowFiledPeriodEdit if the return will be revised.`);
     } else {
       warnings.push(`${action0} on ${p.date} changes a voucher in a FILED period (through ${FILED_THROUGH}) — the return will need revising.`);
     }
   }
-  if ((action0 === "Alter" || action0 === "Delete") && !FILED_THROUGH) {
+  if (CHANGES_EXISTING.has(action0) && !FILED_THROUGH) {
     warnings.push("MKCP_FILED_THROUGH is not set, so filed-period protection is off — an Alter could change an already-submitted return.");
   }
 
@@ -133,7 +137,7 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters): GuardResult {
   // Create instead and returns created=1, which reads as success while
   // duplicating real money. Refuse rather than let that happen.
   const action = p.action ?? "Create";
-  if ((action === "Alter" || action === "Delete") && !p.remoteId) {
+  if (CHANGES_EXISTING.has(action) && !p.remoteId) {
     errors.push(`${action} requires a remoteId — Tally addresses existing vouchers by REMOTEID. Without one it would silently create a duplicate instead of changing anything.`);
   }
   if (action === "Create" && !p.remoteId) {

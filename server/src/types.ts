@@ -187,8 +187,24 @@ export interface VoucherPayload {
    * makes a re-pushed voucher idempotent rather than duplicated.
    */
   remoteId?: string;
-  /** Create (default), Alter or Delete. Alter and Delete REQUIRE `remoteId`. */
-  action?: "Create" | "Alter" | "Delete";
+  /**
+   * Create (default), Alter, Cancel or Delete. Everything but Create REQUIRES
+   * `remoteId`.
+   *
+   * ⚠ CANCEL IS AN ACTION, NOT A FLAG. Proved 2026-09-12
+   * (scripts/test-cancel-voucher.ts): `ACTION="Alter"` carrying
+   * `<ISCANCELLED>Yes</ISCANCELLED>` returns `altered=1` — success by every
+   * signal a caller can see — and the voucher comes back `ISCANCELLED=No`. The
+   * flag is accepted and discarded, so anyone reaching for the intuitive shape
+   * would believe they had cancelled an invoice that is still live in the books
+   * and still in GSTR-1.
+   *
+   * `ACTION="Cancel"` works: same MASTERID, same voucher NUMBER, ISCANCELLED=Yes,
+   * no duplicate. Keeping the number is the point — it is what you want for
+   * anything a customer has already seen, where Delete would leave a hole in the
+   * sequence and an invoice number that no longer means anything.
+   */
+  action?: "Create" | "Alter" | "Cancel" | "Delete";
   /**
    * Permit an Alter or Delete against a voucher in a GST period that has already
    * been filed.
