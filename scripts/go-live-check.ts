@@ -60,6 +60,59 @@ function checkRole(): void {
   }
 }
 
+/* ── 1b. Filed-period protection ──────────────────────────────────────── */
+/**
+ * The one unset variable that lets a submitted GST return be changed.
+ *
+ * Without MKCP_FILED_THROUGH the push guard has no idea which periods are
+ * closed, so an Alter dated inside a filed return passes with ZERO errors.
+ * Measured 14-Sep-2026 against the live masters: an Alter of a SALES dated
+ * 2026-07-15 was accepted outright unset, and refused by name once set to
+ * 2026-08-31 (server/scripts/verify-filed-period-gate.ts).
+ *
+ * safePush does warn — on every single write — which is how it has gone
+ * unnoticed. A warning that appears every time is not a warning.
+ *
+ * It is a BLOCKER rather than a caution: revising a filed GST return is a
+ * regulatory event, and the whole point of go-live-check is to refuse to start
+ * in a state where that can happen quietly.
+ */
+function checkFiledPeriod(): void {
+  const raw = (process.env.MKCP_FILED_THROUGH ?? "").trim();
+  if (!raw) {
+    add(
+      "Filed-period protection",
+      "blocked",
+      "MKCP_FILED_THROUGH is not set, so the push guard cannot tell which GST periods are closed. " +
+        "An Alter dated inside a submitted return is accepted with no error at all — verified.",
+      "Set MKCP_FILED_THROUGH in server/.env to the LAST DATE whose GST return has been filed " +
+        "(e.g. MKCP_FILED_THROUGH=2026-08-31). Update it each time a return is filed.",
+    );
+    return;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    add("Filed-period protection", "blocked",
+      `MKCP_FILED_THROUGH="${raw}" is not a YYYY-MM-DD date, so the comparison is meaningless.`,
+      "Use a plain ISO date, e.g. 2026-08-31.");
+    return;
+  }
+  /* A date far in the past protects nothing; one in the future refuses edits to
+     periods nobody has filed yet. Both are worth saying out loud. */
+  const filed = new Date(`${raw}T00:00:00`);
+  const days = Math.floor((Date.now() - filed.getTime()) / 86_400_000);
+  if (days < 0) {
+    add("Filed-period protection", "caution",
+      `MKCP_FILED_THROUGH=${raw} is in the FUTURE, so edits to periods that have not been filed will be refused.`,
+      "Set it to the last date actually filed.");
+  } else if (days > 75) {
+    add("Filed-period protection", "caution",
+      `MKCP_FILED_THROUGH=${raw} is ${days} days old — more than two filing cycles. Anything filed since is unprotected.`,
+      "Update it to the most recently filed period.");
+  } else {
+    add("Filed-period protection", "ready", `Filed through ${raw} — Alters inside that period are refused.`);
+  }
+}
+
 /* ── 2. Offline mode ──────────────────────────────────────────────────── */
 function checkOffline(): void {
   if ((process.env.MKCP_OFFLINE ?? "").trim().toLowerCase() === "true") {
@@ -165,6 +218,7 @@ const MARK: Record<Level, string> = { ready: "  ok  ", blocked: " STOP ", warn: 
 
 async function main(): Promise<void> {
   checkRole();
+  checkFiledPeriod();
   checkOffline();
   checkPushAgent();
   await checkTally();
