@@ -84,6 +84,23 @@ export class SupabaseSync {
     }
   }
 
+  /**
+   * The client, or null when this process must not touch Supabase.
+   *
+   * Exposed for readers that need the mirror to answer a question rather than
+   * to receive a write — the incremental-sync cursor is the first: "what is the
+   * highest AlterID I actually hold" is a question only the mirror can answer,
+   * and it is the difference between resuming correctly after a restart and
+   * silently skipping everything edited while the agent was down.
+   *
+   * Null is a normal answer (offline mode, no service key) and every caller
+   * must handle it — see services/syncCursor.ts, which reports the degraded
+   * cursor rather than pretending it has one.
+   */
+  getClient(): SupabaseClient | null {
+    return this.client;
+  }
+
   async syncMasters(messages: any[], company: string): Promise<void> {
     if (!this.client) return;
     if (!messages || messages.length === 0) return;

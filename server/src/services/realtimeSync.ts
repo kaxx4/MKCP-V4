@@ -30,6 +30,7 @@ import { isTallyBusy } from "./tallyBusy.js";
 import type { SyncOrchestrator } from "./syncOrchestrator.js";
 import type { SupabaseSync } from "./supabaseSync.js";
 import type { AlterIdSnapshot } from "../types.js";
+import { mirrorVoucherWatermark, resolveVoucherCursor, type CursorSource } from "./syncCursor.js";
 
 /**
  * Tuning. Read at CONSTRUCTION, not at import — module-level env constants
@@ -65,6 +66,11 @@ export interface RealtimeStatus {
   vouchersApplied: number;
   skipped: { busy: number; tooMany: number };
   lastError: string | null;
+  /* Where the voucher cursor came from. "tally-now" means restarts can skip
+     edits made while the agent was down — a status a human should be able to
+     see rather than infer from a log line that scrolled past. */
+  cursorSource: CursorSource | null;
+  cursorNote: string | null;
 }
 
 export class RealtimeSync {
@@ -78,7 +84,10 @@ export class RealtimeSync {
     running: false, company: null, cursor: null, ticks: 0,
     lastTickAt: null, lastChangeAt: null, vouchersApplied: 0,
     skipped: { busy: 0, tooMany: 0 }, lastError: null,
+    cursorSource: null, cursorNote: null,
   };
+
+  private cursorSource: CursorSource | null = null;
 
   private readonly opts: Required<RealtimeOptions>;
 
@@ -101,12 +110,34 @@ export class RealtimeSync {
       this.company = convertCompanies(await tallyPost(this.tallyUrl, HEALTH_XML, 10_000))[0]?.name ?? null;
       if (!this.company) { console.warn("[realtime] no company loaded — not starting"); return; }
 
-      // Seed the cursor from where Tally is NOW. Without this the first tick
-      // would report every voucher in the company as "changed".
-      this.cursor = await this.detector.fetchCurrentAlterIds(this.tallyUrl, this.company);
+      const tallyNow = await this.detector.fetchCurrentAlterIds(this.tallyUrl, this.company);
+
+      /* ── Resume from the MIRROR, not from Tally's current mark ─────────────
+         Seeding from `tallyNow` silently declares "everything up to now has
+         been seen", so anything edited while this agent was down — overnight,
+         over a weekend, during an update — sits above the old cursor and below
+         the new one and is never re-read. No error, no log, a permanently wrong
+         mirror for those vouchers.
+
+         That was unavoidable while the cursor lived only in memory. Migration
+         029 put alter_id on tally_vouchers, so the mirror can now answer "what
+         is the highest AlterID I actually hold", which is what resuming means.
+         See services/syncCursor.ts. */
+      const fromMirror = await mirrorVoucherWatermark(this.supabase?.getClient() ?? null, this.company);
+      const origin = resolveVoucherCursor(fromMirror, tallyNow.transactionId);
+
+      this.cursor = { ...tallyNow, transactionId: origin.value };
+      this.cursorSource = origin.source;
       this.detector.updateSnapshot(this.cursor);
       this.status.company = this.company;
+      this.status.cursorSource = origin.source;
+      this.status.cursorNote = origin.note;
+
       console.log(`[realtime] watching "${this.company}" from masters=${this.cursor.masterId} vouchers=${this.cursor.transactionId}, tick ${this.opts.tickMs}ms (vouchers every ${this.opts.voucherEvery})`);
+      console.log(`[realtime] voucher cursor (${origin.source}): ${origin.note}`);
+      if (origin.source !== "mirror") {
+        console.warn(`[realtime] NOT resuming durably — restarts can skip edits until alter_id is populated.`);
+      }
     } catch (e) {
       console.warn(`[realtime] could not establish a baseline: ${(e as Error).message}`);
       return;
