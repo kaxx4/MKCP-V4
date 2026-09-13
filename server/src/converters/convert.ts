@@ -584,6 +584,12 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
         // E-way bill / delivery block. Always present in the export, dropped by
         // this converter until 2026-08-27 — see extractVoucherTransport.
         transport: extractVoucherTransport(v),
+        /* The IRP clock's only input. Empty is the normal, meaningful state:
+           it means this invoice has not been registered yet, and the 30-day
+           window is running. Read as "" rather than defaulted to anything. */
+        irn: txt(v.IRN),
+        irnackno: txt(v.IRNACKNO),
+        irnackdate: txt(v.IRNACKDATE),
         iscancelled: txt(v.ISCANCELLED) === "Yes",
         isoptional: txt(v.ISOPTIONAL) === "Yes",
         effectivedate: txt(v.EFFECTIVEDATE) || txt(v.DATE),
