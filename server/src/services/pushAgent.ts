@@ -24,6 +24,7 @@ import { tallyPost, HEALTH_XML } from "../tally.js";
 import { safePush } from "./safePush.js";
 import { isTallyBusy } from "./tallyBusy.js";
 import type { VoucherPayload, PushResult } from "../types.js";
+import { refuseSharedWrite } from "./tallyRole.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────────
 const POLL_MS = 4000;          // fallback/heartbeat tick
@@ -377,6 +378,14 @@ async function reconcile(): Promise<void> {
 export function startPushAgent(opts: { tallyUrl: string }): void {
   if (state.started) return;
   tallyUrl = opts.tallyUrl || tallyUrl;
+
+  /* A COPY OF THE COMPANY MUST NEVER DRAIN THE SHARED QUEUE.
+     `push_queue` is one table serving both machines. If the agent runs here
+     while this Tally holds a duplicate, it claims real jobs and books them into
+     the COPY — where they are lost — while the queue row reads "succeeded" and
+     the web app reports the invoice as pushed. Nothing anywhere would say the
+     voucher never reached the real books. */
+  if (refuseSharedWrite("Push-queue draining")) return;
 
   const url = process.env.SUPABASE_URL || "https://vmkytsytxlofjyeotmgb.supabase.co";
   const key = process.env.SUPABASE_SERVICE_KEY;

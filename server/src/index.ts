@@ -13,6 +13,7 @@ import { startRefreshListener } from "./services/refreshListener.js";
 import { startPushListener, listPendingPushes, approvePush, rejectPush } from "./services/pushListener.js";
 import { startNightlySync } from "./services/nightlySync.js";
 import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
+import { announceRole } from "./services/tallyRole.js";
 import { planBankRows, pushBankPlan, type BankPlan } from "./services/bankToReceipts.js";
 import type { ExtractedBankRow } from "./services/extraction.js";
 import { loadMasters } from "./services/tallyMasters.js";
@@ -594,6 +595,9 @@ const httpServer = app.listen(PORT, () => {
   startPushListener(company, TALLY);
 
   // Nightly automatic full-FY sync at 00:00 local (configurable via NIGHTLY_SYNC_*).
+  // Say which machine this is before anything writes. Two machines share one
+  // Supabase mirror and the company name cannot tell them apart.
+  announceRole();
   startNightlySync(PORT, company);
   // The recurring quick syncs, which used to run only while the Electron window
   // was open — see scheduledSyncs.ts.
