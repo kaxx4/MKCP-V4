@@ -55,10 +55,16 @@ async function tallyDay(company: string, iso: string): Promise<Set<string>> {
   const out = new Set<string>();
   /* ⚠ MATCH `<VOUCHER ` WITH WHITESPACE, NOT `<VOUCHER\b`.
      Every Tally response opens with a <CMPINFO> preamble of COUNT tags, one of
-     which is literally `<VOUCHER>0</VOUCHER>`. A \b pattern matches that first,
-     and it carries no GUID — so this set came back EMPTY and every mirror row
-     looked like a phantom. That is exactly what this script reported on its
-     first run (58 of them), entirely as an artifact of this regex.
+     which is literally `<VOUCHER>0</VOUCHER>`. A \b pattern matches that too,
+     and it carries no GUID — so a junk entry lands in the parsed list and any
+     count taken from it is one too high.
+
+     Here it changed nothing (the phantom total was 58 before and after the
+     fix), because the entry contributes no GUID to the set either way. It is
+     fixed anyway: the same \b pattern is copied through several harnesses, and
+     in one that counts vouchers rather than filtering them by number it would
+     be an off-by-one that nobody would think to question.
+
      Real voucher elements always carry attributes (REMOTEID, VCHTYPE, VCHKEY);
      the count tag never does. */
   for (const m of raw.matchAll(/<VOUCHER\s[^>]*>[\s\S]*?<\/VOUCHER>/g)) {
