@@ -259,8 +259,12 @@ async function processJob(job: PushJob): Promise<void> {
       : { ...job.payload, remoteId: job.idempotency_key };
 
     const res = await safePush(tallyUrl, job.company, payload);
+    /* The fallback only runs when safePush refused BEFORE reaching Tally — a
+       guard rejection — so nothing was created, altered or deleted. Attributing
+       the outcome to `created` alone would be a guess about which action it
+       was; all three stay zero, which is what actually happened. */
     const result: PushResult = res.pushResult ?? {
-      success: res.ok, created: res.ok ? 1 : 0, errors: res.ok ? 0 : 1,
+      success: res.ok, created: 0, altered: 0, deleted: 0, errors: res.ok ? 0 : 1,
       lastVoucherId: res.voucherId, lineErrors: res.errors, rawResponse: res.responseXml ?? "",
     };
 
