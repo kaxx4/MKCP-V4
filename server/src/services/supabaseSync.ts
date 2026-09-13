@@ -771,6 +771,17 @@ export class SupabaseSync {
       opening_balance: m.openingbalance,
       gstin: m.gstin,
       credit_period: m.creditperiod,
+      /* STATE decides CGST+SGST against IGST on every outward voucher, and the
+         push guard's tax-head rule rests on it — while the mirror it reads from
+         did not carry it at all. Tally has always sent these; convertLedgers
+         has always discarded them. */
+      state: m.state || null,
+      country: m.country || null,
+      pincode: m.pincode || null,
+      mailing_name: m.mailingname || null,
+      address: m.address || null,
+      phone: m.phone || null,
+      email: m.email || null,
       synced_at: new Date().toISOString(),
     };
   }

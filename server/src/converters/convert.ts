@@ -322,6 +322,29 @@ export function convertLedgers(parsed: any): { tallymessage: any[] } {
         gstin: txt(l.PARTYGSTIN) || txt(l.GSTIN) || txt(l.LEDGSTIN),
         creditperiod: txt(l.CREDITPERIOD) || txt(l.BILLCREDITPERIOD),
         guid: txt(l.GUID),
+        /* ── Fetched since forever, read for the first time ────────────────
+           collections.ts has always asked Tally for these seven fields and
+           this function has always ignored them.
+
+           STATE is the one that matters: it decides CGST+SGST against IGST on
+           every outward voucher, and pushGuard's entire tax-head rule rests on
+           it — while the mirror the guard reads from did not carry it. 399 of
+           482 ledgers have one.
+
+           The rest are already on the wire and the call list needs them.
+           Guardrail G4: a fetched field is stored, or documented as
+           deliberately dropped. */
+        state: txt(l.LEDSTATENAME),
+        country: txt(l.COUNTRYNAME),
+        pincode: txt(l.PINCODE),
+        mailingname: txt(l.MAILINGNAME),
+        address: (() => {
+          // Tally returns ADDRESS as a .LIST of lines, not a scalar.
+          const lines = arr(l["ADDRESS.LIST"]?.ADDRESS ?? l.ADDRESS);
+          return lines.map((x: any) => txt(x)).filter(Boolean).join(", ");
+        })(),
+        phone: txt(l.LEDGERPHONE) || txt(l.LEDGERMOBILE),
+        email: txt(l.EMAIL),
       };
     }).filter(Boolean),
   };
