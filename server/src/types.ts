@@ -262,6 +262,12 @@ export interface PushResult {
   /** An Alter, and also a Cancel — Tally reports a cancel as an alteration. */
   altered: number;
   deleted: number;
+  /**
+   * Tally accepted the request and refused the CONTENT without saying why.
+   * The silent-failure signature: EXCEPTIONS=1, ERRORS=0, no LINEERROR.
+   * It was previously not read at all, so such a voucher reported success.
+   */
+  exceptions: number;
   errors: number;
   lastVoucherId: string | null;
   lineErrors: string[];

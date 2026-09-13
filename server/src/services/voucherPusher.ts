@@ -351,6 +351,7 @@ export function parseImportResponse(rawXml: string): PushResult {
   let created = 0;
   let altered = 0;
   let deleted = 0;
+  let exceptions = 0;
   let errCount = lineErrors.length;
   let lastVchId: string | null = null;
 
@@ -369,6 +370,10 @@ export function parseImportResponse(rawXml: string): PushResult {
       // alteration, never under a count of its own.
       altered  = parseInt(String(importResult.ALTERED  ?? "0"), 10) || 0;
       deleted  = parseInt(String(importResult.DELETED  ?? "0"), 10) || 0;
+      // EXCEPTIONS is the signal that means "Tally accepted the request and
+      // refused the CONTENT, and will not say why". It was not read at all —
+      // so a voucher rejected this way reported success=true with errors=0.
+      exceptions = parseInt(String(importResult.EXCEPTIONS ?? "0"), 10) || 0;
       errCount = parseInt(String(importResult.ERRORS   ?? "0"), 10);
       lastVchId = importResult.LASTVCHID ? String(importResult.LASTVCHID) : null;
     } else {
@@ -379,6 +384,8 @@ export function parseImportResponse(rawXml: string): PushResult {
       if (alteredMatch) altered = parseInt(alteredMatch[1], 10) || 0;
       const deletedMatch = rawXml.match(/<DELETED>(\d+)<\/DELETED>/);
       if (deletedMatch) deleted = parseInt(deletedMatch[1], 10) || 0;
+      const excMatch = rawXml.match(/<EXCEPTIONS>(\d+)<\/EXCEPTIONS>/);
+      if (excMatch) exceptions = parseInt(excMatch[1], 10) || 0;
       const errorsMatch = rawXml.match(/<ERRORS>(\d+)<\/ERRORS>/);
       if (errorsMatch) errCount = parseInt(errorsMatch[1], 10);
       const lastVchMatch = rawXml.match(/<LASTVCHID>([^<]+)<\/LASTVCHID>/);
@@ -391,10 +398,14 @@ export function parseImportResponse(rawXml: string): PushResult {
     return {
       // Tally DID something. An Alter reports ALTERED=1 CREATED=0 and a Delete
       // reports DELETED=1 CREATED=0 — reading only CREATED called both failures.
-      success: (created > 0 || altered > 0 || deleted > 0) && errCount === 0 && lineErrors.length === 0,
+      // An EXCEPTION is a refusal even when Tally counted something. Omitting
+      // it from this test is how a silently-wrong voucher reported success.
+      success: (created > 0 || altered > 0 || deleted > 0)
+        && errCount === 0 && lineErrors.length === 0 && exceptions === 0,
       created,
       altered,
       deleted,
+      exceptions,
       errors: errCount,
       lastVoucherId: lastVchId,
       lineErrors,
@@ -406,6 +417,7 @@ export function parseImportResponse(rawXml: string): PushResult {
       created: 0,
       altered: 0,
       deleted: 0,
+      exceptions: 0,
       errors: 1,
       lastVoucherId: null,
       lineErrors: lineErrors.length > 0 ? lineErrors : ["Failed to parse Tally response"],
