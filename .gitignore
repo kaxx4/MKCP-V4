@@ -71,3 +71,4 @@ server/.voucher-cache.xml
 # Diagnostic logs — local only, can grow large, never shared
 server/data/*.jsonl
 server/data/*.jsonl.*
+server/data/gstr-baseline.json
