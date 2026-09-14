@@ -239,16 +239,43 @@ async function main(): Promise<void> {
     for (const b of blocked) console.log(`    · ${b.name}: ${b.detail}`);
     console.log("\n  Nothing would look broken. The screen would say 'queued' and the");
     console.log("  vouchers would simply never arrive.\n");
-    process.exit(1);
+    return exitWith(1);
   }
 
   console.log(`\n  READY${warned.length ? ` — with ${warned.length} thing(s) worth a look above` : ""}.\n`);
-  // Explicit, because the Supabase client keeps a handle open and Node's
-  // teardown trips a libuv assertion on Windows on the way out.
-  process.exit(0);
+  exitWith(0);
+}
+
+/**
+ * Exit with a code this script's caller can actually trust.
+ *
+ * A bare `process.exit()` here aborts on Windows with
+ * `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` — Node tears down
+ * while a socket left open by the Supabase client or the Tally probe is still
+ * closing. The process then dies with 127 instead of the code we asked for.
+ *
+ * That is not cosmetic, because this script is a GATE. 127 is indistinguishable
+ * from "command not found", so a caller checking the exit code cannot tell
+ * "two things would stop work reaching Tally" from "the check never ran" — the
+ * same G7 confusion as "Tally returned nothing" versus "my parser found
+ * nothing", and here it fails in the dangerous direction: a crashed check looks
+ * exactly like a failed one, so a genuinely broken harness reads as a normal
+ * NOT READY and nobody investigates.
+ *
+ * Setting `exitCode` and unref-ing the timer lets Node leave on its own the
+ * moment those handles finish closing; the timer is only a backstop for when
+ * something is genuinely still holding the loop open. It is deliberately
+ * generous — a shorter one fired while stdout was still draining into a pipe
+ * and truncated the report it had just printed.
+ */
+function exitWith(code: number): void {
+  process.exitCode = code;
+  setTimeout(() => process.exit(code), 3_000).unref();
 }
 
 main().catch((e) => {
-  console.error(e);
-  process.exit(1);
+  /* A thrown error is NOT the same as "not ready" — it means the check itself
+     could not run, and a gate must be able to tell those apart. */
+  console.error("\n  The check could not complete:\n", e);
+  exitWith(2);
 });
