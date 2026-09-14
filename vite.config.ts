@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { readFileSync } from "node:fs";
 
 export default defineConfig({
   plugins: [react()],
@@ -7,6 +8,15 @@ export default defineConfig({
   define: {
     "process.env.ELECTRON_MODE": JSON.stringify(
       process.env.ELECTRON_MODE || "false"
+    ),
+    /* The renderer needs to know which build it IS, so it can tell whether the
+       server answering on port 3100 is its own. A stale standalone
+       `node dist/index.js` from a previous session holds the port, the new
+       app's server never binds (EADDRINUSE is logged to a console nobody
+       reads), and the UI then talks to yesterday's build while showing advice
+       about an .env that was already correct. Observed 14-Sep-2026. */
+    "__APP_VERSION__": JSON.stringify(
+      JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version,
     ),
   },
   build: {

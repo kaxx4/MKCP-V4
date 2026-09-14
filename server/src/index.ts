@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -15,6 +17,7 @@ import { startNightlySync } from "./services/nightlySync.js";
 import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
 import { announceRole, tallyRole } from "./services/tallyRole.js";
 import { isOffline, offlineReason } from "./services/supabaseClient.js";
+import { buildMirrorPanel } from "./services/mirrorPanel.js";
 import { vouchersOnDay } from "./services/localSession.js";
 import { safePush } from "./services/safePush.js";
 import type { VoucherPayload } from "./types.js";
@@ -625,7 +628,93 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
 // ── Push-Queue Drain Agent (additive — Prompt 3) ─────────────────────────────────
 // Status route for the strip-down status UI (Prompt 4). Always available; reports
 // `enabled:false` when the agent isn't running.
+/* ── Who is actually answering on this port ───────────────────────────────
+ *
+ * Port 3100 can be held by a DIFFERENT MK Cycles server: a leftover standalone
+ * `node dist/index.js` from an earlier session, or a second copy of the app.
+ * When that happens the new app's own server never binds — `EADDRINUSE` is
+ * logged to a console nobody reads — and the window talks to the stale one,
+ * which may be weeks old and was started with a different environment.
+ *
+ * Observed 14-Sep-2026: a server from the previous evening held the port. The
+ * new build's routes 404'd, the push agent read as disabled because that
+ * process had loaded its env before MKCP_TALLY_ROLE was set, and the UI offered
+ * advice about a .env file that was already correct. Two wrong readings, one
+ * invisible cause.
+ *
+ * So the renderer can now ask, and compare against the build it knows itself to
+ * be. `startedAt` and `pid` are here because those are exactly what turned a
+ * puzzle into a one-line diagnosis.
+ */
+/* Read from the app's package.json at startup rather than baked in, so a
+   version bump cannot leave this lying. Falls back to "unknown", never to a
+   stale literal — a wrong version here would defeat the whole check. */
+const APP_VERSION: string = (() => {
+  /* The APP's package.json, not the server's. Ordered most-specific first, and
+     a candidate whose `name` is the proxy is rejected outright — `server/` has
+     its own package.json and picking it up is exactly the mistake this guards
+     against. */
+  for (const candidate of [
+    /* `resourcesPath` exists only under Electron, which is where this
+       server actually runs in production — but it is not on Node's own
+       Process type, hence the cast rather than a lie about the shape. */
+    path.join((process as NodeJS.Process & { resourcesPath?: string }).resourcesPath ?? "", "app.asar", "package.json"),
+    path.join(process.cwd(), "..", "package.json"),
+    path.join(process.cwd(), "package.json"),
+  ]) {
+    try {
+      const raw = fs.readFileSync(candidate, "utf8");
+      const pkg = JSON.parse(raw);
+      if (pkg?.name === "mkcp-tally-proxy") continue;   // the server's own, not the app's
+      if (typeof pkg?.version === "string" && pkg.version) return pkg.version;
+    } catch { /* try the next one */ }
+  }
+  return "unknown";
+})();
+
+const SERVER_STARTED_AT = new Date().toISOString();
+app.get("/api/whoami", (_req, res) =>
+  res.json({
+    app: "mkcp-tally-proxy",
+    /* APP_VERSION only. `npm_package_version` is whatever npm script happened
+       to launch the process — running from server/ it reports the proxy's own
+       3.0.0, not the app's, which would make the stale-server check fire on
+       every healthy launch. Verified: it did. */
+    version: APP_VERSION,
+    pid: process.pid,
+    startedAt: SERVER_STARTED_AT,
+    role: process.env.MKCP_TALLY_ROLE ?? null,
+    pushAgentEnabledEnv: (process.env.PUSH_AGENT_ENABLED ?? "").toLowerCase() === "true",
+    hasSupabaseKey: !!process.env.SUPABASE_SERVICE_KEY,
+  }),
+);
+
 app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()));
+
+/* ── What the agent can tell you about the mirror, without a browser ──────
+ *
+ * The web dashboard has sync logs, a data snapshot and a per-voucher push log.
+ * This machine — the one actually doing the work — had counters and a console
+ * log, so the screen open in the office could say a push had failed but not
+ * which voucher, for which party, or why. The operator standing in front of it
+ * had to go and open the web app on another device.
+ *
+ * Read-only, and it never throws: a panel that 500s when Supabase is slow is
+ * worse than one that says it could not look. */
+app.get("/api/mirror/panel", async (req, res) => {
+  const company =
+    String(req.query?.company || process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)");
+  const limit = Math.min(100, Math.max(5, Number(req.query?.limit ?? 25) || 25));
+  try {
+    res.json(await buildMirrorPanel(company, limit));
+  } catch (e: any) {
+    res.json({
+      company, offline: true, syncs: [], lastFullSyncAt: null, snapshot: [], pushes: [],
+      pushLatency: { count: 0, medianSeconds: null, slowestSeconds: null },
+      error: e?.message ?? String(e),
+    });
+  }
+});
 
 // Trigger an immediate drain tick from the status window's "Drain Now" button.
 /* ── Bank statement → receipts and payments ────────────────────────────────
