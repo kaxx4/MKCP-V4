@@ -322,6 +322,29 @@ export function convertLedgers(parsed: any): { tallymessage: any[] } {
         gstin: txt(l.PARTYGSTIN) || txt(l.GSTIN) || txt(l.LEDGSTIN),
         creditperiod: txt(l.CREDITPERIOD) || txt(l.BILLCREDITPERIOD),
         guid: txt(l.GUID),
+        /* ── Fetched since forever, read for the first time ────────────────
+           collections.ts has always asked Tally for these seven fields and
+           this function has always ignored them.
+
+           STATE is the one that matters: it decides CGST+SGST against IGST on
+           every outward voucher, and pushGuard's entire tax-head rule rests on
+           it — while the mirror the guard reads from did not carry it. 399 of
+           482 ledgers have one.
+
+           The rest are already on the wire and the call list needs them.
+           Guardrail G4: a fetched field is stored, or documented as
+           deliberately dropped. */
+        state: txt(l.LEDSTATENAME),
+        country: txt(l.COUNTRYNAME),
+        pincode: txt(l.PINCODE),
+        mailingname: txt(l.MAILINGNAME),
+        address: (() => {
+          // Tally returns ADDRESS as a .LIST of lines, not a scalar.
+          const lines = arr(l["ADDRESS.LIST"]?.ADDRESS ?? l.ADDRESS);
+          return lines.map((x: any) => txt(x)).filter(Boolean).join(", ");
+        })(),
+        phone: txt(l.LEDGERPHONE) || txt(l.LEDGERMOBILE),
+        email: txt(l.EMAIL),
       };
     }).filter(Boolean),
   };
@@ -405,6 +428,18 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
       const simpleIE = arr(v["INVENTORYENTRIES.LIST"] ?? v.INVENTORYENTRIES);
       const ie = allIE.length > 0 ? allIE : simpleIE;
 
+      /* ── Identity ──────────────────────────────────────────────────────
+         MASTERID is Tally's own, and it is STABLE ACROSS AN ALTER — proven
+         live: a voucher altered in place kept 249387 while its ALTERID moved.
+         ALTERID bumps on every change and is the incremental-sync watermark;
+         not storing it is why incremental sync has never been reachable.
+
+         REMOTEID is deliberately NOT read here. Tally does not export it —
+         asked for it on four vouchers including two this app had pushed hours
+         earlier with an explicit one, and it came back on 0 of 4. Our identity
+         is recorded when we WRITE, never learned by reading. */
+      const masterId = Number(txt(v.MASTERID)) || null;
+
       // Voucher-level party name — the authoritative source for party identification.
       // Individual ledger entries may BOTH have ISPARTYLEDGER=Yes (e.g. party + bank
       // in Receipt/Payment vouchers), so we use PARTYLEDGERNAME to disambiguate.
@@ -439,24 +474,101 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
           isdeemedpositive: txt(e.ISDEEMEDPOSITIVE) === "Yes",
           ispartyledger,
           amount: txt(e.AMOUNT, "0"),
-          billallocations: arr(e["BILLALLOCATIONS.LIST"] ?? e.BILLALLOCATIONS).map((b: any) => ({
-            name: txt(b.NAME),
-            billtype: txt(b.BILLTYPE, "New Ref"),
-            amount: txt(b.AMOUNT, "0"),
-          })),
+          /* ── Bill allocations ────────────────────────────────────────────
+             Measured on 1-Sep-2026: Tally returned 300 BILLALLOCATIONS.LIST
+             blocks and only **32 were populated**. The rest are the empty
+             placeholder shape — the same one that makes a wide voucher pull
+             return unpopulated entry lists.
+
+             This code turned every one of those placeholders into a bill:
+             `txt(b.NAME)` gave "", `txt(b.BILLTYPE, "New Ref")` INVENTED a
+             bill type, and `txt(b.AMOUNT, "0")` invented an amount. The
+             mirror's consequence, measured: 7,621 "New Ref" lines of which
+             **6,779 have a blank name** — roughly 89% phantoms. Anything
+             counting receivables from this table was counting mostly noise,
+             and the Bill object could not be derived at all.
+
+             Two changes. Placeholders are dropped rather than materialised,
+             and BILLTYPE is no longer defaulted — "New Ref" means "this raises
+             a new receivable", which is far too consequential a thing to
+             assume about a block that said nothing.
+
+             Also now read, because the Bill object needs them and Tally has
+             been sending them all along: BILLDATE, BILLID, and
+             BILLCREDITPERIOD — credit terms live on the ALLOCATION, not on the
+             party, which is why a party-level credit period never matched. */
+          billallocations: arr(e["BILLALLOCATIONS.LIST"] ?? e.BILLALLOCATIONS)
+            .map((b: any) => ({
+              name: txt(b.NAME),
+              billtype: txt(b.BILLTYPE),
+              amount: txt(b.AMOUNT),
+              billdate: txt(b.BILLDATE),
+              billid: parseInt(txt(b.BILLID) || "0", 10) || null,
+              // "14 Days" / "20 Days" as Tally writes it. Kept verbatim rather
+              // than parsed to a number here — the domain layer owns that.
+              creditperiod: txt(b.BILLCREDITPERIOD),
+            }))
+            /* A block with no name AND no type AND no amount is a placeholder,
+               not a bill. Requiring a TYPE specifically: a real allocation
+               always states whether it raises, settles, or sits on account. */
+            .filter((b: any) => b.billtype !== "" || b.name !== "" || b.amount !== ""),
         };
       });
 
-      const inventoryentries = ie.map((e: any) => ({
-        stockitemname: txt(e.STOCKITEMNAME),
-        actualqty: txt(e.ACTUALQTY) || txt(e.BILLEDQTY, "0"),
-        billedqty: txt(e.BILLEDQTY) || txt(e.ACTUALQTY, "0"),
-        rate: txt(e.RATE, "0"),
-        amount: txt(e.AMOUNT, "0"),
-        isdeemedpositive: txt(e.ISDEEMEDPOSITIVE) === "Yes",
-      }));
+      const inventoryentries = ie.map((e: any) => {
+        /* ── The location key (Phase 2.4) ────────────────────────────────────
+           Where the goods physically are. Tally carries it on
+           BATCHALLOCATIONS.LIST, which this converter has always ignored, so
+           tally_voucher_inventory_entries had no godown or batch column at all
+           and the only godown reference in the whole web app is a hardcoded
+           "Main Location" string in VoucherLines.tsx.
+
+           Today that costs nothing — the company has ONE godown, and all 132
+           batch allocations on a sampled day read "Main Location" /
+           "Primary Batch". It costs everything the day a second godown opens,
+           because every historical row would be unattributable. Schema now,
+           UI later: carry the key from the start.
+
+           An inventory line may split across SEVERAL godowns, so the whole
+           list is kept as well as the primary — taking only the first would
+           silently lose the split, which is the shape of defect this project
+           keeps finding. */
+        const allocs = arr(e["BATCHALLOCATIONS.LIST"] ?? e.BATCHALLOCATIONS).map((b: any) => ({
+          godownname: txt(b.GODOWNNAME),
+          batchname: txt(b.BATCHNAME),
+          destinationgodownname: txt(b.DESTINATIONGODOWNNAME),
+          batchid: parseInt(txt(b.BATCHID) || "0", 10) || null,
+          amount: txt(b.AMOUNT, "0"),
+          actualqty: txt(b.ACTUALQTY) || txt(b.BILLEDQTY, "0"),
+          billedqty: txt(b.BILLEDQTY) || txt(b.ACTUALQTY, "0"),
+        }));
+
+        return {
+          stockitemname: txt(e.STOCKITEMNAME),
+          actualqty: txt(e.ACTUALQTY) || txt(e.BILLEDQTY, "0"),
+          billedqty: txt(e.BILLEDQTY) || txt(e.ACTUALQTY, "0"),
+          rate: txt(e.RATE, "0"),
+          amount: txt(e.AMOUNT, "0"),
+          isdeemedpositive: txt(e.ISDEEMEDPOSITIVE) === "Yes",
+
+          // The primary allocation, promoted to columns so the common case is
+          // queryable without opening the JSON.
+          godownname: allocs[0]?.godownname ?? "",
+          batchname: allocs[0]?.batchname ?? "",
+          destinationgodownname: allocs[0]?.destinationgodownname ?? "",
+          // True when the line really is split — the case columns cannot hold.
+          issplitacrossgodowns: new Set(allocs.map((a) => a.godownname).filter(Boolean)).size > 1,
+          batchallocations: allocs,
+        };
+      });
 
       return {
+        /* Tally's own identity, and STABLE ACROSS AN ALTER — proven live: a
+           voucher altered in place kept masterId 249387 while its alterId
+           moved. `alterid` below was already converted; it simply was never
+           stored. */
+        masterid: masterId,
+
         metadata: { type: "Voucher" },
         date: txt(v.DATE) || txt(v["@_DATE"]),
         guid: txt(v.GUID) || txt(v["@_GUID"]),
@@ -472,6 +584,12 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
         // E-way bill / delivery block. Always present in the export, dropped by
         // this converter until 2026-08-27 — see extractVoucherTransport.
         transport: extractVoucherTransport(v),
+        /* The IRP clock's only input. Empty is the normal, meaningful state:
+           it means this invoice has not been registered yet, and the 30-day
+           window is running. Read as "" rather than defaulted to anything. */
+        irn: txt(v.IRN),
+        irnackno: txt(v.IRNACKNO),
+        irnackdate: txt(v.IRNACKDATE),
         iscancelled: txt(v.ISCANCELLED) === "Yes",
         isoptional: txt(v.ISOPTIONAL) === "Yes",
         effectivedate: txt(v.EFFECTIVEDATE) || txt(v.DATE),

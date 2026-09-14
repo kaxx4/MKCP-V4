@@ -1,5 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
+import { supabaseClient } from "./supabaseClient.js";
+import { emitMirrorChanges } from "./mirrorSignal.js";
 
 // Polyfill WebSocket for Node.js 20 (Supabase needs it for realtime)
 if (typeof globalThis !== 'undefined' && !globalThis.WebSocket) {
@@ -69,20 +71,35 @@ export class SupabaseSync {
     }
 
     try {
-      this.client = createClient(url, key, {
-        auth: { persistSession: false },
-        realtime: {
-          params: {
-            eventsPerSecond: 10,
-          },
-        },
-      });
+      /* Through the one chokepoint, so OFFLINE MODE reaches every writer at
+         once. This class is the main one — masters, vouchers, config, and the
+         prunes — so a machine holding a duplicate company must not get a live
+         client here under any circumstances. See supabaseClient.ts. */
+      this.client = supabaseClient({ realtime: { params: { eventsPerSecond: 10 } } });
+      if (!this.client) return;
       console.log("[Supabase] Client initialized");
     } catch (err: any) {
       console.error(`[Supabase] Failed to initialize client: ${err.message}`);
       console.error(`[Supabase] WebSocket support: ${typeof WebSocket}`);
       this.client = null;
     }
+  }
+
+  /**
+   * The client, or null when this process must not touch Supabase.
+   *
+   * Exposed for readers that need the mirror to answer a question rather than
+   * to receive a write — the incremental-sync cursor is the first: "what is the
+   * highest AlterID I actually hold" is a question only the mirror can answer,
+   * and it is the difference between resuming correctly after a restart and
+   * silently skipping everything edited while the agent was down.
+   *
+   * Null is a normal answer (offline mode, no service key) and every caller
+   * must handle it — see services/syncCursor.ts, which reports the degraded
+   * cursor rather than pretending it has one.
+   */
+  getClient(): SupabaseClient | null {
+    return this.client;
   }
 
   async syncMasters(messages: any[], company: string): Promise<void> {
@@ -191,6 +208,31 @@ export class SupabaseSync {
         await this.upsertBatch("tally_vouchers", batch);
       }
 
+      /* ── Say WHICH vouchers moved (Phase 4.2) ────────────────────────────
+         Emitted AFTER the upsert, never before: a client that reacts instantly
+         must not be sent looking for a row that has not landed. Never throws,
+         and stays silent above a ceiling — a full sync rewrites every voucher,
+         and 2,792 individual hints would cost more than the single reload they
+         were meant to replace. A client that misses or ignores all of this does
+         exactly what it does today. See services/mirrorSignal.ts. */
+      const signal = await emitMirrorChanges(
+        this.client,
+        company,
+        vouchers.map((v: any) => ({
+          table: "tally_vouchers",
+          pk: String(v.guid),
+          // Upserts, so an existing voucher is an update and a new one an
+          // insert — indistinguishable from here, and the client treats both
+          // the same way (fetch that row). "update" is the honest label for
+          // "this row now differs from what you hold".
+          op: "update" as const,
+          version: typeof v.alter_id === "number" ? v.alter_id : null,
+        })),
+      );
+      if (signal.suppressed || signal.emitted === 0) {
+        console.log(`[Supabase] mirror signals: ${signal.note}`);
+      }
+
       // Extract and sync denormalized ledger and inventory entries
       const ledgerEntries: any[] = [];
       const inventoryEntries: any[] = [];
@@ -227,6 +269,17 @@ export class SupabaseSync {
               rate: ie.rate,
               amount: ie.amount,
               is_deemed_positive: ie.isdeemedpositive === true,
+              /* The location key (Phase 2.4). Tally carries godown and batch on
+                 BATCHALLOCATIONS.LIST for every inventory line; this table had
+                 nowhere to put them, so the mirror could not say where anything
+                 physically was. `?? null` rather than `?? ""` — a row whose
+                 allocation Tally did not send must read as "no key", not as an
+                 empty godown name. */
+              godown_name: ie.godownname || null,
+              batch_name: ie.batchname || null,
+              destination_godown_name: ie.destinationgodownname || null,
+              batch_allocations: ie.batchallocations?.length ? ie.batchallocations : null,
+              is_split_across_godowns: ie.issplitacrossgodowns === true,
               synced_at: new Date().toISOString(),
             });
           }
@@ -667,6 +720,20 @@ export class SupabaseSync {
    * A master without a real GUID is a phantom, so we skip it rather than
    * invent an id for it. Genuine Tally master syncs always carry a GUID, so
    * this is inert on the real path.
+   *
+   * ── Extended to every master type, 13-Sep-2026 ───────────────────────────
+   *
+   * It guarded only stock items and ledgers, which is where the damage had
+   * been SEEN — but the same `POST /api/supabase/sync` path forwards stock
+   * groups, units, godowns and cost centres from the browser with exactly the
+   * same name-derived canonical ids, so those four could still create
+   * name-keyed phantoms. They had not yet, which is not the same as being
+   * safe. Guardrail G5.
+   *
+   * Verified inert before extending it: every master type Tally serves carries
+   * a real GUID — stock groups 22/22, units 9/9, godowns 1/1, ledgers 482/482,
+   * stock items 489/489, cost centres 0 of 0 (this company has none). So the
+   * guard drops nothing real and blocks only the browser-forwarded path.
    */
   private hasRealGuid(m: any): boolean {
     return !!(m?.guid || "").trim();
@@ -681,6 +748,7 @@ export class SupabaseSync {
 
   private mapStockGroup(m: any, company: string): any {
     if (!m.name) return null;
+    if (!this.hasRealGuid(m)) return null; // see hasRealGuid — phantom-master guard
     return {
       guid: this.safeGuid(m.guid, company, m.name),
       company,
@@ -693,6 +761,7 @@ export class SupabaseSync {
 
   private mapUnit(m: any, company: string): any {
     if (!m.name) return null;
+    if (!this.hasRealGuid(m)) return null; // see hasRealGuid — phantom-master guard
     return {
       guid: this.safeGuid(m.guid, company, m.name),
       company,
@@ -709,6 +778,7 @@ export class SupabaseSync {
 
   private mapGodown(m: any, company: string): any {
     if (!m.name) return null;
+    if (!this.hasRealGuid(m)) return null; // see hasRealGuid — phantom-master guard
     return {
       guid: this.safeGuid(m.guid, company, m.name),
       company,
@@ -721,6 +791,7 @@ export class SupabaseSync {
 
   private mapCostCentre(m: any, company: string): any {
     if (!m.name) return null;
+    if (!this.hasRealGuid(m)) return null; // see hasRealGuid — phantom-master guard
     return {
       guid: this.safeGuid(m.guid, company, m.name),
       company,
@@ -772,6 +843,17 @@ export class SupabaseSync {
       opening_balance: m.openingbalance,
       gstin: m.gstin,
       credit_period: m.creditperiod,
+      /* STATE decides CGST+SGST against IGST on every outward voucher, and the
+         push guard's tax-head rule rests on it — while the mirror it reads from
+         did not carry it at all. Tally has always sent these; convertLedgers
+         has always discarded them. */
+      state: m.state || null,
+      country: m.country || null,
+      pincode: m.pincode || null,
+      mailing_name: m.mailingname || null,
+      address: m.address || null,
+      phone: m.phone || null,
+      email: m.email || null,
       synced_at: new Date().toISOString(),
     };
   }
@@ -807,6 +889,19 @@ export class SupabaseSync {
       voucher_type: m.vouchertypename,
       party_ledger_name: m.partyledgername,
       narration: m.narration,
+      /* Tally's own identity (stable across an Alter) and its change counter.
+         remote_id is NOT set here — Tally does not export it, so it is written
+         when we push and backfilled from push_queue, never learned by reading. */
+      master_id: m.masterid ?? null,
+      alter_id: m.alterid ?? null,
+      /* The IRP clock. `|| null` not `?? null`: Tally sends an EMPTY string for
+         an unregistered invoice, and "" stored in a text column is non-null —
+         which would read as "registered, with a blank number" to every query
+         that asks `WHERE irn IS NULL`. That is the same empty-string-vs-null
+         confusion that made costing_method look landed on 492 rows. */
+      irn: m.irn || null,
+      irn_ack_no: m.irnackno || null,
+      irn_ack_date: m.irnackdate || null,
       reference: m.reference ?? null,   // mirror Tally <REFERENCE> for push-agent reconciliation (see migration 012)
       is_cancelled: m.iscancelled === true,
       is_optional: m.isoptional === true,
@@ -980,13 +1075,112 @@ export class SupabaseSync {
     }
   }
 
+  /**
+   * Mirror Tally's dated price list.
+   *
+   * ⚠ Depends on migration 027, which has NOT been applied. Until it is, this
+   * throws "relation does not exist" — verify with
+   * `scripts/verify-supabase-tables.ts` before trusting it, because an
+   * unverified Supabase seam is exactly how this codebase's dead features
+   * happened.
+   *
+   * The whole catalogue is 4,254 rows and costs 0.18s to read from Tally, so
+   * it is upserted wholesale rather than diffed. Keyed on
+   * (company, item_name, price_level, effective_from) — a rate that has not
+   * changed upserts onto itself, so re-running is free rather than duplicating.
+   *
+   * NEVER deletes. A price list is a history: a row missing from today's pull
+   * means Tally no longer reports that revision, not that the price never
+   * existed. Pruning it would silently rewrite what a backdated voucher is
+   * priced at.
+   */
+  async syncPriceList(
+    entries: Array<{
+      itemName: string; priceLevel: string; priceLevelRaw: string;
+      date: string; rate: number; unit: string; discountPct: number;
+    }>,
+    company: string,
+  ): Promise<void> {
+    if (!this.client || !entries.length) return;
+    const t0 = Date.now();
+    const mapped = entries.map((e) => ({
+      company,
+      item_name: e.itemName,
+      price_level: e.priceLevel,
+      price_level_raw: e.priceLevelRaw,
+      effective_from: e.date,
+      rate: e.rate,
+      unit: e.unit,
+      discount_pct: e.discountPct,
+      synced_at: new Date().toISOString(),
+    }));
+    await this.batchAndUpsertOn("tally_price_list", mapped, "company,item_name,price_level,effective_from");
+    console.log(`[Supabase] ✓ Synced ${mapped.length} price-list entries (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+  }
+
+  /**
+   * Mirror Tally's dated GST rates, for items AND stock groups.
+   *
+   * Both scopes, because a rate resolves item-first then up the stock-group
+   * tree: only 36 of 489 items declare their own, 453 inherit. Storing just
+   * the item level loses the rate for 93% of the catalogue.
+   *
+   * ⚠ Also depends on migration 027. Same caveat as above.
+   */
+  async syncGstRates(
+    rows: Array<{
+      scope: "item" | "stock_group"; name: string; effectiveFrom: string;
+      gstRate: number; cgst: number; sgst: number; igst: number;
+      taxability: string; parent?: string;
+    }>,
+    company: string,
+  ): Promise<void> {
+    if (!this.client || !rows.length) return;
+    const t0 = Date.now();
+    const mapped = rows.map((r) => ({
+      company,
+      scope: r.scope,
+      name: r.name,
+      effective_from: r.effectiveFrom,
+      gst_rate: r.gstRate,
+      cgst_rate: r.cgst,
+      sgst_rate: r.sgst,
+      igst_rate: r.igst,
+      taxability: r.taxability || null,
+      parent: r.parent || null,
+      synced_at: new Date().toISOString(),
+    }));
+    await this.batchAndUpsertOn("tally_gst_rates", mapped, "company,scope,name,effective_from");
+    console.log(`[Supabase] ✓ Synced ${mapped.length} GST rate rows (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+  }
+
+  /** batchAndUpsert, but with an explicit conflict target rather than `guid`. */
+  private async batchAndUpsertOn(table: string, rows: any[], conflictCol: string): Promise<void> {
+    if (!this.client || rows.length === 0) return;
+    const BATCH_SIZE = 200;
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      await this.upsertBatch(table, rows.slice(i, i + BATCH_SIZE), conflictCol);
+    }
+  }
+
+  /**
+   * Clear the cloud draft. Separated from {@link syncOrderDraftLines} because
+   * an empty array used to mean "wipe everything", and that is far too
+   * destructive a thing to express by omission — the desktop's draft store has
+   * no writers, so every call was the empty one and the wipe was the ONLY
+   * reachable branch. Clearing is now something a caller has to ask for.
+   */
+  async clearOrderDraftLines(company: string): Promise<void> {
+    if (!this.client) return;
+    try {
+      await this.client.from("order_draft_lines").delete().eq("company", company);
+    } catch { /* swallow — clean-slate is best-effort */ }
+  }
+
   async syncOrderDraftLines(lines: any[], company: string): Promise<void> {
     if (!this.client) return;
     if (!lines || lines.length === 0) {
-      // If draft is empty, wipe any old rows so the cloud reflects local truth.
-      try {
-        await this.client.from("order_draft_lines").delete().eq("company", company);
-      } catch { /* swallow — clean-slate is best-effort */ }
+      // Deliberately a no-op, NOT a wipe — see clearOrderDraftLines above.
       return;
     }
 

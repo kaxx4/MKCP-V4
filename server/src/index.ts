@@ -6,11 +6,22 @@ import { convertCompanies } from "./converters/convert.js";
 import { SyncOrchestrator } from "./services/syncOrchestrator.js";
 import { ChangeDetector } from "./services/changeDetector.js";
 import { SupabaseSync } from "./services/supabaseSync.js";
+import { RealtimeSync } from "./services/realtimeSync.js";
 import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import { startRefreshListener } from "./services/refreshListener.js";
 import { startPushListener, listPendingPushes, approvePush, rejectPush } from "./services/pushListener.js";
 import { startNightlySync } from "./services/nightlySync.js";
+import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
+import { announceRole, tallyRole } from "./services/tallyRole.js";
+import { isOffline, offlineReason } from "./services/supabaseClient.js";
+import { vouchersOnDay } from "./services/localSession.js";
+import { safePush } from "./services/safePush.js";
+import type { VoucherPayload } from "./types.js";
+import { planBankRows, pushBankPlan, type BankPlan } from "./services/bankToReceipts.js";
+import type { ExtractedBankRow } from "./services/extraction.js";
+import { loadMasters } from "./services/tallyMasters.js";
+
 import {
   startFileTransferSync, pushFileToWeb, listRecentTransfers,
   startWatchFolder, watchFolderStatus,
@@ -25,11 +36,33 @@ const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const changeDetector = new ChangeDetector();
 const orchestrator = new SyncOrchestrator(TALLY, changeDetector);
 const supabaseSync = new SupabaseSync();
+const realtime = new RealtimeSync(TALLY, orchestrator, supabaseSync);
 
 // Duplicate sync lock
 const activeSyncs = new Map<string, Promise<any>>();
 
-app.use(cors());
+/**
+ * This process can write to the books, so it does not accept requests from any
+ * origin a browser happens to be on. Allowed: the Electron renderer (no Origin
+ * header at all), anything on localhost, and the deployed dashboard. Extra
+ * origins can be added via ALLOWED_ORIGINS as a comma-separated list.
+ */
+const EXTRA_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",").map(s => s.trim()).filter(Boolean);
+const originAllowed = (origin: string) =>
+  /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin) ||
+  /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin) ||
+  EXTRA_ORIGINS.includes(origin);
+
+app.use(cors({
+  origin(origin, cb) {
+    // No Origin header: same-origin, curl, or the Electron renderer.
+    if (!origin || originAllowed(origin)) return cb(null, true);
+    console.warn(`[security] blocked cross-origin request from ${origin}`);
+    cb(new Error(`Origin ${origin} is not allowed`));
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: "100mb" }));
 
 // ── Request logging ───────────────────────────────────────────────────────────
@@ -214,6 +247,11 @@ app.post("/api/tally/sync-daybook", syncGuard, async (req, res) => {
       console.log(`[DAYBOOK] ${p.step}/${p.totalSteps}: ${p.detail}`);
     });
     if (!res.writableEnded) res.json(result);
+    // Mark the clock for EVERY caller — the renderer's scheduler, the nightly
+    // job, a person pressing Sync. The server-side scheduler stands down when a
+    // window was refreshed recently, so while the Electron window is open the
+    // two schedulers cooperate instead of pulling Tally twice as often.
+    noteDaybookSync(company);
     console.log(`[SYNC] ✓ origin=${origin} company=${company} route=sync-daybook vouchers=${result.stats?.vouchers ?? 0} ${Date.now() - t0}ms`);
   } catch (e: any) {
     if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
@@ -392,8 +430,21 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
       { label: "calling_list_entries", promise: callingList.length > 0 ? supabaseSync.syncCallingList(callingList, company) : Promise.resolve() },
       { label: "voucher_overrides", promise: Object.keys(voucherOverrides).length > 0 ? supabaseSync.syncVoucherOverrides(voucherOverrides, company) : Promise.resolve() },
       { label: "app_settings", promise: Object.keys(appSettings).length > 0 ? supabaseSync.syncAppSettings(appSettings, company) : Promise.resolve() },
-      // order_draft_lines always fires — empty array means "clear the cloud draft"
-      { label: "order_draft_lines", promise: supabaseSync.syncOrderDraftLines(orderDraftLines, company) },
+      //   order_draft_lines — same mechanism as the four above, and the last
+      //     one left unguarded. It used to fire unconditionally on the reading
+      //     that "an empty array means clear the cloud draft". That reading is
+      //     only safe if the desktop can ever produce a NON-empty one, and it
+      //     cannot: `orderDraftLines` comes from `useOrderStore.getState().lines`
+      //     (useSupabaseConfigSync.ts:87), whose `setLine`/`removeLine` have
+      //     zero callers anywhere in the renderer. So the array is always `[]`,
+      //     the DELETE branch is the only reachable one, and the upsert below it
+      //     is dead code.
+      //     Nothing is being lost today — no writer means no rows to lose — but
+      //     this is a landmine for the web-app order desk: the moment anything
+      //     there writes the table, a scheduled quick-sync would wipe it within
+      //     30 minutes, which is exactly the bug fixed for the tables above on
+      //     2026-08-25. Guarded now, while it is still harmless.
+      { label: "order_draft_lines", promise: orderDraftLines.length > 0 ? supabaseSync.syncOrderDraftLines(orderDraftLines, company) : Promise.resolve() },
     ];
 
     // Run sync tasks sequentially — firing 14 tasks in parallel overwhelms Supabase's
@@ -442,19 +493,27 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
   }
 });
 
-// ── Legacy raw import endpoint (backward compat) ───────────────────────────────
+/**
+ * Detect a write envelope. Only `Import Data` changes the books; `Export` is a
+ * read. Checked with a loose regex because the header may be formatted freely.
+ */
+const isImportEnvelope = (xml: string) => /<TALLYREQUEST>\s*Import\s*Data\s*<\/TALLYREQUEST>/i.test(xml);
+
+const WRITE_PATH_MESSAGE =
+  "Raw XML writes are disabled. Every voucher must go through the push_queue → safePush path, " +
+  "which resolves master names, runs the preflight guard, serialises access to Tally's " +
+  "single-threaded port, then reads the voucher back and diffs it field by field. " +
+  "A raw write skips all of that: a bill reference belonging to another party, for example, is " +
+  "silently rewritten by Tally from 'Agst Ref' to 'New Ref' — creating a liability instead of " +
+  "clearing one — while still reporting created=1. Only the read-back catches it.";
+
+// ── Legacy raw import endpoint ────────────────────────────────────────────────
+// Kept as an explicit refusal rather than deleted, so anything still pointing
+// here fails loudly and visibly instead of silently losing its voucher.
 app.post("/api/tally/import", express.text({ type: "application/xml" }), async (req, res) => {
-  try {
-    const xml = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
-    lastRawXml = { request: xml, response: "", timestamp: new Date().toISOString(), label: "import-voucher" };
-    const response = await tallyPost(TALLY, xml, 30_000, true);
-    const responseText = typeof response === "string" ? response : JSON.stringify(response);
-    lastRawXml.response = responseText.slice(0, 50_000);
-    res.setHeader("Content-Type", "application/xml");
-    res.status(200).send(responseText);
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
+  const xml = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+  console.warn(`[security] refused raw /api/tally/import from ${req.ip} (${xml.length} bytes)`);
+  return res.status(410).json({ error: "Endpoint retired.", detail: WRITE_PATH_MESSAGE });
 });
 
 // ── Web voucher pushes (awaiting approval on THIS machine) ──────────────────────
@@ -483,6 +542,12 @@ app.post("/api/tally/pending-pushes/:id/reject", async (req, res) => {
 app.post("/api/tally/debug", async (req, res) => {
   const { company, xml: customXml } = req.body;
   if (!company && !customXml) return res.status(400).json({ error: "company or xml required" });
+  // A debug endpoint that accepts arbitrary XML will execute an Import envelope
+  // as readily as an Export one. Reads only.
+  if (typeof customXml === "string" && isImportEnvelope(customXml)) {
+    console.warn(`[security] refused an Import envelope on /api/tally/debug from ${req.ip}`);
+    return res.status(403).json({ error: "This endpoint is read-only.", detail: WRITE_PATH_MESSAGE });
+  }
   try {
     const xml = customXml ?? HEALTH_XML;
     const raw = await tallyPost(TALLY, xml, 60_000, true);
@@ -534,7 +599,13 @@ const httpServer = app.listen(PORT, () => {
   startPushListener(company, TALLY);
 
   // Nightly automatic full-FY sync at 00:00 local (configurable via NIGHTLY_SYNC_*).
+  // Say which machine this is before anything writes. Two machines share one
+  // Supabase mirror and the company name cannot tell them apart.
+  announceRole();
   startNightlySync(PORT, company);
+  // The recurring quick syncs, which used to run only while the Electron window
+  // was open — see scheduledSyncs.ts.
+  startScheduledSyncs(PORT, company);
 
   // Two-way file handoff with the web dashboard (see server/src/services/fileTransferSync.ts).
   startFileTransferSync();
@@ -557,6 +628,176 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
 app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()));
 
 // Trigger an immediate drain tick from the status window's "Drain Now" button.
+/* ── Bank statement → receipts and payments ────────────────────────────────
+ *
+ * `bankToReceipts` has been complete for a long time and had no route, so
+ * nothing could reach it. This is that route.
+ *
+ * Deliberately TWO endpoints, not one. Planning reads Tally and decides nothing
+ * that anyone has to live with; pushing books real money against real bills. A
+ * single "import my statement" call would collapse the step where a person
+ * looks at what is about to happen — and the thing they are looking for is the
+ * one this cannot get right alone: which party a bank narration refers to.
+ *
+ * Rows the planner cannot resolve come back carrying a `question` and are never
+ * pushed. That is the module's own rule; the routes only expose it.
+ */
+app.post("/api/bank/plan", async (req, res) => {
+  const { company, rows, bankLedger, learnedPayers } = req.body as {
+    company?: string;
+    rows?: ExtractedBankRow[];
+    bankLedger?: string;
+    learnedPayers?: Record<string, string>;
+  };
+  if (!company) return res.status(400).json({ error: "company required" });
+  if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: "rows required" });
+
+  // Reading open bills touches Tally's single-threaded port, so it queues
+  // behind any sync in flight rather than contending with it.
+  if (isTallyBusy()) return res.status(409).json({ error: "Tally is busy with a sync — try again in a moment" });
+
+  try {
+    const masters = await loadMasters(TALLY, company);
+    const plan = await planBankRows(
+      TALLY, company, rows, masters,
+      bankLedger || "HDFC BANK",
+      learnedPayers ? new Map(Object.entries(learnedPayers)) : undefined,
+    );
+    res.json({ ok: true, plan });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/bank/push", async (req, res) => {
+  const { company, plan } = req.body as { company?: string; plan?: BankPlan };
+  if (!company) return res.status(400).json({ error: "company required" });
+  if (!plan || !Array.isArray(plan.rows)) return res.status(400).json({ error: "plan required" });
+  if (isTallyBusy()) return res.status(409).json({ error: "Tally is busy with a sync — try again in a moment" });
+
+  /* The plan is echoed back by the caller rather than recomputed here, so what
+     a person approved on screen is exactly what is booked. Re-planning would
+     re-read open bills, and a bill settled in the seconds between review and
+     approval would silently change the allocation out from under them.
+
+     Through the gate: every voucher goes via safePush, which guards, pushes and
+     diffs the stored voucher — and the circuit breaker stops a run dead rather
+     than hammering a Tally that has started refusing. */
+  try {
+    /* NOT wrapped in withTally — pushBankPlan calls safePush, which goes
+       through the gate itself, and nesting the gate deadlocks. */
+    const result = await pushBankPlan(TALLY, company, plan);
+    res.json({ ok: true, ...result });
+  } catch (e: any) {
+    res.status(503).json({ error: e.message });
+  }
+});
+
+/* ── Local session ────────────────────────────────────────────────────────
+ *
+ * A full round trip against the Tally on THIS machine, with Supabase out of the
+ * picture entirely — see supabaseClient.ts. It is what makes the dummy company
+ * useful: every write path the rebuild added can be exercised end to end, and
+ * nothing can reach the shared mirror while it is.
+ *
+ * These routes deliberately do NOT read or write Supabase. The write still goes
+ * through `safePush`, so it is guarded, serialised and read back exactly as a
+ * queued push would be — testing an easier path than the real one would prove
+ * nothing.
+ */
+app.get("/api/local/status", async (_req, res) => {
+  try {
+    const companies = convertCompanies(await tallyPost(TALLY, HEALTH_XML, 10_000));
+    res.json({
+      ok: true,
+      role: tallyRole(),
+      offline: isOffline(),
+      offlineReason: offlineReason(),
+      filedThrough: process.env.MKCP_FILED_THROUGH || null,
+      company: companies[0]?.name ?? null,
+      companies: companies.map((c) => c.name),
+      tallyUrl: TALLY,
+    });
+  } catch (e: any) {
+    res.status(503).json({ ok: false, error: `Tally is not answering on ${TALLY}: ${e.message}` });
+  }
+});
+
+app.get("/api/local/vouchers", async (req, res) => {
+  const date = String(req.query.date ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: "date=YYYY-MM-DD required" });
+  }
+  if (isTallyBusy()) return res.status(409).json({ error: "Tally is busy — try again in a moment" });
+  try {
+    const company = String(req.query.company ?? "")
+      || convertCompanies(await tallyPost(TALLY, HEALTH_XML, 10_000))[0]?.name;
+    if (!company) return res.status(503).json({ error: "No company open in Tally" });
+    const vouchers = await vouchersOnDay(TALLY, company, date);
+    res.json({ ok: true, company, date, count: vouchers.length, vouchers });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** Ledgers and items, for pickers. Names must match Tally EXACTLY — a
+ *  near-miss is dropped silently rather than refused. */
+app.get("/api/local/masters", async (req, res) => {
+  if (isTallyBusy()) return res.status(409).json({ error: "Tally is busy — try again in a moment" });
+  try {
+    const company = String(req.query.company ?? "")
+      || convertCompanies(await tallyPost(TALLY, HEALTH_XML, 10_000))[0]?.name;
+    if (!company) return res.status(503).json({ error: "No company open in Tally" });
+    const m = await loadMasters(TALLY, company);
+    res.json({
+      ok: true,
+      company,
+      ledgers: [...m.ledgers.values()].map((l) => ({
+        name: l.name, parent: l.parent, state: l.state, gstin: l.gstin,
+      })),
+      items: [...m.items.values()].map((i) => ({
+        name: i.name, baseUnit: i.baseUnit, closingRate: i.closingRate, closingStock: i.closingStock,
+      })),
+      voucherTypes: [...m.voucherTypes],
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Create, alter, cancel or delete one voucher against the local Tally.
+ *
+ * Through `safePush` — guarded, serialised and read back. The whole point of a
+ * dummy session is to exercise the REAL path; a route that posted raw XML would
+ * be testing something the app never does.
+ */
+app.post("/api/local/push", async (req, res) => {
+  const payload = req.body?.payload as VoucherPayload | undefined;
+  if (!payload || !payload.voucherType) {
+    return res.status(400).json({ error: "payload required" });
+  }
+  if (isTallyBusy()) return res.status(409).json({ error: "Tally is busy — try again in a moment" });
+  try {
+    const company = String(req.body?.company ?? "")
+      || convertCompanies(await tallyPost(TALLY, HEALTH_XML, 10_000))[0]?.name;
+    if (!company) return res.status(503).json({ error: "No company open in Tally" });
+    /* NOT wrapped in withTally — safePush goes through the gate itself, and
+       nesting the gate deadlocks (the inner call queues behind the outer). */
+    const result = await safePush(TALLY, company, payload);
+    res.json({
+      ok: result.ok,
+      stage: result.stage,
+      voucherId: result.voucherId,
+      errors: result.errors,
+      warnings: result.warnings,
+      differences: result.differences,
+    });
+  } catch (e: any) {
+    res.status(503).json({ error: e.message });
+  }
+});
+
 app.post("/api/push-agent/drain", (_req, res) => {
   drainNow();
   res.json({ ok: true, drainedAt: new Date().toISOString() });
@@ -584,6 +825,27 @@ app.post("/api/push-agent/requeue", async (req: express.Request, res: express.Re
 if (process.env.PUSH_AGENT_ENABLED === "true") {
   startPushAgent({ tallyUrl: TALLY });
 }
+
+/**
+ * Near-real-time pull. Off unless explicitly enabled, because it costs time on
+ * Tally's single-threaded port (~4s per voucher scan) and that is time a person
+ * working in Tally would otherwise have.
+ */
+if (process.env.REALTIME_SYNC_ENABLED === "true") {
+  void realtime.start();
+}
+
+app.get("/api/realtime/status", (_req, res) => res.json(realtime.getStatus()));
+
+app.post("/api/realtime/start", async (_req, res) => {
+  await realtime.start();
+  res.json(realtime.getStatus());
+});
+
+app.post("/api/realtime/stop", (_req, res) => {
+  realtime.stop();
+  res.json(realtime.getStatus());
+});
 
 // ── File transfer (web ↔ desktop) ────────────────────────────────────────────
 // Incoming (web -> desktop) is handled entirely by fileTransferSync's own
