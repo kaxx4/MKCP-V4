@@ -72,3 +72,11 @@ server/.voucher-cache.xml
 server/data/*.jsonl
 server/data/*.jsonl.*
 server/data/gstr-baseline.json
+
+# Any backup or variant of an env file. `.env` alone did not cover
+# `server/.env.bak-before-golive-20260914`, which holds the live service-role
+# key in plaintext and sat untracked-but-committable for a day. A secret one
+# `git add -A` away from the history is a secret already leaking.
+.env.*
+*.env
+!.env.example

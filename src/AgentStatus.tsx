@@ -966,11 +966,28 @@ export default function AgentStatus() {
                   </Btn>
                 </div>
 
+                {/* The agent stays off for THREE reasons and this used to name
+                    only one of them — sending you to set a flag that was
+                    already true. `startPushAgent` returns before it reports
+                    itself enabled whenever `supabaseClient()` is null, and that
+                    happens when MKCP_TALLY_ROLE=sandbox. Observed 14-Sep-2026:
+                    PUSH_AGENT_ENABLED was true throughout and the role was the
+                    blocker. Either way the server reads its env at STARTUP, so
+                    a change needs a restart — which the old wording never
+                    mentioned either. */}
                 {!pushStatus.enabled && (
-                  <p className="mb-3 text-xs text-yellow-700 bg-yellow-50 rounded p-2 flex items-center gap-1">
-                    <AlertTriangle size={12} />
-                    Set PUSH_AGENT_ENABLED=true in server env to activate the drain agent.
-                  </p>
+                  <div className="mb-3 text-xs text-yellow-700 bg-yellow-50 rounded p-2 flex items-start gap-1.5">
+                    <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                    <span>
+                      The drain agent is not running. In <code>server/.env</code>, all three must hold:
+                      <br />· <code>PUSH_AGENT_ENABLED=true</code>
+                      <br />· <code>MKCP_TALLY_ROLE=primary</code> — on <code>sandbox</code> the agent refuses to
+                      claim jobs, so vouchers stay queued and nothing says why
+                      <br />· <code>SUPABASE_URL</code> and <code>SUPABASE_SERVICE_KEY</code> set
+                      <br />
+                      <strong>Then restart this app</strong> — the server reads its environment once, at startup.
+                    </span>
+                  </div>
                 )}
 
                 {/* Push Log */}
