@@ -1,0 +1,235 @@
+/**
+ * Sync history, mirror snapshot and the push log — on the agent itself.
+ *
+ * The web dashboard has all three. This machine is the one doing the work, and
+ * it had counters ("Pending 4, Failed 1") plus a console log. So the screen in
+ * the office could say a push had failed but not WHICH voucher, for which
+ * party, or why — and the person standing in front of it had to open the web
+ * app on another device to find out. See server/src/services/mirrorPanel.ts.
+ *
+ * The refusal text is shown in full and never truncated. Each one names the
+ * thing to fix — a ledger Tally spells differently, a filed GST period — and
+ * the reason is the only useful part of it.
+ */
+import { useCallback, useEffect, useState } from "react";
+import {
+  Database, History, ArrowUpRight, RefreshCw, Check, AlertTriangle, Loader2, Minus, Clock,
+} from "lucide-react";
+
+const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
+
+interface SyncRun {
+  startedAt: string; completedAt: string | null; syncType: string | null;
+  success: boolean; counts: Record<string, number> | null; errors: string[] | null; full: boolean;
+}
+interface Snapshot { table: string; rows: number | null; newest: string | null }
+interface PushRow {
+  id: string; status: string; voucherType: string; voucherNumber: string; party: string;
+  amount: number; attempts: number; lastError: string | null;
+  createdAt: string; claimedAt: string | null; pushedAt: string | null; waitedSeconds: number | null;
+}
+interface Panel {
+  company: string; offline: boolean; syncs: SyncRun[]; lastFullSyncAt: string | null;
+  snapshot: Snapshot[]; pushes: PushRow[];
+  pushLatency: { count: number; medianSeconds: number | null; slowestSeconds: number | null };
+  error?: string;
+}
+
+const n = (v: number | null | undefined) =>
+  v == null ? "—" : v.toLocaleString("en-IN");
+
+const when = (iso: string | null): string => {
+  if (!iso) return "—";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return "just now";
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
+};
+
+const TONE: Record<string, string> = {
+  succeeded: "text-green-700", pending: "text-blue-700", claimed: "text-blue-700",
+  pushing: "text-blue-700", failed: "text-red-700", cancelled: "text-neutral-400",
+};
+
+export function MirrorPanel() {
+  const [panel, setPanel] = useState<Panel | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${BASE}/api/mirror/panel?limit=25`);
+      setPanel(await r.json());
+    } catch {
+      setPanel(null);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    const t = setInterval(() => { void load(); }, 15_000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  if (!panel) {
+    return (
+      <div className="bg-white rounded-xl border border-neutral-200 px-4 py-3 text-xs text-neutral-500">
+        {busy ? "Reading the mirror…" : "Could not reach the local server."}
+      </div>
+    );
+  }
+
+  if (panel.offline) {
+    return (
+      <div className="bg-white rounded-xl border border-neutral-200 px-4 py-3 text-xs text-yellow-700 flex items-start gap-1.5">
+        <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+        <span>Supabase is not configured or not reachable, so there is nothing to read. {panel.error}</span>
+      </div>
+    );
+  }
+
+  const lat = panel.pushLatency;
+
+  return (
+    <div className="space-y-3">
+      {/* ── How fast a queued voucher actually reaches Tally ────────────── */}
+      <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
+          <Clock size={14} className="text-neutral-500" />
+          <h2 className="font-semibold text-sm text-neutral-700 flex-1">Queue to Tally</h2>
+          <button onClick={() => void load()} className="text-neutral-400 hover:text-neutral-700" aria-label="Refresh">
+            <RefreshCw size={13} className={busy ? "animate-spin" : ""} />
+          </button>
+        </div>
+        <div className="px-4 py-3 text-xs text-neutral-700">
+          {lat.count === 0 ? (
+            <span className="text-neutral-500">Nothing has been pushed yet, so there is no timing to show.</span>
+          ) : (
+            <>
+              <span className="font-mono text-lg font-bold text-neutral-900">
+                {lat.medianSeconds}s
+              </span>{" "}
+              typical wait from queued to in Tally
+              <span className="text-neutral-500">
+                {" "}· slowest {lat.slowestSeconds}s · {lat.count} measured
+              </span>
+              {/* The agent takes the realtime INSERT as its cue and polls every
+                  4 s as the guarantee, so anything much above 4 s means the
+                  realtime channel is not delivering and the poll is carrying it
+                  alone — worth knowing before it becomes a complaint. */}
+              {lat.medianSeconds !== null && lat.medianSeconds > 6 && (
+                <p className="mt-1 text-yellow-700">
+                  Slower than the 4-second poll, which suggests the realtime channel is not delivering
+                  and every push is waiting for a tick.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── Push log ───────────────────────────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
+          <ArrowUpRight size={14} className="text-neutral-500" />
+          <h2 className="font-semibold text-sm text-neutral-700 flex-1">Push log</h2>
+          <span className="text-[11px] text-neutral-500">{panel.pushes.length} most recent</span>
+        </div>
+        {panel.pushes.length === 0 ? (
+          <p className="px-4 py-3 text-xs text-neutral-500">Nothing queued yet.</p>
+        ) : (
+          <ul className="divide-y divide-neutral-100 max-h-[320px] overflow-auto">
+            {panel.pushes.map((p) => (
+              <li key={p.id} className="px-4 py-2">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-xs font-semibold">{p.voucherType}</span>
+                  <span className="text-[11px] font-mono text-neutral-500">{p.voucherNumber}</span>
+                  <span className={`ml-auto text-[10.5px] font-bold inline-flex items-center gap-1 ${TONE[p.status] ?? "text-neutral-500"}`}>
+                    {p.status === "succeeded" ? <Check size={11} />
+                      : p.status === "failed" ? <AlertTriangle size={11} />
+                      : p.status === "cancelled" ? <Minus size={11} />
+                      : <Loader2 size={11} className="animate-spin" />}
+                    {p.status}
+                  </span>
+                </div>
+                <div className="flex items-baseline gap-2 mt-0.5">
+                  <span className="text-[11px] text-neutral-600 truncate" title={p.party}>{p.party}</span>
+                  {p.amount > 0 && (
+                    <span className="ml-auto text-[11px] font-mono text-neutral-700">
+                      ₹{p.amount.toLocaleString("en-IN")}
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10.5px] text-neutral-400 mt-0.5">
+                  queued {when(p.createdAt)}
+                  {p.waitedSeconds !== null && p.waitedSeconds >= 0 && ` · took ${p.waitedSeconds}s`}
+                  {p.attempts > 1 && ` · ${p.attempts} attempts`}
+                </div>
+                {/* In full. Truncating a refusal removes the only useful part. */}
+                {p.lastError && (
+                  <p className="mt-1 text-[10.5px] text-red-700 bg-red-50 rounded px-1.5 py-1">{p.lastError}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* ── Sync history ───────────────────────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
+          <History size={14} className="text-neutral-500" />
+          <h2 className="font-semibold text-sm text-neutral-700 flex-1">Sync history</h2>
+          <span className="text-[11px] text-neutral-500">
+            last full pull {panel.lastFullSyncAt ? when(panel.lastFullSyncAt) : "— none on record"}
+          </span>
+        </div>
+        {/* A full sweep is its own fact. Backdated entry is most of the work
+            here and the small pulls only look at today, so a run of successful
+            little syncs makes the mirror look fresh while last week's orders
+            quietly never arrive. */}
+        <ul className="divide-y divide-neutral-100 max-h-[240px] overflow-auto">
+          {panel.syncs.map((s, i) => (
+            <li key={i} className="px-4 py-1.5 flex items-baseline gap-2 text-[11px]">
+              <span className={s.success ? "text-green-700" : "text-red-700"}>
+                {s.success ? <Check size={11} /> : <AlertTriangle size={11} />}
+              </span>
+              <span className="font-semibold capitalize">{s.syncType ?? "sync"}</span>
+              {s.full && (
+                <span className="px-1.5 rounded bg-blue-50 text-blue-700 text-[10px] font-bold">full</span>
+              )}
+              <span className="text-neutral-500 truncate">
+                {Object.entries(s.counts ?? {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${n(Number(v))} ${k}`).join(", ") || "—"}
+              </span>
+              <span className="ml-auto shrink-0 text-neutral-400">{when(s.startedAt)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* ── Snapshot ───────────────────────────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
+          <Database size={14} className="text-neutral-500" />
+          <h2 className="font-semibold text-sm text-neutral-700 flex-1">Data snapshot</h2>
+        </div>
+        <ul className="divide-y divide-neutral-100">
+          {panel.snapshot.map((s) => (
+            <li key={s.table} className="px-4 py-1.5 flex items-baseline gap-2 text-[11px]">
+              <span className="font-mono text-neutral-700">{s.table}</span>
+              <span className="ml-auto font-mono font-semibold text-neutral-900">{n(s.rows)}</span>
+              {s.newest && <span className="text-neutral-400 w-24 text-right">to {s.newest}</span>}
+            </li>
+          ))}
+        </ul>
+        <p className="px-4 py-2 text-[10.5px] text-neutral-500 border-t border-neutral-100">
+          A dash means the table could not be read, which is not the same as it being empty.
+        </p>
+      </div>
+    </div>
+  );
+}

@@ -12,6 +12,7 @@ import { useToast } from "./components/Toast";
 import { todayYmd, daysAgoYmd } from "./services/tallyPull";
 import { runQuickSync } from "./services/quickSync";
 import { useQuickSyncStore } from "./store/quickSyncStore";
+import { MirrorPanel } from "./MirrorPanel";
 
 const SUPA_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
 const SUPA_ANON = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -1090,6 +1091,15 @@ export default function AgentStatus() {
               <p className="text-xs text-neutral-400 py-2">Loading push agent status…</p>
             )}
           </SectionCard>
+        </div>
+
+        {/* ── The mirror, as this machine sees it ──────────────── */}
+        {/* Sync history, data snapshot and a per-voucher push log — the three
+            things the web dashboard has had and the agent did not, so the one
+            screen in the office could report a failure without being able to
+            say which voucher or why. */}
+        <div className="md:col-span-2">
+          <MirrorPanel />
         </div>
 
         {/* ── Logs ─────────────────────────────────────────────── */}

@@ -15,6 +15,7 @@ import { startNightlySync } from "./services/nightlySync.js";
 import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
 import { announceRole, tallyRole } from "./services/tallyRole.js";
 import { isOffline, offlineReason } from "./services/supabaseClient.js";
+import { buildMirrorPanel } from "./services/mirrorPanel.js";
 import { vouchersOnDay } from "./services/localSession.js";
 import { safePush } from "./services/safePush.js";
 import type { VoucherPayload } from "./types.js";
@@ -626,6 +627,31 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
 // Status route for the strip-down status UI (Prompt 4). Always available; reports
 // `enabled:false` when the agent isn't running.
 app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()));
+
+/* ── What the agent can tell you about the mirror, without a browser ──────
+ *
+ * The web dashboard has sync logs, a data snapshot and a per-voucher push log.
+ * This machine — the one actually doing the work — had counters and a console
+ * log, so the screen open in the office could say a push had failed but not
+ * which voucher, for which party, or why. The operator standing in front of it
+ * had to go and open the web app on another device.
+ *
+ * Read-only, and it never throws: a panel that 500s when Supabase is slow is
+ * worse than one that says it could not look. */
+app.get("/api/mirror/panel", async (req, res) => {
+  const company =
+    String(req.query?.company || process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)");
+  const limit = Math.min(100, Math.max(5, Number(req.query?.limit ?? 25) || 25));
+  try {
+    res.json(await buildMirrorPanel(company, limit));
+  } catch (e: any) {
+    res.json({
+      company, offline: true, syncs: [], lastFullSyncAt: null, snapshot: [], pushes: [],
+      pushLatency: { count: 0, medianSeconds: null, slowestSeconds: null },
+      error: e?.message ?? String(e),
+    });
+  }
+});
 
 // Trigger an immediate drain tick from the status window's "Drain Now" button.
 /* ── Bank statement → receipts and payments ────────────────────────────────
