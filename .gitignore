@@ -80,3 +80,8 @@ server/data/gstr-baseline.json
 .env.*
 *.env
 !.env.example
+
+# Runtime artifacts the server writes beside itself when started from the
+# server/ directory (smoke tests, manual runs). Data, not source.
+server/server/
+**/data/tally-log.jsonl
