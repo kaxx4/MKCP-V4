@@ -343,7 +343,13 @@ async function reconcile(): Promise<void> {
   const { data, error } = await client
     .from("push_queue")
     .select("id, idempotency_key, company")
-    .in("status", ["pending", "pushing", "failed"])
+    /* `dismissed` belongs here. A dismissed row is one a person read and set
+       aside — usually Tally's silent duplicate-number refusal — and the whole
+       reason that refusal is dangerous is that the voucher MAY be in the books
+       under this row's idempotency key. Dropping dismissed rows out of
+       reconciliation would mean the one case where the operator has stopped
+       looking is also the one case nothing else is looking at. */
+    .in("status", ["pending", "pushing", "failed", "dismissed"])
     .gt("attempts", 0)
     .limit(200);
   if (error || !data) {

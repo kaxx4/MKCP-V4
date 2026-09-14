@@ -24,6 +24,7 @@ import type { VoucherPayload } from "./types.js";
 import { planBankRows, pushBankPlan, type BankPlan } from "./services/bankToReceipts.js";
 import type { ExtractedBankRow } from "./services/extraction.js";
 import { loadMasters } from "./services/tallyMasters.js";
+import { fetchPriceList } from "./services/tallyPriceList.js";
 
 import {
   startFileTransferSync, pushFileToWeb, listRecentTransfers,
@@ -227,6 +228,50 @@ app.post("/api/tally/sync-masters", syncGuard, async (req, res) => {
   } catch (e: any) {
     if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
     console.log(`[SYNC] ✗ origin=${origin} company=${company} route=sync-masters error="${e.message}" ${Date.now() - t0}ms`);
+  }
+});
+
+/**
+ * Pull the dealer price list and nothing else.
+ *
+ * The whole catalogue is one Tally request — 490 items, 1.3 MB, measured at
+ * 0.18s against the live company. It is already pulled on every masters run,
+ * but a masters run is minutes and a price refresh should not be: the operator
+ * wanting today's rates on screen should not have to re-sync the books to get
+ * them.
+ *
+ * Behind `syncGuard` like every other Tally route, because Tally's XML port is
+ * single-threaded — a quick request is still a request, and jumping the queue
+ * would wedge a sync that is already running.
+ *
+ * NEVER deletes. `syncPriceList` upserts on (company, item, level, date): a row
+ * missing from today's pull means Tally no longer reports that revision, not
+ * that the price never existed, and pruning it would silently re-price every
+ * backdated voucher that referenced it.
+ */
+app.post("/api/tally/sync-price-list", syncGuard, async (req, res) => {
+  const { company, origin = "manual" } = req.body;
+  const t0 = Date.now();
+  const ac = new AbortController();
+  res.on("close", () => { if (!res.writableEnded) ac.abort(); });
+  try {
+    const entries = await fetchPriceList(TALLY, company, ac.signal);
+    /* An empty pull is not a successful one. The commonest cause is the wrong
+       company name or Tally closed, and reporting it as success would leave the
+       page showing yesterday's rates with a fresh timestamp on them — worse
+       than an error, because it looks settled. */
+    if (entries.length === 0) {
+      if (!res.writableEnded) res.status(200).json({ success: false, error: "Tally returned no price rows — check the company name and that Tally is open.", count: 0 });
+      console.log(`[SYNC] ✗ origin=${origin} company=${company} route=sync-price-list rows=0 ${Date.now() - t0}ms`);
+      return;
+    }
+    await supabaseSync.syncPriceList(entries, company);
+    const items = new Set(entries.map((e) => e.itemName)).size;
+    if (!res.writableEnded) res.json({ success: true, count: entries.length, items, elapsedMs: Date.now() - t0 });
+    console.log(`[SYNC] ✓ origin=${origin} company=${company} route=sync-price-list rows=${entries.length} items=${items} ${Date.now() - t0}ms`);
+  } catch (e: any) {
+    if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
+    console.log(`[SYNC] ✗ origin=${origin} company=${company} route=sync-price-list error="${e.message}" ${Date.now() - t0}ms`);
   }
 });
 

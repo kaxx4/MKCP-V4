@@ -23,8 +23,18 @@
 
 /* ─── Focus Ring ──────────────────────────────────────────── */
 *:focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid #2f5fe0;
   outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Inputs, selects and buttons carry their own ring already; 3px keeps the two
+   from touching. Same values as the web app. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline-offset: 3px;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -42,16 +52,26 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* Matched to the web dashboard's "Refined Minimal" base. The sync agent and
+     the web app are opened by the same person on the same desk, against the
+     same books; they had no business being set in different typefaces on
+     different grounds. Only the tokens differed — the component vocabulary
+     (.card, .btn-*, .badge-*, .form-*) is already the same in both — so this is
+     a token change, not a rewrite of the two screens. */
   body {
-    background-color: #f5f5f7;
-    color: #1d1d1f;
-    font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-    font-size: 15px;
-    line-height: 1.6;
+    background-color: #eeefec;
+    color: #16161a;
+    font-family: "Plus Jakarta Sans", "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 14.5px;
+    line-height: 1.55;
     font-weight: 400;
+    /* Tabular figures at the root, as the web app does. Every number on this
+       window is a count, a rupee figure or a timestamp, and proportional digits
+       make a column of them shuffle sideways as they tick. */
+    font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    text-rendering: auto;
+    text-rendering: optimizeLegibility;
     text-wrap: pretty;
     overflow-x: hidden;
   }
@@ -69,12 +89,12 @@
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #a1a1a6;
+    background: #9a9aa0;
   }
 
   /* Selection */
   ::selection {
-    background-color: #2563eb;
+    background-color: #2f5fe0;
     color: #ffffff;
   }
 }
