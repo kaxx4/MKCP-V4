@@ -75,7 +75,6 @@
 
 /* ── surfaces: flat, hairlined, generously rounded ───────────────── */
 [data-theme="bento"] .card,
-[data-theme="bento"] .bento-card,
 [data-theme="bento"] .card-elevated,
 [data-theme="bento"] .card-interactive {
   background-color: var(--card);
