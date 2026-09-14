@@ -72,6 +72,16 @@ export interface PushLogRow {
   waitedSeconds: number | null;
 }
 
+export interface EditLogRow {
+  id: number;
+  at: string;
+  who: string;
+  domain: string;
+  table: string;
+  action: string;
+  count: number | null;
+}
+
 export interface MirrorPanel {
   company: string;
   offline: boolean;
@@ -79,7 +89,30 @@ export interface MirrorPanel {
   lastFullSyncAt: string | null;
   snapshot: MirrorSnapshot[];
   pushes: PushLogRow[];
-  pushLatency: { count: number; medianSeconds: number | null; slowestSeconds: number | null };
+  /**
+   * The two legs, never blended.
+   *
+   * `pickup` is queued → claimed: how long before the agent NOTICED. That is
+   * the app's own responsiveness and it is sub-second, because the agent
+   * subscribes to `push_queue` inserts and the 4-second poll is only a
+   * guarantee behind it.
+   *
+   * `inTally` is claimed → pushed: Tally importing the voucher, roughly eight
+   * seconds each and SERIALISED, because Tally's XML port is single-threaded.
+   * Six vouchers claimed in the same instant finished 9, 18 and 25 seconds
+   * apart.
+   *
+   * One blended number reads as "the app took 25 seconds" when the app took
+   * half of one — which is how I first mis-read this myself, from a single row.
+   */
+  pushLatency: {
+    count: number;
+    pickupMedian: number | null;
+    inTallyMedian: number | null;
+    inTallySlowest: number | null;
+  };
+  /** Who changed what — the same `config_edit_log` the web Activity Log reads. */
+  edits: EditLogRow[];
 }
 
 const MIRROR_TABLES: { table: string; dateColumn?: string }[] = [
@@ -103,7 +136,8 @@ export async function buildMirrorPanel(company: string, limit = 25): Promise<Mir
   if (!client) {
     return {
       company, offline: true, syncs: [], lastFullSyncAt: null,
-      snapshot: [], pushes: [], pushLatency: { count: 0, medianSeconds: null, slowestSeconds: null },
+      snapshot: [], pushes: [], edits: [],
+      pushLatency: { count: 0, pickupMedian: null, inTallyMedian: null, inTallySlowest: null },
     };
   }
 
@@ -200,20 +234,53 @@ export async function buildMirrorPanel(company: string, limit = 25): Promise<Mir
   /* Negative waits are dropped rather than averaged in: they are rows stamped
      before the database-clock trigger existed, and one of them drags a median
      somewhere impossible. */
-  const waits = pushes.map((p) => p.waitedSeconds).filter((n): n is number => n !== null && n >= 0).sort((a, b) => a - b);
-  const median = waits.length ? waits[Math.floor(waits.length / 2)] : null;
+  const med = (xs: number[]): number | null =>
+    xs.length ? xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)] : null;
+
+  const secs = (from: string | null, to: string | null): number | null =>
+    from && to ? Math.round(((new Date(to).getTime() - new Date(from).getTime()) / 1000) * 10) / 10 : null;
+
+  const pickups = pushes
+    .map((p) => secs(p.createdAt, p.claimedAt))
+    .filter((n): n is number => n !== null && n >= 0);
+  const inTally = pushes
+    .map((p) => secs(p.claimedAt, p.pushedAt))
+    .filter((n): n is number => n !== null && n >= 0);
+
+  /* ── Edit log ──────────────────────────────────────────────────────── */
+  const { data: editRows } = await client
+    .from("config_edit_log")
+    .select("id,created_at,actor,device_name,domain,table_name,action,entity_count")
+    .eq("company", company)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  const edits: EditLogRow[] = (editRows ?? []).map((r: any) => ({
+    id: Number(r.id),
+    at: r.created_at,
+    /* The signed-in profile when there is one, otherwise the device. "Unknown"
+       only when neither exists — which is itself worth seeing rather than
+       hiding behind a blank. */
+    who: r.actor || r.device_name || "Unknown",
+    domain: r.domain ?? "—",
+    table: r.table_name ?? "—",
+    action: r.action ?? "—",
+    count: r.entity_count == null ? null : Number(r.entity_count),
+  }));
 
   return {
     company,
     offline: false,
     syncs,
+    edits,
     lastFullSyncAt: fullRow ? (fullRow as any).completed_at ?? (fullRow as any).started_at : null,
     snapshot,
     pushes,
     pushLatency: {
-      count: waits.length,
-      medianSeconds: median,
-      slowestSeconds: waits.length ? waits[waits.length - 1] : null,
+      count: inTally.length,
+      pickupMedian: med(pickups),
+      inTallyMedian: med(inTally),
+      inTallySlowest: inTally.length ? Math.max(...inTally) : null,
     },
   };
 }
