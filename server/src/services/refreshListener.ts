@@ -293,6 +293,41 @@ function subscribeForCompany(
     }
   }
 
+  /**
+   * The price-list-only path.
+   *
+   * Retries on 409 the same way `fireBatch` does, and for the same reason:
+   * Tally's XML port is single-threaded, so "another sync is running" is a
+   * wait, not a failure. Marking it `error` would put a red state on a button
+   * whose request is perfectly good and about to be servable.
+   */
+  async function firePriceList(id: number, attempt = 0): Promise<void> {
+    try {
+      const resp = await postTallySync(
+        localPort, { company, origin: "web-price-list" }, "/api/tally/sync-price-list",
+      );
+      if (resp.ok && resp.json?.success) {
+        console.log(`🌐 [WEB-SYNC] ✓ Price list [${id}]: ${resp.json.count} rows, ${resp.json.items} items in ${resp.json.elapsedMs}ms`);
+        await setStatus([id], "done");
+        return;
+      }
+      if (resp.status === 409 && attempt < MAX_BUSY_RETRIES) {
+        console.log(`🌐 [WEB-SYNC] ⏭ Price list busy — retry ${attempt + 1}/${MAX_BUSY_RETRIES} in ${COALESCE_MS / 1000}s [${id}]`);
+        setTimeout(() => void firePriceList(id, attempt + 1), COALESCE_MS);
+        return;
+      }
+      /* A zero-row pull comes back 200 with success:false — the wrong company,
+         or Tally closed. It is reported as an error rather than passing as a
+         refresh, because the alternative is yesterday's rates wearing today's
+         timestamp. */
+      console.error(`🌐 [WEB-SYNC] ✗ Price list [${id}]: ${resp.json?.error ?? `HTTP ${resp.status}`}`);
+      await setStatus([id], "error");
+    } catch (err: any) {
+      console.error(`🌐 [WEB-SYNC] ✗ Price list [${id}]: ${err.message}`);
+      await setStatus([id], "error");
+    }
+  }
+
   // One channel per company so multiple desktop instances don't cross-trigger.
   const channelName = `refresh-listener-${company
     .replace(/[^a-zA-Z0-9]/g, "_")
@@ -313,6 +348,21 @@ function subscribeForCompany(
       async (payload) => {
         const id: number = (payload.new as any).id;
         const days = (payload.new as any).days;
+        const scope: string | null = (payload.new as any).scope ?? null;
+
+        /* A scoped command is NOT merged into the burst buffer. The buffer
+           coalesces by taking the WIDEST date window, which is the right rule
+           for "pull the books" and a nonsense one here: a price-list pull has
+           no date window at all, and folding it in would silently turn a 0.18s
+           request into a minutes-long whole-plan sync — or, worse, let a
+           price-only click widen someone else's 7-day refresh. Different
+           question, different route. */
+        if (scope === "price_list") {
+          await setStatus([id], "ack");
+          void firePriceList(id);
+          return;
+        }
+
         // Add to the burst buffer BEFORE any await — Node runs this synchronous
         // section to completion, so concurrent handlers can't race on `batch`.
         if (!batch) {
