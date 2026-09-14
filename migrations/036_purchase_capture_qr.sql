@@ -45,4 +45,5 @@ ALTER TABLE purchase_captures
 
 COMMENT ON COLUMN purchase_captures.qr IS
   'Decoded invoice QR (QrAnchor) or null. Survives a re-read, unlike `extracted`. '
-  'Measured hit rate 2.6% on the Mar-2026 corpus, e-way bill only — a bonus anchor, never required.';
+  'Measured over 224 real bills: ~6% carry a readable QR, ~2% the e-invoice one that also '
+  'gives document number, date and total. A bonus anchor, never required.';
