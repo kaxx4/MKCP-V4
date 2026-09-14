@@ -1,6 +1,24 @@
+const path = require("node:path");
+
+/* Content globs are ABSOLUTE, resolved against this config file.
+
+   Tailwind resolves a relative `content` glob against process.cwd(), not
+   against the config. Any tool that starts the dev server from a directory
+   other than this one therefore matches ZERO source files, and Tailwind emits a
+   stylesheet with preflight and the @layer components rules — neither of which
+   depends on the content scan — but not one utility class. The window then
+   renders as a single column of unstyled text, which reads as a broken
+   stylesheet rather than a scan that found nothing, and production is
+   unaffected, which is what lets it survive.
+
+   The web dashboard hit this and fixed it the same way; this config had not
+   been given the same treatment. Anchoring to __dirname makes the scan
+   independent of where the process was launched from. */
+const here = (p) => path.join(__dirname, p);
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  content: [here("index.html"), here("src/**/*.{ts,tsx}")],
   theme: {
     extend: {
       colors: {
@@ -22,17 +40,28 @@ module.exports = {
 
         // ─── Primary Accent (Blue) ──────────────────────────────────
         // Kept as specified by user (#2563eb)
+        /* Same palette as the web dashboard (MKCP MOB2/web-dashboard). The two
+           apps sit side by side on the same desk, opened by the same person,
+           showing the same books — and were running different design systems:
+           this one on the older "Bold Financial" scheme (IBM Plex Sans, accent
+           #2563eb), the web app on "Refined Minimal" (Plus Jakarta Sans, accent
+           #2f5fe0). The class vocabulary was already shared, so only the tokens
+           had drifted; they are matched here rather than the components being
+           rewritten. */
         accent: {
           50: "#f0f9ff",
           100: "#e0f2fe",
           200: "#bae6fd",
           300: "#7dd3fc",
           400: "#38bdf8",
-          DEFAULT: "#2563eb",       // Primary action color
-          600: "#2563eb",           // Alias for consistency
+          DEFAULT: "#2f5fe0",
+          600: "#2f5fe0",
           700: "#1d4ed8",
           800: "#1e40af",
           900: "#1e3a8a",
+          /* Explicit tint token rather than an opacity trick, so a badge on a
+             card reads the same as one on the page ground. */
+          soft: "#eaf0fd",
         },
 
         // ─── Semantic Colors ────────────────────────────────────────
@@ -95,16 +124,16 @@ module.exports = {
           50: "#fafafa",
           100: "#f5f5f7",
           150: "#f0f0f3",
-          200: "#e5e5ea",
+          200: "#e7e7e3",
           250: "#d9d9e3",
           300: "#d0d0d5",
           400: "#c7c7cc",
-          500: "#a1a1a6",
+          500: "#9a9aa0",
           600: "#8e8e93",       // Secondary text
-          700: "#6c6c70",       // Tertiary text
+          700: "#6b6b70",       // Tertiary text
           800: "#545458",
           900: "#424245",       // Primary text (light mode)
-          950: "#1d1d1f",       // Primary text (alternative)
+          950: "#16161a",       // Primary text (alternative)
         },
 
         // ─── Primary Text Colors ────────────────────────────────────
@@ -136,6 +165,7 @@ module.exports = {
       // ─── Typography System (IBM Plex - Bold Financial Dashboard) ──
       fontFamily: {
         sans: [
+          '"Plus Jakarta Sans"',
           '"IBM Plex Sans"',
           '-apple-system',
           'BlinkMacSystemFont',
