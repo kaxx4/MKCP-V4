@@ -197,25 +197,81 @@ async function killPortProcess(port) {
 // process doesn't have that package on its own module path (it's the
 // server workspace's dependency, not the root app's), and the format is
 // simple enough not to need it.
-function loadPackagedEnv() {
-  const envPath = isDev
-    ? path.join(__dirname, '../server/.env')
-    : path.join(process.resourcesPath, 'server/.env');
-  if (!fs.existsSync(envPath)) {
-    console.warn(`[server] No .env found at ${envPath} — Supabase-dependent features (sync, remote refresh, push agent) will self-disable until one is provided.`);
-    return;
-  }
-  const lines = fs.readFileSync(envPath, 'utf8').split('\n');
-  for (const rawLine of lines) {
+/** Read KEY=VALUE pairs from a file into process.env, never overriding. */
+function applyEnvFile(envPath) {
+  if (!envPath || !fs.existsSync(envPath)) return 0;
+  let applied = 0;
+  for (const rawLine of fs.readFileSync(envPath, 'utf8').split('\n')) {
     const line = rawLine.replace(/\r$/, ''); // tolerate CRLF
     const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/);
     if (!m) continue;
     const [, key, rawValue] = m;
     // Same precedence dotenv uses: never override a value already set
-    // (e.g. by a real OS-level env var at launch).
+    // (e.g. by a real OS-level env var at launch, or an earlier file here).
     if (process.env[key] === undefined) {
       process.env[key] = rawValue.replace(/^["']|["']$/g, '');
+      applied++;
     }
+  }
+  return applied;
+}
+
+/**
+ * Where this machine's credentials come from, in order.
+ *
+ * -- Why there is an order at all -----------------------------------------
+ *
+ * The installer BUNDLES server/.env, which holds a live Supabase SERVICE-ROLE
+ * key: 219 characters of JWT that bypasses row-level security on every table in
+ * the database. That was a deliberate choice -- it replaced a key hardcoded
+ * into this very file, which had already been committed to git -- and it works.
+ * It also means the .exe is itself a secret: anyone handed a copy holds full
+ * read/write on the company's books.
+ *
+ * Verified 2026-09-14 by unpacking the installer and reading the key straight
+ * out of resources/server/.env.
+ *
+ * So there is now a place for credentials that is NOT inside the installer: a
+ * .env in the app's own userData folder, per machine, never copied when the
+ * .exe is. It is read FIRST, and since nothing here overrides a value that is
+ * already set, whatever it provides the bundled file can no longer change.
+ *
+ * That makes a keyless build possible -- drop ".env" from extraResources and
+ * put one file on each machine -- without breaking any install that already
+ * depends on the bundled one. Until a build does that, the honest description
+ * of the .exe is "a secret": do not email it, upload it, or hand it on.
+ */
+function loadPackagedEnv() {
+  const userEnv = path.join(app.getPath('userData'), '.env');
+  const applied = applyEnvFile(userEnv);
+  if (applied > 0) {
+    console.log(`[server] Loaded ${applied} setting(s) from ${userEnv} (takes precedence over the bundled .env).`);
+  }
+
+  const bundled = isDev
+    ? path.join(__dirname, '../server/.env')
+    : path.join(process.resourcesPath, 'server/.env');
+
+  if (!fs.existsSync(bundled)) {
+    if (applied === 0) {
+      console.warn(`[server] No .env at ${userEnv} or ${bundled} - Supabase-dependent features (sync, remote refresh, push agent) will self-disable until one is provided.`);
+    }
+    return;
+  }
+
+  const hadKeyAlready = process.env.SUPABASE_SERVICE_KEY !== undefined;
+  applyEnvFile(bundled);
+
+  /* Said out loud, every launch, when the key in use came out of the installer.
+     A secret shipped inside a file people pass around is not something to
+     record once in a comment and forget. */
+  if (!hadKeyAlready && process.env.SUPABASE_SERVICE_KEY) {
+    console.warn(
+      `[server] SECURITY: the Supabase service-role key was read from the BUNDLED ${bundled}. ` +
+      `Every copy of this installer carries it, so treat the .exe as a secret. ` +
+      `To stop shipping it: put SUPABASE_SERVICE_KEY in ${userEnv} on each machine, ` +
+      `then drop ".env" from extraResources in electron-builder.json5.`,
+    );
   }
 }
 
