@@ -13,8 +13,15 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import {
-  Database, History, ArrowUpRight, RefreshCw, Check, AlertTriangle, Loader2, Minus, Clock,
+  Database, History, ArrowUpRight, RefreshCw, Check, AlertTriangle, Loader2, Minus, Clock, PenLine,
 } from "lucide-react";
+
+const ACTION_TONE: Record<string, string> = {
+  upsert: "bg-blue-50 text-blue-700",
+  delete: "bg-red-50 text-red-700",
+  export: "bg-purple-50 text-purple-700",
+  import: "bg-amber-50 text-amber-700",
+};
 
 const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
 
@@ -28,10 +35,18 @@ interface PushRow {
   amount: number; attempts: number; lastError: string | null;
   createdAt: string; claimedAt: string | null; pushedAt: string | null; waitedSeconds: number | null;
 }
+interface EditRow {
+  id: number; at: string; who: string; domain: string; table: string; action: string; count: number | null;
+}
+interface WhoAmI {
+  app?: string; version?: string; pid?: number; startedAt?: string;
+  role?: string | null; pushAgentEnabledEnv?: boolean; hasSupabaseKey?: boolean;
+}
+
 interface Panel {
   company: string; offline: boolean; syncs: SyncRun[]; lastFullSyncAt: string | null;
-  snapshot: Snapshot[]; pushes: PushRow[];
-  pushLatency: { count: number; medianSeconds: number | null; slowestSeconds: number | null };
+  snapshot: Snapshot[]; pushes: PushRow[]; edits: EditRow[];
+  pushLatency: { count: number; pickupMedian: number | null; inTallyMedian: number | null; inTallySlowest: number | null };
   error?: string;
 }
 
@@ -53,15 +68,76 @@ const TONE: Record<string, string> = {
   pushing: "text-blue-700", failed: "text-red-700", cancelled: "text-neutral-400",
 };
 
+declare const __APP_VERSION__: string;
+
+/**
+ * Is the server on port 3100 actually OURS?
+ *
+ * It can be a leftover standalone `node dist/index.js` from an earlier session
+ * or a second copy of the app. When it is, this app's own server never binds —
+ * `EADDRINUSE` goes to a console nobody reads — and every screen here talks to
+ * a stale build started with a different environment.
+ *
+ * That happened on 14-Sep-2026: a server from the previous evening held the
+ * port, so the mirror panel 404'd AND the push agent read as disabled, and the
+ * only advice on screen was about a `.env` that was already correct. Two wrong
+ * readings from one invisible cause, and no way to see it from inside the app.
+ */
+function StaleServerBanner({ who, reachable }: { who: WhoAmI | null; reachable: boolean }) {
+  const mine = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : null;
+  const theirs = who?.version;
+  /* Only when we can actually TELL. An older server has no /api/whoami at all,
+     which is itself the signal — but a network blip is not, so an unreachable
+     server says nothing here and the panel's own message covers it. */
+  const mismatch = reachable && (!who || (!!mine && !!theirs && theirs !== mine && theirs !== "unknown"));
+  if (!mismatch) return null;
+
+  return (
+    <div className="bg-yellow-50 border border-yellow-300 rounded-xl px-4 py-3 text-xs text-yellow-900">
+      <div className="flex items-start gap-2">
+        <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <div>
+          <p className="font-semibold">
+            Another MK Cycles server is holding port 3100 — this window is talking to it, not to its own.
+          </p>
+          <p className="mt-1">
+            {who?.version
+              ? <>It reports version <b>{who.version}</b>{who.pid ? <> (pid {who.pid})</> : null}
+                  {who.startedAt ? <>, started {new Date(who.startedAt).toLocaleString()}</> : null}.
+                  This app is <b>{mine}</b>.</>
+              : <>It does not answer <code>/api/whoami</code>, so it predates this build.</>}
+          </p>
+          <p className="mt-1">
+            Everything on this screen — the push agent's state included — is that server's, and it was
+            started with whatever environment existed then. Quit it and restart this app.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function MirrorPanel() {
   const [panel, setPanel] = useState<Panel | null>(null);
+  const [who, setWho] = useState<WhoAmI | null>(null);
+  const [reachable, setReachable] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setBusy(true);
     try {
+      /* whoami FIRST, and separately: if the wrong server is answering, that is
+         the thing to say, and it explains whatever the panel does next. */
+      try {
+        const w = await fetch(`${BASE}/api/whoami`);
+        setReachable(true);
+        setWho(w.ok ? ((await w.json()) as WhoAmI) : null);
+      } catch {
+        setReachable(false);
+        setWho(null);
+      }
       const r = await fetch(`${BASE}/api/mirror/panel?limit=25`);
-      setPanel(await r.json());
+      setPanel(r.ok ? await r.json() : null);
     } catch {
       setPanel(null);
     } finally {
@@ -77,8 +153,14 @@ export function MirrorPanel() {
 
   if (!panel) {
     return (
-      <div className="bg-white rounded-xl border border-neutral-200 px-4 py-3 text-xs text-neutral-500">
-        {busy ? "Reading the mirror…" : "Could not reach the local server."}
+      <div className="space-y-3">
+        <StaleServerBanner who={who} reachable={reachable} />
+        <div className="bg-white rounded-xl border border-neutral-200 px-4 py-3 text-xs text-neutral-500">
+          {busy ? "Reading the mirror…"
+            : reachable
+              ? "The server on port 3100 answered, but not with this panel — see above."
+              : "Could not reach the local server on port 3100."}
+        </div>
       </div>
     );
   }
@@ -96,6 +178,8 @@ export function MirrorPanel() {
 
   return (
     <div className="space-y-3">
+      <StaleServerBanner who={who} reachable={reachable} />
+
       {/* ── How fast a queued voucher actually reaches Tally ────────────── */}
       <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
         <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
@@ -110,21 +194,33 @@ export function MirrorPanel() {
             <span className="text-neutral-500">Nothing has been pushed yet, so there is no timing to show.</span>
           ) : (
             <>
-              <span className="font-mono text-lg font-bold text-neutral-900">
-                {lat.medianSeconds}s
-              </span>{" "}
-              typical wait from queued to in Tally
-              <span className="text-neutral-500">
-                {" "}· slowest {lat.slowestSeconds}s · {lat.count} measured
-              </span>
-              {/* The agent takes the realtime INSERT as its cue and polls every
-                  4 s as the guarantee, so anything much above 4 s means the
-                  realtime channel is not delivering and the poll is carrying it
-                  alone — worth knowing before it becomes a complaint. */}
-              {lat.medianSeconds !== null && lat.medianSeconds > 6 && (
+              {/* TWO figures, never one. The app's own responsiveness and
+                  Tally's import time are different things with different
+                  remedies, and blending them reads as "the app took 25
+                  seconds" when the app took half of one. */}
+              <div className="flex flex-wrap gap-x-6 gap-y-1">
+                <span>
+                  <span className="font-mono text-lg font-bold text-neutral-900">{lat.pickupMedian ?? "—"}s</span>{" "}
+                  to pick up
+                  <span className="text-neutral-500"> · this app noticing</span>
+                </span>
+                <span>
+                  <span className="font-mono text-lg font-bold text-neutral-900">{lat.inTallyMedian ?? "—"}s</span>{" "}
+                  in Tally
+                  <span className="text-neutral-500">
+                    {lat.inTallySlowest != null ? ` · slowest ${lat.inTallySlowest}s` : ""} · {lat.count} measured
+                  </span>
+                </span>
+              </div>
+              <p className="mt-1 text-neutral-500">
+                Pickup is sub-second because the agent listens for the insert; the poll behind it is only a
+                guarantee. The rest is Tally importing, one voucher at a time — its XML port is
+                single-threaded, so a batch finishes in sequence rather than together.
+              </p>
+              {lat.pickupMedian != null && lat.pickupMedian > 6 && (
                 <p className="mt-1 text-yellow-700">
-                  Slower than the 4-second poll, which suggests the realtime channel is not delivering
-                  and every push is waiting for a tick.
+                  Pickup is slower than the 4-second poll, which means the realtime channel is not
+                  delivering and every push is waiting for a tick.
                 </p>
               )}
             </>
@@ -211,24 +307,59 @@ export function MirrorPanel() {
         </ul>
       </div>
 
-      {/* ── Snapshot ───────────────────────────────────────────────────── */}
+      {/* ── Snapshot ─────────────────────────────────────────────────────
+          Tiles rather than a list, matching the web Sync Logs page — the same
+          five figures in the same shape, so the two screens can be read
+          against each other without translating. */}
       <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
         <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
           <Database size={14} className="text-neutral-500" />
           <h2 className="font-semibold text-sm text-neutral-700 flex-1">Data snapshot</h2>
         </div>
-        <ul className="divide-y divide-neutral-100">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 p-3">
           {panel.snapshot.map((s) => (
-            <li key={s.table} className="px-4 py-1.5 flex items-baseline gap-2 text-[11px]">
-              <span className="font-mono text-neutral-700">{s.table}</span>
-              <span className="ml-auto font-mono font-semibold text-neutral-900">{n(s.rows)}</span>
-              {s.newest && <span className="text-neutral-400 w-24 text-right">to {s.newest}</span>}
-            </li>
+            <div key={s.table} className="rounded-lg border border-neutral-200 px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-500 truncate" title={s.table}>
+                {s.table.replace(/^tally_/, "").replace(/_/g, " ")}
+              </div>
+              <div className="font-mono text-lg font-bold text-neutral-900 tabular-nums">{n(s.rows)}</div>
+              {s.newest && <div className="text-[10px] text-neutral-400">to {s.newest}</div>}
+            </div>
           ))}
-        </ul>
+        </div>
         <p className="px-4 py-2 text-[10.5px] text-neutral-500 border-t border-neutral-100">
           A dash means the table could not be read, which is not the same as it being empty.
         </p>
+      </div>
+
+      {/* ── Activity log ─────────────────────────────────────────────────
+          Who changed what, from the same `config_edit_log` the web page reads.
+          Here because the agent is the machine people stand in front of when
+          something looks wrong, and "did someone change the discount rules?" is
+          one of the first questions. */}
+      <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
+          <PenLine size={14} className="text-neutral-500" />
+          <h2 className="font-semibold text-sm text-neutral-700 flex-1">Activity log</h2>
+          <span className="text-[11px] text-neutral-500">{panel.edits.length} most recent</span>
+        </div>
+        {panel.edits.length === 0 ? (
+          <p className="px-4 py-3 text-xs text-neutral-500">Nothing recorded yet.</p>
+        ) : (
+          <ul className="divide-y divide-neutral-100 max-h-[240px] overflow-auto">
+            {panel.edits.map((e) => (
+              <li key={e.id} className="px-4 py-1.5 flex items-baseline gap-2 text-[11px]">
+                <span className={`px-1.5 rounded text-[10px] font-bold shrink-0 ${ACTION_TONE[e.action] ?? "bg-neutral-100 text-neutral-600"}`}>
+                  {e.action}
+                </span>
+                <span className="font-semibold truncate" title={`${e.domain} · ${e.table}`}>{e.domain}</span>
+                {e.count != null && <span className="text-neutral-500 shrink-0">×{e.count}</span>}
+                <span className="text-neutral-500 truncate" title={e.who}>{e.who}</span>
+                <span className="ml-auto shrink-0 text-neutral-400">{when(e.at)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
