@@ -21,20 +21,24 @@
 --
 -- ── What this is worth, measured rather than assumed ─────────────────────
 --
--- Very little on most bills, and that is the honest reason it is a nullable
--- column and not a required step. Measured over 38 real supplier invoices
--- (PURCHASE INVOICES/MAR 01042026, 14-Sep-2026), using the exact ladder the app
--- ships: ONE decoded — 2.6% — and it was an e-way bill QR carrying a GSTIN and a
--- date, with no document number, no total and no IRN. Zero e-invoice (IRN) QRs
--- decoded, which confirms the earlier four-bill finding recorded in
--- invoiceQr.ts. The dense ~800-character IRN JWT does not survive a phone photo
--- of a fax-quality invoice.
+-- Not much on most bills, which is the honest reason this is a nullable column
+-- and not a required step. Measured over 224 real supplier invoices using the
+-- exact ladder the app ships (14-Sep-2026):
 --
--- So this anchors the VENDOR and sometimes the date, on a minority of bills. It
--- is a bonus, never a prerequisite: a bill with no readable QR must import
--- exactly as it does today. Anyone tempted to build a matching flow on the
--- assumption that the QR supplies number/date/total should re-run
--- web-dashboard/scripts/measure-invoice-qr.mts first.
+--   MAR, 38 images  :  1 decoded (2.6%) -- e-way bill only
+--   JAN+FEB, 186    : 13 decoded (7%)   -- 9 e-way bill, 4 e-invoice
+--
+-- An earlier version of this header, written off the 38-image run alone, said
+-- zero e-invoice QRs decode. That was wrong, and the wider corpus corrected it:
+-- four did, and each carried the lot -- document number, date, total and IRN
+-- (e.g. 2278/2025-26, 28-Jan-2026, Rs 141,120). The dense ~800-character IRN
+-- JWT is not undecodable from a phone photo; it is UNRELIABLE from one.
+--
+-- So: roughly 1 bill in 20 yields a vendor GSTIN and a date, and 1 in 50 yields
+-- the full set. That is worth capturing and worth nothing to plan around. A
+-- bill with no readable QR must import exactly as it does today, and anyone
+-- sizing a matching flow on "the QR gives us number/date/total" should re-run
+-- web-dashboard/scripts/measure-invoice-qr.mts before believing it.
 
 ALTER TABLE purchase_captures
   ADD COLUMN IF NOT EXISTS qr jsonb;
