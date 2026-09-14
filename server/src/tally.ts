@@ -1,6 +1,8 @@
 import * as http from "node:http";
 import { URL } from "node:url";
 import { XMLParser } from "fast-xml-parser";
+import { recordTallyCall, classify, truncateForLog } from "./services/tallyLog.js";
+import { mockTransport } from "./services/tallyMock.js";
 
 // ─────────────────────────────────────────────────────────────────────
 // XML Parser ───────────────────────────────────────────────────────────
@@ -26,6 +28,111 @@ const ARRAY_TAGS = new Set([
 ]);
 
 /**
+ * Everything that happens to a response body once it has arrived.
+ *
+ * Factored out so the mock transport goes through the SAME interpretation the
+ * live socket does — the LINEERROR rejection, the exception log, the rawMode
+ * branch and the parse. A mock that skips this would be testing a code path
+ * production never runs, which is worse than no mock.
+ *
+ * Throws on a Tally-reported error or a parse failure; the caller settles.
+ */
+function interpretResponse(
+  xml: string, body: string, label: string, ms: number, totalBytes: number,
+  timeoutMs: number, rawMode: boolean, via: "tally" | "mock",
+): any {
+  console.log(`[${via}] ✓ ${label}: ${totalBytes} bytes in ${ms}ms`);
+
+  const lineError = body.includes("<LINEERROR>")
+    ? body.match(/<LINEERROR>([^<]*)/)?.[1] || "unknown"
+    : null;
+  if (lineError) console.error(`[${via}] ✗  TALLY ERROR: ${lineError}`);
+
+  /* ── The exception log (guardrail P8) ──────────────────────────────
+     Recorded HERE because this is the single chokepoint every request
+     shape passes through — reads and writes alike. Today a read failure
+     leaves only a console line naming the chunk, and a write failure
+     loses its request XML entirely, so there is no record anywhere of
+     WHICH shapes fail. Full bodies are kept on a failure only; a
+     success keeps a digest, because 3,000 successful vouchers a day
+     would bury the interesting rows. Never throws. */
+  {
+    const verdict = classify(body);
+    const num = (tag: string) => {
+      // `\\d`, not `\d`. In a template literal `\d` collapses to a bare "d",
+      // so this read `<CREATED>(d+)</CREATED>` and matched nothing — every
+      // created/altered/deleted/errors/exceptions field in the log was
+      // silently undefined. Found while wiring the mock, 13-Sep-2026.
+      const m = body.match(new RegExp(`<${tag}>\\s*(\\d+)\\s*</${tag}>`, "i"));
+      return m ? Number(m[1]) : undefined;
+    };
+    const isImport = /<TALLYREQUEST>\s*Import/i.test(xml);
+    const bad = verdict.outcome !== "ok";
+    recordTallyCall({
+      at: new Date().toISOString(),
+      label,
+      kind: isImport ? "Import" : (xml.match(/<TYPE>([^<]+)<\/TYPE>/i)?.[1] ?? "Collection"),
+      objectType: xml.match(/<COLLECTION[^>]*>\s*<TYPE>([^<]+)<\/TYPE>/i)?.[1],
+      fields: [...xml.matchAll(/<NATIVEMETHOD>([^<]+)<\/NATIVEMETHOD>/gi)].map((m) => m[1]),
+      filter: xml.match(/<SYSTEM[^>]*NAME="[^"]*"[^>]*>([\s\S]*?)<\/SYSTEM>/i)?.[1],
+      timeoutMs,
+      elapsedMs: ms,
+      bytesIn: totalBytes,
+      outcome: verdict.outcome,
+      note: verdict.note,
+      created: num("CREATED"),
+      altered: num("ALTERED"),
+      deleted: num("DELETED"),
+      errors: num("ERRORS"),
+      exceptions: num("EXCEPTIONS"),
+      lineErrors: lineError ? [lineError] : undefined,
+      ...(bad ? { requestXml: truncateForLog(xml), responseXml: truncateForLog(body) } : {}),
+    });
+  }
+
+  if (rawMode) return body;
+
+  // A LINEERROR response used to be resolved same as a real success —
+  // every convertX() in converters/convert.ts falls through its
+  // "no DATA node" branch for this exact shape (no ENVELOPE.BODY.DATA
+  // on an error response), returning `{ tallymessage: [] }` — visually
+  // identical to a legitimately empty collection. That silently
+  // reported failed pulls (wrong company name, Tally not ready, an
+  // invalid TDL request) as "0 rows synced" instead of a sync
+  // failure. Reject here instead, once, at the source — every
+  // consumer's existing catch/retry handling picks it up from there.
+  if (lineError) throw new Error(`Tally reported an error: ${lineError}`);
+
+  /* ── G7, at the only place that can enforce it for every reader ──────────
+     A response with no <DATA> node is an error-shaped envelope, not a result.
+     Every convertX() in converters/convert.ts falls through its "no DATA"
+     branch for this shape and returns `{ tallymessage: [] }` — which is
+     byte-identical to a legitimately empty collection. That is the blind spot
+     the edge-case catalogue found: damage reported as a clean zero.
+
+     Safe to reject here because this branch is reads only. Measured
+     13-Sep-2026: all 8 captured response shapes carry a DATA node, and every
+     push path (safePush, pushListener, billSettlement, reconcile,
+     statusRoutine, localSession, changeDetector) passes rawMode=true and so
+     never reaches this line. */
+  if (!/<DATA>/i.test(body)) {
+    throw new Error(
+      `Tally returned no <DATA> node (${totalBytes} bytes) for "${label}". This is an ` +
+      `error-shaped envelope, not an empty result — reporting it as "0 rows synced" is ` +
+      `how a failed pull looks exactly like a quiet day.`,
+    );
+  }
+
+  try {
+    return xmlParser.parse(body);
+  } catch (parseErr: any) {
+    console.error(`[${via}] ✗ XML parse failed: ${parseErr.message}`);
+    console.error(`[${via}]   First 500 chars: ${body.slice(0, 500)}`);
+    throw new Error(`XML parse failed: ${parseErr.message}`);
+  }
+}
+
+/**
  * POST XML to Tally using node:http with SOCKET-LEVEL timeout.
  * Unlike fetch(), this properly handles Tally's slow response generation.
  *
@@ -36,6 +143,20 @@ const ARRAY_TAGS = new Set([
  * @param signal    Optional AbortSignal to cancel the request externally
  */
 export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, rawMode = false, signal?: AbortSignal): Promise<any> {
+  /* ── The mock (Phase 1.2) ────────────────────────────────────────────────
+     Intercepted here, at the one place every request shape passes through,
+     so a test exercises the real builders, the real converters and the real
+     error handling — only the socket is replaced. Null in production; an
+     installed transport is always a deliberate act by a test. */
+  const mock = mockTransport();
+  if (mock) {
+    const label = xml.match(/<ID[^>]*>([^<]+)/)?.[1] || "request";
+    const t0 = Date.now();
+    return mock(tallyUrl, xml, timeoutMs).then((body) =>
+      interpretResponse(xml, body, label, Date.now() - t0, Buffer.byteLength(body), timeoutMs, rawMode, "mock"),
+    );
+  }
+
   return new Promise((resolve, reject) => {
     const url = new URL(tallyUrl);
     const label = xml.match(/<ID[^>]*>([^<]+)/)?.[1] || "request";
@@ -111,36 +232,11 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
         res.on("end", () => {
           const ms = Date.now() - t0;
           const body = Buffer.concat(chunks).toString("utf-8");
-          console.log(`[tally] ✓ ${label}: ${totalBytes} bytes in ${ms}ms`);
-
-          const lineError = body.includes("<LINEERROR>")
-            ? body.match(/<LINEERROR>([^<]*)/)?.[1] || "unknown"
-            : null;
-          if (lineError) console.error(`[tally] ✗  TALLY ERROR: ${lineError}`);
-
-          if (rawMode) return settle(() => resolve(body));
-
-          // A LINEERROR response used to be resolved same as a real success —
-          // every convertX() in converters/convert.ts falls through its
-          // "no DATA node" branch for this exact shape (no ENVELOPE.BODY.DATA
-          // on an error response), returning `{ tallymessage: [] }` — visually
-          // identical to a legitimately empty collection. That silently
-          // reported failed pulls (wrong company name, Tally not ready, an
-          // invalid TDL request) as "0 rows synced" instead of a sync
-          // failure. Reject here instead, once, at the source — every
-          // consumer's existing catch/retry handling picks it up from there.
-          if (lineError) {
-            settle(() => reject(new Error(`Tally reported an error: ${lineError}`)));
-            return;
-          }
-
           try {
-            const parsed = xmlParser.parse(body);
-            settle(() => resolve(parsed));
-          } catch (parseErr: any) {
-            console.error(`[tally] ✗ XML parse failed: ${parseErr.message}`);
-            console.error(`[tally]   First 500 chars: ${body.slice(0, 500)}`);
-            settle(() => reject(new Error(`XML parse failed: ${parseErr.message}`)));
+            const out = interpretResponse(xml, body, label, ms, totalBytes, timeoutMs, rawMode, "tally");
+            settle(() => resolve(out));
+          } catch (e: any) {
+            settle(() => reject(e));
           }
         });
 

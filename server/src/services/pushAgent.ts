@@ -2,7 +2,9 @@
 //
 // Runs inside the existing Electron-embedded server process. Drains the Supabase
 // `push_queue` (Prompt 2 schema, migration 011) into Tally by REUSING the existing,
-// frozen `pushVoucherToTally` — the hard voucher-XML problem is already solved there.
+// `safePush` — which resolves masters, preflights, pushes, and READS THE VOUCHER
+// BACK to confirm Tally stored what we sent. This is the only unattended path
+// into the books, so it is the last place that should take Tally's word for it.
 //
 // Safety invariants:
 //  - Sequential push per company. Tally is single-threaded per company; parallel pushes
@@ -19,9 +21,11 @@
 import os from "os";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { tallyPost, HEALTH_XML } from "../tally.js";
-import { pushVoucherToTally } from "./voucherPusher.js";
+import { safePush } from "./safePush.js";
 import { isTallyBusy } from "./tallyBusy.js";
 import type { VoucherPayload, PushResult } from "../types.js";
+import { refuseSharedWrite } from "./tallyRole.js";
+import { supabaseClient } from "./supabaseClient.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────────
 const POLL_MS = 4000;          // fallback/heartbeat tick
@@ -238,19 +242,57 @@ async function processJob(job: PushJob): Promise<void> {
   await client.from("push_queue").update({ status: "pushing", attempts: newAttempts }).eq("id", job.id);
 
   try {
-    const result: PushResult = await pushVoucherToTally(tallyUrl, job.company, job.payload);
-    if (result.success) {
+    // Goes through safePush, NOT pushVoucherToTally directly.
+    //
+    // This is the one unattended path into Tally, so it is the last place that
+    // should skip checks. Calling the builder directly meant no master
+    // resolution, no preflight, and — worst — no read-back: Tally answers
+    // CREATED=1 to several kinds of wrong voucher (a ledger name off by one
+    // space drops an entire posting, a wrong unit voids quantity and rate), so
+    // a job could be marked "succeeded" while the voucher landed incomplete.
+    //
+    // A payload carrying `remoteId` also becomes correctable later; one without
+    // it can only ever be created. The queue's idempotency key is the natural
+    // identity, so use it when the producer didn't supply one.
+    const payload = job.payload.remoteId
+      ? job.payload
+      : { ...job.payload, remoteId: job.idempotency_key };
+
+    const res = await safePush(tallyUrl, job.company, payload);
+    /* The fallback only runs when safePush refused BEFORE reaching Tally — a
+       guard rejection — so nothing was created, altered or deleted. Attributing
+       the outcome to `created` alone would be a guess about which action it
+       was; all three stay zero, which is what actually happened. */
+    const result: PushResult = res.pushResult ?? {
+      success: res.ok, created: 0, altered: 0, deleted: 0, exceptions: 0, errors: res.ok ? 0 : 1,
+      lastVoucherId: res.voucherId, lineErrors: res.errors, rawResponse: res.responseXml ?? "",
+    };
+
+    if (res.ok) {
       const resolvedAt = nowIso();
       await client.from("push_queue").update({
         status: "succeeded",
-        tally_vch_id: result.lastVoucherId,
-        result: result as unknown as Record<string, unknown>,
+        tally_vch_id: res.voucherId,
+        // Keep the evidence: the exact XML sent and Tally's verbatim reply are
+        // the only useful things to look at when a voucher lands wrong.
+        result: {
+          ...result,
+          verified: true,
+          warnings: res.warnings,
+          requestXml: res.requestXml,
+          responseXml: res.responseXml,
+        } as unknown as Record<string, unknown>,
         pushed_at: resolvedAt,
       }).eq("id", job.id);
       await writePushLog(job, "succeeded", result, resolvedAt);
       record(job.id, job.idempotency_key, "succeeded");
     } else {
-      await fail(job, newAttempts, result.lineErrors?.join("; ") || "push failed", result);
+      // A voucher that Tally created but stored differently is NOT a success,
+      // and must not be retried either — it already exists.
+      const why = res.differences.length
+        ? `stored differently from what was sent: ${res.differences.join("; ")}`
+        : res.errors.join("; ") || "push failed";
+      await fail(job, res.stage === "verify" ? job.max_attempts : newAttempts, why, result);
     }
   } catch (e: any) {
     await fail(job, newAttempts, e?.message ?? String(e), null);
@@ -342,6 +384,14 @@ export function startPushAgent(opts: { tallyUrl: string }): void {
   if (state.started) return;
   tallyUrl = opts.tallyUrl || tallyUrl;
 
+  /* A COPY OF THE COMPANY MUST NEVER DRAIN THE SHARED QUEUE.
+     `push_queue` is one table serving both machines. If the agent runs here
+     while this Tally holds a duplicate, it claims real jobs and books them into
+     the COPY — where they are lost — while the queue row reads "succeeded" and
+     the web app reports the invoice as pushed. Nothing anywhere would say the
+     voucher never reached the real books. */
+  if (refuseSharedWrite("Push-queue draining")) return;
+
   const url = process.env.SUPABASE_URL || "https://vmkytsytxlofjyeotmgb.supabase.co";
   const key = process.env.SUPABASE_SERVICE_KEY;
   if (!url || !key) {
@@ -350,7 +400,8 @@ export function startPushAgent(opts: { tallyUrl: string }): void {
   }
 
   try {
-    client = createClient(url, key, { auth: { persistSession: false } });
+    client = supabaseClient();
+    if (!client) return;   // offline, or no service key — see supabaseClient.ts
   } catch (err: any) {
     console.error(`[pushAgent] Failed to init Supabase client: ${err.message}`);
     return;

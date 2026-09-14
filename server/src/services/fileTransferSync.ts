@@ -4,6 +4,7 @@ import ws from "ws";
 import fs from "fs";
 import path from "path";
 import chokidar, { type FSWatcher } from "chokidar";
+import { supabaseClient } from "./supabaseClient.js";
 
 // Same WebSocket polyfill used by SupabaseSync / refreshListener.
 if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
@@ -142,7 +143,8 @@ export function startFileTransferSync(): void {
     return;
   }
 
-  client = createClient(url, key, { realtime: { params: { eventsPerSecond: 2 } } });
+  client = supabaseClient({ realtime: { params: { eventsPerSecond: 2 } } });
+  if (!client) return;   // offline, or no service key — see supabaseClient.ts
   connect(client);
 }
 

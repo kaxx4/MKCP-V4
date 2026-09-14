@@ -45,7 +45,21 @@ export const MASTER_COLLECTIONS: CollectionDef[] = [
     fetch: [
       "Name", "Parent", "Category", "BaseUnits", "AdditionalUnits", "Denominator",
       "OpeningBalance", "OpeningRate", "OpeningValue",
+      // The converter reads CLOSINGBALANCE/CLOSINGRATE/CLOSINGVALUE with a "0"
+      // default (converters/convert.ts). They were missing from this fetch list,
+      // so Tally never sent them and every stock item landed in Supabase with
+      // closing_rate = "0" — which is why four modules disagreed about stock
+      // value. services/tallyMasters.ts already proves Tally serves these.
+      "ClosingBalance", "ClosingRate", "ClosingValue",
       "GSTApplicable", "GSTTypeOfSupply", "GSTDetails", "HSNDetails", "GUID",
+      // convertStockItems reads these four (convert.ts:279-282) and mapStockItem
+      // writes them to four Supabase columns — but they were never in this list,
+      // so Tally was never asked and all four columns were permanently empty.
+      // Guardrail G4. Probed one field at a time before adding, because a bad
+      // fetch field can crash TallyPrime: all four are served and populated on
+      // 489 of 489 items (server/scripts/probe-stockitem-fields.ts, 13-Sep-2026 —
+      // "Avg. Cost", "Avg. Price", "No", "No").
+      "CostingMethod", "ValuationMethod", "IsBatchWiseOn", "IsCostCentresOn",
     ],
     timeout: 900_000,
     parallel: false,
@@ -73,7 +87,33 @@ export const TRANSACTION_COLLECTIONS: CollectionDef[] = [
     category: "transaction",
     fetch: [
       "Guid", "Date", "VoucherTypeName", "VoucherNumber", "Reference", "Narration",
-      "PartyLedgerName", "IsCancelled", "IsOptional", "EffectiveDate", "AlterID",
+      "PartyLedgerName", "IsCancelled", "IsOptional", "EffectiveDate", "AlterID", "MasterId",
+      /* E-invoice registration. Tally emits these as self-closing empty tags on
+         an invoice with no IRN yet — proven with a NATIVEMETHOD * probe, and
+         that emptiness IS the signal: an e-invoice must reach the IRP within 30
+         days of the invoice date or it can never be registered, and the buyer
+         loses their input tax credit. The app never calls the IRP (a hard scope
+         boundary); it only needs to NOTICE. It cannot notice without these.
+         server/scripts/probe-irn-fields.ts, 14-Sep-2026. */
+      "IRN", "IRNAckNo", "IRNAckDate",
+      /* E-way bill and transport. convert.ts has read
+         EWAYBILLDETAILS.TRANSPORTDETAILS.DISTANCE (plus the bill number, vehicle
+         and mode) since it was written — and this list never asked for the
+         block, so every one of those columns was empty on all 2,792 mirrored
+         vouchers. G4 exactly: a converter reading fields nobody fetches, the
+         same defect already recorded for convertStockItems.
+
+         Tally holds them. Probed 14-Sep-2026 on the 23 SALES vouchers of
+         1-Aug-2026: DISTANCE="90", VEHICLENUMBER="WB03D3840",
+         TRANSPORTMODE="1 - Road", CONSIGNEEPINCODE="741121". Verified with an
+         explicit FETCH of this exact name — not a wildcard — returning 41,227
+         bytes with the block intact. server/scripts/probe-ewaybill-fields.ts.
+
+         Worth the extra payload: the e-way bill's distance is the only
+         freight distance anyone has actually accepted. The web app's fallbacks
+         are a routed estimate and, below that, a rate card typed in July 2024
+         that runs up to 67% wrong. */
+      "EWayBillDetails",
       // Sub-lists WITHOUT .* wildcards — wildcards crash TallyPrime ("incorrect object type").
       // Requesting the parent key is enough: TallyPrime returns all standard sub-fields automatically.
       "AllLedgerEntries",

@@ -24,6 +24,9 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
 import { tallyPost } from "../tally.js";
+import { withTally, TallyUnavailableError } from "./tallyGate.js";
+import { isTallyBusy } from "./tallyBusy.js";
+import { supabaseClient } from "./supabaseClient.js";
 
 if (typeof (globalThis as any).WebSocket === "undefined") {
   (globalThis as any).WebSocket = ws;
@@ -101,15 +104,36 @@ function verdict(raw: string): { ok: boolean; message: string } {
   return { ok: false, message: "Tally created nothing — check the voucher type and company name" };
 }
 
-/** Approve and import. Returns the operator-facing outcome. */
+/**
+ * Approve and import. Returns the operator-facing outcome.
+ *
+ * The import goes through {@link withTally} like every other write. It used to
+ * call `tallyPost` directly, which meant it was the one write path in the
+ * codebase with no serialisation and no circuit breaker: it could land on
+ * Tally's single-threaded port in the middle of a sync, and a transport failure
+ * here never counted toward breaking the circuit. Approval is a human decision,
+ * but the human is deciding WHETHER to import — not whether the port is free.
+ *
+ * This still has no read-back diff, unlike `safePush`. That gap closes when
+ * `tally_push_commands` is retired in favour of the queue; until then the
+ * verdict is at least parsed from the response body rather than the transport.
+ */
 export async function approvePush(id: number): Promise<{ ok: boolean; message: string }> {
   const item = pending.get(id);
   if (!item) return { ok: false, message: "That push is no longer waiting — it may have been handled already." };
+
+  // Don't consume the approval if a sync currently owns the port — leave it
+  // waiting so the operator can approve again in a moment, rather than burning
+  // it on a request that would queue behind a long pull.
+  if (isTallyBusy()) {
+    return { ok: false, message: "A sync is using Tally right now — try again in a moment." };
+  }
   pending.delete(id);
 
   await setStatus(id, "importing");
   try {
-    const raw = await tallyPost(tallyUrl, item.xml, 30_000, true);
+    const raw = await withTally(tallyUrl, `web-push ${item.label}`, () =>
+      tallyPost(tallyUrl, item.xml, 30_000, true));
     const text = typeof raw === "string" ? raw : JSON.stringify(raw);
     const v = verdict(text);
     await setStatus(id, v.ok ? "done" : "error", {
@@ -119,7 +143,11 @@ export async function approvePush(id: number): Promise<{ ok: boolean; message: s
     console.log(`📤 [WEB-PUSH] id=${id} ${item.label}: ${v.message}`);
     return v;
   } catch (e: any) {
-    const message = `Could not reach Tally: ${e?.message ?? e}`;
+    // The gate's own message already explains itself (and names the likely
+    // dialog); wrapping it in "Could not reach Tally" would bury the reason.
+    const message = e instanceof TallyUnavailableError
+      ? e.message
+      : `Could not reach Tally: ${e?.message ?? e}`;
     await setStatus(id, "error", { result_message: message });
     console.error(`📤 [WEB-PUSH] id=${id} ${item.label}: ${message}`);
     return { ok: false, message };
@@ -169,7 +197,8 @@ export function startPushListener(company: string, tally: string): void {
     return;
   }
 
-  client = createClient(url, key, { realtime: { params: { eventsPerSecond: 2 } } });
+  client = supabaseClient({ realtime: { params: { eventsPerSecond: 2 } } });
+  if (!client) return;   // offline, or no service key — see supabaseClient.ts
 
   client
     .channel("tally-push-commands")

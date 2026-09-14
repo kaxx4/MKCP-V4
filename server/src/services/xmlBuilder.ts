@@ -141,38 +141,18 @@ export function buildAlterIdXml(company: string): string {
 </ENVELOPE>`;
 }
 
-/** Aggregation: get per-date voucher counts — used for smart batching */
-export function buildVoucherCountXml(company: string, fromDate: string, toDate: string): string {
-  const fromInt = parseInt(fromDate, 10);
-  const toInt = parseInt(toDate, 10);
-  return `<ENVELOPE>
-<HEADER>
-<VERSION>1</VERSION>
-<TALLYREQUEST>Export</TALLYREQUEST>
-<TYPE>Collection</TYPE>
-<ID>MKCPVoucherCounts</ID>
-</HEADER>
-<BODY>
-<DESC>
-<STATICVARIABLES>
-<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
-</STATICVARIABLES>
-<TDL>
-<TDLMESSAGE>
-<COLLECTION NAME="MKCPVoucherCounts" ISMODIFY="No">
-<TYPE>Voucher</TYPE>
-<NATIVEMETHOD>Date</NATIVEMETHOD>
-<FILTER>MKCPCountFilter</FILTER>
-</COLLECTION>
-<SYSTEM TYPE="Formulae" NAME="MKCPCountFilter">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) &gt;= ${fromInt} AND ($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) &lt;= ${toInt}</SYSTEM>
-</TDLMESSAGE>
-</TDL>
-</DESC>
-</BODY>
-</ENVELOPE>`;
-}
-
+/* REMOVED: buildVoucherCountXml + voucherBatcher's smart batching.
+ *
+ * It asked Tally for per-date voucher counts so day ranges could be packed into
+ * even batches. Nothing has imported it for a long time — every sync path uses
+ * daily or monthly chunking — and it was not merely unused but a liability: an
+ * unrecognised object type in a Collection raises a MODAL on the Tally machine,
+ * which blocks the XML port entirely until a person dismisses it. That is the
+ * one failure mode here that cannot be recovered from in software.
+ *
+ * Deleted rather than left dormant, so it cannot be wired up by someone who
+ * reasonably assumes an exported, tidy-looking function is safe to call.
+ */
 /**
  * Day Book fallback XML — used when Collection returns 0 vouchers.
  * Reference: TallyPrime Integration Guide - "Exporting Transactions (Day Book)"
