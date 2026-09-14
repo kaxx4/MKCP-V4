@@ -134,6 +134,9 @@ async function setStatus(
   id: string,
   patch: Record<string, unknown>,
 ): Promise<void> {
+  // A shape check (--as-test) has no queue row of its own and must not write to
+  // the one it was copied from.
+  if (!id) return;
   const { error } = await db.from("push_queue").update(patch).eq("id", id);
   if (error) throw new Error(`could not set queue row ${id} to "${patch.status}": ${error.message}`);
 }
@@ -192,6 +195,37 @@ function selfTest(): void {
 
 const isTestNumber = (n: string) => TEST_PREFIXES.some((p) => String(n ?? "").toUpperCase().startsWith(p));
 
+/**
+ * A copy of a queued voucher, under a test number.
+ *
+ * ── Why this exists ───────────────────────────────────────────────────────
+ *
+ * Split invoice, the sales quote and the manifest all take their numbers from
+ * the company's own series — `26-27/0679`, not `MKCP-anything`. That is correct
+ * and must stay that way, and it means the prefix guard will not let this script
+ * push them, which is also correct: a script that can post a real invoice number
+ * to the live books is a script waiting to have a bad day.
+ *
+ * So the voucher is not pushed. A COPY of it is, carrying a test number and the
+ * REMOTEID that follows from it, and everything else — party, lines, stock, tax,
+ * bill references, GST identity — exactly as the app built it. The original
+ * queue row is not read for status, not updated, and not deleted.
+ *
+ * What that proves: the payload this app builds for that method is one Tally
+ * accepts and stores correctly. What it does NOT prove: that the number the app
+ * chose is free, or that the real row will drain. Saying which is the point.
+ */
+function asTestCopy(payload: VoucherPayload, suffix: string): VoucherPayload {
+  const voucherNumber = `MKCP-T-${suffix}`;
+  const fy = String(payload.remoteId ?? "").split("|").pop() || "2026-27";
+  return {
+    ...payload,
+    voucherNumber,
+    remoteId: `MKCP|${payload.voucherType}|${voucherNumber}|${fy}`,
+    narration: `${payload.narration ?? ""} [MKCP shape check of ${payload.voucherNumber} — safe to delete]`.trim(),
+  };
+}
+
 type Job = { id: string; status: string; payload: unknown };
 
 async function main(): Promise<void> {
@@ -199,13 +233,39 @@ async function main(): Promise<void> {
 
   const alsoDelete = process.argv.includes("--delete");
   const all = process.argv.includes("--all");
+  const asTest = process.argv.includes("--as-test");
   const wanted = process.argv.slice(2).find((a) => !a.startsWith("--"));
 
   if (!wanted && !all) {
     console.error("usage: drain-one-queued.ts <voucherNumber> [--delete]");
-    console.error("       drain-one-queued.ts --all [--delete]   every queued TEST voucher, one at a time");
+    console.error("       drain-one-queued.ts --all [--delete]            every queued TEST voucher");
+    console.error("       drain-one-queued.ts <number> --as-test --delete push a COPY under a test number");
     process.exit(2);
   }
+
+  /* --as-test works on a voucher the guard would otherwise refuse, because it
+     never pushes that voucher — see asTestCopy. The queue row is left alone. */
+  if (wanted && asTest) {
+    const url0 = process.env.SUPABASE_URL, key0 = process.env.SUPABASE_SERVICE_KEY;
+    if (!url0 || !key0) { console.error("SUPABASE_URL / SUPABASE_SERVICE_KEY missing"); process.exit(2); }
+    const db0 = createClient(url0, key0, { auth: { persistSession: false } });
+    const { data: rs } = await db0.from("push_queue").select("*").eq("company", COMPANY).limit(200);
+    const hits = (rs ?? []).filter((r) => (r.payload as VoucherPayload)?.voucherNumber === wanted);
+    if (!hits.length) { console.error(`  no queued voucher numbered ${wanted}`); process.exit(1); }
+
+    console.log(`\n  SHAPE CHECK — ${hits.length} voucher(s) numbered like ${wanted}\n  ` + "═".repeat(60));
+    console.log("  The queued voucher is NOT pushed. A copy of it is, under a test number.\n");
+    let bad = 0;
+    for (let i = 0; i < hits.length; i++) {
+      const copy = asTestCopy(hits[i].payload as VoucherPayload, `SHAPE${i + 1}`);
+      try {
+        await drainOne(db0, { id: "", status: "pending", payload: copy }, alsoDelete);
+      } catch (e) { bad++; console.error(`  ✗ ${e instanceof Error ? e.message : e}`); }
+    }
+    console.log(bad ? `\n  ${bad} of ${hits.length} FAILED.` : `\n  all ${hits.length} shapes are ones Tally accepts.`);
+    process.exit(bad ? 1 : 0);
+  }
+
   if (wanted && !isTestNumber(wanted)) {
     console.error(
       `\n  REFUSED. "${wanted}" is not a marked test voucher.\n` +
@@ -337,9 +397,11 @@ async function drainOne(
       : await readBackFromTally(wanted);
     const left = vouchersIn(after).count;
     console.log(`  vouchers left in Tally: ${left}`);
-    const { error: delErr } = await db.from("push_queue").delete().eq("id", job.id);
-    if (delErr) throw new Error(`Tally is clean but the queue row survived: ${delErr.message}`);
-    console.log("  queue row removed.");
+    if (job.id) {
+      const { error: delErr } = await db.from("push_queue").delete().eq("id", job.id);
+      if (delErr) throw new Error(`Tally is clean but the queue row survived: ${delErr.message}`);
+      console.log("  queue row removed.");
+    }
     if (left !== 0) throw new Error("still present in Tally after Delete — clean it up by hand");
     console.log("\n  ✓ the books are as they were.");
   } else {
