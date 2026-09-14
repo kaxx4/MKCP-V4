@@ -61,6 +61,36 @@ async function readBackFromTally(voucherNumber: string): Promise<string> {
 }
 
 /**
+ * Ask Tally for a voucher by DATE, TYPE and NARRATION instead of by number.
+ *
+ * Needed because the number is not always ours to keep. This company's Journal
+ * voucher type assigns no number, so Tally DISCARDS the one we send and stores
+ * the voucher unnumbered — observed 14-Sep-2026: "MKCP-T-JRN" pushed, safePush
+ * returned ok=true, and the voucher landed as MASTERID 249395 with an empty
+ * VOUCHERNUMBER. All 98 journals in FY26-27 are unnumbered the same way.
+ *
+ * Searching by number therefore reports ZERO for a voucher that is sitting in
+ * the books, which reads as "the push silently did nothing" — the single most
+ * misleading answer this script could give.
+ */
+async function readBackByNarration(voucherType: string, date: string, narration: string): Promise<string> {
+  const [y, m, d] = date.split("-");
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const tallyDate = `${d}-${MONTHS[Number(m) - 1]}-${y}`;
+  const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkDrainVerify2</ID></HEADER>
+<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(COMPANY)}</SVCURRENTCOMPANY></STATICVARIABLES>
+<TDL><TDLMESSAGE><COLLECTION NAME="MkDrainVerify2" ISMODIFY="No"><TYPE>Voucher</TYPE>
+<FETCH>VoucherNumber</FETCH><FETCH>VoucherTypeName</FETCH><FETCH>Date</FETCH>
+<FETCH>PartyLedgerName</FETCH><FETCH>Narration</FETCH><FETCH>MasterId</FETCH>
+<FETCH>AllLedgerEntries</FETCH>
+<FILTER>MkDrainVerify2F</FILTER></COLLECTION>
+<SYSTEM TYPE="Formulae" NAME="MkDrainVerify2F">$$IsEqual:$VoucherTypeName:"${esc(voucherType)}" AND $Date = $$Date:"${tallyDate}" AND $$IsEqual:$Narration:"${esc(narration)}"</SYSTEM>
+</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+  return tallyPost(TALLY, xml, 120_000, true);
+}
+
+/**
  * Read a field off the voucher, tolerating an attribute on the tag.
  *
  * Tally writes the SAME field both ways depending on which one it is:
@@ -160,17 +190,23 @@ function selfTest(): void {
   process.exit(bad ? 1 : 0);
 }
 
+const isTestNumber = (n: string) => TEST_PREFIXES.some((p) => String(n ?? "").toUpperCase().startsWith(p));
+
+type Job = { id: string; status: string; payload: unknown };
+
 async function main(): Promise<void> {
   if (process.argv.includes("--selftest")) return selfTest();
 
-  const wanted = process.argv[2];
   const alsoDelete = process.argv.includes("--delete");
-  if (!wanted) {
+  const all = process.argv.includes("--all");
+  const wanted = process.argv.slice(2).find((a) => !a.startsWith("--"));
+
+  if (!wanted && !all) {
     console.error("usage: drain-one-queued.ts <voucherNumber> [--delete]");
+    console.error("       drain-one-queued.ts --all [--delete]   every queued TEST voucher, one at a time");
     process.exit(2);
   }
-
-  if (!TEST_PREFIXES.some((p) => wanted.toUpperCase().startsWith(p))) {
+  if (wanted && !isTestNumber(wanted)) {
     console.error(
       `\n  REFUSED. "${wanted}" is not a marked test voucher.\n` +
       `  This script only ever touches numbers starting with: ${TEST_PREFIXES.join(", ")}\n`,
@@ -182,16 +218,58 @@ async function main(): Promise<void> {
   if (!url || !key) { console.error("SUPABASE_URL / SUPABASE_SERVICE_KEY missing from server/.env"); process.exit(2); }
   const db = createClient(url, key, { auth: { persistSession: false } });
 
-  console.log(`\n  DRAIN ONE — ${wanted}\n  ` + "─".repeat(60));
-
   const { data: rows, error } = await db
-    .from("push_queue").select("*").eq("company", COMPANY).order("created_at", { ascending: false }).limit(50);
+    .from("push_queue").select("*").eq("company", COMPANY).order("created_at", { ascending: true }).limit(200);
   if (error) { console.error("  could not read push_queue:", error.message); process.exit(1); }
 
-  const job = (rows ?? []).find((r) => (r.payload as VoucherPayload)?.voucherNumber === wanted);
-  if (!job) { console.error(`  no queued voucher numbered ${wanted}`); process.exit(1); }
+  /* In --all mode the SAME prefix guard decides what is in scope, row by row.
+     Anything real sitting in the queue is stepped over and named, never pushed
+     by a script whose whole point is that it cannot touch trade. */
+  const queue = (rows ?? []) as Job[];
+  const mine = all
+    ? queue.filter((r) => isTestNumber((r.payload as VoucherPayload)?.voucherNumber))
+    : queue.filter((r) => (r.payload as VoucherPayload)?.voucherNumber === wanted);
 
+  if (all) {
+    const skipped = queue.length - mine.length;
+    console.log(`\n  DRAIN ALL — ${mine.length} test voucher(s)` +
+      (skipped ? `, ${skipped} real row(s) left alone` : "") + `\n  ` + "═".repeat(60));
+    if (!mine.length) { console.log("  nothing queued under a test prefix."); return; }
+
+    const results: { n: string; ok: boolean; note: string }[] = [];
+    for (const job of mine) {
+      const p = job.payload as VoucherPayload;
+      try {
+        await drainOne(db, job, alsoDelete);
+        results.push({ n: `${p.voucherType} ${p.voucherNumber}`, ok: true, note: alsoDelete ? "pushed, verified, removed" : "pushed and verified" });
+      } catch (e) {
+        results.push({ n: `${p.voucherType} ${p.voucherNumber}`, ok: false, note: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    console.log("\n  " + "═".repeat(60) + "\n  SUMMARY");
+    for (const r of results) console.log(`  ${r.ok ? "✓" : "✗"} ${r.n} — ${r.note}`);
+    const bad = results.filter((r) => !r.ok).length;
+    console.log(bad ? `\n  ${bad} of ${results.length} FAILED.` : `\n  all ${results.length} landed in Tally and read back.`);
+    process.exit(bad ? 1 : 0);
+  }
+
+  const job = mine[0];
+  if (!job) { console.error(`  no queued voucher numbered ${wanted}`); process.exit(1); }
+  console.log(`\n  DRAIN ONE — ${wanted}\n  ` + "─".repeat(60));
+  await drainOne(db, job, alsoDelete);
+}
+
+/** One voucher, all the way to Tally and back. Throws rather than exiting, so
+ *  a batch can record the failure and carry on to the next. */
+async function drainOne(
+  db: ReturnType<typeof createClient>,
+  job: Job,
+  alsoDelete: boolean,
+): Promise<void> {
   const payload = job.payload as VoucherPayload;
+  const wanted = payload.voucherNumber;
+  console.log(`\n  ── ${payload.voucherType} ${wanted} ` + "─".repeat(Math.max(0, 40 - wanted.length)));
   console.log(`  found queue row ${job.id} — ${payload.voucherType} ${payload.voucherNumber}, status "${job.status}"`);
   console.log(`  remoteId: ${payload.remoteId}`);
 
@@ -207,16 +285,32 @@ async function main(): Promise<void> {
     console.log(`  → ok=${res.ok}${res.errors?.length ? ` errors=${res.errors.join(" · ")}` : ""}`);
     if (!res.ok) {
       await setStatus(db, job.id, { status: "failed", last_error: (res.errors ?? []).join(" · ") });
-      process.exit(1);
+      throw new Error(`push refused: ${(res.errors ?? []).join(" · ")}`);
     }
     await setStatus(db, job.id, { status: "succeeded", pushed_at: new Date().toISOString() });
   }
 
   console.log("\n  asking TALLY whether it is there…");
-  const raw = await readBackFromTally(wanted);
-  const { count: found, data } = vouchersIn(raw);
+  let raw = await readBackFromTally(wanted);
+  let byNumber = vouchersIn(raw);
+  let renumbered = false;
 
-  console.log(`  vouchers matching ${wanted} in Tally: ${found}`);
+  /* Nothing under that number is not the same fact as nothing in the books.
+     Some voucher types are numbered by Tally, not by us — see
+     readBackByNarration — so before reporting a silent failure, ask again the
+     way the voucher can actually be found. */
+  if (byNumber.count === 0 && payload.narration?.trim()) {
+    const alt = vouchersIn(await readBackByNarration(payload.voucherType, payload.date, payload.narration.trim()));
+    if (alt.count > 0) {
+      renumbered = true;
+      raw = ""; byNumber = alt;
+      console.log(`  NOT under "${wanted}" — Tally assigned its own number for this type.`);
+      console.log(`  found by date + type + narration instead: ${alt.count}`);
+    }
+  }
+
+  const { count: found, data } = byNumber;
+  if (!renumbered) console.log(`  vouchers matching ${wanted} in Tally: ${found}`);
   console.log(`  type=${field(data, "VOUCHERTYPENAME")}  masterId=${field(data, "MASTERID")}`);
   console.log(`  date=${field(data, "DATE")}  deleted=${field(data, "ISDELETED")}`);
   console.log(`  party=${field(data, "PARTYLEDGERNAME")}`);
@@ -233,14 +327,20 @@ async function main(): Promise<void> {
 
   if (alsoDelete) {
     console.log("\n  removing it again…");
+    /* Delete addresses the REMOTEID we assigned, not the number Tally chose,
+       so it works for a renumbered voucher exactly as well. That is what
+       identity-from-creation buys, and it is why the verification above can
+       afford to be the awkward half. */
     await deleteFromTally(payload);
-    const after = await readBackFromTally(wanted);
+    const after = renumbered
+      ? await readBackByNarration(payload.voucherType, payload.date, payload.narration!.trim())
+      : await readBackFromTally(wanted);
     const left = vouchersIn(after).count;
     console.log(`  vouchers left in Tally: ${left}`);
     const { error: delErr } = await db.from("push_queue").delete().eq("id", job.id);
     if (delErr) throw new Error(`Tally is clean but the queue row survived: ${delErr.message}`);
     console.log("  queue row removed.");
-    if (left !== 0) { console.error("  STILL PRESENT — clean it up by hand."); process.exit(1); }
+    if (left !== 0) throw new Error("still present in Tally after Delete — clean it up by hand");
     console.log("\n  ✓ the books are as they were.");
   } else {
     console.log("\n  LEFT IN TALLY on purpose. Re-run with --delete to remove it.");
