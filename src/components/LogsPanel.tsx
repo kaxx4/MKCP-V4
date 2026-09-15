@@ -112,6 +112,7 @@ export function LogsPanel({ logs, base, onCopy }: Props) {
           <button
             key={key}
             onClick={() => setFilter(key)}
+            aria-pressed={filter === key}
             className={clsx("filter-chip text-[11px]", filter === key && "filter-chip-active")}
           >
             {label}
