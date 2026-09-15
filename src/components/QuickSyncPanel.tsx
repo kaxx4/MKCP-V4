@@ -52,6 +52,9 @@ interface Props {
   qsync: QuickSyncState;
   /** Tally reachable right now. */
   connected: boolean;
+  /** Why it is not, when it is not — so the panel does not blame TallyPrime for
+   *  this app's own server being down. Falls back to the Tally wording. */
+  notConnectedReason?: string | null;
   /** Company configured in this app. */
   company: string;
   /** Some other sync holds the global lock. */
@@ -64,10 +67,10 @@ const everyLabel = (m: number) =>
   : m < 60 ? `automatic every ${m} min`
   : `automatic every ${(m / 60).toFixed(m % 60 === 0 ? 0 : 1)} h`;
 
-export function QuickSyncPanel({ ranges, qsync, connected, company, otherSyncRunning, onRun }: Props) {
+export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, company, otherSyncRunning, onRun }: Props) {
   /* One reason, the first that applies — not a disabled button with no note. */
   const blocked =
-    !connected ? "Tally is not answering, so there is nothing to pull from."
+    !connected ? (notConnectedReason ?? "Tally is not answering, so there is nothing to pull from.")
     : !company.trim() ? "No company is set in Settings, so there is nothing to sync as."
     : qsync.running ? `The ${qsync.running} sync is running.`
     : otherSyncRunning ? "Another sync is holding the Tally connection."
@@ -96,7 +99,11 @@ export function QuickSyncPanel({ ranges, qsync, connected, company, otherSyncRun
               key={r.label}
               onClick={() => onRun(r)}
               disabled={!!blocked}
-              className={clsx("btn-secondary btn-sm !items-start !flex-col !gap-0 !py-1.5")}
+              /* The reason travels with the control, not only with the note
+                 below it — a pointer resting on a grey button should answer
+                 the question it just raised. */
+              title={blocked ?? `Pull ${r.label} from Tally, then push it to Supabase.`}
+              className={clsx("btn-secondary btn-sm tap-y !items-start !flex-col !gap-0 !py-1.5")}
             >
               <span className="flex items-center gap-1.5">
                 {running ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}

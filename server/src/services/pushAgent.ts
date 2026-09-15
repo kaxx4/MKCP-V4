@@ -64,6 +64,18 @@ const state = {
   claimedCount: 0,
   last10Results: [] as ResultLogEntry[],
   queueStats: { pending: 0, pushing: 0, failed: 0 } as Record<string, number>,
+  /* WHEN those counts were last read out of Supabase — null until they have
+     been, which is not the same fact as "all three are zero".
+
+     Measured 15-Sep-2026 with the local server stopped: the agent window's
+     Queue tile read "0 · nothing waiting" while the queue depth was simply
+     unknown. Three separate paths reach that zero — the agent never starts
+     (no service key, so `tick()` returns on `!client` and these counters stay
+     at their initial value forever), the first tick has not completed yet, or
+     the Supabase read inside refreshQueueStats failed. A queue reported as
+     empty is a queue nobody goes to look at, which is the whole failure the
+     tile exists to prevent. */
+  queueStatsAt: null as string | null,
 };
 
 function record(id: string, idempotency_key: string, status: string, error?: string) {
@@ -99,13 +111,22 @@ async function isTallyHealthy(): Promise<boolean> {
 /** Refresh live queue depth counters from Supabase (called at end of each tick). */
 async function refreshQueueStats(): Promise<void> {
   if (!client) return;
-  const { data } = await client
+  const { data, error } = await client
     .from("push_queue")
     .select("status")
     .in("status", ["pending", "pushing", "failed"]);
+  /* A failed read used to land here as `data == null` and be counted as three
+     zeros — "the queue is empty" from a query that never answered. Leave the
+     last known counts and their timestamp alone instead, so the window shows
+     an age rather than a fiction. */
+  if (error || !data) {
+    if (error) console.warn(`[pushAgent] queue-stat read failed: ${error.message}`);
+    return;
+  }
   const counts: Record<string, number> = { pending: 0, pushing: 0, failed: 0 };
-  for (const row of (data ?? [])) counts[row.status] = (counts[row.status] ?? 0) + 1;
+  for (const row of data) counts[row.status] = (counts[row.status] ?? 0) + 1;
   state.queueStats = counts;
+  state.queueStatsAt = nowIso();
 }
 
 /** Write a permanent push resolution record to push_sync_log (succeeds or final-fail only). */
@@ -449,6 +470,7 @@ export function getPushAgentStatus() {
     claimedCount: state.claimedCount,
     last10Results: state.last10Results,
     queueStats: state.queueStats,
+    queueStatsAt: state.queueStatsAt,
   };
 }
 

@@ -76,6 +76,27 @@ function buildSyncPayload(company: string = DEFAULT_COMPANY) {
     tallyFyFromDate: tally.fyFromDate,
     tallyFyToDate: tally.fyToDate,
     tallySyncMode: tally.syncMode,
+    /* THESE FOUR ARE NOT FRESHNESS. Anything reading them as "when the mirror
+       last moved" is being misled, including the web app, since this bag is
+       what it sees (audited 15-Sep-2026):
+
+         tallyLastSyncAt         — stamped by AgentStatus's `triggerSync` after
+                                   ANY successful manual pull, including a
+                                   0.4s price-list fetch.
+         tallyLastMastersSyncAt  — ALWAYS null. `setLastMastersSync` is
+                                   exported by store/tallyStore.ts and called
+                                   from nowhere in this repo; nothing has ever
+                                   written it on any machine.
+         tallyLastVouchersSyncAt — written only by `completeSyncWith`, i.e. the
+                                   renderer-driven pull path.
+         tallyLastVoucherDate    — the newest date the LAST pull happened to
+                                   see, so a "Today" pull makes it today
+                                   whatever else is in the books.
+
+       They are still sent because removing a key from a settings bag another
+       repo reads is not this repo's call. The truthful source for all four is
+       the `tally_sync_history` table the SERVER writes — which is what this
+       app's own Pull Sync and Mirror panels were rebuilt onto. */
     tallyLastSyncAt: tally.lastSyncAt,
     tallyLastMastersSyncAt: tally.lastMastersSyncAt,
     tallyLastVouchersSyncAt: tally.lastVouchersSyncAt,

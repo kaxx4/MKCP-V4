@@ -44,6 +44,10 @@ export interface PushAgentStatusLike {
   lastTick: string | null;
   tallyHealthy: boolean;
   queueStats: { pending: number; pushing: number; failed: number };
+  /** When those counts were last read out of Supabase; null means never — the
+   *  initial zeros rather than a measured empty queue. Absent on a server
+   *  older than 15-Sep-2026, which is also "cannot tell". */
+  queueStatsAt?: string | null;
 }
 
 export interface PushLogRowLike {
@@ -103,23 +107,35 @@ export function PushQueuePanel({
     return <p className="flex items-center gap-2 py-2 text-[12.5px] text-neutral-500"><Loader2 size={13} className="animate-spin" /> Reading the push agent…</p>;
   }
 
+  const queueKnown = !!status.queueStatsAt;
   const waiting = status.queueStats.pending + status.queueStats.pushing;
   const shown = showAll ? log : log.slice(0, 8);
-  const nothingAtAll = failedJobs.length === 0 && waiting === 0 && log.length === 0;
+  const nothingAtAll = queueKnown && failedJobs.length === 0 && waiting === 0 && log.length === 0;
 
   return (
     <div className="space-y-4">
       {/* The drain control sits alone at the top — it is the only thing in this
           panel that DOES something to the books. */}
       <div className="flex flex-wrap items-center gap-2">
-        <button onClick={onDrain} disabled={draining || !status.enabled} className="btn-secondary btn-sm">
+        <button
+          onClick={onDrain}
+          disabled={draining || !status.enabled}
+          title={!status.enabled ? "The drain agent is not running — see the reason below." : undefined}
+          className="btn-secondary btn-sm tap-y"
+        >
           {draining ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
           Drain now
         </button>
+        {/* "Nothing waiting" was printed from counters that had never been
+            read — see server/src/services/pushAgent.ts:refreshQueueStats,
+            which only runs at the end of a completed tick and never runs at
+            all when the agent could not start. (15-Sep-2026) */}
         <span className="text-[11.5px] text-neutral-600">
-          {waiting > 0
-            ? `${waiting} waiting · the agent picks these up on its own every few seconds`
-            : "Nothing waiting — the agent drains automatically."}
+          {!queueKnown
+            ? "The depth of the queue has never been counted, so nothing here says it is empty."
+            : waiting > 0
+              ? `${waiting} waiting · the agent picks these up on its own every few seconds`
+              : "Nothing waiting — the agent drains automatically."}
         </span>
       </div>
 

@@ -989,8 +989,11 @@ app.post("/api/realtime/stop", (_req, res) => {
 app.get("/api/file-transfer/status", async (req, res) => {
   const company = String(req.query.company || process.env.TALLY_COMPANY || "");
   if (!company) return res.status(400).json({ error: "company query param required" });
-  const rows = await listRecentTransfers(company);
-  res.json({ rows });
+  /* `ok` travels with the rows: an empty list because there is nothing to
+     show and an empty list because Supabase could not be asked are different
+     answers, and the window used to render both as "Nothing yet." */
+  const { ok, rows, error } = await listRecentTransfers(company);
+  res.json({ ok, rows, error, watch: watchFolderStatus() });
 });
 
 app.get("/api/file-transfer/watch", (_req, res) => {
