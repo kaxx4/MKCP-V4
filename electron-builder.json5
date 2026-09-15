@@ -95,8 +95,20 @@
       // function's existing warning and self-disables its Supabase features,
       // instead of silently running on a key that arrived by download.
       //
-      // Provisioning is therefore a deliberate, per-machine act: put the .env
-      // in %APPDATA%/MK Cycles Dashboard/.env once. Updates never touch it.
+      // Provisioning is therefore a deliberate, per-machine act: the .env goes
+      // in %APPDATA%/mkcycles-dashboard-electron/.env once, and updates never
+      // touch it. NOT the product-named folder, however much it looks like it
+      // should be — Electron builds userData from package.json's `name`, and
+      // guessing "MK Cycles Dashboard" is what left the first machine running
+      // with its push agent disabled.
+      //
+      // Doing that by hand is the step that goes wrong, so `MKCP_EMBED_ENV=1
+      // npm run build:prod` builds a PROVISIONING installer that carries the
+      // .env and writes it to that path on first run. It goes to its own output
+      // directory and cannot be published — see scripts/build-prod.js and
+      // docs/RELEASING.md. This line is what that build rewrites, so if you
+      // reformat it, fix the marker in build-prod.js too; it is matched exactly
+      // and refuses to guess.
       filter: ["dist/**/*", "package.json", "node_modules/**/*"],
     },
   ],
