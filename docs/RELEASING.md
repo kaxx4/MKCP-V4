@@ -31,10 +31,54 @@ that no longer ships.
 `loadPackagedEnv()` now accepts the product-named folder too and logs which path
 it actually read, so a wrong guess degrades to a warning that names both.
 
-Copy `server/.env` there by hand (USB, not email). Updates never touch it. A
-machine without it starts, serves Tally locally, and self-disables its
-Supabase features with a warning in the log — it does not silently run on a key
-that arrived by download.
+Updates never touch that file. A machine without it starts, serves Tally
+locally, and self-disables its Supabase features with a warning in the log — it
+does not silently run on a key that arrived by download.
+
+## Provisioning a machine: the installer that carries the key
+
+Placing that file by hand is the step that goes wrong, so there is a build that
+does it for you.
+
+```bash
+MKCP_EMBED_ENV=1 npm run build:prod
+```
+
+This produces `release-provisioning/MK Cycles Dashboard Setup <version>.exe`
+with `server/.env` inside it. On first run the app copies the key to
+`%APPDATA%\mkcycles-dashboard-electron\.env` **if that file does not already
+exist** — never over one the operator placed — and from then on that machine
+takes ordinary over-the-air updates and never needs a provisioning build again.
+That copy is the whole point: without it, the next credential-free update would
+take the key away and the push agent would go quiet with nothing on screen
+saying why.
+
+**This .exe is a secret.** It carries the live Supabase service-role key, which
+bypasses RLS on every table. Carry it on a USB stick, install it, delete it.
+Never upload it, never email it, never put it in a shared drive.
+
+Three things enforce that, because one slip publishes the key permanently:
+
+1. `MKCP_EMBED_ENV=1` and `MKCP_PUBLISH=always` **cannot be combined** — the
+   build refuses, rather than warning.
+2. It builds into `release-provisioning/`, a different directory from the
+   `release2/` that the release step uploads, so the `latest.yml` and .exe that
+   get published can never be the ones carrying the key.
+3. Every build checks the **unpacked tree** rather than trusting the flag: an
+   embedded build that has no `.env` inside fails, and an ordinary build that
+   somehow has one fails too. A filter that quietly stopped matching would
+   otherwise produce a perfectly successful build of exactly the wrong artifact.
+
+If you would rather not have a key-bearing .exe in existence at all, the manual
+path still works: copy `server/.env` to the path above by hand.
+
+**One tidiness note.** The bundled copy stays inside the installed app's
+`resources/server/.env` until that machine takes its next update. It is the same
+key already in userData on the same trusted machine, so it changes nothing about
+exposure — but it means a provisioning build should get a version number you do
+**not** intend to publish credential-free, or the machine will sit at "up to
+date" and keep the bundled copy indefinitely. Publishing the next version
+clears it.
 
 ## Cutting a release
 

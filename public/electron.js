@@ -292,15 +292,49 @@ function loadPackagedEnv() {
   const hadKeyAlready = process.env.SUPABASE_SERVICE_KEY !== undefined;
   applyEnvFile(bundled);
 
+  /* PROVISIONING: copy the bundled file into userData the first time, so this
+     machine keeps its credentials once the bundle stops arriving.
+
+     Only a build made with MKCP_EMBED_ENV=1 carries a bundled .env, and that
+     build is never published — it exists to credential a machine by being
+     installed, instead of by someone finding %APPDATA% and placing a file in a
+     folder named after the package rather than the product. Every ordinary
+     release is credential-free, so WITHOUT this copy the next over-the-air
+     update would silently take the key away again and the push agent would go
+     quiet with nothing on screen saying why.
+
+     Never overwrites: `applied > 0` means this machine already has its own
+     file, and a hand-placed one is the operator's, not the installer's. */
+  if (applied === 0) {
+    const target = candidates[0];
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(bundled, target);
+      console.log(
+        `[server] Provisioned ${target} from the bundled .env. ` +
+        `Updates never touch it, so this machine stays credentialed when the ` +
+        `next release ships without one.`,
+      );
+    } catch (err) {
+      console.warn(
+        `[server] Could not provision ${target} from the bundled .env: ${err.message}. ` +
+        `This launch still works (the bundled copy was applied above), but an ` +
+        `over-the-air update to a credential-free release will disable the ` +
+        `Supabase features until the file is placed by hand.`,
+      );
+    }
+  }
+
   /* Said out loud, every launch, when the key in use came out of the installer.
      A secret shipped inside a file people pass around is not something to
      record once in a comment and forget. */
   if (!hadKeyAlready && process.env.SUPABASE_SERVICE_KEY) {
     console.warn(
       `[server] SECURITY: the Supabase service-role key was read from the BUNDLED ${bundled}. ` +
-      `Every copy of this installer carries it, so treat the .exe as a secret. ` +
-      `To stop shipping it: put SUPABASE_SERVICE_KEY in ${userEnv} on each machine, ` +
-      `then drop ".env" from extraResources in electron-builder.json5.`,
+      `This is a PROVISIONING build (MKCP_EMBED_ENV=1) — every copy of its installer ` +
+      `carries the key, so treat that .exe as the secret it is: carry it on a USB stick, ` +
+      `install it, delete it. Never upload it. Ordinary releases carry no key, which is ` +
+      `the only reason they can be published to a public repository at all.`,
     );
   }
 }
