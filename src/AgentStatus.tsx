@@ -15,6 +15,7 @@ import { useQuickSyncStore } from "./store/quickSyncStore";
 import { MirrorPanel } from "./MirrorPanel";
 import { PageHeader } from "./components/PageHeader";
 import { StatTile } from "./components/StatTile";
+import { PushQueuePanel } from "./components/PushQueuePanel";
 
 const SUPA_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
 const SUPA_ANON = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -1047,161 +1048,25 @@ export default function AgentStatus() {
         </div>
 
         {/* ── Push Queue ────────────────────────────────────────── */}
+        {/* Rebuilt in components/PushQueuePanel.tsx on the web dashboard's row
+            idiom. The counts and the two health pills that used to open this
+            panel now live in the KPI strip at the top of the page, so this is
+            only the work behind them: what is stuck, what is waiting, what
+            went. */}
         <div className="md:col-span-2">
-          <SectionCard title="Push Queue  (Supabase → Tally)" icon={<Activity size={15} />}>
-            {pushStatus ? (
-              <>
-                <div className="flex items-center gap-3 mb-3 flex-wrap">
-                  <Pill ok={pushStatus.enabled} label={pushStatus.enabled ? "Agent running" : "Agent disabled"} />
-                  {pushStatus.lastTick == null
-                    ? <Pill ok={null} label="Tally not checked" />
-                    : <Pill ok={pushStatus.tallyHealthy} label={pushStatus.tallyHealthy ? "Tally healthy" : "Tally unreachable"} />
-                  }
-                  <span className="text-xs text-neutral-500">Last tick: {fmt(pushStatus.lastTick)}</span>
-                </div>
-
-                <div className="flex gap-2 mb-3 flex-wrap">
-                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-800 text-xs font-medium">
-                    Pending: {qs.pending}
-                  </span>
-                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-yellow-50 text-yellow-800 text-xs font-medium">
-                    Pushing: {qs.pushing}
-                  </span>
-                  <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${qs.failed > 0 ? "bg-red-100 text-red-800" : "bg-neutral-100 text-neutral-600"}`}>
-                    Failed: {qs.failed}
-                  </span>
-                </div>
-
-                <div className="flex gap-2 mb-4">
-                  <Btn onClick={drainQueue} disabled={draining || !pushStatus.enabled}>
-                    {draining ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                    Drain Now
-                  </Btn>
-                </div>
-
-                {/* The agent stays off for THREE reasons and this used to name
-                    only one of them — sending you to set a flag that was
-                    already true. `startPushAgent` returns before it reports
-                    itself enabled whenever `supabaseClient()` is null, and that
-                    happens when MKCP_TALLY_ROLE=sandbox. Observed 14-Sep-2026:
-                    PUSH_AGENT_ENABLED was true throughout and the role was the
-                    blocker. Either way the server reads its env at STARTUP, so
-                    a change needs a restart — which the old wording never
-                    mentioned either. */}
-                {!pushStatus.enabled && (
-                  <div className="mb-3 text-xs text-yellow-700 bg-yellow-50 rounded p-2 flex items-start gap-1.5">
-                    <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                    <span>
-                      The drain agent is not running. In <code>server/.env</code>, all three must hold:
-                      <br />· <code>PUSH_AGENT_ENABLED=true</code>
-                      <br />· <code>MKCP_TALLY_ROLE=primary</code> — on <code>sandbox</code> the agent refuses to
-                      claim jobs, so vouchers stay queued and nothing says why
-                      <br />· <code>SUPABASE_URL</code> and <code>SUPABASE_SERVICE_KEY</code> set
-                      <br />
-                      <strong>Then restart this app</strong> — the server reads its environment once, at startup.
-                    </span>
-                  </div>
-                )}
-
-                {/* Push Log */}
-                {pushLog.length > 0 && (
-                  <div className="mb-4">
-                    <p className="text-xs font-medium text-neutral-500 mb-1.5">Push log (last 30)</p>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="border-b border-neutral-100">
-                            <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Resolved</th>
-                            <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Type</th>
-                            <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Party</th>
-                            <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Date</th>
-                            <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Result</th>
-                            <th className="text-left py-1 text-neutral-400 font-medium">VCH ID</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {pushLog.map(row => (
-                            <>
-                              <tr key={row.id}
-                                className="border-b border-neutral-50 hover:bg-neutral-50 cursor-pointer"
-                                onClick={() => row.last_error && toggleError(`pl-${row.id}`)}>
-                                <td className="py-1 pr-3 text-neutral-500 whitespace-nowrap">{fmt(row.resolved_at)}</td>
-                                <td className="py-1 pr-3">
-                                  <Badge label={row.voucher_type || "—"} color="gray" />
-                                </td>
-                                <td className="py-1 pr-3 text-neutral-700 max-w-[120px] truncate" title={row.party ?? ""}>{row.party || "—"}</td>
-                                <td className="py-1 pr-3 text-neutral-500">{row.date || "—"}</td>
-                                <td className="py-1 pr-3">
-                                  <span className="flex items-center gap-1">
-                                    <Badge label={row.status} color={row.status === "succeeded" ? "green" : "red"} />
-                                    {row.last_error ? <ChevronRight size={11} className="text-neutral-400" /> : null}
-                                  </span>
-                                </td>
-                                <td className="py-1 text-neutral-500 font-mono text-[10px]">{row.tally_vch_id || "—"}</td>
-                              </tr>
-                              {expandedErrors.has(`pl-${row.id}`) && row.last_error && (
-                                <tr key={`pl-${row.id}-err`}>
-                                  <td colSpan={6} className="pb-2">
-                                    <div className="bg-red-50 rounded p-2 text-xs text-red-700">
-                                      {row.line_errors?.join(" · ") || row.last_error}
-                                    </div>
-                                  </td>
-                                </tr>
-                              )}
-                            </>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Failed jobs with re-queue */}
-                {failedJobs.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-red-600 mb-1.5 flex items-center gap-1">
-                      <AlertTriangle size={12} /> {failedJobs.length} failed job{failedJobs.length > 1 ? "s" : ""} in queue
-                    </p>
-                    <div className="space-y-2">
-                      {failedJobs.map(job => (
-                        <div key={job.id} className="bg-red-50 rounded-lg p-3 text-xs">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1 flex-wrap">
-                                <span className="font-medium text-red-800">
-                                  {(job.payload as any)?.voucherType || "Voucher"}
-                                </span>
-                                {(job.payload as any)?.partyLedgerName && (
-                                  <span className="text-red-700">→ {(job.payload as any).partyLedgerName}</span>
-                                )}
-                                <span className="text-red-400">· attempts: {job.attempts}</span>
-                              </div>
-                              {job.last_error && (
-                                <p className="text-red-600 mt-1 break-words">{job.last_error}</p>
-                              )}
-                              <p className="text-red-400 mt-0.5 font-mono text-[10px]">{job.idempotency_key.slice(0, 30)}…</p>
-                            </div>
-                            <Btn onClick={() => requeueJob(job.id)} disabled={requeueing === job.id}>
-                              {requeueing === job.id
-                                ? <Loader2 size={11} className="animate-spin" />
-                                : <RotateCcw size={11} />}
-                              Re-queue
-                            </Btn>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : pushStatusUnreachable ? (
-              <p className="text-xs text-red-600 py-2 flex items-center gap-1.5">
-                <AlertTriangle size={12} className="flex-shrink-0" />
-                Push agent unreachable — the local server on {BASE.replace(/^https?:\/\//, "")} isn't responding. Restart the app if this persists.
-              </p>
-            ) : (
-              <p className="text-xs text-neutral-400 py-2">Loading push agent status…</p>
-            )}
+          <SectionCard title="Push queue  (Supabase → Tally)" icon={<Activity size={15} />}>
+            <PushQueuePanel
+              status={pushStatus}
+              unreachable={pushStatusUnreachable}
+              baseLabel={BASE.replace(/^https?:\/\//, "")}
+              log={pushLog}
+              failedJobs={failedJobs}
+              draining={draining}
+              onDrain={drainQueue}
+              requeueingId={requeueing}
+              onRequeue={requeueJob}
+              fmtTime={fmt}
+            />
           </SectionCard>
         </div>
 
