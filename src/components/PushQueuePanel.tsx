@@ -32,9 +32,12 @@
 import { useState } from "react";
 import {
   Activity, AlertTriangle, CheckCircle2, Clock, Loader2, RotateCcw,
-  RefreshCw, CloudOff, type LucideIcon,
+  RefreshCw, CloudOff,
 } from "lucide-react";
-import clsx from "clsx";
+/* The row this panel invented now lives in StatusRow.tsx, because the four
+   panels rebuilt after it list the same kind of fact and were each about to
+   grow their own copy. Rendered output is unchanged. */
+import { StatusRow, RowGroupHeading, EmptyNote } from "./StatusRow";
 
 export interface PushAgentStatusLike {
   enabled: boolean;
@@ -76,52 +79,6 @@ interface Props {
   requeueingId: string | null;
   onRequeue: (id: string) => void;
   fmtTime: (iso: string | null | undefined) => string;
-}
-
-/** One row of the queue, shaped like the web dashboard's `PushQueueList`. */
-function QueueRow({
-  icon: Icon, tone, title, party, meta, error, action, spinning,
-}: {
-  icon: LucideIcon;
-  tone: "neutral" | "success" | "danger";
-  title: string;
-  party?: string | null;
-  meta?: string;
-  error?: string | null;
-  action?: React.ReactNode;
-  spinning?: boolean;
-}) {
-  const toneCls =
-    tone === "success" ? "bg-success/10 text-success-700"
-    : tone === "danger" ? "bg-danger/10 text-danger-700"
-    : "bg-neutral-100 text-neutral-700";
-
-  return (
-    <li className="rounded-xl bg-white ring-1 ring-black/[0.06] px-3 py-2.5">
-      <div className="flex items-start gap-3">
-        <span className={clsx("grid h-9 w-9 shrink-0 place-items-center rounded-lg", toneCls)}>
-          <Icon size={16} className={spinning ? "animate-spin" : undefined} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[13px] font-semibold text-neutral-900">{title}</span>
-                {party && <span className="truncate text-[12.5px] text-neutral-700">{party}</span>}
-              </div>
-              {meta && <div className="text-[11px] tabular-nums text-neutral-500">{meta}</div>}
-            </div>
-            {action && <div className="shrink-0">{action}</div>}
-          </div>
-          {/* The reason sits with the row it belongs to, not in a table cell
-              you have to click to expand. */}
-          {error && (
-            <p className="mt-1 break-words rounded bg-danger-soft px-2 py-1 text-[11px] text-danger-700">{error}</p>
-          )}
-        </div>
-      </div>
-    </li>
-  );
 }
 
 export function PushQueuePanel({
@@ -190,26 +147,23 @@ export function PushQueuePanel({
       )}
 
       {nothingAtAll && (
-        <div className="flex flex-col items-center gap-1.5 rounded-xl bg-bg-sub px-4 py-8 text-center">
-          <Activity size={20} className="text-neutral-300" />
-          <span className="text-[13px] text-neutral-500">Nothing has been pushed from this machine yet.</span>
-        </div>
+        <EmptyNote icon={Activity}>Nothing has been pushed from this machine yet.</EmptyNote>
       )}
 
       {/* 1 — what needs a person */}
       {failedJobs.length > 0 && (
         <section>
-          <h3 className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-danger-700">
-            <AlertTriangle size={12} /> Needs you — {failedJobs.length} refused
-          </h3>
+          <RowGroupHeading tone="danger" icon={AlertTriangle}>
+            Needs you — {failedJobs.length} refused
+          </RowGroupHeading>
           <ul className="flex flex-col gap-2">
             {failedJobs.map((job) => (
-              <QueueRow
+              <StatusRow
                 key={job.id}
                 icon={AlertTriangle}
                 tone="danger"
                 title={String((job.payload as { voucherType?: string })?.voucherType ?? "Voucher")}
-                party={String((job.payload as { partyLedgerName?: string })?.partyLedgerName ?? "")}
+                subject={String((job.payload as { partyLedgerName?: string })?.partyLedgerName ?? "")}
                 meta={`attempt ${job.attempts} · queued ${fmtTime(job.created_at)}`}
                 error={job.last_error}
                 action={
@@ -231,17 +185,15 @@ export function PushQueuePanel({
       {/* 2 — what already went */}
       {log.length > 0 && (
         <section>
-          <h3 className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-neutral-600">
-            Recently pushed
-          </h3>
+          <RowGroupHeading>Recently pushed</RowGroupHeading>
           <ul className="flex flex-col gap-2">
             {shown.map((row) => (
-              <QueueRow
+              <StatusRow
                 key={row.id}
                 icon={row.status === "succeeded" ? CheckCircle2 : AlertTriangle}
                 tone={row.status === "succeeded" ? "success" : "danger"}
                 title={row.voucher_type || "Voucher"}
-                party={row.party}
+                subject={row.party}
                 meta={[
                   row.date,
                   fmtTime(row.resolved_at),
@@ -254,7 +206,7 @@ export function PushQueuePanel({
           {log.length > shown.length && (
             <button
               onClick={() => setShowAll(true)}
-              className="tap mt-2 w-full rounded-lg px-3 py-1.5 text-[11.5px] font-medium text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-700"
+              className="mt-2 w-full rounded-lg px-3 py-1.5 text-[11.5px] font-medium text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-700"
             >
               Show {log.length - shown.length} more
             </button>
