@@ -25,6 +25,23 @@ if (typeof globalThis !== 'undefined' && !globalThis.WebSocket) {
  * NOTE: this lives in the Supabase sync layer — it does NOT modify how Tally
  * XML is parsed, fetched, or imported. The Tally import path is untouched.
  */
+/**
+ * The one row shape both price-list writers put into `price_list_change_signal`.
+ *
+ * Exported and pure so the write can be pinned by a test without a Supabase
+ * connection — this machine is sandbox-role and may not write. It must stay
+ * byte-identical in column set to the file-import writer in MKCP MOB2's
+ * `web-dashboard/api/price-list.ts`, or the web side cannot tell which path
+ * produced a given row (G1). See `bumpPriceListSignal` for the full account.
+ */
+export function priceListSignalRow(
+  company: string,
+  itemCount: number,
+  now: Date = new Date(),
+): { company: string; updated_at: string; item_count: number } {
+  return { company, updated_at: now.toISOString(), item_count: itemCount };
+}
+
 /** Normalize a Tally date to ISO YYYY-MM-DD. Accepts "20260401" or "2026-04-01". */
 function toIsoDate(raw: any): any {
   if (raw == null) return raw;
@@ -1115,7 +1132,65 @@ export class SupabaseSync {
       synced_at: new Date().toISOString(),
     }));
     await this.batchAndUpsertOn("tally_price_list", mapped, "company,item_name,price_level,effective_from");
+    const items = new Set(entries.map((e) => e.itemName)).size;
     console.log(`[Supabase] ✓ Synced ${mapped.length} price-list entries (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+    await this.bumpPriceListSignal(company, items);
+  }
+
+  /**
+   * Tell the other devices the price list moved.
+   *
+   * ── Why this exists ───────────────────────────────────────────────────
+   * The web app subscribes to `price_list_change_signal` and NOT to
+   * `tally_price_list_imports` (MKCP MOB2 web-dashboard/src/App.tsx:478-497:
+   * that table is outside the supabase_realtime publication and has no SELECT
+   * policy, and granting one would expose the whole cost book). The signal is
+   * a deliberately contentless row.
+   *
+   * Only ONE of the two writers was bumping it. `api/price-list.ts`'s POST —
+   * the file-import path the owner has stopped using — upserts the row; this
+   * agent's Tally pull writes `tally_price_list` directly and bumped nothing.
+   * Measured 15-Sep-2026: the pull had just written 498 current rows / 488
+   * items stamped 08:08 UTC with a matching `scope='price_list'` refresh
+   * command marked done, while the signal still read 14-Sep 11:34. So the
+   * live push worked only for the half of the system nobody uses, and a
+   * second device open during a pull was never told to refetch. A display
+   * that silently does nothing is this project's house failure mode.
+   *
+   * ── The shape is the import path's shape, on purpose (G1) ─────────────
+   * Same table, same three columns, same `onConflict: "company"` upsert onto
+   * the single per-company row. If the two writers diverged the web side
+   * could not tell which produced a given row. `item_count` is the number of
+   * DISTINCT ITEMS, matching what the import path's row count means there
+   * (one current price per item) and what `/api/tally/sync-price-list`
+   * already reports as `items` — not `mapped.length`, which for a pull is the
+   * whole dated history (~4,254 revisions) and would make "488 prices
+   * updated" read as 4,254.
+   *
+   * ── Non-fatal, and after the upserts ──────────────────────────────────
+   * Exactly as the import path reasons: the prices are already committed by
+   * the time this runs, so failing the sync over a missed notification would
+   * report a failure that did not happen. The client's wake-on-return refetch
+   * is the actual guarantee; this is the latency optimisation on top of it.
+   *
+   * NOT OBSERVED LIVE. This machine is MKCP_TALLY_ROLE=sandbox and may not
+   * write to Supabase, so the bump itself has never been watched landing.
+   * What is verified is the write shape, pinned in
+   * server/scripts/test-price-list-signal.ts, and the live facts above
+   * (read-only SQL): the table is a BASE TABLE keyed on `company`, holds
+   * exactly one row, and IS in the supabase_realtime publication.
+   */
+  private async bumpPriceListSignal(company: string, itemCount: number): Promise<void> {
+    if (!this.client) return;
+    try {
+      const { error } = await this.client
+        .from("price_list_change_signal")
+        .upsert(priceListSignalRow(company, itemCount), { onConflict: "company" });
+      if (error) console.warn(`[Supabase] price-list change signal not sent: ${error.message}`);
+      else console.log(`[Supabase] ✓ price-list change signal bumped (${itemCount} items)`);
+    } catch (e: any) {
+      console.warn(`[Supabase] price-list change signal not sent: ${e?.message ?? e}`);
+    }
   }
 
   /**
