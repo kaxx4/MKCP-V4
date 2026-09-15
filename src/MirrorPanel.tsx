@@ -16,11 +16,16 @@ import {
   Database, History, ArrowUpRight, RefreshCw, Check, AlertTriangle, Loader2, Minus, Clock, PenLine,
 } from "lucide-react";
 
+/* The edit-log action chips. These are CATEGORIES, not states — the word is
+   already in the chip — so only the one that carries real meaning keeps a
+   status colour. The old map spent four hues on them (`bg-purple-50`,
+   `bg-amber-50`) and put `import` in the same amber this screen uses for
+   "needs attention", so a routine import read as a warning. */
 const ACTION_TONE: Record<string, string> = {
-  upsert: "bg-blue-50 text-blue-700",
-  delete: "bg-red-50 text-red-700",
-  export: "bg-purple-50 text-purple-700",
-  import: "bg-amber-50 text-amber-700",
+  upsert: "bg-accent/10 text-accent-700",
+  delete: "bg-danger/10 text-danger-700",
+  export: "bg-neutral-100 text-neutral-700",
+  import: "bg-neutral-100 text-neutral-700",
 };
 
 const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
@@ -63,9 +68,11 @@ const when = (iso: string | null): string => {
   return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
 };
 
+/* Semantic tokens only — "failed" here must be the same red as "failed" in the
+   push queue two panels up, and as "failed" in the web dashboard. */
 const TONE: Record<string, string> = {
-  succeeded: "text-green-700", pending: "text-blue-700", claimed: "text-blue-700",
-  pushing: "text-blue-700", failed: "text-red-700", cancelled: "text-neutral-400",
+  succeeded: "text-success-700", pending: "text-accent-700", claimed: "text-accent-700",
+  pushing: "text-accent-700", failed: "text-danger-700", cancelled: "text-neutral-400",
 };
 
 declare const __APP_VERSION__: string;
@@ -93,7 +100,7 @@ function StaleServerBanner({ who, reachable }: { who: WhoAmI | null; reachable: 
   if (!mismatch) return null;
 
   return (
-    <div className="bg-yellow-50 border border-yellow-300 rounded-xl px-4 py-3 text-xs text-yellow-900">
+    <div className="bg-warn-soft border border-warn-200 rounded-xl px-4 py-3 text-xs text-warn-800">
       <div className="flex items-start gap-2">
         <AlertTriangle size={14} className="mt-0.5 shrink-0" />
         <div>
@@ -167,7 +174,7 @@ export function MirrorPanel() {
 
   if (panel.offline) {
     return (
-      <div className="bg-white rounded-xl border border-neutral-200 px-4 py-3 text-xs text-yellow-700 flex items-start gap-1.5">
+      <div className="bg-white rounded-xl border border-neutral-200 px-4 py-3 text-xs text-warn-800 flex items-start gap-1.5">
         <AlertTriangle size={13} className="mt-0.5 shrink-0" />
         <span>Supabase is not configured or not reachable, so there is nothing to read. {panel.error}</span>
       </div>
@@ -218,7 +225,7 @@ export function MirrorPanel() {
                 single-threaded, so a batch finishes in sequence rather than together.
               </p>
               {lat.pickupMedian != null && lat.pickupMedian > 6 && (
-                <p className="mt-1 text-yellow-700">
+                <p className="mt-1 text-warn-800">
                   Pickup is slower than the 4-second poll, which means the realtime channel is not
                   delivering and every push is waiting for a tick.
                 </p>
@@ -267,7 +274,7 @@ export function MirrorPanel() {
                 </div>
                 {/* In full. Truncating a refusal removes the only useful part. */}
                 {p.lastError && (
-                  <p className="mt-1 text-[10.5px] text-red-700 bg-red-50 rounded px-1.5 py-1">{p.lastError}</p>
+                  <p className="mt-1 text-[10.5px] text-danger-700 bg-danger-soft rounded px-1.5 py-1">{p.lastError}</p>
                 )}
               </li>
             ))}
@@ -291,12 +298,12 @@ export function MirrorPanel() {
         <ul className="divide-y divide-neutral-100 max-h-[240px] overflow-auto">
           {panel.syncs.map((s, i) => (
             <li key={i} className="px-4 py-1.5 flex items-baseline gap-2 text-[11px]">
-              <span className={s.success ? "text-green-700" : "text-red-700"}>
+              <span className={s.success ? "text-success-700" : "text-danger-700"}>
                 {s.success ? <Check size={11} /> : <AlertTriangle size={11} />}
               </span>
               <span className="font-semibold capitalize">{s.syncType ?? "sync"}</span>
               {s.full && (
-                <span className="px-1.5 rounded bg-blue-50 text-blue-700 text-[10px] font-bold">full</span>
+                <span className="px-1.5 rounded bg-accent/10 text-accent-700 text-[10px] font-bold">full</span>
               )}
               <span className="text-neutral-500 truncate">
                 {Object.entries(s.counts ?? {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${n(Number(v))} ${k}`).join(", ") || "—"}

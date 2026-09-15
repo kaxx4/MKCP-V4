@@ -259,19 +259,38 @@ function SectionCard({ title, icon, children, defaultOpen = true }: {
   );
 }
 
-function Btn({ onClick, disabled, children, variant = "secondary" }: {
-  onClick: () => void; disabled?: boolean; children: React.ReactNode; variant?: "primary" | "secondary" | "danger";
+/**
+ * The small button used by Settings and File transfer.
+ *
+ * It used to carry its own three-variant palette — `bg-blue-600`,
+ * `bg-red-50 text-red-700` — which meant the agent's "danger" was a different
+ * red from the danger in every panel beside it and from the web dashboard's.
+ * It now composes the shared `.btn-*` classes in index.css, which is the same
+ * vocabulary the rebuilt panels use, so there is one definition of each state.
+ *
+ * `disabledReason` is not decoration: a flat grey button that says nothing is
+ * the difference between a two-second fix and a hunt through the log. When it
+ * is given, it becomes the tooltip AND the accessible description, and the
+ * button is disabled from that fact rather than from a separate flag.
+ */
+function Btn({ onClick, disabled, disabledReason, children, variant = "secondary", title }: {
+  onClick: () => void;
+  disabled?: boolean;
+  /** Why this is not available. Supplying it also disables the button. */
+  disabledReason?: string | null;
+  children: React.ReactNode;
+  variant?: "primary" | "secondary" | "danger";
+  title?: string;
 }) {
-  const cls = {
-    primary: "bg-blue-600 text-white hover:bg-blue-700",
-    secondary: "border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-700",
-    danger: "border border-red-200 bg-red-50 hover:bg-red-100 text-red-700",
-  }[variant];
+  const cls = { primary: "btn-primary", secondary: "btn-secondary", danger: "btn-danger" }[variant];
+  const off = !!disabled || !!disabledReason;
   return (
     <button
       onClick={onClick}
-      disabled={disabled}
-      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg disabled:opacity-50 disabled:cursor-not-allowed ${cls}`}
+      disabled={off}
+      title={disabledReason ?? title}
+      aria-description={disabledReason ?? undefined}
+      className={`${cls} btn-sm tap-y shrink-0`}
     >
       {children}
     </button>
@@ -946,7 +965,7 @@ export default function AgentStatus() {
                   <label key={label} className="block">
                     <span className="text-xs text-neutral-500 mb-1 block">{label}</span>
                     <input
-                      className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="form-input w-full"
                       value={val}
                       onChange={e => set(e.target.value)}
                     />
@@ -962,7 +981,7 @@ export default function AgentStatus() {
                   <span className="text-xs text-neutral-500 mb-1 block">Today — every (minutes)</span>
                   <input
                     type="number" min={0} step={1}
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="form-input w-full"
                     value={editTodayMins}
                     onChange={e => setEditTodayMins(e.target.value)}
                   />
@@ -971,7 +990,7 @@ export default function AgentStatus() {
                   <span className="text-xs text-neutral-500 mb-1 block">Last 7 days — every (minutes, 0 = off)</span>
                   <input
                     type="number" min={0} step={1}
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="form-input w-full"
                     value={editWeekMins}
                     onChange={e => setEditWeekMins(e.target.value)}
                   />
@@ -980,7 +999,7 @@ export default function AgentStatus() {
                   <span className="text-xs text-neutral-500 mb-1 block">This FY — every (minutes, 0 = off · heavy, use the button)</span>
                   <input
                     type="number" min={0} step={1}
-                    className="w-full border border-neutral-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="form-input w-full"
                     value={editFyMins}
                     onChange={e => setEditFyMins(e.target.value)}
                   />
@@ -1004,7 +1023,7 @@ export default function AgentStatus() {
               <Send size={15} className="text-neutral-500" />
               <h2 className="font-semibold text-sm text-neutral-700 flex-1">File transfer</h2>
               {transfers.some(t => t.status === "pending" && t.direction === "web_to_desktop") && (
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">new</span>
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-accent/10 text-accent-700">new</span>
               )}
               {showFileTransfer ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
             </button>
@@ -1039,7 +1058,7 @@ export default function AgentStatus() {
                   <p className="text-xs text-neutral-500 mb-1">Send a file to the web dashboard</p>
                   <div className="flex items-center gap-2">
                     <input
-                      className="flex-1 border border-neutral-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="form-input flex-1 min-w-0 text-xs"
                       placeholder="Note (optional)"
                       value={transferNote}
                       onChange={e => setTransferNote(e.target.value)}
@@ -1058,7 +1077,13 @@ export default function AgentStatus() {
                     <div className="space-y-1.5 max-h-56 overflow-y-auto">
                       {transfers.map(t => (
                         <div key={t.id} className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg bg-neutral-50">
-                          {t.direction === "web_to_desktop" ? <Download size={12} className="text-blue-500 flex-shrink-0" /> : <Upload size={12} className="text-emerald-500 flex-shrink-0" />}
+                          {/* Direction is a CATEGORY, not a state, so it is not
+                              given a status colour: incoming takes the accent
+                              because it is the only one that can still need
+                              you, outgoing is neutral because it is done. */}
+                          {t.direction === "web_to_desktop"
+                            ? <Download size={12} className="text-accent flex-shrink-0" />
+                            : <Upload size={12} className="text-neutral-500 flex-shrink-0" />}
                           <div className="flex-1 min-w-0">
                             <div className="truncate">{t.filename}</div>
                             <div className="flex items-center gap-1.5 text-[10px] text-neutral-400">
@@ -1070,10 +1095,13 @@ export default function AgentStatus() {
                               <span>{fmt(t.created_at)}</span>
                             </div>
                           </div>
+                          {/* Same three tones as every other status on this
+                              screen: waiting is warn, done is success, put
+                              aside is neutral. */}
                           <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
-                            t.status === "pending" ? "bg-amber-100 text-amber-700"
-                            : t.status === "downloaded" ? "bg-emerald-100 text-emerald-700"
-                            : "bg-neutral-200 text-neutral-500"
+                            t.status === "pending" ? "bg-warn/10 text-warn-800"
+                            : t.status === "downloaded" ? "bg-success/10 text-success-700"
+                            : "bg-neutral-100 text-neutral-600"
                           }`}>{t.status}</span>
                           {t.direction === "web_to_desktop" && t.status === "pending" && (
                             <button

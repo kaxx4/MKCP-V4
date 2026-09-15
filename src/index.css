@@ -421,6 +421,41 @@ button:focus-visible {
   .btn-sm { @apply text-xs min-h-7 px-2.5 py-1; }
   .btn-lg { @apply text-base min-h-11 px-6 py-2.5; }
 
+  /* ── Finger-sized hit areas, without changing how anything looks ────────
+   *
+   * A sweep of this window on 15-Sep-2026 found the small controls well under
+   * the 44px guidance: the mirror panel's refresh was a bare 13px icon, the
+   * file-transfer dismiss 13px, and every `.btn-sm` 28px tall. Simply making
+   * them 44px would wreck a window that is dense on purpose — it is a status
+   * board, and the whole point is that the state of the system fits on one
+   * screen. So the VISUAL box is left exactly as it is and an invisible one
+   * is grown behind it.
+   *
+   * `.tap` gives a centred 44x44 area; `.tap-y` grows only vertically, for a
+   * control sitting in a horizontal row where a wider area would reach its
+   * neighbour — a hit area that overlaps the next control is worse than a
+   * small one, because it does the wrong thing rather than nothing.
+   *
+   * DELIBERATELY NOT gated on `@media (pointer: coarse)`, which is how the web
+   * dashboard ships the same class (web-dashboard/src/index.css). That gate is
+   * right there — those are phone visits to an all-day desktop grid. This is an
+   * Electron window driven by a mouse, where the gate would make the class a
+   * silent no-op, and Fitts's law does not stop applying because the pointer
+   * is fine. Nothing sits behind these controls for the area to swallow. */
+  .tap, .tap-y { position: relative; }
+  .tap::before, .tap-y::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    min-height: 44px;
+    /* Never wider than the element on .tap-y — vertical reach only. */
+    width: 100%;
+    min-width: 0;
+  }
+  .tap::before { min-width: 44px; }
+
   /* ═══════════════════════════════════════════════════════════
      FORM CONTROLS
      ═══════════════════════════════════════════════════════════ */
