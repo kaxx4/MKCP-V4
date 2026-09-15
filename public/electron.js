@@ -460,14 +460,22 @@ function createWindow() {
 }
 
 // ── Quick View (picture-in-picture) window ───────────────────────────────────
-// Small always-on-top window loading a dedicated #/pip route of the same built
-// web app. Window mechanics only — the #/pip route's content (price
-// verification, discounts, upsell, who-to-call tabs) is a separate web-side
-// React Router route, not built here. NOTE: this Electron app currently has no
-// react-router-dom dependency (App.tsx renders AgentStatus unconditionally), so
-// until that web-side route ships, #/pip resolves to the same AgentStatus
-// screen shrunk into a small window rather than a 404 — a harmless temporary
-// state, not a crash.
+// Small always-on-top window loading the #/pip route of the same built app.
+//
+// That route is now real: src/App.tsx reads the hash and renders
+// src/QuickView.tsx — approvals waiting, then Tally / push drain / queue, all
+// derived by the same functions as the main window's KPI strip
+// (src/status/agentFacts.ts) so the two windows cannot disagree.
+//
+// Until 15-Sep-2026 nothing read the hash, so this window rendered the ENTIRE
+// 1,100-line status board at 280-360px — and, less visibly, mounted a second
+// `useScheduledSyncs()`, i.e. a duplicate 30-minute Today sync firing at
+// TallyPrime's single-threaded XML port from a window nobody was looking at.
+// The note that used to sit here called that "a harmless temporary state".
+//
+// The earlier plan for this window (price verification, discounts, upsell,
+// who-to-call tabs) is a web-dashboard feature and was never built anywhere;
+// it is not what this window shows.
 function createPipWindow() {
   const bounds = getSafeWindowBoundsFor('pipWindowBounds', PIP_WINDOW_SIZE);
 

@@ -1,4 +1,4 @@
-import { useEffect, startTransition } from "react";
+import { useEffect, useState, startTransition } from "react";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/Toast";
 import { Layout } from "./components/Layout";
@@ -10,6 +10,7 @@ import { deserializeParsedData } from "./utils/serialize";
 import { useScheduledSyncs } from "./hooks/useScheduledSyncs";
 import { usePersistenceMonitor } from "./hooks/usePersistenceMonitor";
 import AgentStatus from "./AgentStatus";
+import QuickView from "./QuickView";
 
 function SyncAgent() {
   const setData = useDataStore((s) => s.setData);
@@ -62,12 +63,40 @@ function SyncAgent() {
   return <AgentStatus />;
 }
 
+/**
+ * Which window is this.
+ *
+ * `public/electron.js` opens a second, always-on-top BrowserWindow at `#/pip`
+ * (tray → "Toggle Quick View", and Ctrl+Shift+P). Nothing read that hash until
+ * 15-Sep-2026, so BOTH windows rendered `<SyncAgent />` — which meant the small
+ * one showed the entire 1,100-line status board, and, less visibly, mounted a
+ * SECOND `useScheduledSyncs()`: a duplicate 30-minute Today sync firing at
+ * TallyPrime's single-threaded XML port from a window nobody was looking at.
+ *
+ * A hash, not a router. One alternative route does not earn a router
+ * dependency, and `hashchange` is the whole of what react-router would be doing
+ * here.
+ */
+function useRoute(): "pip" | "main" {
+  const read = () => (window.location.hash.replace(/^#\/?/, "").split("?")[0] === "pip" ? "pip" : "main");
+  const [route, setRoute] = useState<"pip" | "main">(read);
+  useEffect(() => {
+    const onHash = () => setRoute(read());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  return route;
+}
+
 export default function App() {
+  const route = useRoute();
   return (
     <ErrorBoundary>
       <ToastProvider>
         <Layout>
-          <SyncAgent />
+          {/* Quick View mounts NEITHER the scheduler nor the IDB restore — it is
+              a reader, and the window doing the work is the main one. */}
+          {route === "pip" ? <QuickView /> : <SyncAgent />}
         </Layout>
       </ToastProvider>
     </ErrorBoundary>

@@ -24,6 +24,10 @@ import { SupabaseCloudPanel } from "./components/SupabaseCloudPanel";
 import { QuickSyncPanel } from "./components/QuickSyncPanel";
 import { PullSyncPanel, type PullAction } from "./components/PullSyncPanel";
 import { LogsPanel, isErrorLine } from "./components/LogsPanel";
+/* The four KPI facts are derived here AND in QuickView.tsx, so the reasoning
+   lives in one module rather than in whichever window was edited last. The part
+   that must not drift is telling "zero" apart from "never counted". */
+import { tallyFact, drainFact, queueFact, cloudFact, toneToStatTile } from "./status/agentFacts";
 
 const SUPA_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
 const SUPA_ANON = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -747,30 +751,27 @@ export default function AgentStatus() {
   const localServerDown = health == null;
   const company = companyName || "—";
 
-  /* Three states, not two. `success` is `null` on a channel nothing has tried
-     yet, and `success !== false` counted that as fine — so a freshly started
-     app with nothing pushed reported the mirror "OK" in the largest type on
-     the screen. `cloudTried` is what separates "working" from "untested".
-     (15-Sep-2026) */
-  const cloudChannels = [cloudConfig, cloudMasters, cloudVouchers];
-  const cloudFailing = cloudChannels.some((c) => c.success === false);
-  const cloudTried = cloudChannels.some((c) => c.success !== null);
-  const cloudLastAt = cloudVouchers.lastAt || cloudMasters.lastAt || cloudConfig.lastAt;
-  /* Retained for the panel below, which shows every channel individually. */
-  const cloudOk = !cloudFailing;
+  /* The four facts, from status/agentFacts.ts — the same functions the Quick
+     View window renders from. Each knows the difference between a measured
+     value and one that was never read; the reasoning for each sits in that
+     module, next to the field it reads. */
+  const facts = [
+    tallyFact(health, BASE_LABEL),
+    drainFact(pushStatus),
+    queueFact(pushStatus),
+    cloudFact(cloudConfig, cloudMasters, cloudVouchers),
+  ];
 
-  /* The queue depth is only a number once the drain agent has actually read it
-     out of Supabase. Until then `queueStats` holds its initial zeros — see
-     server/src/services/pushAgent.ts. Older servers do not send
-     `queueStatsAt`; `undefined` there means "cannot tell", same as null. */
+  /* Still needed below: the Supabase panel lists every channel individually,
+     and the push-queue panel says whether a depth was ever counted. */
+  const cloudOk = ![cloudConfig, cloudMasters, cloudVouchers].some((c) => c.success === false);
+
   /* Inbound files still waiting for this machine. Named once, because it is
      both the header badge and the thing the badge is counting. */
   const incomingWaiting = transfers.filter(
     (t) => t.status === "pending" && t.direction === "web_to_desktop",
   ).length;
 
-  const queueMeasuredAt = pushStatus?.queueStatsAt ?? null;
-  const queueKnown = !!pushStatus && !!queueMeasuredAt;
 
   /* One reason, the first that applies. A flat-disabled button that says
      nothing is the difference between a two-second fix and a hunt through the
@@ -879,83 +880,17 @@ export default function AgentStatus() {
             last move. They were scattered across four panels, each as a small
             pill, so the state of the system had to be assembled by eye. */}
         <div className="mb-4 grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-          <StatTile
-            emphasis
-            label="Tally"
-            value={connected ? "Connected" : "Offline"}
-            tone={connected ? "success" : "danger"}
-            tint={!connected}
-            /* Which of the two processes failed. Naming Tally's port when this
-               app's own server is the thing that is down sends the reader to
-               TallyPrime's connectivity settings for a problem that is not
-               there. */
-            sub={
-              connected
-                ? (health?.tallyUrl || BASE)
-                : localServerDown
-                  ? `this app's own server on ${BASE_LABEL} is not answering`
-                  : "TallyPrime is not answering on :9000"
-            }
-          />
-          {/* Three states. `pushStatus` is null when the local server did not
-              answer, and `pushStatus?.enabled` collapsed that to "Disabled" —
-              an assertion about a configuration we could not read. Observed
-              15-Sep-2026 with the server stopped: the tile said "Disabled ·
-              no tick yet" beside a panel correctly saying it could not be
-              reached. */}
-          <StatTile
-            emphasis
-            label="Push drain"
-            value={!pushStatus ? "Unknown" : pushStatus.enabled ? "Running" : "Disabled"}
-            tone={!pushStatus ? "warn" : pushStatus.enabled ? "success" : "warn"}
-            tint={!pushStatus?.enabled}
-            sub={
-              !pushStatus
-                ? "the local server did not answer, so its state is unknown"
-                : pushStatus.lastTick
-                  ? `last tick ${new Date(pushStatus.lastTick).toLocaleTimeString("en-IN")}`
-                  : "no tick yet"
-            }
-          />
-          {/* "0 · nothing waiting" was printed whenever the counts had never
-              been read — server unreachable, drain agent never started, or a
-              failed Supabase read — which is the state a person is least
-              likely to go and check. A queue whose depth is unknown says so.
-              (15-Sep-2026) */}
-          <StatTile
-            emphasis
-            label="Queue"
-            value={queueKnown ? String(pushStatus!.queueStats.pending + pushStatus!.queueStats.pushing) : "—"}
-            tone={!queueKnown ? "warn" : pushStatus!.queueStats.failed > 0 ? "warn" : undefined}
-            tint={!queueKnown}
-            sub={
-              !queueKnown
-                ? "never counted — the drain agent has not reported a depth"
-                : pushStatus!.queueStats.failed > 0
-                  ? `${pushStatus!.queueStats.failed} failed · counted ${new Date(queueMeasuredAt!).toLocaleTimeString("en-IN")}`
-                  : `nothing waiting · counted ${new Date(queueMeasuredAt!).toLocaleTimeString("en-IN")}`
-            }
-          />
-          {/* `cloudVouchers` is a CHANNEL STATUS ({lastAt, success, error}),
-              not a count — rendering it as one produced "[object Object]" in
-              the largest type on the screen. What this state actually knows is
-              whether the mirror is accepting writes and when it last did. */}
-          <StatTile
-            emphasis
-            label="Supabase"
-            value={cloudFailing ? "Error" : cloudTried ? "OK" : "Not tried"}
-            tone={cloudFailing ? "danger" : cloudTried ? "success" : undefined}
-            tint={cloudFailing}
-            /* Not "last write": `lastAt` is stamped on every ATTEMPT, so a
-               failing channel was reporting a write that never happened. And
-               the store is in-memory, so no timestamp means "not since this
-               app started", never "never". */
-            sub={
-              cloudLastAt
-                ? `${cloudFailing ? "last tried" : "last write"} ${new Date(cloudLastAt).toLocaleTimeString("en-IN")}`
-                : "no push since this app started"
-            }
-          />
+          {facts.map((f) => (
+            <StatTile
+              key={f.label}
+              emphasis
+              label={f.label}
+              value={f.value}
+              tone={toneToStatTile(f.tone)}
+              tint={f.attention}
+              sub={f.sub}
+            />
+          ))}
         </div>
       </div>
 
