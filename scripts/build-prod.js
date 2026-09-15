@@ -2,7 +2,7 @@
 // scripts/build-prod.js – Production installer builder
 
 import { execSync, execFileSync } from 'child_process';
-import { existsSync, readdirSync, statSync, rmSync, renameSync } from 'fs';
+import { existsSync, readdirSync, statSync, rmSync, renameSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { readFileSync } from 'fs';
 
@@ -104,6 +104,18 @@ async function main() {
   run('npm install', { cwd: join(ROOT, 'server') });
   ok('Server dependencies ready');
 
+  /* Snapshot the manifest before electron-builder runs.
+     `extraMetadata` makes electron-builder generate a TRANSFORMED package.json
+     for the packaged app — name/version/main/dependencies, with `scripts` and
+     `devDependencies` stripped. On 15-Sep-2026 a publish run wrote that
+     transformed copy over the SOURCE file: 17 scripts and 22 devDependencies
+     gone, `npm run build` answering "Missing script: build", and the damage
+     committed before anyone noticed because the file still looked like valid
+     JSON. Restored from git.
+     Cheap insurance: remember it, and put it back if it comes out thinner. */
+  const pkgPath = join(ROOT, 'package.json');
+  const pkgBefore = readFileSync(pkgPath, 'utf8');
+
   // Step 2: Build React frontend
   step('Building React frontend...');
   run('npm run build');
@@ -147,6 +159,20 @@ async function main() {
   step('Restoring server dev-dependencies for development...');
   run('npm install', { cwd: join(ROOT, 'server') });
   ok('Server devDeps restored');
+
+  /* Step 4.6: Did the build eat the manifest? See the snapshot above. */
+  const pkgAfter = readFileSync(pkgPath, 'utf8');
+  if (pkgAfter !== pkgBefore) {
+    const before = JSON.parse(pkgBefore);
+    const after = JSON.parse(pkgAfter);
+    const lostScripts = Object.keys(before.scripts || {}).length - Object.keys(after.scripts || {}).length;
+    const lostDev = Object.keys(before.devDependencies || {}).length - Object.keys(after.devDependencies || {}).length;
+    if (lostScripts > 0 || lostDev > 0) {
+      warn(`package.json was rewritten by the build — ${lostScripts} script(s) and ${lostDev} devDependency(ies) lost. Restoring it.`);
+      writeFileSync(pkgPath, pkgBefore);
+      ok('package.json restored');
+    }
+  }
 
   // Step 5: Verify output
   step('Verifying output...');

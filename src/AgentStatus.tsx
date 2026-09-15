@@ -13,6 +13,8 @@ import { todayYmd, daysAgoYmd } from "./services/tallyPull";
 import { runQuickSync } from "./services/quickSync";
 import { useQuickSyncStore } from "./store/quickSyncStore";
 import { MirrorPanel } from "./MirrorPanel";
+import { PageHeader } from "./components/PageHeader";
+import { StatTile } from "./components/StatTile";
 
 const SUPA_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
 const SUPA_ANON = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -719,24 +721,74 @@ export default function AgentStatus() {
   });
 
   return (
-    <div className="min-h-screen bg-neutral-100 p-4 md:p-6">
-      {/* Header */}
-      <div className="mb-5 flex items-center justify-between max-w-5xl mx-auto">
-        <div>
-          <h1 className="text-xl font-bold text-neutral-900">MKCP Sync Agent</h1>
-          <p className="text-xs text-neutral-500 mt-0.5">{company}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <UpdateChip state={update} />
-          <SyncStateIndicator isSyncing={isSyncing} syncingLabel={syncing} qsync={qsync} />
-          <button
-            onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
-            disabled={polling}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-600 disabled:opacity-50"
-          >
-            <RefreshCw size={13} className={polling ? "animate-spin" : ""} />
-            Refresh
-          </button>
+    /* `bg-bg-page`, the same ground the web dashboard paints. This was
+       `bg-neutral-100`, a different off-white, so the two apps sat side by side
+       on the same desk in visibly different greys. */
+    <div className="min-h-screen bg-bg-page p-4 md:p-6">
+      <div className="max-w-5xl mx-auto">
+        {/* The web dashboard's own PageHeader, copied verbatim — same title
+            sizing, same subtitle spacing, same title/actions row. The agent
+            previously hand-rolled a smaller heading, which is why it read as a
+            utility window rather than as part of the same product. */}
+        <PageHeader
+          title="Sync agent"
+          subtitle={<>{company} · the only thing here that talks to Tally</>}
+          actions={
+            <>
+              <UpdateChip state={update} />
+              <SyncStateIndicator isSyncing={isSyncing} syncingLabel={syncing} qsync={qsync} />
+              <button
+                onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
+                disabled={polling}
+                className="btn-secondary btn-sm"
+              >
+                <RefreshCw size={13} className={polling ? "animate-spin" : ""} />
+                Refresh
+              </button>
+            </>
+          }
+        />
+
+        {/* The four figures worth reading before anything else: is Tally there,
+            is the drain running, how deep is the queue, and when did the mirror
+            last move. They were scattered across four panels, each as a small
+            pill, so the state of the system had to be assembled by eye. */}
+        <div className="mb-4 grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+          <StatTile
+            emphasis
+            label="Tally"
+            value={connected ? "Connected" : "Offline"}
+            tone={connected ? "success" : "danger"}
+            tint={!connected}
+            sub={connected ? (health?.tallyUrl || BASE) : "TallyPrime is not answering on :9000"}
+          />
+          <StatTile
+            emphasis
+            label="Push drain"
+            value={pushStatus?.enabled ? "Running" : "Disabled"}
+            tone={pushStatus?.enabled ? "success" : "warn"}
+            tint={!pushStatus?.enabled}
+            sub={pushStatus?.lastTick ? `last tick ${new Date(pushStatus.lastTick).toLocaleTimeString("en-IN")}` : "no tick yet"}
+          />
+          <StatTile
+            emphasis
+            label="Queue"
+            value={String((pushStatus?.queueStats?.pending ?? 0) + (pushStatus?.queueStats?.pushing ?? 0))}
+            tone={(pushStatus?.queueStats?.failed ?? 0) > 0 ? "warn" : undefined}
+            sub={(pushStatus?.queueStats?.failed ?? 0) > 0 ? `${pushStatus?.queueStats?.failed} failed` : "nothing waiting"}
+          />
+          {/* `cloudVouchers` is a CHANNEL STATUS ({lastAt, success, error}),
+              not a count — rendering it as one produced "[object Object]" in
+              the largest type on the screen. What this state actually knows is
+              whether the mirror is accepting writes and when it last did. */}
+          <StatTile
+            emphasis
+            label="Supabase"
+            value={cloudOk ? "OK" : cloudLastAt ? "Error" : "Never"}
+            tone={cloudOk ? "success" : cloudLastAt ? "danger" : undefined}
+            tint={!cloudOk && !!cloudLastAt}
+            sub={cloudLastAt ? `last write ${new Date(cloudLastAt).toLocaleTimeString("en-IN")}` : "nothing written yet"}
+          />
         </div>
       </div>
 
