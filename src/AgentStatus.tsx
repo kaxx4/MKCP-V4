@@ -1238,7 +1238,7 @@ export default function AgentStatus() {
                     <p className="flex items-start gap-1.5 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
                       <AlertTriangle size={13} className="mt-0.5 shrink-0" />
                       <span>
-                        The transfer list could not be read — {transfersError} This is not the same as there being
+                        The transfer list could not be read: {transfersError}. That is not the same as there being
                         none{transfersReadAt ? `; the last list that did come back was at ${new Date(transfersReadAt).toLocaleTimeString("en-IN")}` : ""}.
                       </span>
                     </p>
