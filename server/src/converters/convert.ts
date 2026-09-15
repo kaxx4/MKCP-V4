@@ -52,6 +52,19 @@ function num(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Tally's compact `YYYYMMDD` → ISO `YYYY-MM-DD`. Null for anything else.
+ *
+ * Exported so the test can pin it: "the date is stored as an ISO date" is the
+ * whole contract the web side reads, and a silent format drift there is
+ * indistinguishable from the missing-field bug this helper exists to fix.
+ */
+export function tallyIsoDate(raw: string): string | null {
+  const d = (raw ?? "").trim();
+  if (!/^\d{8}$/.test(d)) return null;
+  return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+}
+
 export interface VoucherTransport {
   ewb_number: string | null;
   ewb_valid_until: string | null;
@@ -280,8 +293,46 @@ export function convertStockItems(parsed: any): { tallymessage: any[] } {
         valuationmethod: txt(si.VALUATIONMETHOD),
         isbatchwiseon: txt(si.ISBATCHWISEON) === "Yes",
         iscostcentreson: txt(si.ISCOSTCENTRESON) === "Yes",
+        /* ── A GST block without its date is not a rate, it is a rumour ─────
+           Guardrail G4. Tally stamps every GSTDETAILS.LIST with APPLICABLEFROM
+           and names every STATEWISEDETAILS.LIST with STATENAME; this converter
+           kept only the rate rows, so both were fetched and silently dropped —
+           510 blocks in the mirror, zero dates.
+
+           It cost money. With no date there is no defensible way to pick the
+           current block: `BABY CAR TRANSFORMERS` reads 18 / 18 / 0 with the
+           stale zero LAST, while `BABY SCOOTER HECTOR` has its blank FIRST, so
+           neither "take the first" nor "take the last" is right. The bundled
+           engine/purchase/data/itemMaster.json took the first and carries
+           BABY TRICYCLE PUNCH 4 IN 1 at 12, BASKET KID at 12 and two
+           RIM MOTOR CYCLE … at 28, where the date-resolved answer is 5/5/18/18
+           — one full slab too high on each. The web app now WITHHOLDS a rate
+           whenever the undated evidence is ambiguous (dataset.ts's
+           `resolveItemMasterGstRate`), which is correct and is a workaround for
+           exactly this.
+
+           Confirmed on the live company 15-Sep-2026 by replaying the captured
+           production request (server/fixtures/MKCP_StockItem.json): 507 of 507
+           GSTDETAILS blocks carry APPLICABLEFROM — 15 distinct dates from
+           20170701 to 20260401, including 20250922, the day bicycles moved to
+           5% — and all 507 STATEWISEDETAILS blocks carry STATENAME.
+
+           STATENAME is every bit as load-bearing even though it reads "Any" on
+           all 507 blocks today: the block is named state-wise, so the instant
+           one rate varies by state that variation is invisible without it, and
+           "they are all Any" is a fact about this afternoon, not a schema.
+
+           `applicablefrom` is emitted as null rather than omitted when Tally's
+           value is not 8 digits, so a row synced after this change and carrying
+           a dateless block is distinguishable from a row written before it,
+           where the key is absent entirely. Both keys are ADDITIVE: the web
+           side reads `statewisedetails[].ratedetails[]` and is untouched. */
         gstdetails: arr(si.GSTDETAILS ?? si["GSTDETAILS.LIST"]).map((g: any) => ({
+          applicablefrom: tallyIsoDate(txt(g?.APPLICABLEFROM)),
           statewisedetails: arr(g?.STATEWISEDETAILS ?? g?.["STATEWISEDETAILS.LIST"]).map((s: any) => ({
+            // txt() strips Tally's &#4; sort-order prefix — the raw value is
+            // "\x04 Any", which would not equal any state name anyone compares to.
+            statename: txt(s?.STATENAME) || null,
             ratedetails: arr(s?.RATEDETAILS ?? s?.["RATEDETAILS.LIST"]).map((r: any) => ({
               gstratedutyhead: txt(r.GSTRATEDUTYHEAD),
               gstrate: txt(r.GSTRATE, "0"),
