@@ -133,7 +133,12 @@ async function main() {
 
   // Step 4: Run electron-builder
   step(`Building Electron installer (${CONFIG_FILE})...`);
-  run(`npx electron-builder --win --config ${CONFIG_FILE}`);
+  /* `--publish never`, explicitly. The config now carries a GitHub publish
+     target so electron-updater has somewhere to look, and electron-builder
+     will upload on its own if it finds a token in the environment. Building
+     and releasing are different decisions — `npm run release` is the one that
+     uploads. */
+  run(`npx electron-builder --win --config ${CONFIG_FILE} --publish never`);
 
   // Step 4.5: Restore server devDependencies so the workspace stays usable for development.
   step('Restoring server dev-dependencies for development...');
