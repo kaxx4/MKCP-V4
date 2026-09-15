@@ -130,6 +130,15 @@ function counts(rc: Record<string, number> | null): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
+/** The first reason that applies, so a grey button answers the question it
+ *  raises — the note below the row says the same thing, but only for whichever
+ *  reason came first, and a pointer is already on the button. */
+function whyOff(blocked: string | null, busy: boolean, runningLabel: string | null): string | null {
+  if (blocked) return blocked;
+  if (busy) return runningLabel ? `The ${runningLabel} sync is still running.` : "Another sync is holding the Tally connection.";
+  return null;
+}
+
 export function PullSyncPanel({
   actions, windows, runningLabel, busy, blocked, history, canReadHistory,
 }: Props) {
@@ -173,6 +182,7 @@ export function PullSyncPanel({
                 a.run();
               }}
               disabled={busy || !!blocked}
+              title={whyOff(blocked, busy, runningLabel) ?? `${a.label} — ${a.note}${a.confirm ? " (asks first)" : ""}`}
               className="btn-secondary btn-sm !flex-col !items-start !gap-0 !py-1.5"
             >
               <span className="flex items-center gap-1.5">
@@ -194,6 +204,7 @@ export function PullSyncPanel({
               key={w.label}
               onClick={w.run}
               disabled={busy || !!blocked}
+              title={whyOff(blocked, busy, runningLabel) ?? `Pull every voucher in "${w.label}" from Tally.`}
               className={`filter-chip text-[11px] ${running ? "filter-chip-active" : ""}`}
             >
               {running && <Loader2 size={10} className="animate-spin" />}

@@ -192,8 +192,18 @@ export function MirrorPanel() {
         <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
           <Clock size={14} className="text-neutral-500" />
           <h2 className="font-semibold text-sm text-neutral-700 flex-1">Queue to Tally</h2>
-          <button onClick={() => void load()} className="text-neutral-400 hover:text-neutral-700" aria-label="Refresh">
-            <RefreshCw size={13} className={busy ? "animate-spin" : ""} />
+          {/* Was a bare 13px icon with no box at all — the smallest target on
+              the screen, for the control a person reaches for most often on
+              this panel. `btn-icon` gives it a real box and `tap` a 44px
+              area behind it. (15-Sep-2026) */}
+          <button
+            onClick={() => void load()}
+            disabled={busy}
+            className="btn-icon h-9 w-9 shrink-0 tap"
+            aria-label="Refresh the mirror"
+            title={busy ? "Reading the mirror…" : "Re-read the mirror now"}
+          >
+            <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
           </button>
         </div>
         <div className="px-4 py-3 text-xs text-neutral-700">

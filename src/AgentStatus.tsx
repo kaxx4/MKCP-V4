@@ -247,21 +247,49 @@ function SyncStateIndicator({
   );
 }
 
-function SectionCard({ title, icon, children, defaultOpen = true }: {
-  title: string; icon: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean;
+/**
+ * The collapsible panel — ONE definition.
+ *
+ * Logs, Settings and File transfer each hand-rolled this same card and header
+ * inline further down, because SectionCard could not carry the small badge
+ * their headers needed (an error count, a "new" pill). Four copies of one
+ * shape, so an affordance had to be fixed four times and was not: none of the
+ * four said `aria-expanded`, none had a hover state, and the header was 44px
+ * only by the accident of its padding. Adding a `badge` slot collapses them
+ * into this. (15-Sep-2026)
+ */
+function SectionCard({ title, icon, children, badge, defaultOpen = true, bodyClassName = "px-4 py-3", open: openProp, onOpenChange }: {
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  /** Small trailing note in the header — the one thing worth seeing while the
+   *  panel is still closed. */
+  badge?: React.ReactNode;
+  defaultOpen?: boolean;
+  bodyClassName?: string;
+  /** Controlled mode. Three panels poll a server only while they are open, so
+   *  the parent has to know — Logs refreshes its tail every 2s, File transfer
+   *  its list every 10s, and both are deliberately quiet while shut. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [openState, setOpenState] = useState(defaultOpen);
+  const open = openProp ?? openState;
+  const setOpen = (next: boolean) => { setOpenState(next); onOpenChange?.(next); };
   return (
     <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
       <button
-        className="flex items-center gap-2 px-4 py-3 border-b border-neutral-100 bg-neutral-50 w-full text-left"
-        onClick={() => setOpen(v => !v)}
+        className="flex min-h-11 w-full items-center gap-2 border-b border-neutral-100 bg-neutral-50 px-4 py-3 text-left transition-colors hover:bg-neutral-100"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        title={open ? `Hide ${title}` : `Show ${title}`}
       >
         <span className="text-neutral-500">{icon}</span>
         <h2 className="font-semibold text-sm text-neutral-700 flex-1">{title}</h2>
+        {badge}
         {open ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
       </button>
-      {open && <div className="px-4 py-3">{children}</div>}
+      {open && <div className={bodyClassName}>{children}</div>}
     </div>
   );
 }
@@ -735,6 +763,12 @@ export default function AgentStatus() {
      out of Supabase. Until then `queueStats` holds its initial zeros — see
      server/src/services/pushAgent.ts. Older servers do not send
      `queueStatsAt`; `undefined` there means "cannot tell", same as null. */
+  /* Inbound files still waiting for this machine. Named once, because it is
+     both the header badge and the thing the badge is counting. */
+  const incomingWaiting = transfers.filter(
+    (t) => t.status === "pending" && t.direction === "web_to_desktop",
+  ).length;
+
   const queueMeasuredAt = pushStatus?.queueStatsAt ?? null;
   const queueKnown = !!pushStatus && !!queueMeasuredAt;
 
@@ -830,6 +864,7 @@ export default function AgentStatus() {
               <button
                 onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
                 disabled={polling}
+                title={polling ? "Already reading…" : "Re-read health, the push queue and the Supabase lists now. They refresh on their own every 10 s."}
                 className="btn-secondary btn-sm"
               >
                 <RefreshCw size={13} className={polling ? "animate-spin" : ""} />
@@ -1017,52 +1052,41 @@ export default function AgentStatus() {
             error count, because that is the one thing worth seeing while the
             panel is still closed; everything else moved inside. */}
         <div className="md:col-span-2">
-          <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
-            <button
-              className="flex items-center gap-2 px-4 py-3 border-b border-neutral-100 bg-neutral-50 w-full text-left"
-              onClick={() => setShowLogs(v => !v)}
-            >
-              <Activity size={15} className="text-neutral-500" />
-              <h2 className="font-semibold text-sm text-neutral-700 flex-1">
-                Logs{logs.length > 0 ? ` (${logs.length})` : ""}
-              </h2>
-              {logErrorCount > 0 && (
-                <span className="text-[11px] font-semibold text-danger-700">
-                  {logErrorCount} error{logErrorCount === 1 ? "" : "s"}
-                </span>
-              )}
-              {showLogs ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
-            </button>
-            {showLogs && (
-              <div className="px-3 py-3">
-                <LogsPanel
-                  logs={logs}
-                  base={BASE}
-                  onCopy={(text) =>
-                    navigator.clipboard?.writeText(text).then(
-                      () => toast("Logs copied", "success"),
-                      () => toast("Copy failed", "error"),
-                    )
-                  }
-                />
-              </div>
-            )}
-          </div>
+          <SectionCard
+            title={`Logs${logs.length > 0 ? ` (${logs.length})` : ""}`}
+            icon={<Activity size={15} />}
+            open={showLogs}
+            onOpenChange={setShowLogs}
+            bodyClassName="px-3 py-3"
+            badge={logErrorCount > 0 ? (
+              <span className="text-[11px] font-semibold text-danger-700">
+                {logErrorCount} error{logErrorCount === 1 ? "" : "s"}
+              </span>
+            ) : undefined}
+          >
+            <LogsPanel
+              logs={logs}
+              base={BASE}
+              onCopy={(text) =>
+                navigator.clipboard?.writeText(text).then(
+                  () => toast("Logs copied", "success"),
+                  () => toast("Copy failed", "error"),
+                )
+              }
+            />
+          </SectionCard>
         </div>
 
         {/* ── Settings ─────────────────────────────────────────── */}
         <div className="md:col-span-2">
-          <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
-            <button
-              className="flex items-center gap-2 px-4 py-3 border-b border-neutral-100 bg-neutral-50 w-full text-left"
-              onClick={() => setShowSettings(v => !v)}
-            >
-              <Settings size={15} className="text-neutral-500" />
-              <h2 className="font-semibold text-sm text-neutral-700 flex-1">Settings</h2>
-              {showSettings ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
-            </button>
-            {showSettings && (
-              <div className="px-4 py-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <SectionCard
+            title="Settings"
+            icon={<Settings size={15} />}
+            open={showSettings}
+            onOpenChange={setShowSettings}
+            bodyClassName="px-4 py-4 grid grid-cols-1 sm:grid-cols-2 gap-4"
+          >
+            <>
                 {([
                   ["Company name",       editCompany, setEditCompany],
                   ["Proxy URL",          editProxy,   setEditProxy],
@@ -1113,29 +1137,29 @@ export default function AgentStatus() {
                 </label>
 
                 <div className="sm:col-span-2">
-                  <Btn variant="primary" onClick={applySettings}>Save settings</Btn>
+                  <Btn variant="primary" onClick={applySettings} title="Store these on this machine and use them from now on.">
+                    Save settings
+                  </Btn>
                 </div>
-              </div>
-            )}
-          </div>
+            </>
+          </SectionCard>
         </div>
 
         {/* ── File transfer ────────────────────────────────────── */}
         <div className="md:col-span-2">
-          <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
-            <button
-              className="flex items-center gap-2 px-4 py-3 border-b border-neutral-100 bg-neutral-50 w-full text-left"
-              onClick={() => setShowFileTransfer(v => !v)}
-            >
-              <Send size={15} className="text-neutral-500" />
-              <h2 className="font-semibold text-sm text-neutral-700 flex-1">File transfer</h2>
-              {transfers.some(t => t.status === "pending" && t.direction === "web_to_desktop") && (
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-accent/10 text-accent-700">new</span>
-              )}
-              {showFileTransfer ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
-            </button>
-            {showFileTransfer && (
-              <div className="px-4 py-4 space-y-4">
+          <SectionCard
+            title="File transfer"
+            icon={<Send size={15} />}
+            open={showFileTransfer}
+            onOpenChange={setShowFileTransfer}
+            bodyClassName="px-4 py-4 space-y-4"
+            badge={incomingWaiting > 0 ? (
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-accent/10 text-accent-700">
+                {incomingWaiting} new
+              </span>
+            ) : undefined}
+          >
+            <>
                 {noBridgeReason && (
                   <p className="flex items-start gap-1.5 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
                     <AlertTriangle size={13} className="mt-0.5 shrink-0" />
@@ -1268,15 +1292,20 @@ export default function AgentStatus() {
                     </div>
                   )}
                 </div>
-              </div>
-            )}
-          </div>
+            </>
+          </SectionCard>
         </div>
 
       </div>
 
+      {/* `agentId` is `os.hostname()#pid` from the server. When it is a dash the
+          server did not answer — which is a fact about this app, not an agent
+          named "—". */}
       <p className="mt-6 text-center text-xs text-neutral-400 max-w-5xl mx-auto">
-        Agent: {pushStatus?.agentId ?? "—"} · Auto-refresh every 10 s
+        {pushStatus?.agentId
+          ? `Agent: ${pushStatus.agentId}`
+          : "The local server is not answering, so this window cannot name the agent."}
+        {" · Auto-refresh every 10 s"}
       </p>
     </div>
   );

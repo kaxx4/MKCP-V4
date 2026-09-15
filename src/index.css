@@ -456,6 +456,25 @@ button:focus-visible {
   }
   .tap::before { min-width: 44px; }
 
+  /* The two named small controls, given `.tap-y`'s treatment without having to
+     touch every call site. Measured in the running window 15-Sep-2026: every
+     `.btn-sm` is 28px tall and every `.filter-chip` 30px — 20 controls across
+     the page header, the Logs filter bar, Pull Sync's voucher windows and the
+     panel actions. Vertical reach only: these sit in wrapping horizontal rows,
+     and a hit area that reaches sideways into the next chip would do the wrong
+     thing rather than nothing. */
+  .btn-sm, .filter-chip { position: relative; }
+  .btn-sm::before, .filter-chip::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+  }
+
   /* ═══════════════════════════════════════════════════════════
      FORM CONTROLS
      ═══════════════════════════════════════════════════════════ */
