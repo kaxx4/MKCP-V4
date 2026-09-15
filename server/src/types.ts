@@ -222,7 +222,17 @@ export interface VoucherPayload {
     | "Debit Note" | "Journal" | "Sales Order Note" | "Delivery Note" | "Receipt Note";
   date: string;               // YYYY-MM-DD
   voucherNumber?: string;
+  /** Tally's `<REFERENCE>` — the OTHER party's document number. On a Purchase
+   *  that is the supplier's invoice number and it is accounting data. It also
+   *  carries the push agent's idempotency key for vouchers that have no such
+   *  document; see `reconcile()` and web `validateVoucher` rule 5, which now
+   *  only fills an EMPTY reference. */
   reference?: string;
+  /** Tally's `<REFERENCEDATE>` — the date on that document, never the entry
+   *  date. Absent until 15-Sep-2026, so every queued purchase lost the
+   *  supplier's own dating and a bill received three weeks late read same-day.
+   *  The file-export path has emitted it all along. */
+  referenceDate?: string;     // YYYY-MM-DD
   narration?: string;
   partyLedgerName: string;
   /**

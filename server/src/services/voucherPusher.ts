@@ -318,6 +318,7 @@ export function buildVoucherImportXml(company: string, payload: VoucherPayload, 
             ${/RECEIPT NOTE/.test(payload.voucherType.toUpperCase()) ? "" : `<PERSISTEDVIEW>${esc(objView)}</PERSISTEDVIEW>`}
             ${payload.voucherNumber ? `<VOUCHERNUMBER>${esc(payload.voucherNumber)}</VOUCHERNUMBER>` : ""}
             ${payload.reference ? `<REFERENCE>${esc(payload.reference)}</REFERENCE>` : ""}
+            ${payload.referenceDate ? `<REFERENCEDATE>${esc(toVoucherDate(payload.referenceDate))}</REFERENCEDATE>` : ""}
             ${payload.narration ? `<NARRATION>${esc(payload.narration)}</NARRATION>` : ""}
             <PARTYLEDGERNAME>${esc(payload.partyLedgerName)}</PARTYLEDGERNAME>
             ${buildGstIdentity(payload, masters)}
