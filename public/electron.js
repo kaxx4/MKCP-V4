@@ -244,8 +244,31 @@ function applyEnvFile(envPath) {
  * of the .exe is "a secret": do not email it, upload it, or hand it on.
  */
 function loadPackagedEnv() {
-  const userEnv = path.join(app.getPath('userData'), '.env');
-  const applied = applyEnvFile(userEnv);
+  /* TWO candidate locations, because one of them is a trap.
+     `app.getPath('userData')` is built from package.json's `name`, so the real
+     directory is `%APPDATA%/mkcycles-dashboard-electron` — NOT the product name
+     the operator sees everywhere else ("MK Cycles Dashboard" in Programs, in
+     the Start menu, in the window title). Provisioning a machine by hand means
+     guessing, and the obvious guess is wrong: it was got wrong on the very
+     first machine, which started with the push agent disabled and a panel
+     telling the operator to edit a `server/.env` that no longer ships.
+
+     Both are accepted, the real one first, and the path actually used is
+     logged — so the next person can read where it looked instead of guessing
+     again. */
+  const userDataDir = app.getPath('userData');
+  const candidates = [
+    path.join(userDataDir, '.env'),
+    // The product-named sibling — the folder a human would look for.
+    path.join(path.dirname(userDataDir), 'MK Cycles Dashboard', '.env'),
+  ].filter((p, i, all) => all.indexOf(p) === i);
+
+  let applied = 0;
+  let userEnv = candidates[0];
+  for (const candidate of candidates) {
+    const n = applyEnvFile(candidate);
+    if (n > 0) { applied = n; userEnv = candidate; break; }
+  }
   if (applied > 0) {
     console.log(`[server] Loaded ${applied} setting(s) from ${userEnv} (takes precedence over the bundled .env).`);
   }
@@ -256,7 +279,12 @@ function loadPackagedEnv() {
 
   if (!fs.existsSync(bundled)) {
     if (applied === 0) {
-      console.warn(`[server] No .env at ${userEnv} or ${bundled} - Supabase-dependent features (sync, remote refresh, push agent) will self-disable until one is provided.`);
+      console.warn(
+        '[server] No .env found. Looked in:\n  ' +
+        candidates.concat([bundled]).join('\n  ') +
+        '\nSupabase-dependent features (sync, remote refresh, push agent) will ' +
+        'self-disable until one is provided. Put the file at the FIRST path above.'
+      );
     }
     return;
   }

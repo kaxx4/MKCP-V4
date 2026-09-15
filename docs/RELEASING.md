@@ -17,8 +17,19 @@ It is no longer bundled (`electron-builder.json5` → `extraResources` → `filt
 **Every machine now needs its own credentials, once:**
 
 ```
-%APPDATA%\MK Cycles Dashboard\.env
+%APPDATA%\mkcycles-dashboard-electron\.env
 ```
+
+**Not** `%APPDATA%\MK Cycles Dashboard\.env`, however much it looks like it
+should be. Electron builds `userData` from package.json's `name`, not from
+`productName` — so the folder is named after the package while everything the
+operator sees (Programs, Start menu, window title) says "MK Cycles Dashboard".
+This was got wrong on the first machine provisioned: the agent came up with the
+push drain disabled and a panel telling the operator to edit a `server/.env`
+that no longer ships.
+
+`loadPackagedEnv()` now accepts the product-named folder too and logs which path
+it actually read, so a wrong guess degrades to a warning that names both.
 
 Copy `server/.env` there by hand (USB, not email). Updates never touch it. A
 machine without it starts, serves Tally locally, and self-disables its
@@ -44,8 +55,17 @@ that arrived by download.
 3. **Publish**, with a GitHub token that can write releases on `kaxx4/MKCP-V4`:
 
    ```bash
-   GH_TOKEN=<token> npm run release
+   MKCP_PUBLISH=always GH_TOKEN=<token> npm run release
    ```
+
+   `MKCP_PUBLISH=always` makes the SAME build upload itself. It is not a second
+   electron-builder run, deliberately: `build-prod.js` prunes the server's
+   dev-dependencies before packaging and restores them afterwards, so a build
+   that ran after that restore would package ~100 MB of `typescript` and friends
+   and upload an artifact nobody had tested.
+
+   Without the variable, `npm run release` is just a build — same as
+   `build:prod`. Uploading is never the default.
 
 ## The way this fails silently
 
