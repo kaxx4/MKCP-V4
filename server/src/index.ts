@@ -353,7 +353,31 @@ app.post("/api/supabase/sync", async (req: express.Request, res: express.Respons
         guid: item.itemId,
         metadata: { type: "Stock Item" },
         parent: item.group || "Primary",
-        gstapplicable: item.gstRate ?? 0,
+        /* `gstapplicable` is NOT sent from here, and must not be.
+           ────────────────────────────────────────────────────────────────
+           It used to be `gstapplicable: item.gstRate ?? 0`, and that is a
+           column misalignment, not a value bug. `mapStockItem` writes this
+           field straight into `tally_stock_items.gst_applicable`, whose
+           meaning is Tally's GSTAPPLICABLE ENUM — "Applicable",
+           "Not Applicable", "Undefined". `CanonicalItem.gstRate` is a
+           PERCENTAGE. The two sync paths were therefore writing different
+           types into one text column: the Tally path (collections.ts fetches
+           GSTApplicable → convertStockItems → mapStockItem) wrote
+           "Applicable" on 492 rows, while this path wrote "0", "5" and "18"
+           on 459 — measured on the live mirror 15-Sep-2026.
+
+           There is no correct value to send instead: the browser's canonical
+           item carries no GSTAPPLICABLE enum, because nothing ever fetched
+           one into it. Omitting the key leaves `m.gstapplicable` undefined,
+           which the Supabase client drops from the upsert, so an existing
+           row keeps whatever the authoritative Tally path last wrote rather
+           than having it overwritten with a rate.
+
+           The rate itself is not lost: it lives in `tally_gst_rates` (dated,
+           both scopes) and in `tally_stock_items.gst_details`, which now
+           carries APPLICABLEFROM so it can actually be resolved. Nothing
+           reads `gst_applicable` today — the web app's dataset.ts does not
+           reference it — which is precisely why this rotted unseen. */
       })),
       ...ledgers.map((ledger: any) => ({
         name: ledger.name,
