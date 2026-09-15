@@ -173,9 +173,31 @@ async function main() {
       fail('Without it this build would be silently identical to an ordinary one, which is the worst of both outcomes.');
       process.exit(1);
     }
-    activeConfig = writeProvisioningConfig();
+    /* Say which ROLE is going into the installer, and refuse the one that
+       produces a working install that does nothing.
+
+       `MKCP_TALLY_ROLE` decides whether the machine claims push-queue jobs. A
+       provisioning installer exists to put a machine to work, so embedding
+       `sandbox` credentials it to sit idle — and the symptom is a drain agent
+       that refuses every job with nothing on screen saying why, which is the
+       exact failure this whole provisioning path was built to end.
+
+       It is easy to hit by accident: the build machine's own server/.env holds
+       whatever role THAT machine needs, which for a sandbox is `sandbox`. The
+       value is right for the builder and wrong for the target. */
+    const role = (readFileSync(envPath, 'utf8').match(/^\s*MKCP_TALLY_ROLE\s*=\s*(\S+)/m) || [])[1] || '(unset)';
     warn('MKCP_EMBED_ENV=1 — this installer will CARRY server/.env (the live Supabase service-role key).');
     warn(`Output goes to ${EMBED_OUTPUT_DIR}/ and must never be uploaded. Treat the .exe as the secret it contains.`);
+    warn(`Embedded MKCP_TALLY_ROLE=${role} — the machine you install this on will take that role.`);
+    if (role !== 'primary' && process.env.MKCP_EMBED_ROLE_OK !== '1') {
+      fail(`Refusing to build: MKCP_TALLY_ROLE=${role} in ${envPath}.`);
+      fail('A machine provisioned with this will start, connect, and then refuse every push-queue job.');
+      fail('Set it to `primary` in server/.env for the target machine, or pass MKCP_EMBED_ROLE_OK=1 if a second sandbox is genuinely what you want.');
+      process.exit(1);
+    }
+    // Generated LAST, so a refusal above leaves nothing behind to be run later
+    // from a shell that happens to have a GitHub token in it.
+    activeConfig = writeProvisioningConfig();
   }
 
   const outputDir = getOutputDir(activeConfig);
