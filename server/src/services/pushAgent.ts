@@ -363,7 +363,7 @@ async function reconcile(): Promise<void> {
   if (!client) return;
   const { data, error } = await client
     .from("push_queue")
-    .select("id, idempotency_key, company")
+    .select("id, idempotency_key, company, payload")
     /* `dismissed` belongs here. A dismissed row is one a person read and set
        aside — usually Tally's silent duplicate-number refusal — and the whole
        reason that refusal is dangerous is that the voucher MAY be in the books
@@ -379,20 +379,83 @@ async function reconcile(): Promise<void> {
   }
   if (data.length === 0) return;
 
-  // Bulk lookup — one query instead of N sequential findInMirror calls.
-  const keys = (data as Array<{ id: string; idempotency_key: string }>).map((r) => r.idempotency_key);
-  const { data: mirrors } = await client
-    .from("tally_vouchers")
-    .select("guid, reference")
-    .in("reference", keys);
+  type Cand = {
+    id: string;
+    idempotency_key: string;
+    payload?: {
+      reference?: string;
+      voucherType?: string;
+      voucherNumber?: string;
+      partyLedgerName?: string;
+    } | null;
+  };
+  const rows = data as Cand[];
+
+  /* TWO ways to recognise a voucher Tally already holds, because there are two
+     kinds of voucher.
+     
+     (a) THE HASH. A Payment, Receipt or Contra has no document of its own, so
+         `reference` carries the idempotency key, the pull sync mirrors it
+         (migration 012), and finding it here means Tally created the voucher
+         before the agent crashed. Unchanged.
+     
+     (b) THE DOCUMENT NUMBER. A Purchase's `<REFERENCE>` is the SUPPLIER's
+         invoice number — accounting data a person reads in Tally and a later
+         payment cites with Agst Ref. Stamping the hash over it put 64 hex
+         characters on KAY ECH CYCLES bill 564 (push_queue 70907168, observed
+         15-Sep-2026) and destroyed the supplier's own dating with it. Rule 5 on
+         the web side now fills only an EMPTY reference — so these rows are no
+         longer findable by hash, and this is the half that replaces it:
+         ask the mirror whether that supplier's bill already exists.
+     
+     That is a BETTER question than the hash, not a weaker one. The hash matches
+     one particular attempt; the voucher number matches the bill however it got
+     into the books — including typed straight into Tally by hand, which the
+     hash could never see. It is the same question
+     `engine/purchase/alreadyInTally.ts` asks on the web side, deliberately. */
+  const keys = rows.map((r) => r.idempotency_key);
+  const numbered = rows.filter(
+    (r) => r.payload?.voucherNumber && r.payload.reference !== r.idempotency_key,
+  );
+
+  const [byRef, byNumber] = await Promise.all([
+    client.from("tally_vouchers").select("guid, reference").in("reference", keys),
+    numbered.length
+      ? client
+          .from("tally_vouchers")
+          .select("guid, voucher_number, voucher_type, party_ledger_name, is_cancelled")
+          .in("voucher_number", numbered.map((r) => r.payload!.voucherNumber!))
+      : Promise.resolve({ data: [] as never[] }),
+  ]);
 
   const mirrorMap = new Map<string, string>(); // idempotency_key → guid
-  for (const m of (mirrors ?? []) as Array<{ guid: string; reference: string }>) {
+  for (const m of (byRef.data ?? []) as Array<{ guid: string; reference: string }>) {
     if (m.reference) mirrorMap.set(m.reference, m.guid);
   }
 
-  for (const cand of data as Array<{ id: string; idempotency_key: string }>) {
-    const guid = mirrorMap.get(cand.idempotency_key);
+  /* Matched on TYPE + NUMBER + PARTY together. Number alone is not enough:
+     suppliers number their own bills, so "564" is exactly the kind of number
+     several of them issue in the same year. A cancelled voucher is not a
+     booking — it is the absence of one — so it must not stop a re-push. */
+  const docMap = new Map<string, string>(); // `${type}|${number}|${party}` → guid
+  const docKey = (t: string, n: string, p: string) =>
+    `${t.trim().toUpperCase()}|${n.trim().toUpperCase()}|${p.trim().toUpperCase()}`;
+  for (const m of (byNumber.data ?? []) as Array<{
+    guid: string; voucher_number: string | null; voucher_type: string | null;
+    party_ledger_name: string | null; is_cancelled: boolean | null;
+  }>) {
+    if (m.is_cancelled) continue;
+    if (!m.voucher_number || !m.voucher_type || !m.party_ledger_name) continue;
+    docMap.set(docKey(m.voucher_type, m.voucher_number, m.party_ledger_name), m.guid);
+  }
+
+  for (const cand of rows) {
+    const p = cand.payload;
+    const guid =
+      mirrorMap.get(cand.idempotency_key) ??
+      (p?.voucherType && p.voucherNumber && p.partyLedgerName
+        ? docMap.get(docKey(p.voucherType, p.voucherNumber, p.partyLedgerName))
+        : undefined);
     if (guid) {
       await client.from("push_queue").update({
         status: "succeeded",
