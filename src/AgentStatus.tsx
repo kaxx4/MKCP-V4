@@ -4,7 +4,7 @@ import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 import {
   Wifi, WifiOff, RefreshCw, Cloud, CloudOff, CheckCircle, XCircle,
   Clock, Activity, ChevronDown, ChevronUp, Settings, Database,
-  AlertTriangle, Loader2, RotateCcw, ChevronRight, Send, Upload, Download, Tag,
+  AlertTriangle, Loader2, Send, Upload, Download, Tag, CalendarRange, PackageSearch,
 } from "lucide-react";
 import { useTallyStore } from "./store/tallyStore";
 import { useSupabaseSyncStatusStore } from "./store/supabaseSyncStatusStore";
@@ -16,6 +16,14 @@ import { MirrorPanel } from "./MirrorPanel";
 import { PageHeader } from "./components/PageHeader";
 import { StatTile } from "./components/StatTile";
 import { PushQueuePanel } from "./components/PushQueuePanel";
+/* The five panels below were inline in this file. Each is rebuilt on the web
+   dashboard's idiom the way PushQueuePanel was — see each file's header for
+   what the old version got wrong and why the new one is shaped as it is. */
+import { TallyPanel } from "./components/TallyPanel";
+import { SupabaseCloudPanel } from "./components/SupabaseCloudPanel";
+import { QuickSyncPanel } from "./components/QuickSyncPanel";
+import { PullSyncPanel, type PullAction } from "./components/PullSyncPanel";
+import { LogsPanel, isErrorLine } from "./components/LogsPanel";
 
 const SUPA_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
 const SUPA_ANON = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -108,35 +116,13 @@ interface FailedQueueRow {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const d = new Date(iso);
-  return `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
-}
-
-function fmtDur(ms: number | null | undefined): string {
-  if (ms == null) return "—";
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
+  /* en-IN explicitly. The default locale rendered `9/15/2026 12:04:54 PM`
+     next to rows formatted `15/9/2026, 12:04:54 pm` — the same instant in two
+     notations, one line apart. */
+  return new Date(iso).toLocaleString("en-IN");
 }
 
 // ── Shared UI components ──────────────────────────────────────────────────────
-function Pill({ ok, label }: { ok: boolean | null; label: string }) {
-  if (ok === null) return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-neutral-100 text-neutral-500">
-      <Clock size={11} /> {label}
-    </span>
-  );
-  return ok ? (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-green-50 text-green-700 font-medium">
-      <CheckCircle size={11} /> {label}
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-red-50 text-red-700 font-medium">
-      <XCircle size={11} /> {label}
-    </span>
-  );
-}
-
 /** Compact, always-visible sync-state indicator — idle / syncing(phase) / succeeded /
  *  failed(actual error). Reads only from stores already populated by every sync path
  *  (quickSyncStore for quick-sync, tallyStore.isSyncing for manual full/masters/daybook
@@ -198,14 +184,14 @@ function SyncStateIndicator({
   if (qsync.running) {
     const phaseLabel = qsync.phase === "push" ? "Pushing to Supabase…" : "Pulling from Tally…";
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-50 text-blue-700">
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-accent/10 text-accent-700">
         <Loader2 size={12} className="animate-spin" /> Syncing · {phaseLabel}
       </span>
     );
   }
   if (isSyncing) {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-50 text-blue-700">
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-accent/10 text-accent-700">
         <Loader2 size={12} className="animate-spin" /> Syncing{syncingLabel ? ` · ${syncingLabel}` : ""}
       </span>
     );
@@ -220,7 +206,7 @@ function SyncStateIndicator({
         ? "Tally not connected"
         : "no company configured";
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 text-amber-700">
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-warn-soft text-warn-800">
         <AlertTriangle size={12} /> {qsync.lastSkipped.label} sync skipped — {reasonLabel}
       </span>
     );
@@ -228,7 +214,7 @@ function SyncStateIndicator({
   if (qsync.finishedAt) {
     if (qsync.ok) {
       return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-green-50 text-green-700">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-success/10 text-success-700">
           <CheckCircle size={12} /> Synced {fmt(qsync.finishedAt)}
         </span>
       );
@@ -240,7 +226,7 @@ function SyncStateIndicator({
         : "Sync failed";
     return (
       <span
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-red-50 text-red-700 max-w-[360px] truncate"
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-danger-soft text-danger-700 max-w-[360px] truncate"
         title={errMsg}
       >
         <XCircle size={12} className="shrink-0" /> Failed · {errMsg}
@@ -252,17 +238,6 @@ function SyncStateIndicator({
       <Clock size={12} /> Idle
     </span>
   );
-}
-
-function Badge({ label, color }: { label: string; color: "green" | "red" | "yellow" | "blue" | "gray" }) {
-  const cls = {
-    green: "bg-green-100 text-green-800",
-    red: "bg-red-100 text-red-800",
-    yellow: "bg-yellow-100 text-yellow-800",
-    blue: "bg-blue-100 text-blue-800",
-    gray: "bg-neutral-100 text-neutral-600",
-  }[color];
-  return <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`}>{label}</span>;
 }
 
 function SectionCard({ title, icon, children, defaultOpen = true }: {
@@ -280,15 +255,6 @@ function SectionCard({ title, icon, children, defaultOpen = true }: {
         {open ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
       </button>
       {open && <div className="px-4 py-3">{children}</div>}
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between py-1.5 text-sm border-b border-neutral-50 last:border-0">
-      <span className="text-neutral-500 text-xs">{label}</span>
-      <span className="text-neutral-800 font-medium text-right ml-4 max-w-[200px] truncate">{value}</span>
     </div>
   );
 }
@@ -361,13 +327,9 @@ export default function AgentStatus() {
   const [pushLog, setPushLog] = useState<PushLogRow[]>([]);
   const [failedJobs, setFailedJobs] = useState<FailedQueueRow[]>([]);
   const [requeueing, setRequeueing] = useState<string | null>(null);
-  const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
   const qsync = useQuickSyncStore();
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
-  const [logFilter, setLogFilter] = useState<"all" | "errors" | "tally" | "supabase" | "remote" | "auto">("all");
-  const logsBoxRef = useRef<HTMLDivElement | null>(null);
-  const logsAutoScrollRef = useRef(true);
 
   // Settings local state (initialised once from store — not reactive after that)
   const [editCompany, setEditCompany] = useState(companyName);
@@ -470,6 +432,11 @@ export default function AgentStatus() {
     void fetchPushLog();
     void fetchFailedJobs();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* One read at startup so the COLLAPSED Logs header can carry a real error
+     count. Without it `logs` is empty until the panel is opened, which made the
+     "2 errors" badge visible only to someone who had already gone looking. */
+  useEffect(() => { void fetchLogs(); }, [fetchLogs]);
 
   // ── Live log polling — only while the Logs panel is open (every 2s) ───────
   useEffect(() => {
@@ -578,12 +545,6 @@ export default function AgentStatus() {
     }
   }, [fetchTransfers]);
 
-  // Keep the log box pinned to the bottom unless the user scrolled up.
-  useEffect(() => {
-    const el = logsBoxRef.current;
-    if (el && logsAutoScrollRef.current) el.scrollTop = el.scrollHeight;
-  }, [logs, logFilter]);
-
   // ── Quick Sync: pull from Tally (daily), THEN push to Supabase ────────────
   // Sequential by design — the push only starts after the Tally pull finishes,
   // and pullFromTally holds the global sync lock so the push can't run mid-sync.
@@ -686,14 +647,6 @@ export default function AgentStatus() {
   }, [editCompany, editProxy, editFyFrom, editFyTo, editTodayMins, editWeekMins, editFyMins,
       setCompanyName, setProxyUrl, setFyDates, setSyncTodayMinutes, setSyncWeekMinutes, setSyncFyMinutes, toast]);
 
-  const toggleError = useCallback((id: string) => {
-    setExpandedErrors(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }, []);
-
   // ── Derived values ────────────────────────────────────────────────────────
   const connected = health?.connected ?? false;
   const company = companyName || "—";
@@ -701,25 +654,70 @@ export default function AgentStatus() {
   const cloudLastAt = cloudVouchers.lastAt || cloudMasters.lastAt || cloudConfig.lastAt;
   const qs = pushStatus?.queueStats ?? { pending: 0, pushing: 0, failed: 0 };
 
-  const cloudChannels = [
-    ["config",   cloudConfig]   as const,
-    ["masters",  cloudMasters]  as const,
-    ["vouchers", cloudVouchers] as const,
+  /* One reason, the first that applies. A flat-disabled button that says
+     nothing is the difference between a two-second fix and a hunt through the
+     log — four separate conditions used to produce the identical grey button. */
+  const logErrorCount = logs.filter(isErrorLine).length;
+
+  const pullBlocked =
+    !connected ? "Tally is not answering, so there is nothing to pull from."
+    : !companyName.trim() ? "No company is set in Settings, so there is nothing to sync as."
+    : null;
+
+  /* The three Quick Sync windows ARE the three scheduled syncs — same labels,
+     same ranges, driven by hooks/useScheduledSyncs.ts off these same three
+     interval settings. Carrying the interval onto the button is the only place
+     that fact is stated outside the collapsed Settings panel. */
+  const quickRanges = [
+    { label: "Today",       from: todayYmd(),    to: todayYmd(), everyMinutes: syncTodayMinutes },
+    { label: "Last 7 days", from: daysAgoYmd(6), to: todayYmd(), everyMinutes: syncWeekMinutes  },
+    { label: "This FY",     from: fyFromDate,    to: todayYmd(), everyMinutes: syncFyMinutes    },
   ];
 
-  // ── Log filtering ──────────────────────────────────────────────────────────
-  // Genuine errors carry the ❌/✗ marker (the server prefixes every console.error
-  // with ❌). Also catch explicit failure words, but NOT benign "(0 errors)" summaries.
-  const isErrorLine = (l: string) => /❌|✗/.test(l) || /\bfailed\b|\bexception\b|\brejected\b/i.test(l);
-  const errorLogCount = logs.filter(isErrorLine).length;
-  const visibleLogs = logs.filter((l) => {
-    if (logFilter === "errors")   return isErrorLine(l);
-    if (logFilter === "tally")    return /\[tally\]|\[DAYBOOK\]|\[SYNC\]|\[MASTERS\]|\[convert\]|\[PUSH-TEST\]/i.test(l);
-    if (logFilter === "supabase") return /\[Supabase\]|\[pushAgent\]|\[Auto-push|\[Config Sync\]/i.test(l);
-    if (logFilter === "remote")   return /🌐|\[WEB-SYNC\]/.test(l);  // web-triggered (Supabase) refresh
-    if (logFilter === "auto")     return /🌙|\[NIGHTLY\]|origin=scheduled-/i.test(l);   // any of the 4 automatic triggers: nightly full-FY + the 3 scheduled quick syncs
-    return true;
-  });
+  const ymd = (d: Date) =>
+    `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+  const daysBackYmd = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return ymd(d); };
+
+  const pullActions: PullAction[] = [
+    {
+      key: "full", label: "Full sync", icon: RefreshCw,
+      note: "whole FY, day by day — slowest",
+      /* Kept from the old panel and still true: a full-year detail pull is the
+         heaviest thing this app can ask Tally for, and it sat one click away
+         from the much narrower Masters button. */
+      confirm: "Pull the FULL current financial year from Tally? This is the slowest option — Masters or Daybook is usually what you actually want.",
+      run: () => triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "full", chunkStrategy: "daily" }, "Full sync"),
+    },
+    {
+      key: "masters", label: "Sync Masters", icon: PackageSearch,
+      note: "items, ledgers, groups",
+      run: () => triggerSync("/api/tally/sync-masters", { company }, "Sync Masters"),
+    },
+    {
+      key: "daybook", label: "Sync Daybook", icon: CalendarRange,
+      note: "every voucher in the FY window",
+      run: () => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate, chunkMode: "daily" }, "Sync Daybook"),
+    },
+    {
+      /* One Tally request for the whole catalogue — measured at well under a
+         second against the live company — so it does not belong behind a
+         masters sync that takes minutes. */
+      key: "price", label: "Price list", icon: Tag,
+      note: "one request, whole catalogue",
+      run: () => triggerSync("/api/tally/sync-price-list", { company, origin: "agent-ui" }, "Price list"),
+    },
+  ];
+
+  const voucherWindows = ([
+    ["Today", 0], ["Last week", 6], ["Last month", 29], ["3 months", 89],
+  ] as [string, number][]).map(([label, back]) => ({
+    label,
+    run: () => triggerSync(
+      "/api/tally/sync-daybook",
+      { company, fromDate: daysBackYmd(back), toDate: ymd(new Date()), chunkMode: "daily" },
+      `Vouchers ${label}`,
+    ),
+  }));
 
   return (
     /* `bg-bg-page`, the same ground the web dashboard paints. This was
@@ -788,7 +786,15 @@ export default function AgentStatus() {
             value={cloudOk ? "OK" : cloudLastAt ? "Error" : "Never"}
             tone={cloudOk ? "success" : cloudLastAt ? "danger" : undefined}
             tint={!cloudOk && !!cloudLastAt}
-            sub={cloudLastAt ? `last write ${new Date(cloudLastAt).toLocaleTimeString("en-IN")}` : "nothing written yet"}
+            /* Not "last write": `lastAt` is stamped on every ATTEMPT, so a
+               failing channel was reporting a write that never happened. And
+               the store is in-memory, so no timestamp means "not since this
+               app started", never "never". */
+            sub={
+              cloudLastAt
+                ? `${cloudOk ? "last write" : "last tried"} ${new Date(cloudLastAt).toLocaleTimeString("en-IN")}`
+                : "no push since this app started"
+            }
           />
         </div>
       </div>
@@ -802,258 +808,49 @@ export default function AgentStatus() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mx-auto">
 
-        {/* ── Tally Connection ──────────────────────────────────── */}
+        {/* ── Tally ─────────────────────────────────────────────── */}
         <SectionCard title="Tally" icon={connected ? <Wifi size={15} /> : <WifiOff size={15} />}>
-          <Row label="Status" value={<Pill ok={connected} label={connected ? "Connected" : "Disconnected"} />} />
-          <Row label="URL" value={health?.tallyUrl || BASE} />
-          <Row label="Company" value={health?.current || company} />
-          {!connected && health?.error && (
-            <p className="mt-2 text-xs text-red-600 bg-red-50 rounded p-2">{health.error}</p>
-          )}
+          <TallyPanel health={health} configuredCompany={companyName} base={BASE} />
         </SectionCard>
 
         {/* ── Cloud / Supabase ──────────────────────────────────── */}
         <SectionCard title="Supabase Cloud" icon={cloudOk ? <Cloud size={15} /> : <CloudOff size={15} />}>
-          {cloudChannels.map(([ch, chCloud]) => (
-            <Row key={ch} label={ch.charAt(0).toUpperCase() + ch.slice(1)} value={
-              <span className="flex items-center gap-1">
-                <Pill ok={chCloud.success} label={
-                  chCloud.success == null ? "Never" : chCloud.success ? "OK" : "Error"
-                } />
-                {chCloud.retryScheduled && (
-                  <span className="text-[10px] text-yellow-600">retry ~60s</span>
-                )}
-              </span>
-            } />
-          ))}
-          <Row label="Last pushed" value={fmt(cloudLastAt)} />
-          {cloudChannels.map(([ch, chCloud]) =>
-            chCloud.error && chCloud.success === false ? (
-              <p key={`err-${ch}`} className="mt-1 text-xs text-red-600 bg-red-50 rounded p-2 truncate" title={chCloud.error}>
-                <span className="font-medium capitalize">{ch}:</span> {chCloud.error}
-              </p>
-            ) : null
-          )}
+          <SupabaseCloudPanel
+            config={cloudConfig}
+            masters={cloudMasters}
+            vouchers={cloudVouchers}
+            canRead={!!sbRead}
+            readHost={SUPA_URL ? new URL(SUPA_URL).host : null}
+            fmtTime={fmt}
+          />
         </SectionCard>
 
-        {/* ── Quick Sync (Tally → then → Supabase) ──────────────── */}
+        {/* ── Quick Sync (Tally → then push → Supabase) ────────── */}
         <div className="md:col-span-2">
           <SectionCard title="Quick Sync  (Tally → then push → Supabase)" icon={<RefreshCw size={15} />}>
-            <p className="text-xs text-neutral-500 mb-2">
-              Pulls daily from Tally, then pushes to Supabase once the pull finishes (never during a sync).
-            </p>
-            <div className="flex gap-2 flex-wrap mb-3">
-              {([
-                ["Today",        todayYmd(),        todayYmd()],
-                ["Last 7 days",  daysAgoYmd(6),     todayYmd()],
-                ["This FY",      fyFromDate,        todayYmd()],
-              ] as [string, string, string][]).map(([label, from, to]) => {
-                const running = qsync.running === label;
-                return (
-                  <Btn key={label} variant={label === "Last 7 days" ? "primary" : "secondary"}
-                    onClick={() => quickSync(label, from, to)}
-                    disabled={!!qsync.running || !!syncing || isSyncing || !connected}>
-                    {running
-                      ? <><Loader2 size={12} className="animate-spin" /> {qsync.phase === "push" ? "Pushing…" : "Syncing…"}</>
-                      : <><RefreshCw size={12} /> {label}</>}
-                  </Btn>
-                );
-              })}
-            </div>
-
-            {/* Two-phase result with clear success / error + statistics */}
-            {(qsync.tally || qsync.running) && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                {/* Phase 1 — Tally */}
-                <div className="rounded-lg border border-neutral-200 p-2.5">
-                  <div className="flex items-center gap-1.5 mb-1">
-                    {qsync.running && qsync.phase === "sync"
-                      ? <Loader2 size={13} className="animate-spin text-blue-500" />
-                      : qsync.tally?.ok ? <CheckCircle size={13} className="text-green-600" /> : qsync.tally ? <XCircle size={13} className="text-red-600" /> : <Clock size={13} className="text-neutral-400" />}
-                    <span className="font-semibold text-neutral-700">1 · Tally pull</span>
-                  </div>
-                  {qsync.tally ? (
-                    qsync.tally.ok ? (
-                      <div className="text-neutral-600 space-y-0.5">
-                        <div><span className="font-medium text-neutral-800">{qsync.tally.vouchers}</span> voucher(s) pulled{qsync.tally.cleared > 0 ? <> · <span className="text-amber-700">{qsync.tally.cleared} cleared</span></> : null}</div>
-                        <div className="text-neutral-400">{qsync.tally.chunksSucceeded}/{qsync.tally.chunksTotal} chunks{qsync.tally.chunksFailed > 0 ? <span className="text-red-600"> · {qsync.tally.chunksFailed} failed</span> : null} · {qsync.tally.elapsedSeconds}s</div>
-                      </div>
-                    ) : (
-                      <div className="text-red-600 break-words">{qsync.tally.error}</div>
-                    )
-                  ) : <div className="text-neutral-400">{qsync.phase === "sync" ? "Pulling from Tally…" : "—"}</div>}
-                </div>
-
-                {/* Phase 2 — Supabase */}
-                <div className="rounded-lg border border-neutral-200 p-2.5">
-                  <div className="flex items-center gap-1.5 mb-1">
-                    {qsync.running && qsync.phase === "push"
-                      ? <Loader2 size={13} className="animate-spin text-blue-500" />
-                      : qsync.push?.ok ? <CheckCircle size={13} className="text-green-600" /> : qsync.push ? <XCircle size={13} className="text-red-600" /> : <Clock size={13} className="text-neutral-400" />}
-                    <span className="font-semibold text-neutral-700">2 · Supabase push</span>
-                  </div>
-                  {qsync.push ? (
-                    <div className="text-neutral-600 space-y-0.5">
-                      <div><span className="font-medium text-neutral-800">{qsync.push.vouchers}</span> vouchers · {qsync.push.items} items · {qsync.push.ledgers} ledgers</div>
-                      {qsync.push.ok
-                        ? <div className="text-green-700">Pushed successfully</div>
-                        : <div className="text-red-600 break-words">{qsync.push.vouchersErr || qsync.push.configErr || "Push had errors"}</div>}
-                    </div>
-                  ) : <div className="text-neutral-400">{qsync.phase === "push" ? "Pushing to Supabase…" : qsync.running ? "Waiting for pull…" : "—"}</div>}
-                </div>
-              </div>
-            )}
+            <QuickSyncPanel
+              ranges={quickRanges}
+              qsync={qsync}
+              connected={connected}
+              company={companyName}
+              otherSyncRunning={!!syncing || isSyncing}
+              onRun={(r) => quickSync(r.label, r.from, r.to)}
+            />
           </SectionCard>
         </div>
 
         {/* ── Pull Sync ─────────────────────────────────────────── */}
         <div className="md:col-span-2">
           <SectionCard title="Pull Sync  (Tally → Supabase)" icon={<Database size={15} />}>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-              {([
-                ["Full sync",    lastSyncAt],
-                ["Masters",      lastMastersSyncAt],
-                ["Vouchers",     lastVouchersSyncAt],
-              ] as [string, string | null][]).map(([label, val]) => (
-                <div key={label} className="bg-neutral-50 rounded-lg p-2 text-center">
-                  <div className="text-[10px] text-neutral-400 uppercase tracking-wide">{label}</div>
-                  <div className="text-xs font-medium text-neutral-800 mt-0.5 truncate">{fmt(val).split(" ")[0] || "—"}</div>
-                </div>
-              ))}
-              <div className="bg-neutral-50 rounded-lg p-2 text-center">
-                <div className="text-[10px] text-neutral-400 uppercase tracking-wide">Last voucher</div>
-                <div className="text-xs font-medium text-neutral-800 mt-0.5">{lastVoucherDate || "—"}</div>
-              </div>
-            </div>
-            <div className="flex gap-2 flex-wrap mb-2">
-              <Btn variant="primary"
-                onClick={() => {
-                  // Full FY is the heaviest, slowest sync on this panel — a
-                  // one-click "Sync Now" right next to the narrower Masters/
-                  // Daybook buttons was too easy to hit by accident. Mirrors
-                  // the same confirmation the web app's RefreshTallyButton
-                  // added for its own "Full year" option.
-                  if (!window.confirm("Pull the FULL current financial year from Tally? This is the slowest option — Masters or Daybook sync is usually what you actually want.")) return;
-                  triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "full", chunkStrategy: "daily" }, "Full sync");
-                }}
-                disabled={!!syncing || isSyncing || !connected}>
-                {syncing === "Full sync" ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                Sync Now
-              </Btn>
-              <Btn onClick={() => triggerSync("/api/tally/sync-masters", { company }, "Sync Masters")} disabled={!!syncing || isSyncing || !connected}>
-                {syncing === "Sync Masters" && <Loader2 size={12} className="animate-spin" />}
-                Sync Masters
-              </Btn>
-              <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate, chunkMode: "daily" }, "Sync Daybook")} disabled={!!syncing || isSyncing || !connected}>
-                {syncing === "Sync Daybook" && <Loader2 size={12} className="animate-spin" />}
-                Sync Daybook
-              </Btn>
-              {/* The price list is ONE Tally request for the whole catalogue —
-                  ~490 items, 1.3 MB, measured at 0.37s against the live company
-                  — so it does not belong behind a masters sync that takes
-                  minutes. The agent gained the route; this panel had no way to
-                  reach it, which meant the only button for it was in the web
-                  dashboard, on a machine that cannot talk to Tally. */}
-              <Btn onClick={() => triggerSync("/api/tally/sync-price-list", { company, origin: "agent-ui" }, "Price list")} disabled={!!syncing || isSyncing || !connected}>
-                {syncing === "Price list" ? <Loader2 size={12} className="animate-spin" /> : <Tag size={12} />}
-                Price list
-              </Btn>
-            </div>
-
-            {/* Quick voucher refresh by date range */}
-            <div className="flex gap-1.5 flex-wrap mb-4">
-              <span className="text-[10px] text-neutral-400 uppercase tracking-wide self-center mr-0.5">Vouchers:</span>
-              {([
-                ["Today",     0,  0 ],
-                ["Last week", 6,  0 ],
-                ["Last month",29, 0 ],
-                ["3 months",  89, 0 ],
-              ] as [string, number, number][]).map(([label, daysBack, daysAhead]) => {
-                const fmt8 = (d: Date) => {
-                  const y = d.getFullYear();
-                  const m = String(d.getMonth() + 1).padStart(2, "0");
-                  const day = String(d.getDate()).padStart(2, "0");
-                  return `${y}${m}${day}`;
-                };
-                const to   = new Date(); to.setDate(to.getDate() + daysAhead);
-                const from = new Date(); from.setDate(from.getDate() - daysBack);
-                const key  = `Vouchers ${label}`;
-                return (
-                  <button
-                    key={label}
-                    onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fmt8(from), toDate: fmt8(to), chunkMode: "daily" }, key)}
-                    disabled={!!syncing || isSyncing || !connected}
-                    className="px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors
-                      border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50 hover:border-neutral-300
-                      disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
-                  >
-                    {syncing === key ? <Loader2 size={10} className="animate-spin" /> : null}
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Sync History */}
-            {syncHistory.length > 0 && (
-              <div>
-                <p className="text-xs font-medium text-neutral-500 mb-1.5">Recent sync history</p>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-neutral-100">
-                        <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Started</th>
-                        <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Type</th>
-                        <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Duration</th>
-                        <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Chunks</th>
-                        <th className="text-left py-1 pr-3 text-neutral-400 font-medium">Rows</th>
-                        <th className="text-left py-1 text-neutral-400 font-medium">Result</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {syncHistory.map(row => (
-                        <>
-                          <tr key={row.id} className="border-b border-neutral-50 hover:bg-neutral-50 cursor-pointer"
-                            onClick={() => row.errors?.length && toggleError(row.id)}>
-                            <td className="py-1 pr-3 text-neutral-600 whitespace-nowrap">{fmt(row.started_at)}</td>
-                            <td className="py-1 pr-3">
-                              <Badge label={row.sync_type} color={row.sync_type === "masters" ? "blue" : "gray"} />
-                            </td>
-                            <td className="py-1 pr-3 text-neutral-600">{fmtDur(row.duration_ms)}</td>
-                            <td className="py-1 pr-3 text-neutral-600">{row.chunk_count ?? "—"}</td>
-                            <td className="py-1 pr-3 text-neutral-600">
-                              {row.row_counts
-                                ? Object.entries(row.row_counts).map(([k, v]) => `${k}:${v}`).join(" ")
-                                : "—"}
-                            </td>
-                            <td className="py-1">
-                              <span className="flex items-center gap-1">
-                                <Pill ok={row.success} label={row.success ? "OK" : "Error"} />
-                                {row.errors?.length ? <ChevronRight size={11} className="text-neutral-400" /> : null}
-                              </span>
-                            </td>
-                          </tr>
-                          {expandedErrors.has(row.id) && row.errors?.length && (
-                            <tr key={`${row.id}-err`}>
-                              <td colSpan={6} className="pb-2">
-                                <div className="bg-red-50 rounded p-2 text-xs text-red-700 space-y-0.5">
-                                  {row.errors.map((e, i) => <div key={i}>{e}</div>)}
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {!sbRead && (
-                  <p className="text-xs text-neutral-400 mt-1">
-                    Set VITE_SUPABASE_URL + VITE_SUPABASE_PUBLISHABLE_KEY to enable history.
-                  </p>
-                )}
-              </div>
-            )}
+            <PullSyncPanel
+              actions={pullActions}
+              windows={voucherWindows}
+              runningLabel={syncing}
+              busy={!!syncing || isSyncing || !!qsync.running}
+              blocked={pullBlocked}
+              history={syncHistory}
+              canReadHistory={!!sbRead}
+            />
           </SectionCard>
         </div>
 
@@ -1090,6 +887,9 @@ export default function AgentStatus() {
         </div>
 
         {/* ── Logs ─────────────────────────────────────────────── */}
+        {/* Rebuilt in components/LogsPanel.tsx. The header keeps only the
+            error count, because that is the one thing worth seeing while the
+            panel is still closed; everything else moved inside. */}
         <div className="md:col-span-2">
           <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
             <button
@@ -1098,83 +898,27 @@ export default function AgentStatus() {
             >
               <Activity size={15} className="text-neutral-500" />
               <h2 className="font-semibold text-sm text-neutral-700 flex-1">
-                Logs{showLogs && logs.length > 0 ? ` (${logs.length})` : ""}
-                {showLogs && errorLogCount > 0 && (
-                  <span className="ml-2 text-xs font-medium text-red-600">{errorLogCount} error{errorLogCount === 1 ? "" : "s"}</span>
-                )}
+                Logs{logs.length > 0 ? ` (${logs.length})` : ""}
               </h2>
-              {showLogs && (
-                <span
-                  role="button"
-                  tabIndex={0}
-                  className="text-xs text-neutral-500 hover:text-neutral-800 px-2 py-0.5 rounded border border-neutral-200"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    navigator.clipboard?.writeText(visibleLogs.join("\n")).then(
-                      () => toast("Logs copied", "success"),
-                      () => toast("Copy failed", "error"),
-                    );
-                  }}
-                >
-                  Copy
+              {logErrorCount > 0 && (
+                <span className="text-[11px] font-semibold text-danger-700">
+                  {logErrorCount} error{logErrorCount === 1 ? "" : "s"}
                 </span>
               )}
               {showLogs ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
             </button>
             {showLogs && (
               <div className="px-3 py-3">
-                {/* Filter chips — isolate errors or a single source for debugging */}
-                <div className="flex gap-1.5 mb-2 flex-wrap">
-                  {([
-                    ["all", "All"],
-                    ["errors", "Errors only"],
-                    ["tally", "Tally"],
-                    ["supabase", "Supabase"],
-                    ["remote", "🌐 Remote"],
-                    ["auto", "⏱ Scheduled"],
-                  ] as [typeof logFilter, string][]).map(([key, label]) => (
-                    <button
-                      key={key}
-                      onClick={() => setLogFilter(key)}
-                      className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors ${
-                        logFilter === key
-                          ? "bg-neutral-900 text-white border-neutral-900"
-                          : "bg-white text-neutral-600 border-neutral-200 hover:bg-neutral-50"
-                      }`}
-                    >
-                      {label}{key === "errors" && errorLogCount > 0 ? ` (${errorLogCount})` : ""}
-                    </button>
-                  ))}
-                </div>
-                <div
-                  ref={logsBoxRef}
-                  onScroll={(e) => {
-                    const el = e.currentTarget;
-                    logsAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-                  }}
-                  className="font-mono text-[11px] leading-relaxed bg-neutral-950 text-neutral-200 rounded-lg p-3 h-80 overflow-y-auto whitespace-pre-wrap"
-                >
-                  {visibleLogs.length === 0 ? (
-                    <span className="text-neutral-500">
-                      {logs.length === 0
-                        ? "Waiting for log activity… (trigger a sync to see Tally + Supabase logs here)"
-                        : `No ${logFilter === "all" ? "" : logFilter + " "}lines in the current buffer.`}
-                    </span>
-                  ) : (
-                    visibleLogs.map((line, i) => {
-                      const cls = isErrorLine(line) ? "text-red-400"
-                        : /🌐/.test(line) ? "text-cyan-300"   // web-triggered remote refresh
-                        : /🌙/.test(line) ? "text-violet-300" // scheduled nightly full-FY sync
-                        : /⚠/.test(line) ? "text-amber-400"
-                        : /✓/.test(line) ? "text-green-400"
-                        : "text-neutral-300";
-                      return <div key={i} className={cls}>{line}</div>;
-                    })
-                  )}
-                </div>
-                <p className="mt-1.5 text-[10px] text-neutral-400">
-                  Live tail of the local server (last {logs.length || 0} lines, refreshes every 2s). Also at {BASE}/
-                </p>
+                <LogsPanel
+                  logs={logs}
+                  base={BASE}
+                  onCopy={(text) =>
+                    navigator.clipboard?.writeText(text).then(
+                      () => toast("Logs copied", "success"),
+                      () => toast("Copy failed", "error"),
+                    )
+                  }
+                />
               </div>
             )}
           </div>
