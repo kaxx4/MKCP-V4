@@ -32,6 +32,8 @@ process.on('unhandledRejection', (reason) => {
   // Never crash/relaunch on an unhandled promise rejection — just log it.
   console.error('[electron] unhandledRejection:', reason);
 });
+const { startAutoUpdate, getUpdateState } = require('./autoUpdate');
+let updater = null;
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -544,6 +546,13 @@ ipcMain.handle('get-settings', () => readConfig());
 ipcMain.handle('set-setting', (_e, key, value) => { setConfig(key, value); return { success: true }; });
 ipcMain.handle('get-version', () => app.getVersion());
 
+/* Update state, readable on demand as well as pushed over `update:state`.
+   A renderer that mounts after the check has already run would otherwise never
+   learn the result — which is the silent-updater failure this is meant to
+   avoid. */
+ipcMain.handle('update:get-state', () => getUpdateState());
+ipcMain.handle('update:check-now', async () => (updater ? updater.checkNow() : getUpdateState()));
+
 // ── Discount Rules file persistence ──────────────────────────────────────────
 const discountRulesPath = path.join(app.getPath('userData'), 'discount-rules.json');
 
@@ -680,6 +689,16 @@ app.whenReady().then(() => {
       dialog.showErrorBox('API Server Error',
         `The local server could not start.\n\n${err.message}\n\nTally sync will not work.`);
     });
+
+  /* Over-the-air updates. Safe to publish only because the installer no longer
+     carries server/.env — see public/autoUpdate.js and the note on
+     `extraResources` in electron-builder.json5. Staged, never forced: this
+     process holds Tally's single-threaded port and drains the push queue. */
+  try {
+    updater = startAutoUpdate({ getWindow: () => mainWindow, isDev });
+  } catch (err) {
+    console.error('[update] could not start the updater (continuing):', err.message);
+  }
 
   // Quit accelerator — always-available fallback if the tray ever fails.
   const quit = () => { appQuitting = true; tray?.destroy(); app.quit(); };

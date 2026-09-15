@@ -18,15 +18,46 @@
     "!dist/preload.js",
     "!dist/package.json",
     "!dist/icon.png",
+    "!dist/autoUpdate.js",
     // Electron shell (canonical copies)
     "public/electron.js",
     "public/preload.js",
+    // The updater. It has to be listed: this `files` array names the shell
+    // files one by one, so a new one is invisible to the packer by default.
+    // Without it `require('./autoUpdate')` resolves to a path that is not in
+    // the asar, the try/catch in electron.js logs and carries on, and the app
+    // runs perfectly while never checking for an update again — the exact
+    // silent failure the updater exists to end.
+    "public/autoUpdate.js",
     "public/favicon.svg",
     "public/icon.png",
     "public/package.json",
     "package.json",
     // Explicitly exclude everything else that would bloat the asar
     "!node_modules/**",
+    /* …except electron-updater and its runtime closure. The main process is
+       NOT bundled — it is plain CommonJS read out of the asar — so its requires
+       have to resolve at runtime, and `!node_modules/**` had excluded all of
+       them. Measured closure: 16 packages, 2.0 MB. Listed explicitly rather
+       than by dropping the exclusion, because the other three production
+       dependencies (the two font packages and supabase-js) are already inside
+       the Vite bundle and would ship twice. */
+    "node_modules/electron-updater/**",
+    "node_modules/builder-util-runtime/**",
+    "node_modules/fs-extra/**",
+    "node_modules/graceful-fs/**",
+    "node_modules/jsonfile/**",
+    "node_modules/universalify/**",
+    "node_modules/js-yaml/**",
+    "node_modules/argparse/**",
+    "node_modules/lazy-val/**",
+    "node_modules/lodash.escaperegexp/**",
+    "node_modules/lodash.isequal/**",
+    "node_modules/semver/**",
+    "node_modules/tiny-typed-emitter/**",
+    "node_modules/debug/**",
+    "node_modules/ms/**",
+    "node_modules/sax/**",
     "!server/**",
     "!src/**",
     "!scripts/**",
@@ -49,7 +80,24 @@
       // loadPackagedEnv()'s warning), it won't fail the build or crash the app.
       from: "server",
       to: "server",
-      filter: ["dist/**/*", "package.json", "node_modules/**/*", ".env"],
+      // ".env" is NOT in this list any more, and that is the change that makes
+      // over-the-air updates possible at all.
+      //
+      // `kaxx4/MKCP-V4` is a PUBLIC repository. Publishing an installer that
+      // carried server/.env — the live Supabase service-role key, which
+      // bypasses RLS on every table — would have put that key on the open
+      // internet for anyone who clicked Releases. The updater was never the
+      // blocker; what shipped inside the artifact was.
+      //
+      // `loadPackagedEnv()` in public/electron.js already preferred
+      // `<userData>/.env` over the bundled copy, so dropping the bundle changes
+      // nothing for a machine that has one. A machine WITHOUT one now gets that
+      // function's existing warning and self-disables its Supabase features,
+      // instead of silently running on a key that arrived by download.
+      //
+      // Provisioning is therefore a deliberate, per-machine act: put the .env
+      // in %APPDATA%/MK Cycles Dashboard/.env once. Updates never touch it.
+      filter: ["dist/**/*", "package.json", "node_modules/**/*"],
     },
   ],
   extraMetadata: {
@@ -67,5 +115,20 @@
     shortcutName: "MK Cycles Dashboard",
   },
   compression: "maximum",  // 7z maximum compression → ~15-20% smaller installer (slower build)
-  publish: null,
+
+  /* Over-the-air updates, via GitHub Releases on the public repo.
+     Safe only because the installer no longer carries server/.env — see the
+     note on extraResources above. electron-builder also emits `latest.yml`
+     alongside the .exe; electron-updater reads THAT, so a release published
+     without it looks to every client exactly like "you are up to date".
+     `npm run build:prod` builds without uploading (--publish never); releasing
+     is a separate, deliberate step. */
+  publish: [
+    {
+      provider: "github",
+      owner: "kaxx4",
+      repo: "MKCP-V4",
+      releaseType: "release",
+    },
+  ],
 }

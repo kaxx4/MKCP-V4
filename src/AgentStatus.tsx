@@ -138,6 +138,53 @@ function Pill({ ok, label }: { ok: boolean | null; label: string }) {
  *  failed(actual error). Reads only from stores already populated by every sync path
  *  (quickSyncStore for quick-sync, tallyStore.isSyncing for manual full/masters/daybook
  *  triggers) — no new store. */
+/**
+ * What the updater is doing, in the header, permanently.
+ *
+ * Only `ready` and `error` are worth interrupting for, so everything else is
+ * quiet or absent: "current" says nothing at all rather than adding a green
+ * tick nobody needs. `ready` is deliberately not a button — this process holds
+ * Tally's single-threaded port and drains the push queue, so it installs on the
+ * next ordinary quit rather than offering to restart mid-push.
+ */
+function UpdateChip({ state }: { state: { phase: string; version?: string; percent?: number; message?: string } | null }) {
+  if (!state) return null;
+  const { phase, version, percent } = state;
+  if (phase === "idle" || phase === "current" || phase === "disabled" || phase === "checking") return null;
+
+  if (phase === "downloading") {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-600"
+        title={`Downloading ${version ?? "an update"} in the background.`}
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+        Update{typeof percent === "number" ? ` ${percent}%` : "…"}
+      </span>
+    );
+  }
+  if (phase === "ready") {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-lg border border-success-200 bg-success-50 px-2.5 py-1.5 text-xs font-semibold text-success-700"
+        title="Downloaded. It installs the next time you close the app — nothing is interrupted now."
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-success-600" />
+        {version ? `v${version} ready` : "Update ready"}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-lg border border-warn-200 bg-warn-50 px-2.5 py-1.5 text-xs font-semibold text-warn-800"
+      title={state.message ?? "The update check failed."}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-warn-600" />
+      Update check failed
+    </span>
+  );
+}
+
 function SyncStateIndicator({
   isSyncing, syncingLabel, qsync,
 }: {
@@ -449,6 +496,18 @@ export default function AgentStatus() {
     return () => clearInterval(id);
   }, [showFileTransfer, fetchTransfers]);
 
+  /* Over-the-air update state.
+     Read once AND subscribed: a check can resolve before this component mounts,
+     and an updater whose result nobody ever sees is the failure this feature is
+     supposed to remove, not introduce. */
+  const [update, setUpdate] = useState<{ phase: string; version?: string; percent?: number; message?: string } | null>(null);
+  useEffect(() => {
+    const api = (window as any).electronAPI?.update;
+    if (!api) return;               // browser/dev — there is no updater to report
+    void api.getState().then(setUpdate).catch(() => {});
+    return api.onState(setUpdate);
+  }, []);
+
   useEffect(() => {
     if (!showFileTransfer || !(window as any).electronAPI?.getSettings) return;
     (window as any).electronAPI.getSettings().then((s: any) => {
@@ -668,6 +727,7 @@ export default function AgentStatus() {
           <p className="text-xs text-neutral-500 mt-0.5">{company}</p>
         </div>
         <div className="flex items-center gap-2">
+          <UpdateChip state={update} />
           <SyncStateIndicator isSyncing={isSyncing} syncingLabel={syncing} qsync={qsync} />
           <button
             onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
