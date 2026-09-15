@@ -183,15 +183,6 @@
 [data-theme="bento"] input[type="date"]::-webkit-datetime-edit-month-field,
 [data-theme="bento"] input[type="date"]::-webkit-datetime-edit-year-field { color: var(--ink-dim); }
 
-/* The quick-capture control was an animated blue->violet gradient. A moving
-   gradient is the loudest thing an interface can do and it survived every
-   other hue being removed only because it lives in a CSS class rather than a
-   utility. Flat ink, no animation. */
-[data-theme="bento"] .quick-capture-fab,
-[data-theme="bento"] .quick-capture-shortcut {
-  background: var(--ink);
-  animation: none;
-}
 
 /* ── density guard ───────────────────────────────────────────────────
    Deliberate scope limit. The references are generous everywhere; this app
@@ -200,3 +191,28 @@
    existing compact metrics so the same number of rows stays on screen. */
 [data-theme="bento"] table { font-variant-numeric: tabular-nums; }
 [data-theme="bento"] thead th { color: var(--ink-mute); letter-spacing: 0.04em; }
+
+/* ── the mobile nav tiles ────────────────────────────────────
+   Added 15-Sep-2026 with the bento/carousel "More" menu (MobileNavMenu.tsx).
+   That menu tints every Daily tile by the kind of work it is — blue for
+   paperwork, green for money, amber/red for anything that can go wrong — which
+   is exactly the decorative hue this theme removed from the chrome everywhere
+   else. So it is removed here too, in the one place the rest of the file
+   already does that job: white card, hairline, ink glyph, black fill for the
+   page you are on.
+
+   The badge inside a tile is deliberately NOT neutralised, for the same reason
+   .text-danger-* survives on figures: an overdue count is meaning, not
+   decoration, and it is the whole reason the tile carries one.             */
+[data-theme="bento"] .nav-tile {
+  background-color: var(--card);
+  box-shadow: none;
+  --tw-ring-color: var(--line);
+}
+[data-theme="bento"] .nav-tile-icon { color: var(--ink); }
+[data-theme="bento"] .nav-tile-active {
+  background-color: var(--ink);
+  color: #ffffff;
+  --tw-ring-color: var(--ink);
+}
+[data-theme="bento"] .nav-tile-active .nav-tile-icon { color: #ffffff; }
