@@ -4,7 +4,7 @@ import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 import {
   Wifi, WifiOff, RefreshCw, Cloud, CloudOff, CheckCircle, XCircle,
   Clock, Activity, ChevronDown, ChevronUp, Settings, Database,
-  AlertTriangle, Loader2, RotateCcw, ChevronRight, Send, Upload, Download,
+  AlertTriangle, Loader2, RotateCcw, ChevronRight, Send, Upload, Download, Tag,
 } from "lucide-react";
 import { useTallyStore } from "./store/tallyStore";
 import { useSupabaseSyncStatusStore } from "./store/supabaseSyncStatusStore";
@@ -947,6 +947,16 @@ export default function AgentStatus() {
               <Btn onClick={() => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate, chunkMode: "daily" }, "Sync Daybook")} disabled={!!syncing || isSyncing || !connected}>
                 {syncing === "Sync Daybook" && <Loader2 size={12} className="animate-spin" />}
                 Sync Daybook
+              </Btn>
+              {/* The price list is ONE Tally request for the whole catalogue —
+                  ~490 items, 1.3 MB, measured at 0.37s against the live company
+                  — so it does not belong behind a masters sync that takes
+                  minutes. The agent gained the route; this panel had no way to
+                  reach it, which meant the only button for it was in the web
+                  dashboard, on a machine that cannot talk to Tally. */}
+              <Btn onClick={() => triggerSync("/api/tally/sync-price-list", { company, origin: "agent-ui" }, "Price list")} disabled={!!syncing || isSyncing || !connected}>
+                {syncing === "Price list" ? <Loader2 size={12} className="animate-spin" /> : <Tag size={12} />}
+                Price list
               </Btn>
             </div>
 
