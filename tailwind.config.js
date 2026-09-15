@@ -36,6 +36,21 @@ module.exports = {
           border: "#e5e5ea",        // Borders, dividers, subtle separators
           input: "#ffffff",         // Input field backgrounds
           muted: "#f5f5f7",         // Muted/disabled backgrounds
+
+          /* The three surface tiers the web dashboard defines, added here on
+             15-Sep-2026 because this repo was USING two of them without
+             owning them: `bg-bg-page` (AgentStatus.tsx) and `bg-bg-sub`
+             (StatusRow.tsx, StatTile.tsx) had no entry in this scale, so
+             Tailwind emitted no such utility. They rendered correctly only
+             because theme-bento.css happens to carry a plain
+             `[data-theme="bento"] .bg-bg-page` rule — i.e. the ground of
+             every panel on this screen depended on a theme layer that
+             main.tsx could stop applying without anything failing loudly.
+             Defining them here makes the base stylesheet correct on its own;
+             the bento layer still wins on specificity and repaints them. */
+          card: "#ffffff",
+          page: "#eeefec",
+          sub: "#f6f6f4",
         },
 
         // ─── Primary Accent (Blue) ──────────────────────────────────
