@@ -85,8 +85,13 @@ export function SupabaseCloudPanel({ config, masters, vouchers, canRead, readHos
               {failing === 1 ? "One channel is not reaching Supabase." : `${failing} channels are not reaching Supabase.`}
             </p>
             <p className="mt-1">
-              Tally keeps being read; the mirror just stops moving, so every screen that reads Supabase — the web
-              dashboard included — is showing older numbers than this machine has.
+              {/* Not "Tally keeps being read" — this panel cannot see whether it
+                  is, and when the local server is the thing that is down,
+                  nothing is being read either. Stated as what a write-channel
+                  failure does and does not imply. (15-Sep-2026) */}
+              A write channel failing does not by itself stop Tally being read; it stops the mirror MOVING, so
+              every screen that reads Supabase — the web dashboard included — is showing older numbers than this
+              machine has.
             </p>
           </div>
         </div>

@@ -32,6 +32,9 @@ const sbRead = SUPA_URL && SUPA_ANON
   : null;
 
 const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
+/** `localhost:3100` — the same host:port string in the KPI strip, the push
+ *  queue panel and the Tally panel, derived once. */
+const BASE_LABEL = BASE.replace(/^https?:\/\//, "");
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface PushAgentStatus {
@@ -42,6 +45,10 @@ interface PushAgentStatus {
   claimedCount: number;
   last10Results: Array<{ id: string; idempotency_key: string; status: string; error?: string; at: string }>;
   queueStats: { pending: number; pushing: number; failed: number };
+  /** When those counts were last actually read out of Supabase. `null` means
+   *  they never have been — the initial zeros, not a measured empty queue.
+   *  Written by server/src/services/pushAgent.ts:refreshQueueStats. */
+  queueStatsAt: string | null;
 }
 
 interface TallyHealth {
@@ -304,10 +311,17 @@ export default function AgentStatus() {
   const proxyUrl           = useTallyStore((s) => s.proxyUrl);
   const fyFromDate         = useTallyStore((s) => s.fyFromDate);
   const fyToDate           = useTallyStore((s) => s.fyToDate);
-  const lastSyncAt         = useTallyStore((s) => s.lastSyncAt);
-  const lastMastersSyncAt  = useTallyStore((s) => s.lastMastersSyncAt);
-  const lastVouchersSyncAt = useTallyStore((s) => s.lastVouchersSyncAt);
-  const lastVoucherDate    = useTallyStore((s) => s.lastVoucherDate);
+  /* `lastSyncAt`, `lastMastersSyncAt`, `lastVouchersSyncAt` and
+     `lastVoucherDate` were subscribed here and rendered NOWHERE — they are
+     what PullSyncPanel's old freshness tiles read before that panel was
+     rebuilt on `tally_sync_history`. Two of them could not have told the truth
+     anyway: `setLastMastersSync` is exported by store/tallyStore.ts and called
+     from nowhere in this repo, so `lastMastersSyncAt` is null on every
+     machine, and `lastSyncAt` is stamped by `triggerSync` after ANY manual
+     pull including a 0.4s price-list fetch. Dropped rather than left as four
+     live subscriptions re-rendering a 1,100-line component for values it does
+     not use. They are still PUSHED to Supabase by hooks/useSupabaseConfigSync
+     — see the note there.  (15-Sep-2026) */
   const syncTodayMinutes = useTallyStore((s) => s.syncTodayMinutes);
   const syncWeekMinutes  = useTallyStore((s) => s.syncWeekMinutes);
   const syncFyMinutes    = useTallyStore((s) => s.syncFyMinutes);
@@ -339,6 +353,14 @@ export default function AgentStatus() {
   const [syncFolder, setSyncFolder] = useState<string>("");
   const [watchFolder, setWatchFolder] = useState<string>("");
   const [transfers, setTransfers] = useState<FileTransferRow[]>([]);
+  /* Null until the first answer. `transfersError` non-null means the list is
+     empty because it could not be READ, which is the opposite of empty. */
+  const [transfersError, setTransfersError] = useState<string | null>(null);
+  const [transfersReadAt, setTransfersReadAt] = useState<string | null>(null);
+  /* What the SERVER says it is watching, which is the only thing that decides
+     whether a dropped file is picked up. The Electron setting below is just
+     the path last chosen. */
+  const [watchStatus, setWatchStatus] = useState<{ watching: boolean; dir: string | null } | null>(null);
   const [pushingFile, setPushingFile] = useState(false);
   const [transferNote, setTransferNote] = useState("");
   const [transferBusy, setTransferBusy] = useState<string | null>(null);
@@ -470,13 +492,26 @@ export default function AgentStatus() {
     if (!companyName) return;
     try {
       const resp = await fetch(`${BASE}/api/file-transfer/status?company=${encodeURIComponent(companyName)}`);
-      if (!resp.ok) return;
+      if (!resp.ok) { setTransfersError(`the server answered ${resp.status}`); return; }
       const body = await resp.json();
       setTransfers(body.rows ?? []);
-    } catch {
-      // server not reachable — leave the last-known list showing rather than clearing it
+      setWatchStatus(body.watch ?? null);
+      /* `ok:false` carries an empty list that means "could not ask". Older
+         servers do not send `ok` at all, and an absent field is not a
+         failure — hence the explicit `=== false`. */
+      setTransfersError(body.ok === false ? (body.error || "Supabase could not be read.") : null);
+      if (body.ok !== false) setTransfersReadAt(new Date().toISOString());
+    } catch (e: any) {
+      setTransfersError(`the local server is not answering (${e?.message ?? e})`);
     }
   }, [companyName]);
+
+  /* One read at startup, for the same reason the Logs panel takes one: the
+     "new" badge on this panel's COLLAPSED header is computed from `transfers`,
+     and `transfers` was only ever fetched while the panel was open. A badge
+     whose entire job is to tell you something arrived could not appear until
+     after you had already gone and looked. (15-Sep-2026) */
+  useEffect(() => { void fetchTransfers(); }, [fetchTransfers]);
 
   useEffect(() => {
     if (!showFileTransfer) return;
@@ -504,6 +539,16 @@ export default function AgentStatus() {
       setWatchFolder(s?.watchFolderPath || "");
     });
   }, [showFileTransfer]);
+
+  /* Every control in File transfer goes through Electron's main process. In a
+     browser tab (`npm run dev`, and the preview this UI is checked in) there is
+     no `electronAPI`, and each handler quietly `return`ed — a live-looking
+     button that did nothing at all when pressed. Named once, and rendered as
+     the reason the buttons are off. */
+  const desktopBridge = typeof window !== "undefined" && !!(window as any).electronAPI;
+  const noBridgeReason = desktopBridge
+    ? null
+    : "Only the installed desktop app can open a folder picker — this window is running in a browser.";
 
   const chooseWatchFolder = useCallback(async () => {
     const api = (window as any).electronAPI;
@@ -668,18 +713,45 @@ export default function AgentStatus() {
 
   // ── Derived values ────────────────────────────────────────────────────────
   const connected = health?.connected ?? false;
+  /* `health` is null when OUR OWN server did not answer, which is a different
+     failure from Tally being down and has a different fix. The Tally tile used
+     to blame TallyPrime's port 9000 in both cases. */
+  const localServerDown = health == null;
   const company = companyName || "—";
-  const cloudOk = cloudConfig.success !== false && cloudMasters.success !== false && cloudVouchers.success !== false;
+
+  /* Three states, not two. `success` is `null` on a channel nothing has tried
+     yet, and `success !== false` counted that as fine — so a freshly started
+     app with nothing pushed reported the mirror "OK" in the largest type on
+     the screen. `cloudTried` is what separates "working" from "untested".
+     (15-Sep-2026) */
+  const cloudChannels = [cloudConfig, cloudMasters, cloudVouchers];
+  const cloudFailing = cloudChannels.some((c) => c.success === false);
+  const cloudTried = cloudChannels.some((c) => c.success !== null);
   const cloudLastAt = cloudVouchers.lastAt || cloudMasters.lastAt || cloudConfig.lastAt;
-  const qs = pushStatus?.queueStats ?? { pending: 0, pushing: 0, failed: 0 };
+  /* Retained for the panel below, which shows every channel individually. */
+  const cloudOk = !cloudFailing;
+
+  /* The queue depth is only a number once the drain agent has actually read it
+     out of Supabase. Until then `queueStats` holds its initial zeros — see
+     server/src/services/pushAgent.ts. Older servers do not send
+     `queueStatsAt`; `undefined` there means "cannot tell", same as null. */
+  const queueMeasuredAt = pushStatus?.queueStatsAt ?? null;
+  const queueKnown = !!pushStatus && !!queueMeasuredAt;
 
   /* One reason, the first that applies. A flat-disabled button that says
      nothing is the difference between a two-second fix and a hunt through the
      log — four separate conditions used to produce the identical grey button. */
   const logErrorCount = logs.filter(isErrorLine).length;
 
+  /* Named once and passed to both panels, so Quick Sync and Pull Sync can
+     never give two different reasons for the same grey button — and so neither
+     blames TallyPrime when it is this app's own server that is down. */
+  const notConnectedReason = localServerDown
+    ? `This app's own server on ${BASE_LABEL} is not answering, so Tally cannot be reached from here.`
+    : "Tally is not answering, so there is nothing to pull from.";
+
   const pullBlocked =
-    !connected ? "Tally is not answering, so there is nothing to pull from."
+    !connected ? notConnectedReason
     : !companyName.trim() ? "No company is set in Settings, so there is nothing to sync as."
     : null;
 
@@ -778,22 +850,56 @@ export default function AgentStatus() {
             value={connected ? "Connected" : "Offline"}
             tone={connected ? "success" : "danger"}
             tint={!connected}
-            sub={connected ? (health?.tallyUrl || BASE) : "TallyPrime is not answering on :9000"}
+            /* Which of the two processes failed. Naming Tally's port when this
+               app's own server is the thing that is down sends the reader to
+               TallyPrime's connectivity settings for a problem that is not
+               there. */
+            sub={
+              connected
+                ? (health?.tallyUrl || BASE)
+                : localServerDown
+                  ? `this app's own server on ${BASE_LABEL} is not answering`
+                  : "TallyPrime is not answering on :9000"
+            }
           />
+          {/* Three states. `pushStatus` is null when the local server did not
+              answer, and `pushStatus?.enabled` collapsed that to "Disabled" —
+              an assertion about a configuration we could not read. Observed
+              15-Sep-2026 with the server stopped: the tile said "Disabled ·
+              no tick yet" beside a panel correctly saying it could not be
+              reached. */}
           <StatTile
             emphasis
             label="Push drain"
-            value={pushStatus?.enabled ? "Running" : "Disabled"}
-            tone={pushStatus?.enabled ? "success" : "warn"}
+            value={!pushStatus ? "Unknown" : pushStatus.enabled ? "Running" : "Disabled"}
+            tone={!pushStatus ? "warn" : pushStatus.enabled ? "success" : "warn"}
             tint={!pushStatus?.enabled}
-            sub={pushStatus?.lastTick ? `last tick ${new Date(pushStatus.lastTick).toLocaleTimeString("en-IN")}` : "no tick yet"}
+            sub={
+              !pushStatus
+                ? "the local server did not answer, so its state is unknown"
+                : pushStatus.lastTick
+                  ? `last tick ${new Date(pushStatus.lastTick).toLocaleTimeString("en-IN")}`
+                  : "no tick yet"
+            }
           />
+          {/* "0 · nothing waiting" was printed whenever the counts had never
+              been read — server unreachable, drain agent never started, or a
+              failed Supabase read — which is the state a person is least
+              likely to go and check. A queue whose depth is unknown says so.
+              (15-Sep-2026) */}
           <StatTile
             emphasis
             label="Queue"
-            value={String((pushStatus?.queueStats?.pending ?? 0) + (pushStatus?.queueStats?.pushing ?? 0))}
-            tone={(pushStatus?.queueStats?.failed ?? 0) > 0 ? "warn" : undefined}
-            sub={(pushStatus?.queueStats?.failed ?? 0) > 0 ? `${pushStatus?.queueStats?.failed} failed` : "nothing waiting"}
+            value={queueKnown ? String(pushStatus!.queueStats.pending + pushStatus!.queueStats.pushing) : "—"}
+            tone={!queueKnown ? "warn" : pushStatus!.queueStats.failed > 0 ? "warn" : undefined}
+            tint={!queueKnown}
+            sub={
+              !queueKnown
+                ? "never counted — the drain agent has not reported a depth"
+                : pushStatus!.queueStats.failed > 0
+                  ? `${pushStatus!.queueStats.failed} failed · counted ${new Date(queueMeasuredAt!).toLocaleTimeString("en-IN")}`
+                  : `nothing waiting · counted ${new Date(queueMeasuredAt!).toLocaleTimeString("en-IN")}`
+            }
           />
           {/* `cloudVouchers` is a CHANNEL STATUS ({lastAt, success, error}),
               not a count — rendering it as one produced "[object Object]" in
@@ -802,16 +908,16 @@ export default function AgentStatus() {
           <StatTile
             emphasis
             label="Supabase"
-            value={cloudOk ? "OK" : cloudLastAt ? "Error" : "Never"}
-            tone={cloudOk ? "success" : cloudLastAt ? "danger" : undefined}
-            tint={!cloudOk && !!cloudLastAt}
+            value={cloudFailing ? "Error" : cloudTried ? "OK" : "Not tried"}
+            tone={cloudFailing ? "danger" : cloudTried ? "success" : undefined}
+            tint={cloudFailing}
             /* Not "last write": `lastAt` is stamped on every ATTEMPT, so a
                failing channel was reporting a write that never happened. And
                the store is in-memory, so no timestamp means "not since this
                app started", never "never". */
             sub={
               cloudLastAt
-                ? `${cloudOk ? "last write" : "last tried"} ${new Date(cloudLastAt).toLocaleTimeString("en-IN")}`
+                ? `${cloudFailing ? "last tried" : "last write"} ${new Date(cloudLastAt).toLocaleTimeString("en-IN")}`
                 : "no push since this app started"
             }
           />
@@ -851,6 +957,7 @@ export default function AgentStatus() {
               ranges={quickRanges}
               qsync={qsync}
               connected={connected}
+              notConnectedReason={notConnectedReason}
               company={companyName}
               otherSyncRunning={!!syncing || isSyncing}
               onRun={(r) => quickSync(r.label, r.from, r.to)}
@@ -884,7 +991,7 @@ export default function AgentStatus() {
             <PushQueuePanel
               status={pushStatus}
               unreachable={pushStatusUnreachable}
-              baseLabel={BASE.replace(/^https?:\/\//, "")}
+              baseLabel={BASE_LABEL}
               log={pushLog}
               failedJobs={failedJobs}
               draining={draining}
@@ -1029,13 +1136,20 @@ export default function AgentStatus() {
             </button>
             {showFileTransfer && (
               <div className="px-4 py-4 space-y-4">
+                {noBridgeReason && (
+                  <p className="flex items-start gap-1.5 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
+                    <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                    {noBridgeReason} The list below is still live.
+                  </p>
+                )}
+
                 <div>
                   <p className="text-xs text-neutral-500 mb-1">Incoming files save to</p>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 text-xs bg-neutral-50 border border-neutral-200 rounded-lg px-3 py-1.5 truncate">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <code className="min-w-0 flex-1 basis-48 truncate rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-xs">
                       {syncFolder || "not configured — files will wait until you choose one"}
                     </code>
-                    <Btn onClick={() => void chooseSyncFolder()}>Choose folder</Btn>
+                    <Btn onClick={() => void chooseSyncFolder()} disabledReason={noBridgeReason}>Choose folder</Btn>
                   </div>
                 </div>
 
@@ -1043,12 +1157,27 @@ export default function AgentStatus() {
                   <p className="text-xs text-neutral-500 mb-1">
                     Watch folder — drop a Tally export here and it uploads itself
                   </p>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 text-xs bg-neutral-50 border border-neutral-200 rounded-lg px-3 py-1.5 truncate">
-                      {watchFolder || "not configured — nothing is being watched"}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <code className="min-w-0 flex-1 basis-48 truncate rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-xs">
+                      {watchStatus?.dir || watchFolder || "not configured — nothing is being watched"}
                     </code>
-                    <Btn onClick={() => void chooseWatchFolder()}>Choose folder</Btn>
+                    <Btn onClick={() => void chooseWatchFolder()} disabledReason={noBridgeReason}>Choose folder</Btn>
                   </div>
+                  {/* The path above is only the path last CHOSEN. Whether
+                      anything is actually being watched is decided by chokidar
+                      in the server, which answers at
+                      /api/file-transfer/watch — a route that existed and was
+                      read by nothing, so a watcher that failed to start (a
+                      folder since deleted, or a path on a disconnected drive)
+                      showed here as a configured, working watch folder.
+                      (15-Sep-2026) */}
+                  {watchStatus && (
+                    <p className={`mt-1 text-[11px] ${watchStatus.watching ? "text-neutral-500" : "text-warn-800"}`}>
+                      {watchStatus.watching
+                        ? "The server is watching this folder now."
+                        : "The server is NOT watching anything — a file dropped in this folder will sit there."}
+                    </p>
+                  )}
                   <p className="text-[11px] text-neutral-400 mt-1">
                     Must be a different folder from the one above, or files would loop back and forth.
                   </p>
@@ -1056,14 +1185,19 @@ export default function AgentStatus() {
 
                 <div>
                   <p className="text-xs text-neutral-500 mb-1">Send a file to the web dashboard</p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <input
-                      className="form-input flex-1 min-w-0 text-xs"
+                      className="form-input min-w-0 flex-1 basis-48 text-xs"
                       placeholder="Note (optional)"
                       value={transferNote}
                       onChange={e => setTransferNote(e.target.value)}
                     />
-                    <Btn variant="primary" onClick={() => void pushFileToWeb()} disabled={pushingFile}>
+                    <Btn
+                      variant="primary"
+                      onClick={() => void pushFileToWeb()}
+                      disabled={pushingFile}
+                      disabledReason={noBridgeReason ?? (companyName.trim() ? null : "No company is set in Settings, so a file has nothing to be filed under.")}
+                    >
                       {pushingFile ? "Sending…" : "Choose file & send"}
                     </Btn>
                   </div>
@@ -1071,8 +1205,21 @@ export default function AgentStatus() {
 
                 <div>
                   <p className="text-xs text-neutral-500 mb-1">Recent transfers</p>
-                  {transfers.length === 0 ? (
-                    <p className="text-xs text-neutral-400">Nothing yet.</p>
+                  {/* "Nothing yet." used to be printed for three different
+                      answers — there are no transfers, this machine has no
+                      Supabase credentials, and the query failed — two of which
+                      mean files may well be waiting. The server now says which.
+                      (15-Sep-2026) */}
+                  {transfersError ? (
+                    <p className="flex items-start gap-1.5 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
+                      <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                      <span>
+                        The transfer list could not be read — {transfersError} This is not the same as there being
+                        none{transfersReadAt ? `; the last list that did come back was at ${new Date(transfersReadAt).toLocaleTimeString("en-IN")}` : ""}.
+                      </span>
+                    </p>
+                  ) : transfers.length === 0 ? (
+                    <p className="text-xs text-neutral-500">No transfers in either direction yet.</p>
                   ) : (
                     <div className="space-y-1.5 max-h-56 overflow-y-auto">
                       {transfers.map(t => (
@@ -1105,12 +1252,15 @@ export default function AgentStatus() {
                           }`}>{t.status}</span>
                           {t.direction === "web_to_desktop" && t.status === "pending" && (
                             <button
-                              className="text-neutral-400 hover:text-neutral-600"
+                              className="btn-icon h-9 w-9 shrink-0 tap disabled:opacity-50"
                               onClick={() => void dismissTransfer(t.id)}
-                              disabled={transferBusy === t.id}
-                              title="Dismiss"
+                              disabled={transferBusy === t.id || !sbRead}
+                              title={sbRead ? "Dismiss" : "This build has no Supabase read credentials, so it cannot mark a transfer dismissed."}
+                              aria-label="Dismiss this transfer"
                             >
-                              <XCircle size={13} />
+                              {transferBusy === t.id
+                                ? <Loader2 size={14} className="animate-spin" />
+                                : <XCircle size={14} />}
                             </button>
                           )}
                         </div>

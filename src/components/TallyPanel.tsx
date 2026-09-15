@@ -52,6 +52,8 @@ export interface TallyHealthLike {
 }
 
 interface Props {
+  /** `null` means THIS APP'S OWN server did not answer — which is not the same
+   *  fact as Tally being down, and has a different fix. */
   health: TallyHealthLike | null;
   /** The company this app is configured to sync AS. */
   configuredCompany: string;
@@ -88,6 +90,13 @@ export function TallyPanel({ health, configuredCompany, base }: Props) {
   }, [health?.connected, askTally]);
 
   const connected = health?.connected ?? false;
+  /* Two processes can be missing and only one of them is TallyPrime. Until
+     15-Sep-2026 this panel printed the same "TallyPrime is not answering"
+     advice — check the XML port, restart TallyPrime — in both cases, which
+     sends the reader into Tally's connectivity settings for a problem that is
+     in this app. Observed with the local server stopped: the whole page
+     blamed port 9000 while nothing had ever reached port 3100. */
+  const localServerDown = health == null;
   const configured = configuredCompany.trim();
   /* Tally spells the company exactly as it is in the .tsl; a case or
      whitespace difference is the same company, a different name is not. */
@@ -115,7 +124,25 @@ export function TallyPanel({ health, configuredCompany, base }: Props) {
         </div>
       )}
 
-      {!connected && (
+      {localServerDown && (
+        <div className="flex items-start gap-2 rounded-xl bg-danger-soft px-3 py-2.5 text-[12px] text-danger-700">
+          <WifiOff size={14} className="mt-0.5 shrink-0" />
+          <div>
+            <p className="font-semibold">
+              This app&rsquo;s own server on <span className="font-mono">{base.replace(/^https?:\/\//, "")}</span> is
+              not answering, so nothing on this screen can be read.
+            </p>
+            <p className="mt-1">
+              Nothing here is a statement about TallyPrime — it has not been asked. The usual causes are the app
+              being started before its server finished binding, or another copy already holding the port, which the
+              mirror panel below reports by name.
+            </p>
+            <p className="mt-1"><strong>Quitting and reopening this app is the usual fix.</strong></p>
+          </div>
+        </div>
+      )}
+
+      {!localServerDown && !connected && (
         <div className="flex items-start gap-2 rounded-xl bg-danger-soft px-3 py-2.5 text-[12px] text-danger-700">
           <WifiOff size={14} className="mt-0.5 shrink-0" />
           <div>
@@ -152,13 +179,15 @@ export function TallyPanel({ health, configuredCompany, base }: Props) {
                   ? "read from Tally, not from this app's settings"
                   : connected
                     ? undefined
-                    : "cannot be read while Tally is unreachable"
+                    : localServerDown
+                      ? "cannot be read — this app's own server is not answering, so Tally was never asked"
+                      : "cannot be read while Tally is unreachable"
             }
             error={askError}
             spinning={asking}
             action={
               connected ? (
-                <button onClick={() => void askTally()} disabled={asking} className="btn-secondary btn-sm">
+                <button onClick={() => void askTally()} disabled={asking} className="btn-secondary btn-sm tap-y">
                   {asking ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                   Re-check
                 </button>
@@ -185,23 +214,29 @@ export function TallyPanel({ health, configuredCompany, base }: Props) {
         <ul className="flex flex-col gap-2">
           <StatusRow
             icon={Plug}
-            tone={connected ? "success" : "danger"}
             title="Tally XML port"
             subject={<span className="font-mono">{health?.tallyUrl ?? "—"}</span>}
             meta={
-              health?.busy
-                ? "a sync is holding the port — this is inferred from the sync, not a fresh ping"
-                : connected
-                  ? "answered the last health ping"
-                  : "no answer"
+              localServerDown
+                ? "not asked — the request never left this app"
+                : health?.busy
+                  ? "a sync is holding the port — this is inferred from the sync, not a fresh ping"
+                  : connected
+                    ? "answered the last health ping"
+                    : "no answer"
             }
+            tone={localServerDown ? "neutral" : connected ? "success" : "danger"}
           />
           <StatusRow
             icon={Plug}
-            tone="neutral"
+            tone={localServerDown ? "danger" : "neutral"}
             title="This app's server"
             subject={<span className="font-mono">{base.replace(/^https?:\/\//, "")}</span>}
-            meta="the only process here that talks to Tally"
+            meta={
+              localServerDown
+                ? "not answering — every reading above and below comes through it"
+                : "the only process here that talks to Tally"
+            }
           />
         </ul>
       </section>

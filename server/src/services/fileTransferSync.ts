@@ -332,10 +332,22 @@ export function watchFolderStatus(): { watching: boolean; dir: string | null } {
   return { watching: watcher !== null, dir: watchedDir };
 }
 
-/** Recent transfers for this company, both directions — for AgentStatus.tsx
- *  to poll and show a status panel. */
-export async function listRecentTransfers(company: string): Promise<any[]> {
-  if (!client) return [];
+/**
+ * Recent transfers for this company, both directions — for AgentStatus.tsx
+ * to poll and show a status panel.
+ *
+ * Returns `ok` alongside the rows rather than just an array. It used to answer
+ * `[]` in three different situations — there genuinely are no transfers, there
+ * is no Supabase client on this machine at all, and the query failed — and the
+ * window rendered all three as "Nothing yet." (15-Sep-2026). Two of those mean
+ * "could not ask", which is the opposite claim: files may well be waiting.
+ */
+export async function listRecentTransfers(
+  company: string,
+): Promise<{ ok: boolean; rows: any[]; error?: string }> {
+  if (!client) {
+    return { ok: false, rows: [], error: "This machine has no Supabase credentials, so transfers cannot be read." };
+  }
   const { data, error } = await client
     .from("file_transfers")
     .select("*")
@@ -344,7 +356,7 @@ export async function listRecentTransfers(company: string): Promise<any[]> {
     .limit(30);
   if (error) {
     console.warn(`[file-transfer] listRecentTransfers failed: ${error.message}`);
-    return [];
+    return { ok: false, rows: [], error: error.message };
   }
-  return data ?? [];
+  return { ok: true, rows: data ?? [] };
 }
