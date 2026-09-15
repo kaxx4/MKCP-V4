@@ -752,8 +752,45 @@ export class SupabaseSync {
    * stock items 489/489, cost centres 0 of 0 (this company has none). So the
    * guard drops nothing real and blocks only the browser-forwarded path.
    */
+  /**
+   * ── It was inert. Measured 15-Sep-2026 ──────────────────────────────────
+   *
+   * This returned `!!(m?.guid || "").trim()` — it tested only that the guid was
+   * NON-EMPTY. But the phantom ids it exists to block are `normalizeId(name)`,
+   * the uppercased item name, which is always non-empty. Every phantom passed
+   * the guard the comment above describes it as stopping.
+   *
+   * `tally_stock_items` on 15-Sep-2026: **951 rows — 492 carrying a real Tally
+   * GUID and 459 whose guid IS the item name**, every one of those 459 with
+   * `gst_details` null and the rest of its columns empty. The 14-Sep backup held
+   * 7. So it went 7 → 459 in a day, two days AFTER this guard was extended to
+   * "every master type" and verified "inert on the real path" — it was inert on
+   * every path.
+   *
+   * A Tally GUID looks like `353d02e0-63aa-11d7-8d44-d4bc1970ad56-0003ce47`:
+   * hex groups joined by hyphens. An item name does not. Testing the SHAPE is
+   * what the guard always meant; testing emptiness only ever tested that a
+   * string had been set.
+   *
+   * Safe to tighten, and checked before tightening: every master type Tally
+   * itself serves carries a real GUID — stock groups 22/22, units 9/9, godowns
+   * 1/1, ledgers 482/482, stock items 489/489. So this drops nothing Tally
+   * sends and blocks only the browser-forwarded canonical ids. Guardrail G5.
+   *
+   * It does NOT clean up the 459 already there. A prune keys on "this guid is
+   * not GUID-shaped", never on "absent from today's pull" — sandbox and
+   * production share one company name, so an absence-based prune would delete
+   * real data (G6). That is a separate, operator-approved action.
+   */
   private hasRealGuid(m: any): boolean {
-    return !!(m?.guid || "").trim();
+    const g = (m?.guid || "").trim();
+    if (!g) return false;
+    // Hex-and-hyphen only, at least two groups, and long enough that a short
+    // coded item name cannot pass by accident.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f-]+$/i.test(g)) return false;
+    // Belt and braces: never accept the canonical id, whatever its shape.
+    const name = (m?.name || "").trim();
+    return !(name && g.toUpperCase() === name.toUpperCase());
   }
 
   private mapCompany(m: any): any {
