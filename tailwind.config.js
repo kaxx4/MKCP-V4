@@ -76,6 +76,8 @@ module.exports = {
           600: "#15803d",
           700: "#166534",
           900: "#145231",
+          /* Flat tint for a "good" strip — matches the web dashboard. */
+          soft: "#e7f6ee",
         },
         danger: {
           50: "#fef2f2",
@@ -89,6 +91,8 @@ module.exports = {
           700: "#991b1b",
           800: "#8a1a1a",
           900: "#7f1d1d",
+          /* Flat tint for a "problem" strip — matches the web dashboard. */
+          soft: "#fbeaea",
         },
         warn: {
           50: "#fffbeb",
@@ -102,6 +106,8 @@ module.exports = {
           700: "#92400e",
           800: "#7c3d0f",
           900: "#78350f",
+          /* Flat tint for a "warning" strip — matches the web dashboard. */
+          soft: "#fdf4e6",
         },
         // info: aligned to the web repo's blue ramp. Was a teal/cyan/green ramp
         // (DEFAULT #0891b2) that read as a second "success"; the web already
