@@ -709,9 +709,34 @@ export class SupabaseSync {
     }
   }
 
+  /**
+   * ── The fallback has never fired. Measured 15-Sep-2026 ──────────────────
+   *
+   * `company|name` appears in ZERO rows of `tally_vouchers` (0 of 2,839, all
+   * GUID-shaped), and zero rows of `tally_stock_items`, `tally_ledgers`,
+   * `tally_stock_groups`, `tally_units` and `tally_godowns`. It has never
+   * produced a stored id in this database.
+   *
+   * That is worth saying because the phantoms looked like its work and were
+   * not: the browser forwards `normalizeId(name)` as the guid, which is
+   * non-empty, so this returned it untouched. The invented-id branch was never
+   * the leak — the guard in front of it was.
+   *
+   * For the six MASTER mappers this is now unreachable by construction:
+   * `hasRealGuid` requires a GUID-shaped id before any of them reach here.
+   * Only `mapVoucher` can still get here with nothing, and if it ever does,
+   * that voucher would be keyed on a name and could never be reconciled with
+   * the real one — so it is said out loud rather than absorbed.
+   */
   private safeGuid(raw: string | undefined, company: string, fallbackKey: string): string {
     const g = (raw || "").trim();
-    return g || `${company}|${fallbackKey}`;
+    if (g) return g;
+    console.warn(
+      `[sync] no GUID for "${fallbackKey}" — keying it on the name. This has never ` +
+      `happened in production and a row written this way cannot reconcile with ` +
+      `the real one. Check what produced it before trusting the row.`,
+    );
+    return `${company}|${fallbackKey}`;
   }
 
   /**
