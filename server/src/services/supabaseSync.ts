@@ -1,7 +1,13 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
 import { supabaseClient } from "./supabaseClient.js";
-import { emitMirrorChanges } from "./mirrorSignal.js";
+import {
+  emitMirrorChanges,
+  selectMovedChanges,
+  describeSelection,
+  SIGNAL_CEILING,
+  type PriorVersions,
+} from "./mirrorSignal.js";
 
 // Polyfill WebSocket for Node.js 20 (Supabase needs it for realtime)
 if (typeof globalThis !== 'undefined' && !globalThis.WebSocket) {
@@ -218,6 +224,16 @@ export class SupabaseSync {
       // Per-day prune can clear empty days even with nothing to upsert.
       if (vouchers.length === 0 && !meta?.pruneDays?.length) return;
 
+      /* ── Read the AlterIDs we are about to overwrite ─────────────────────
+         This MUST happen before the upsert: the pre-image is the whole point.
+         Skipped above the ceiling, where emitMirrorChanges stays silent anyway
+         and this would only be a large read to feed a discarded answer. A null
+         result means "could not tell" and every voucher is then announced. */
+      const priorAlterIds: PriorVersions | null =
+        vouchers.length > 0 && vouchers.length <= SIGNAL_CEILING
+          ? await this.priorVoucherAlterIds(company, vouchers.map((v: any) => String(v.guid)))
+          : null;
+
       // Batch vouchers in chunks of 200 (smaller than stock items due to JSONB payload)
       const BATCH_SIZE = 200;
       for (let i = 0; i < vouchers.length; i += BATCH_SIZE) {
@@ -232,22 +248,31 @@ export class SupabaseSync {
          and 2,792 individual hints would cost more than the single reload they
          were meant to replace. A client that misses or ignores all of this does
          exactly what it does today. See services/mirrorSignal.ts. */
-      const signal = await emitMirrorChanges(
-        this.client,
-        company,
-        vouchers.map((v: any) => ({
-          table: "tally_vouchers",
-          pk: String(v.guid),
-          // Upserts, so an existing voucher is an update and a new one an
-          // insert — indistinguishable from here, and the client treats both
-          // the same way (fetch that row). "update" is the honest label for
-          // "this row now differs from what you hold".
-          op: "update" as const,
-          version: typeof v.alter_id === "number" ? v.alter_id : null,
-        })),
-      );
-      if (signal.suppressed || signal.emitted === 0) {
-        console.log(`[Supabase] mirror signals: ${signal.note}`);
+      const candidates = vouchers.map((v: any) => ({
+        table: "tally_vouchers",
+        pk: String(v.guid),
+        // Upserts, so an existing voucher is an update and a new one an
+        // insert — indistinguishable from here, and the client treats both
+        // the same way (fetch that row). "update" is the honest label for
+        // "this row now differs from what you hold".
+        op: "update" as const,
+        version: typeof v.alter_id === "number" ? v.alter_id : null,
+      }));
+
+      /* Drop the ones whose AlterID did not move since the mirror row we just
+         overwrote. A pass re-emitting its whole window was producing 4,918
+         signals for 106 vouchers in 24 h (measured 15-Sep-2026); replayed
+         against those rows this leaves 115. Nothing is dropped on any weaker
+         evidence than "both AlterIDs are numbers and they are equal" — see
+         selectMovedChanges. */
+      const selection = selectMovedChanges(candidates, priorAlterIds ?? new Map());
+
+      const signal = await emitMirrorChanges(this.client, company, selection.emit);
+      if (selection.unchangedAlterId.length > 0 || signal.suppressed || signal.emitted === 0) {
+        console.log(
+          `[Supabase] mirror signals: ${describeSelection(selection)}` +
+          `${priorAlterIds ? "" : " [no pre-image available — nothing deduped]"} → ${signal.note}`
+        );
       }
 
       // Extract and sync denormalized ledger and inventory entries
@@ -415,6 +440,73 @@ export class SupabaseSync {
       console.error(msg);
       await this.logSyncHistory(company, "vouchers", t0, null, [msg], false);
       throw e;
+    }
+  }
+
+  /**
+   * The AlterIDs the mirror holds for these GUIDs, read BEFORE the upsert.
+   *
+   * This is the source of truth for "what did the last signal announce",
+   * not a cache of it: a signal is only ever emitted after a successful upsert
+   * (see the emit site), so the AlterID sitting in `tally_vouchers` when this
+   * runs is exactly the one the previous signal carried. An in-process map
+   * would have said the same thing while the agent stayed up and forgotten it
+   * across the restarts that happen several times a day.
+   *
+   * Cost, measured on this dataset 15-Sep-2026: 2,839 vouchers total, and a
+   * normal pass carries a few dozen — two columns for at most SIGNAL_CEILING
+   * (300) GUIDs, chunked 100 at a time because `.in()` is a GET and the GUIDs
+   * are 36 chars each. That is the same chunk size the child-row deletes below
+   * have used against this table without hitting a URL limit.
+   *
+   * Returns null when it CANNOT answer — a failed read, a missing column, no
+   * client. Null is not "nothing changed"; the caller turns it into "announce
+   * everything", which is the behaviour that existed before this read did.
+   *
+   * TRAP: `tally_vouchers` also has a column literally called `version`, and it
+   * is 0 on every row (checked 15-Sep-2026, integer, never written by this
+   * agent). `mirror_change_signal.version` is `tally_vouchers.alter_id` —
+   * verified by join, 100 of 100 matched pairs. Read alter_id, never version.
+   */
+  private async priorVoucherAlterIds(
+    company: string,
+    guids: string[],
+  ): Promise<PriorVersions | null> {
+    if (!this.client) return null;
+    const clean = (guids || []).filter((g): g is string => typeof g === "string" && g.length > 0);
+    if (clean.length === 0) return new Map();
+
+    const held = new Map<string, number | null>();
+    const CHUNK = 100;
+    try {
+      for (let i = 0; i < clean.length; i += CHUNK) {
+        const chunk = clean.slice(i, i + CHUNK);
+        const { data, error } = await this.withRetry("select prior alter_id", async () => {
+          const res = await this.client!
+            .from("tally_vouchers")
+            .select("guid, alter_id")
+            .eq("company", company)
+            .in("guid", chunk);
+          if (res.error && this.isTransient(res.error)) throw res.error;
+          return res;
+        });
+        if (error) {
+          console.warn(`[Supabase] mirror signals: pre-image read failed (${error.message}) — announcing every voucher this pass`);
+          return null;
+        }
+        for (const row of data ?? []) {
+          /* A row with no alter_id is recorded as null, NOT omitted: "the row
+             exists but carries no AlterID" and "there is no row" are different
+             facts (G7). Both are emitted, but they are not the same thing and
+             the log says which. */
+          const a = (row as any).alter_id;
+          held.set(String((row as any).guid), typeof a === "number" ? a : null);
+        }
+      }
+      return held;
+    } catch (e: any) {
+      console.warn(`[Supabase] mirror signals: pre-image read threw (${e?.message || e}) — announcing every voucher this pass`);
+      return null;
     }
   }
 

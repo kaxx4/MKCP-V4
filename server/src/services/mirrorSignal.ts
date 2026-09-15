@@ -41,6 +41,141 @@ export const SIGNAL_CEILING = 300;
 
 export type MirrorOp = "insert" | "update" | "delete";
 
+/**
+ * ── The amplification, and the only thing that suppresses it ──────────────
+ *
+ * Measured read-only on the live table, 15-Sep-2026, over the trailing 24 h:
+ * 4,918 signals naming 106 distinct vouchers — 46.4x. The busiest `pk` appeared
+ * 167 times carrying ONE distinct `version`: same voucher, same AlterID,
+ * announced 167 times. 205 signals/hour, including 232 in the 3 am hour with
+ * nobody working. The cause is that a sync pass re-emits its whole window
+ * whether or not Tally touched anything in it.
+ *
+ * Replayed against those same 4,918 rows, the rule below leaves 115: 106 first
+ * sightings and 9 genuine AlterID moves.
+ *
+ * The rule is ONE fact and nothing else: Tally's AlterID for this voucher is a
+ * number, the number the mirror already held for it is a number, and the two
+ * are equal. Anything less certain emits. In particular this never looks at the
+ * voucher's DATE — 61% of this business's entry is backdated, so a voucher's
+ * date says nothing about whether its content moved.
+ */
+
+/**
+ * What the mirror held for each pk BEFORE the pass that is now signalling.
+ *
+ * Key absent  → there is no such row; this voucher is new (G7: that is NOT the
+ *               same fact as "unchanged", and it is never suppressed).
+ * Value null  → the row exists but carries no AlterID, so nothing can be
+ *               compared (G7 again: also not "unchanged", also never
+ *               suppressed).
+ * Value number→ the AlterID the mirror held, and the only input that can
+ *               suppress anything.
+ */
+export type PriorVersions = ReadonlyMap<string, number | null>;
+
+/** Why a change was kept. Every value except `alter-id-moved` means "could not tell". */
+export type EmitReason =
+  | "op-never-deduped"
+  | "no-prior-row"
+  | "prior-alter-id-unknown"
+  | "incoming-alter-id-unknown"
+  | "alter-id-moved";
+
+export interface ChangeSelection {
+  /** The changes to write. */
+  emit: MirrorChange[];
+  /** Dropped, and the ONLY reason anything is ever dropped: the AlterID did not move. */
+  unchangedAlterId: MirrorChange[];
+  /** Counts per reason, for a log line that says which fact applied. */
+  reasons: Record<EmitReason, number>;
+}
+
+/**
+ * Keep the changes whose AlterID actually moved (plus everything we cannot be
+ * sure about). Pure — no Supabase, no clock, no I/O.
+ *
+ * `prior` is read from `tally_vouchers` BEFORE the upsert overwrites it, which
+ * makes it the source of truth rather than a cache: the last signal for a
+ * voucher carried exactly the AlterID that was in the mirror row at that
+ * moment, because signals are only ever emitted after a successful upsert. A
+ * caller that cannot obtain `prior` (read failed, above the ceiling) must pass
+ * an EMPTY map, and every change then reads as `no-prior-row` and is emitted —
+ * the failure mode is the noisy status quo, never a missed change.
+ *
+ * Within one batch a repeated pk is folded the same way, because the first
+ * decision updates the working view of what the mirror will hold.
+ */
+export function selectMovedChanges(
+  changes: readonly MirrorChange[],
+  prior: PriorVersions,
+): ChangeSelection {
+  const emit: MirrorChange[] = [];
+  const unchangedAlterId: MirrorChange[] = [];
+  const reasons: Record<EmitReason, number> = {
+    "op-never-deduped": 0,
+    "no-prior-row": 0,
+    "prior-alter-id-unknown": 0,
+    "incoming-alter-id-unknown": 0,
+    "alter-id-moved": 0,
+  };
+
+  /* A mutable view of what the mirror holds as this batch is applied, so a pk
+     repeated inside one batch is compared against the decision just made for it
+     rather than against the pre-batch value. */
+  const held = new Map<string, number | null>(prior);
+
+  const keep = (c: MirrorChange, why: EmitReason): void => {
+    emit.push(c);
+    reasons[why]++;
+    if (c.op !== "delete" && typeof c.version === "number") held.set(c.pk, c.version);
+  };
+
+  for (const c of changes) {
+    /* A delete is never deduped. The consumer treats op="delete" as a
+       full-reload trigger and has nothing else to tell it a row went away; an
+       insert is new by definition. Only an upsert-shaped "update" is a
+       candidate for suppression at all. */
+    if (c.op !== "update") {
+      keep(c, "op-never-deduped");
+      continue;
+    }
+    if (!held.has(c.pk)) {
+      keep(c, "no-prior-row");
+      continue;
+    }
+    const before = held.get(c.pk);
+    if (typeof before !== "number") {
+      keep(c, "prior-alter-id-unknown");
+      continue;
+    }
+    if (typeof c.version !== "number") {
+      keep(c, "incoming-alter-id-unknown");
+      continue;
+    }
+    if (c.version === before) {
+      unchangedAlterId.push(c);
+      continue;
+    }
+    /* Moved — including BACKWARDS. A lower AlterID than the one on file is
+       still a difference from what every client holds, so it is announced. */
+    keep(c, "alter-id-moved");
+  }
+
+  return { emit, unchangedAlterId, reasons };
+}
+
+/** One line saying which fact applied to how many changes. Empty when nothing was kept. */
+export function describeSelection(sel: ChangeSelection): string {
+  const kept = (Object.entries(sel.reasons) as [EmitReason, number][])
+    .filter(([, n]) => n > 0)
+    .map(([why, n]) => `${n} ${why}`)
+    .join(", ");
+  const dropped = sel.unchangedAlterId.length;
+  if (!kept && !dropped) return "no changes";
+  return `${sel.emit.length} kept${kept ? ` (${kept})` : ""}, ${dropped} dropped (alter-id-unchanged)`;
+}
+
 export interface MirrorChange {
   table: string;
   pk: string;
