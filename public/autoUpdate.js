@@ -56,8 +56,10 @@ function getUpdateState() {
  * @param {object} opts
  * @param {() => Electron.BrowserWindow | null} opts.getWindow
  * @param {boolean} opts.isDev
+ * @param {() => boolean} [opts.isBusy] True while a push is in flight, so
+ *   "install now" can refuse rather than kill a voucher mid-push.
  */
-function startAutoUpdate({ getWindow, isDev }) {
+function startAutoUpdate({ getWindow, isDev, isBusy }) {
   broadcast = (state) => {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('update:state', state);
@@ -65,7 +67,7 @@ function startAutoUpdate({ getWindow, isDev }) {
 
   if (isDev) {
     setState({ phase: 'disabled', message: 'Development build — updates are not checked.' });
-    return { checkNow: async () => lastState, getUpdateState };
+    return { checkNow: async () => lastState, installNow: async () => ({ ok: false, reason: 'Development build.' }), getUpdateState };
   }
 
   const { autoUpdater } = require('electron-updater');
@@ -79,7 +81,18 @@ function startAutoUpdate({ getWindow, isDev }) {
 
   autoUpdater.on('checking-for-update', () => setState({ phase: 'checking' }));
   autoUpdater.on('update-available', (info) =>
-    setState({ phase: 'downloading', version: info?.version }));
+    setState({
+      phase: 'downloading',
+      version: info?.version,
+      /* Carried through so the operator can see WHAT is being installed before
+         they choose to restart into it. A version number alone asks someone to
+         accept an interruption on trust. `releaseNotes` is HTML or a string
+         depending on how the release was published; the renderer treats it as
+         text either way rather than injecting markup. */
+      notes: typeof info?.releaseNotes === 'string' ? info.releaseNotes : null,
+      releaseName: info?.releaseName ?? null,
+      releaseDate: info?.releaseDate ?? null,
+    }));
   autoUpdater.on('update-not-available', (info) =>
     setState({ phase: 'current', version: info?.version }));
   autoUpdater.on('download-progress', (p) =>
@@ -88,7 +101,10 @@ function startAutoUpdate({ getWindow, isDev }) {
     setState({
       phase: 'ready',
       version: info?.version,
-      message: 'Installs when you next close the app.',
+      notes: typeof info?.releaseNotes === 'string' ? info.releaseNotes : null,
+      releaseName: info?.releaseName ?? null,
+      releaseDate: info?.releaseDate ?? null,
+      message: 'Ready. Installs when you next close the app — or install it now.',
     }));
   /* Named, not swallowed. The commonest causes are no network and a release
      published without its latest.yml, and both look identical from the UI
@@ -107,8 +123,41 @@ function startAutoUpdate({ getWindow, isDev }) {
   setTimeout(check, 30_000);
   setInterval(check, CHECK_EVERY_MS);
 
+  /**
+   * Install the downloaded update NOW, restarting the app.
+   *
+   * ── Why this is a deliberate act and not a button that just works ────────
+   *
+   * This process owns two things nothing else can take over while it runs:
+   * Tally's single-threaded XML port, and the push-queue drain. Quitting
+   * mid-flight ends a voucher push between "Tally created it" and "the queue
+   * row says so" — the exact window `reconcile()` exists to clean up after.
+   *
+   * So the caller must say whether it is safe, and that judgement is made where
+   * the truth is: the agent knows if a job is in flight. `force` is the
+   * operator overruling it, which is theirs to do, but never the default.
+   *
+   * `isSilent=false` so the NSIS installer shows itself — a machine that
+   * appears to close and do nothing is how an operator ends up double-clicking
+   * the icon during an install. `isForceRunAfter=true` brings the agent back up
+   * on its own, because a sync agent nobody restarts is a sync that stopped.
+   */
+  const installNow = async ({ force = false } = {}) => {
+    if (lastState.phase !== 'ready') {
+      return { ok: false, reason: 'No downloaded update is waiting.' };
+    }
+    if (!force && typeof isBusy === 'function' && isBusy()) {
+      return { ok: false, reason: 'busy' };
+    }
+    setState({ ...lastState, phase: 'installing', message: 'Restarting to install…' });
+    /* Let the reply reach the renderer before the window goes. */
+    setTimeout(() => autoUpdater.quitAndInstall(false, true), 400);
+    return { ok: true };
+  };
+
   return {
     checkNow: async () => { check(); return lastState; },
+    installNow,
     getUpdateState,
   };
 }

@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   update: {
     getState: ()  => ipcRenderer.invoke('update:get-state'),
     checkNow: ()  => ipcRenderer.invoke('update:check-now'),
+    installNow: (opts) => ipcRenderer.invoke('update:install-now', opts ?? {}),
     onState: (cb) => {
       const handler = (_e, state) => cb(state);
       ipcRenderer.on('update:state', handler);

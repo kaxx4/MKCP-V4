@@ -34,6 +34,9 @@ process.on('unhandledRejection', (reason) => {
 });
 const { startAutoUpdate, getUpdateState } = require('./autoUpdate');
 let updater = null;
+/** True while the push agent holds a claimed job — see `isBusy` below.
+ *  Starts TRUE so an install cannot slip through before the first probe. */
+let lastPushBusy = true;
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -622,6 +625,11 @@ ipcMain.handle('get-version', () => app.getVersion());
    avoid. */
 ipcMain.handle('update:get-state', () => getUpdateState());
 ipcMain.handle('update:check-now', async () => (updater ? updater.checkNow() : getUpdateState()));
+/* Install now, restarting the app. Refuses while a push is in flight unless the
+   operator overrules it — see `installNow` in autoUpdate.js for why quitting
+   mid-push is the one thing this must not do casually. */
+ipcMain.handle('update:install-now', async (_e, opts) =>
+  (updater ? updater.installNow(opts ?? {}) : { ok: false, reason: 'Updates are not running.' }));
 
 // ── Discount Rules file persistence ──────────────────────────────────────────
 const discountRulesPath = path.join(app.getPath('userData'), 'discount-rules.json');
@@ -765,7 +773,32 @@ app.whenReady().then(() => {
      `extraResources` in electron-builder.json5. Staged, never forced: this
      process holds Tally's single-threaded port and drains the push queue. */
   try {
-    updater = startAutoUpdate({ getWindow: () => mainWindow, isDev });
+    updater = startAutoUpdate({
+      getWindow: () => mainWindow,
+      isDev,
+      /* "Is a push in flight right now?" asked of the agent itself rather than
+         guessed at. `claimedCount` is the number of queue jobs this agent has
+         CLAIMED and not yet finished — quitting with one outstanding ends it
+         between "Tally created the voucher" and "the queue row says so", which
+         is precisely the window reconcile() has to clean up afterwards.
+         
+         A failed or slow probe answers BUSY, not idle. An update that can wait
+         five minutes is never worth a half-pushed voucher, and "I could not
+         tell" is not "nothing is happening" (G7). */
+      isBusy: () => lastPushBusy,
+    });
+    /* Polled rather than fetched at the moment of asking, because `isBusy` is
+       called from a synchronous IPC path and a hung HTTP call there would
+       freeze the click. */
+    setInterval(async () => {
+      try {
+        const r = await fetch('http://localhost:3100/api/push-agent/status');
+        const j = await r.json();
+        lastPushBusy = (j?.claimedCount ?? 0) > 0;
+      } catch {
+        lastPushBusy = true;
+      }
+    }, 5_000);
   } catch (err) {
     console.error('[update] could not start the updater (continuing):', err.message);
   }

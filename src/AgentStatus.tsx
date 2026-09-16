@@ -147,41 +147,187 @@ function fmt(iso: string | null | undefined): string {
  * Tally's single-threaded port and drains the push queue, so it installs on the
  * next ordinary quit rather than offering to restart mid-push.
  */
-function UpdateChip({ state }: { state: { phase: string; version?: string; percent?: number; message?: string } | null }) {
+interface UpdateState {
+  phase: string;
+  version?: string;
+  percent?: number;
+  message?: string;
+  notes?: string | null;
+  releaseName?: string | null;
+  releaseDate?: string | null;
+}
+
+/**
+ * The update control — what is available, what is in it, and install it now.
+ *
+ * It was a status chip and nothing more: it told you a version was ready and
+ * then made you quit the app to get it. On a machine that is deliberately left
+ * running — this one owns Tally's port and drains the push queue — "the next
+ * time you close it" can be days, so a fix could sit downloaded and unused for
+ * a week. Asked for directly on 16-Sep-2026.
+ *
+ * Three things it must do that a chip could not:
+ *   · say WHAT is in the release, so accepting a restart is not an act of
+ *     faith in a version number;
+ *   · install on demand;
+ *   · refuse to do that while a voucher push is in flight — see `installNow`
+ *     in autoUpdate.js. Quitting then ends the push between "Tally created it"
+ *     and "the queue row says so".
+ */
+function UpdateChip({ state, currentVersion }: { state: UpdateState | null; currentVersion?: string }) {
+  const [open, setOpen] = useState(false);
+  const [busyMsg, setBusyMsg] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  /* Close on an outside click or Escape — a panel that can only be dismissed by
+     the control that opened it traps a mis-tap. */
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
   if (!state) return null;
   const { phase, version, percent } = state;
-  if (phase === "idle" || phase === "current" || phase === "disabled" || phase === "checking") return null;
+  if (phase === "idle" || phase === "disabled") return null;
 
-  if (phase === "downloading") {
-    return (
-      <span
-        className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs text-neutral-600"
-        title={`Downloading ${version ?? "an update"} in the background.`}
-      >
-        <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
-        Update{typeof percent === "number" ? ` ${percent}%` : "…"}
-      </span>
-    );
+  const api = (window as any).electronAPI?.update;
+
+  async function install(force: boolean) {
+    setWorking(true);
+    setBusyMsg(null);
+    try {
+      const r = await api?.installNow({ force });
+      if (r && !r.ok) {
+        setBusyMsg(
+          r.reason === "busy"
+            ? "A voucher is being pushed to Tally right now. Installing would cut it off mid-push."
+            : r.reason,
+        );
+      }
+    } catch (e) {
+      setBusyMsg(e instanceof Error ? e.message : "Couldn't start the install.");
+    } finally {
+      setWorking(false);
+    }
   }
-  if (phase === "ready") {
-    return (
-      <span
-        className="inline-flex items-center gap-1.5 rounded-lg border border-success-200 bg-success-50 px-2.5 py-1.5 text-xs font-semibold text-success-700"
-        title="Downloaded. It installs the next time you close the app — nothing is interrupted now."
-      >
-        <span className="h-1.5 w-1.5 rounded-full bg-success-600" />
-        {version ? `v${version} ready` : "Update ready"}
-      </span>
-    );
-  }
+
+  const tone =
+    phase === "ready" ? "border-success-200 bg-success-50 text-success-700"
+    : phase === "error" ? "border-warn-200 bg-warn-50 text-warn-800"
+    : "border-neutral-200 bg-white text-neutral-600";
+
+  const label =
+    phase === "downloading" ? `Update${typeof percent === "number" ? ` ${percent}%` : "…"}`
+    : phase === "ready" ? (version ? `v${version} ready` : "Update ready")
+    : phase === "installing" ? "Restarting…"
+    : phase === "checking" ? "Checking…"
+    : phase === "current" ? (currentVersion ? `v${currentVersion}` : "Up to date")
+    : "Update check failed";
+
   return (
-    <span
-      className="inline-flex items-center gap-1.5 rounded-lg border border-warn-200 bg-warn-50 px-2.5 py-1.5 text-xs font-semibold text-warn-800"
-      title={state.message ?? "The update check failed."}
-    >
-      <span className="h-1.5 w-1.5 rounded-full bg-warn-600" />
-      Update check failed
-    </span>
+    <div className="relative" ref={boxRef}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold ${tone}`}
+        title="Updates — what is available and what is in it"
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${
+          phase === "ready" ? "bg-success-600"
+          : phase === "error" ? "bg-warn-600"
+          : phase === "downloading" || phase === "checking" ? "bg-accent animate-pulse"
+          : "bg-neutral-400"}`} />
+        {label}
+        <ChevronDown size={12} className={open ? "rotate-180 transition-transform" : "transition-transform"} />
+      </button>
+
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Updates"
+          className="absolute right-0 z-50 mt-1.5 w-[320px] rounded-xl border border-neutral-200 bg-white p-3 shadow-lg"
+        >
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[13px] font-semibold text-neutral-900">
+              {phase === "ready" || phase === "downloading" ? `Version ${version ?? "?"}` : "Updates"}
+            </span>
+            {currentVersion && (
+              <span className="text-[11px] text-neutral-500">running v{currentVersion}</span>
+            )}
+          </div>
+
+          {state.releaseDate && (
+            <div className="mt-0.5 text-[11px] text-neutral-500">
+              published {new Date(state.releaseDate).toLocaleDateString()}
+            </div>
+          )}
+
+          {/* What is in it. Rendered as TEXT, never as markup — release notes
+              are authored outside this app and a renderer that injects them is
+              a renderer that trusts a remote string. */}
+          {state.notes && (
+            <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-neutral-50 p-2 text-[11.5px] leading-snug text-neutral-700">
+              {state.notes.replace(/<[^>]+>/g, "").trim()}
+            </div>
+          )}
+
+          {state.message && !state.notes && (
+            <p className="mt-2 text-[11.5px] text-neutral-600">{state.message}</p>
+          )}
+
+          {busyMsg && (
+            <p className="mt-2 rounded-lg bg-warn-50 p-2 text-[11.5px] font-medium text-warn-800">{busyMsg}</p>
+          )}
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {phase === "ready" && (
+              <button
+                onClick={() => void install(false)}
+                disabled={working}
+                className="btn-primary btn-sm flex-1 disabled:opacity-50"
+                title="Closes the agent, installs, and starts it again."
+              >
+                {working ? "Starting…" : "Install and restart"}
+              </button>
+            )}
+            {phase !== "ready" && (
+              <button
+                onClick={() => { setBusyMsg(null); void api?.checkNow(); }}
+                className="btn-secondary btn-sm flex-1"
+              >
+                Check for updates
+              </button>
+            )}
+          </div>
+
+          {/* The override, and only once refusing has actually happened. An
+              "install anyway" offered up front invites the very thing the
+              refusal exists to prevent. */}
+          {busyMsg?.startsWith("A voucher") && (
+            <button
+              onClick={() => void install(true)}
+              className="mt-2 w-full text-[11px] font-semibold text-warn-800 underline"
+            >
+              Install anyway — I accept the push may be cut off
+            </button>
+          )}
+
+          {phase === "ready" && (
+            <p className="mt-2 text-[10.5px] leading-snug text-neutral-500">
+              It installs on its own the next time you close the app. Nothing is lost by waiting.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -556,12 +702,19 @@ export default function AgentStatus() {
      Read once AND subscribed: a check can resolve before this component mounts,
      and an updater whose result nobody ever sees is the failure this feature is
      supposed to remove, not introduce. */
-  const [update, setUpdate] = useState<{ phase: string; version?: string; percent?: number; message?: string } | null>(null);
+  const [update, setUpdate] = useState<UpdateState | null>(null);
   useEffect(() => {
     const api = (window as any).electronAPI?.update;
     if (!api) return;               // browser/dev — there is no updater to report
     void api.getState().then(setUpdate).catch(() => {});
     return api.onState(setUpdate);
+  }, []);
+
+  /* The version actually RUNNING, so the panel can say "v1.4.4 ready, running
+     v1.4.3" rather than naming one number and leaving the other to memory. */
+  const [appVersion, setAppVersion] = useState<string | undefined>();
+  useEffect(() => {
+    void (window as any).electronAPI?.getVersion?.().then(setAppVersion).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -860,7 +1013,7 @@ export default function AgentStatus() {
           subtitle={<>{company} · the only thing here that talks to Tally</>}
           actions={
             <>
-              <UpdateChip state={update} />
+              <UpdateChip state={update} currentVersion={appVersion} />
               <SyncStateIndicator isSyncing={isSyncing} syncingLabel={syncing} qsync={qsync} />
               <button
                 onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
