@@ -370,7 +370,17 @@ export function convertLedgers(parsed: any): { tallymessage: any[] } {
         name,
         parent: txt(l.PARENT, "Unsorted"),
         openingbalance: txt(l.OPENINGBALANCE, "0"),
-        gstin: txt(l.PARTYGSTIN) || txt(l.GSTIN) || txt(l.LEDGSTIN),
+        /* `PartyGSTIN` first, then the DATED registration block.
+           The fallback is not belt-and-braces: `PartyGSTIN` is computed and
+           returns EMPTY whenever the party's LEDGSTREGDETAILS block carries no
+           STATE, which is true of 53 of 341 parties in these books — measured
+           like-for-like in one response, 17-Sep-2026. Every one of them really
+           does hold a GSTIN, and a purchase pushed without it files into a
+           GSTR-2 exception with nothing on screen to say so.
+           `GSTIN` and `LEDGSTIN` were also tried here and answered for ZERO
+           parties; they are gone from the fetch list rather than left in as
+           decoration. */
+        gstin: txt(l.PARTYGSTIN) || latestGstinFromBlocks(l),
         creditperiod: txt(l.CREDITPERIOD) || txt(l.BILLCREDITPERIOD),
         guid: txt(l.GUID),
         /* ── Fetched since forever, read for the first time ────────────────
@@ -399,6 +409,29 @@ export function convertLedgers(parsed: any): { tallymessage: any[] } {
       };
     }).filter(Boolean),
   };
+}
+
+
+/**
+ * The GSTIN from the newest dated registration block that has one.
+ *
+ * Registrations are DATED and a party can carry several: ASHA RUBEER
+ * INDUSTRIES holds one from 2024-04-01 with no GSTIN and another from
+ * 2025-11-07 with one. Taking the first block would report "no GSTIN" for a
+ * party that has been registered for a year, so the newest wins — the same
+ * rule the GST-rate reader uses for APPLICABLEFROM.
+ */
+function latestGstinFromBlocks(l: any): string {
+  const blocks = arr(l["LEDGSTREGDETAILS.LIST"]);
+  let best = "";
+  let bestFrom = "";
+  for (const b of blocks) {
+    const gstin = txt(b?.GSTIN);
+    if (!gstin) continue;
+    const from = txt(b?.APPLICABLEFROM);
+    if (!best || from >= bestFrom) { best = gstin; bestFrom = from; }
+  }
+  return best;
 }
 
 export function convertVouchers(parsed: any): { tallymessage: any[] } {
