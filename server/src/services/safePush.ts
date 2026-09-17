@@ -149,7 +149,9 @@ export async function safePush(
   tallyUrl: string,
   company: string,
   payload: VoucherPayload,
-  opts: { verify?: boolean } = {}
+  opts: { verify?: boolean } = {},
+  /** Set only by the one recovery below, so it can never recurse twice. */
+  retriedWithoutNumber = false,
 ): Promise<SafePushResult> {
   const verify = opts.verify !== false;
 
@@ -234,6 +236,54 @@ export async function safePush(
       warnings: guard.warnings, differences: [], requestXml: xml, responseXml, pushResult: result };
   }
 
+  /* ── One recovery, and only one: surrender the number to Tally ──────────
+     Payment and Receipt are set to "Automatic (Manual Override)" in this
+     company (confirmed by the owner, 17-Sep-2026), which means Tally will
+     number them itself if we simply do not send one — and will accept ours
+     when we do, provided it is free.
+
+     The collisions come from the number, never the voucher. The app picks the
+     next one by reading the mirror while the operator also types vouchers
+     straight into Tally, taking numbers from the same series; 1852 and 1853
+     turned out to be cash payments BACKDATED to 12-Sep, so nothing re-read
+     that day and the mirror never saw them coming. Two issuers, one series —
+     a fresher mirror narrows that race, it cannot end it.
+
+     So on a rejection that looks like a taken number, drop the number and let
+     Tally choose. Three things make this safe rather than a gamble:
+
+       created=0   Tally states it wrote nothing. A second attempt cannot be a
+                   duplicate — that is the whole reason this is allowed here
+                   while pushAgent refuses to retry anything else.
+       REMOTEID    unchanged, and it is derived from the number we ASKED for,
+                   not the one Tally assigns. Identity survives, so the voucher
+                   can still be corrected later.
+       Create only Never an Alter, Cancel or Delete: those address an existing
+                   voucher, and re-sending one without its number would be a
+                   different instruction, not the same one retried.
+
+     Once. If Tally rejects it a second time the number was not the problem,
+     and the original error is what the operator needs to see. */
+  const numberWasTaken =
+    !succeeded && exceptions > 0 && count("CREATED") === 0 &&
+    action === "Create" && !!payload.voucherNumber && !retriedWithoutNumber;
+
+  if (numberWasTaken) {
+    console.warn(`[safePush] "${payload.voucherNumber}" was refused with no reason given and nothing was created — retrying once with the number left to Tally.`);
+    const { voucherNumber: _surrendered, ...rest } = payload;
+    const again = await safePush(tallyUrl, company, rest as VoucherPayload, opts, true);
+    if (again.ok) {
+      return {
+        ...again,
+        warnings: [
+          ...again.warnings,
+          `"${payload.voucherNumber}" was already taken in Tally, so Tally numbered this one itself. Re-sync to see the number it chose.`,
+        ],
+      };
+    }
+    // The number was not the problem. Report the ORIGINAL rejection.
+  }
+
   if (!succeeded || exceptions > 0) {
     return {
       ok: false, stage: "push", voucherId: null,
@@ -274,6 +324,26 @@ export async function safePush(
         errors: [`Created (id ${result.lastVoucherId}) but could not be verified: it carries no voucher number and ${byNarration.length} vouchers on ${payload.date} share the narration "${payload.narration}". Give it a unique number or narration to make it verifiable.`],
         warnings: guard.warnings, differences: [], requestXml: xml, responseXml, pushResult: result };
     }
+  }
+
+  if (!mine) {
+    /* Last resort: the party and the exact money.
+       Added ONLY as a fallback beneath the two above, so it can never change
+       how a numbered voucher is matched — it can only turn "not found" into
+       "found". It exists because a voucher whose number Tally chose has no
+       number of ours to match on, and money narrations are not unique: this
+       house writes "AS PER VOUCHER" on hundreds of them.
+       Same rule as the narration branch — ONE candidate or none. Two payments
+       to one party on one day for the same amount are genuinely
+       indistinguishable from outside, and guessing between them would report
+       the other voucher's figures as this one's. */
+    const byMoney = vouchers.filter(
+      (x) =>
+        fld(x, "VOUCHERTYPENAME") === payload.voucherType &&
+        fld(x, "PARTYLEDGERNAME") === payload.partyLedgerName &&
+        diffStored(payload, x).length === 0,
+    );
+    if (byMoney.length === 1) mine = byMoney[0];
   }
 
   if (!mine) {
