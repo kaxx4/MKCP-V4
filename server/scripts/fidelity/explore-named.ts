@@ -18,6 +18,16 @@
  * `<TYPE>Collection</TYPE><ID>List of Companies</ID>`, the single most-used
  * request in this codebase.
  *
+ * What the dialog actually says, for whoever meets it next:
+ *
+ *     Error in TDL.
+ *     'Collection:List of Units'
+ *     Could not find description!
+ *
+ * So a named collection is a TDL DESCRIPTION, and asking for one that does not
+ * exist is a TDL error — which Tally raises as a modal rather than answering.
+ * That is why this class cannot be swept and report names can.
+ *
  *   npx tsx scripts/fidelity/explore-named.ts            # named collections
  *   npx tsx scripts/fidelity/explore-named.ts --functions # and Execute/Function
  */
@@ -73,7 +83,7 @@ async function main(): Promise<void> {
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(co)}</SVCURRENTCOMPANY></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
 
-  const probes: { label: string; xml: string }[] = [
+  const probes: { label: string; xml: string }[] = WITH_FUNCTIONS ? [] : [
     // Named collections. Same SHAPE as the health check, which is why this
     // class is safe to walk.
     /* PROVEN SAFE, 17-Sep-2026. Do not add a name to this list on the theory
@@ -96,11 +106,13 @@ async function main(): Promise<void> {
       `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Execute</TALLYREQUEST><TYPE>Function</TYPE><ID>${esc(id)}</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${esc(co)}</SVCURRENTCOMPANY></STATICVARIABLES>
 <FUNCPARAMLIST>${params.map((p) => `<PARAM>${esc(p)}</PARAM>`).join("")}</FUNCPARAMLIST></DESC></BODY></ENVELOPE>`;
-    probes.push(
-      { label: 'function "$$Today"', xml: fn("$$Today") },
-      { label: 'function "$$LastVoucherNumber" (Payment)', xml: fn("$$LastVoucherNumber", ["Payment"]) },
-      { label: 'function "$$CmpMailName"', xml: fn("$$CmpMailName") },
-    );
+    /* ONE per run, chosen by argument. The Execute/Function shape is entirely
+       unproven against this build of Tally and a wrong id in an unproven shape
+       is the most likely thing in this file to cost a dialog. Running three in
+       one go would mean a person clears three dialogs to learn one fact. */
+    const which = process.argv[process.argv.indexOf("--functions") + 1] ?? "$$Today";
+    const params = process.argv.slice(process.argv.indexOf("--functions") + 2).filter((a) => !a.startsWith("--"));
+    probes.push({ label: `function "${which}"${params.length ? ` (${params.join(", ")})` : ""}`, xml: fn(which, params) });
   }
 
   const results: Outcome[] = [];
