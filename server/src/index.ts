@@ -13,6 +13,7 @@ import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import { startRefreshListener } from "./services/refreshListener.js";
 import { startPushListener, listPendingPushes, approvePush, rejectPush } from "./services/pushListener.js";
+import { startReportRunner } from "./services/reportRunner.js";
 import { startNightlySync } from "./services/nightlySync.js";
 import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
 import { announceRole, tallyRole } from "./services/tallyRole.js";
@@ -669,6 +670,12 @@ const httpServer = app.listen(PORT, () => {
   // Voucher pushes FROM the web dashboard. Separate listener, separate table,
   // separate endpoints — the refresh path above is untouched by it on purpose.
   startPushListener(company, TALLY);
+
+  /* On-demand Tally REPORTS. Reads only, and behind the same single-threaded
+     gate as everything else — the first call to Stock Summary in a Tally
+     session takes over a minute, which is why it is a tracked job the operator
+     can walk away from rather than a request a page waits on. */
+  startReportRunner(TALLY);
 
   // Nightly automatic full-FY sync at 00:00 local (configurable via NIGHTLY_SYNC_*).
   // Say which machine this is before anything writes. Two machines share one
