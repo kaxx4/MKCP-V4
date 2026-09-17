@@ -43,9 +43,31 @@ function interpretResponse(
 ): any {
   console.log(`[${via}] ✓ ${label}: ${totalBytes} bytes in ${ms}ms`);
 
+  /* Two ways Tally says no, and only one of them was ever read.
+     <LINEERROR> is the familiar one. The other is the response HEADER's
+     <STATUS>: 1 is success, 0 is failure, and Tally's own integration
+     documentation gives it as the standard failure envelope with a
+     STATUS.LIST/CODE/DESC in the body.
+     Reproduced 17-Sep-2026: an Export with a nonsense TALLYREQUEST answers in
+     134 bytes with STATUS=0 and NO LINEERROR at all — so everything here read
+     it as a success carrying no data, which is indistinguishable from a real
+     empty result. Both are now surfaced through the same channel. */
+  /* Anchored INSIDE <HEADER>. A voucher carries its own <STATUS> element and a
+     collection of them carries hundreds, so an unanchored match would read a
+     voucher's field as the response's verdict and fail every good read. The
+     header's is the only one that means "did this request succeed". */
+  const header = /<HEADER>([\s\S]*?)<\/HEADER>/i.exec(body)?.[1] ?? "";
+  const statusEl = /<STATUS>\s*(-?\d+)\s*<\/STATUS>/.exec(header)?.[1];
+  const statusFailed = statusEl !== undefined && statusEl !== "1";
+  const statusDesc = statusFailed
+    ? (/<DESC>([^<]*)<\/DESC>/.exec(body)?.[1]?.trim() || "no reason given")
+    : null;
+
   const lineError = body.includes("<LINEERROR>")
     ? body.match(/<LINEERROR>([^<]*)/)?.[1] || "unknown"
-    : null;
+    : statusFailed
+      ? `Tally returned STATUS=${statusEl}: ${statusDesc}`
+      : null;
   if (lineError) console.error(`[${via}] ✗  TALLY ERROR: ${lineError}`);
 
   /* ── The exception log (guardrail P8) ──────────────────────────────
