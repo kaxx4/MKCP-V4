@@ -50,10 +50,36 @@ export function flds(xml: string, tag: string): string[] {
     .filter(Boolean);
 }
 
-/** The text of one nested `X.LIST` block, or "". */
+/** True when a block holds anything other than self-closing empty tags. */
+function hasContent(b: string | undefined): boolean {
+  return !!b && !!b.replace(/<[^>]*\/>/g, "").replace(/\s/g, "");
+}
+
+/**
+ * The first nested `X.LIST` block that actually CONTAINS something.
+ *
+ * Tally emits a voucher with roughly fifty EMPTY placeholder `.LIST` elements —
+ * BILLALLOCATIONS.LIST, BANKALLOCATIONS.LIST, EXCISEALLOCATIONS.LIST and so on
+ * — whether or not the voucher uses them. Taking the first match therefore
+ * returns an empty string most of the time, and reads as "the push dropped it".
+ * That is exactly how the purchase case reported a MISSING bill reference
+ * against a voucher whose reference was present and correct two blocks later.
+ *
+ * First non-empty wins. If every occurrence is empty the answer is "", which
+ * then genuinely means Tally holds nothing.
+ */
 export function block(xml: string, name: string): string {
-  const m = new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, "i").exec(xml);
-  return m ? m[1] : "";
+  for (const m of xml.matchAll(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, "gi"))) {
+    if (hasContent(m[1])) return m[1];
+  }
+  return "";
+}
+
+/** Every non-empty occurrence of a nested block. */
+export function blocks(xml: string, name: string): string[] {
+  return [...xml.matchAll(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, "gi"))]
+    .map((m) => m[1])
+    .filter(hasContent);
 }
 
 /**
@@ -88,14 +114,33 @@ export function allFieldsXml(co: string, type: string, filterExpr?: string): str
   }</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 }
 
-/** Every voucher on one day, every field. */
+/**
+ * Every voucher on one day, WITH its entry blocks.
+ *
+ * `NATIVEMETHOD *` alone is not enough and the failure is silent: it returns
+ * the voucher's stored scalar fields and NO ALLLEDGERENTRIES.LIST,
+ * ALLINVENTORYENTRIES.LIST or BILLALLOCATIONS.LIST at all. A purchase read
+ * that way looks like a voucher with no lines, no party entry and no stock —
+ * which is indistinguishable from a push that dropped them, and is how the
+ * first run of the purchase case reported eleven false failures against a
+ * voucher Tally had stored perfectly.
+ *
+ * So the blocks are named explicitly alongside the wildcard. This is the same
+ * list safePush's own verify query uses; entry blocks are ~64x the payload of
+ * a voucher header, which is why nothing asks for them unless it needs them.
+ */
 export function vouchersOnDayXml(co: string, iso: string): string {
   const stamp = parseInt(iso.replace(/-/g, ""), 10);
-  return allFieldsXml(
-    co,
-    "Voucher",
-    `($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${stamp}`,
-  );
+  return `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkV</ID></HEADER>
+<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(co)}</SVCURRENTCOMPANY></STATICVARIABLES>
+<TDL><TDLMESSAGE><COLLECTION NAME="MkV" ISMODIFY="No"><TYPE>Voucher</TYPE>
+<NATIVEMETHOD>*</NATIVEMETHOD>
+<NATIVEMETHOD>AllLedgerEntries</NATIVEMETHOD><NATIVEMETHOD>LedgerEntries</NATIVEMETHOD>
+<NATIVEMETHOD>AllInventoryEntries</NATIVEMETHOD><NATIVEMETHOD>InventoryEntries</NATIVEMETHOD>
+<FILTER>MkVF</FILTER></COLLECTION>
+<SYSTEM TYPE="Formulae" NAME="MkVF">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${stamp}</SYSTEM>
+</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 }
 
 export interface Obj { name: string; body: string }
@@ -171,6 +216,42 @@ export function report(title: string, checks: Check[]): { failed: number; unknow
     `   ${checks.length - failed - unknown} matched, ${failed} wrong or missing, ${unknown} not visible in the read-back`,
   );
   return { failed, unknown };
+}
+
+/**
+ * The leading number out of one of Tally's compound strings.
+ *
+ * Quantities come back as "10 PC =  10.00 PKG" and rates as "100.00/PC". A
+ * naive strip of non-digits turns the first into 1010.00 — which is what the
+ * purchase case reported as a WRONG quantity against a voucher that was right.
+ * The same trap is documented on `tally_voucher_inventory_entries.actual_qty`,
+ * where the leading number is pieces on some lines and packages on others.
+ */
+export function lead(raw: string): number {
+  const m = /-?\d+(?:\.\d+)?/.exec(String(raw ?? "").replace(/,/g, ""));
+  return m ? parseFloat(m[0]) : NaN;
+}
+
+/** A check that compares NUMBERS, so "100" and "100.00/PC" agree. */
+export function checkNum(
+  field: string, intended: number, storedRaw: string | null,
+  opts: { note?: string; tolerance?: number } = {},
+): Check {
+  if (storedRaw === null) {
+    return { field, intended: String(intended), stored: "(not in read-back)", verdict: "UNKNOWN", note: opts.note };
+  }
+  const got = lead(storedRaw);
+  const tol = opts.tolerance ?? 0.005;
+  if (!storedRaw.trim()) {
+    return { field, intended: String(intended), stored: "(empty)", verdict: "MISSING", note: opts.note };
+  }
+  return {
+    field,
+    intended: String(intended),
+    stored: `${Number.isNaN(got) ? "?" : got}   raw: "${storedRaw.trim()}"`,
+    verdict: Number.isFinite(got) && Math.abs(got - intended) <= tol ? "MATCH" : "WRONG",
+    note: opts.note,
+  };
 }
 
 const trunc = (s: string) => (s.length > 78 ? `${s.slice(0, 75)}…` : s);
