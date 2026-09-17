@@ -28,6 +28,7 @@
  */
 import { tallyPost, HEALTH_XML } from "../../src/tally.js";
 import { convertCompanies } from "../../src/converters/convert.js";
+import { readFileSync, writeFileSync } from "node:fs";
 
 export const U = process.env.TALLY_URL || "http://localhost:9000";
 
@@ -277,4 +278,44 @@ export async function push(co: string, inner: string, label: string): Promise<st
   const res = (await tallyPost(U, xml, 120_000, true)) as string;
   console.log(`   push ${label}: ${importSummary(res)}`);
   return res;
+}
+
+// ── The journal ─────────────────────────────────────────────────────────────
+
+/**
+ * Every REMOTEID this harness has ever used, kept on disk.
+ *
+ * Not bookkeeping for its own sake. A voucher can be altered or deleted ONLY
+ * by the REMOTEID it was created with, and that id is WRITE-ONLY — asked for by
+ * name it returns empty, and it is absent from a `NATIVEMETHOD *` dump. Every
+ * other handle Tally exports was tried as a delete key on 17-Sep-2026 —
+ * MASTERID, VOUCHERKEY, GUID, and GUID passed as REMOTEID — and all four
+ * answered `deleted=0` with NO error.
+ *
+ * So an id that is not written down is an id that is gone, and the voucher with
+ * it. Five test payments became permanently unaddressable that way before this
+ * existed. The same rule is why the app derives its REMOTEIDs from data it can
+ * recompute rather than from anything random.
+ */
+const JOURNAL = new URL("./.created.json", import.meta.url);
+
+export interface Created { remoteId: string; voucherType: string; number: string; date: string }
+
+export function remember(entry: Created): void {
+  const all = journal();
+  all.push(entry);
+  writeFileSync(JOURNAL, JSON.stringify(all, null, 2));
+}
+
+export function journal(): Created[] {
+  try {
+    return JSON.parse(readFileSync(JOURNAL, "utf8")) as Created[];
+  } catch {
+    return [];
+  }
+}
+
+export function forget(remoteIds: string[]): void {
+  const gone = new Set(remoteIds);
+  writeFileSync(JOURNAL, JSON.stringify(journal().filter((e) => !gone.has(e.remoteId)), null, 2));
 }

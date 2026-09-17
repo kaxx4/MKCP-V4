@@ -13,6 +13,7 @@ import { tallyPost } from "../tally.js";
 import { buildVoucherImportXml, parseImportResponse } from "./voucherPusher.js";
 import { loadMasters } from "./tallyMasters.js";
 import { guardVoucher } from "./pushGuard.js";
+import { nextFreeNumber, takenNumbers } from "./voucherNumbering.js";
 import { withTally } from "./tallyGate.js";
 import type { VoucherPayload, PushResult } from "../types.js";
 
@@ -236,52 +237,64 @@ export async function safePush(
       warnings: guard.warnings, differences: [], requestXml: xml, responseXml, pushResult: result };
   }
 
-  /* ── One recovery, and only one: surrender the number to Tally ──────────
-     Payment and Receipt are set to "Automatic (Manual Override)" in this
-     company (confirmed by the owner, 17-Sep-2026), which means Tally will
-     number them itself if we simply do not send one — and will accept ours
-     when we do, provided it is free.
+  /* ── One recovery, and only one: find a number that is FREE ─────────────
+     A rejection that looks like a taken number gets ONE more push, carrying
+     the next free number in the same series rather than the one that bounced.
 
-     The collisions come from the number, never the voucher. The app picks the
-     next one by reading the mirror while the operator also types vouchers
-     straight into Tally, taking numbers from the same series; 1852 and 1853
-     turned out to be cash payments BACKDATED to 12-Sep, so nothing re-read
-     that day and the mirror never saw them coming. Two issuers, one series —
-     a fresher mirror narrows that race, it cannot end it.
+     WHAT WAS TRIED FIRST AND IS WRONG. The obvious cure is to drop the number
+     and let Tally assign one — Payment, Receipt, Contra and Sales are all
+     configured "Automatic (Manual Override)" in this company, which says
+     exactly that. Measured against a real company, 17-Sep-2026, four pushes:
 
-     So on a rejection that looks like a taken number, drop the number and let
-     Tally choose. Three things make this safe rather than a gamble:
+       fresh number            created=1  exceptions=0
+       the SAME number again   created=0  exceptions=1   the operator's bug
+       the number OMITTED      created=0  exceptions=1   the "obvious" cure
+       the NEXT free number    created=1  exceptions=0   the real one
 
-       created=0   Tally states it wrote nothing. A second attempt cannot be a
-                   duplicate — that is the whole reason this is allowed here
-                   while pushAgent refuses to retry anything else.
-       REMOTEID    unchanged, and it is derived from the number we ASKED for,
-                   not the one Tally assigns. Identity survives, so the voucher
-                   can still be corrected later.
-       Create only Never an Alter, Cancel or Delete: those address an existing
-                   voucher, and re-sending one without its number would be a
-                   different instruction, not the same one retried.
+     Tally does not auto-number a voucher arriving over XML. Auto-numbering is
+     a behaviour of interactive entry, and a recovery built on it would have
+     traded one silent failure for another.
 
-     Once. If Tally rejects it a second time the number was not the problem,
-     and the original error is what the operator needs to see. */
-  const numberWasTaken =
+     Three conditions make the retry safe rather than a gamble:
+
+       created=0   Tally states it wrote nothing, so a second attempt cannot
+                   duplicate. This is the ONLY exception to pushAgent's refusal
+                   to retry, and it is why that rule can stay strict elsewhere.
+       Create only an Alter/Cancel/Delete without its own number is a different
+                   instruction, not the same one retried.
+       once        a second refusal means the number was never the problem, and
+                   the ORIGINAL error is what the operator needs to see.
+
+     REMOTEID is untouched. It is derived from the number we ASKED for, not the
+     one that lands, so identity survives and the voucher stays correctable —
+     which matters more than usual here, because the REMOTEID is WRITE-ONLY.
+     MASTERID, VOUCHERKEY and GUID were each tried as a delete handle and every
+     one answered deleted=0 with no error; a voucher whose REMOTEID is not
+     recorded can never be altered or removed again. */
+  const numberMayBeTaken =
     !succeeded && exceptions > 0 && count("CREATED") === 0 &&
     action === "Create" && !!payload.voucherNumber && !retriedWithoutNumber;
 
-  if (numberWasTaken) {
-    console.warn(`[safePush] "${payload.voucherNumber}" was refused with no reason given and nothing was created — retrying once with the number left to Tally.`);
-    const { voucherNumber: _surrendered, ...rest } = payload;
-    const again = await safePush(tallyUrl, company, rest as VoucherPayload, opts, true);
-    if (again.ok) {
-      return {
-        ...again,
-        warnings: [
-          ...again.warnings,
-          `"${payload.voucherNumber}" was already taken in Tally, so Tally numbered this one itself. Re-sync to see the number it chose.`,
-        ],
-      };
+  if (numberMayBeTaken) {
+    const taken = await withTally(tallyUrl, `list ${payload.voucherType} numbers`,
+      () => takenNumbers(tallyUrl, company, payload.voucherType));
+    const free = nextFreeNumber(taken, payload.voucherNumber!);
+    if (!free) {
+      console.warn(`[safePush] "${payload.voucherNumber}" was refused and no free number could be worked out for ${payload.voucherType} — reporting the original rejection.`);
+    } else {
+      console.warn(`[safePush] "${payload.voucherNumber}" was refused with nothing created — retrying once as "${free}".`);
+      const again = await safePush(tallyUrl, company, { ...payload, voucherNumber: free }, opts, true);
+      if (again.ok) {
+        return {
+          ...again,
+          warnings: [
+            ...again.warnings,
+            `"${payload.voucherNumber}" was already taken in Tally, so this voucher was numbered "${free}" instead. Re-sync to see it.`,
+          ],
+        };
+      }
+      // The number was not the problem. Report the ORIGINAL rejection.
     }
-    // The number was not the problem. Report the ORIGINAL rejection.
   }
 
   if (!succeeded || exceptions > 0) {
