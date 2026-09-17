@@ -171,13 +171,18 @@ test('pushAgent never retries a rejection Tally answered', () => {
   );
 });
 
-test('the number-collision recovery keeps all three of its safety conditions', () => {
+test('the number-collision recovery keeps its safety conditions', () => {
   // Source-level only — no fake Tally here, so this proves the conditions are
   // still written down, not that they hold at runtime.
   //
   // Dropping the voucher number and re-pushing is safe ONLY because of these:
   //   created=0    Tally says it wrote nothing, so a second attempt cannot
   //                duplicate. This is the one exception to "never retry".
+  //
+  // The retry carries the NEXT FREE NUMBER. Dropping the number instead was
+  // tried, committed, and measured wrong: an imported voucher with no number
+  // comes back created=0 exceptions=1, because "Automatic (Manual Override)"
+  // is a setting for interactive entry and does not apply to XML import.
   //   Create only  an Alter/Cancel/Delete without its number is a different
   //                instruction, not the same one retried.
   //   once         the flag stops it recursing; a second refusal means the
@@ -188,14 +193,16 @@ test('the number-collision recovery keeps all three of its safety conditions', (
   // was gutted — `createBecameAlter` on line 221 carries the same two tests for
   // a different purpose, and it comes first. Mutation-testing caught that: two
   // of three deliberate breakages went unnoticed.
-  const m = /const numberWasTaken =([\s\S]*?);/.exec(src);
-  assert(m, 'the numberWasTaken condition is gone entirely');
+  const m = /const numberMayBeTaken =([\s\S]*?);/.exec(src);
+  assert(m, 'the numberMayBeTaken condition is gone entirely');
   const cond = m[1];
   assert(/count\("CREATED"\)\s*===\s*0/.test(cond), 'lost the created=0 condition — a retry could now duplicate a voucher');
   assert(/action\s*===\s*"Create"/.test(cond), 'lost the Create-only condition');
   assert(/!retriedWithoutNumber/.test(cond), 'lost the once-only condition — the recovery can now recurse');
   assert(/exceptions\s*>\s*0/.test(cond), 'lost the exceptions condition');
   assert(/retriedWithoutNumber = false,/.test(src), 'the recursion flag must default to false for every ordinary caller');
+  assert(/nextFreeNumber\(/.test(src), 'the retry must carry the next FREE number — omitting the number fails identically');
+  assert(!/const \{ voucherNumber: _surrendered/.test(src), 'the drop-the-number recovery is back, and it does not work');
 });
 
 test('read-back matches on number first, and money only as a last resort', () => {
