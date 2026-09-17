@@ -70,7 +70,20 @@ export const MASTER_COLLECTIONS: CollectionDef[] = [
     metadataType: "Ledger",
     category: "master",
     fetch: [
-      "Name", "Parent", "OpeningBalance", "GSTIN", "LedGSTIN", "PartyGSTIN",
+      /* Measured against the live books 17-Sep-2026, 341 parties:
+           LedStateName  341/341   PartyGSTIN 220/341   Address 335/341
+           GSTIN           0/341   LedGSTIN     0/341
+         The last two returned nothing for a single party and were dropped —
+         two fields on every masters pull that could never answer. `PartyGSTIN`
+         is the one that works.
+
+         LedGSTRegDetails is the DATED registration block, and it is here
+         because `PartyGSTIN` is computed and comes back EMPTY when the block
+         carries no STATE: 53 parties (Amrit Cycle Industries, B. D. Malik &
+         Sons, Asian Bikes…) hold a GSTIN that the flat field will not report.
+         A GSTIN-less purchase files into a GSTR-2 exception silently, so the
+         block is the fallback — see convertLedgers. */
+      "Name", "Parent", "OpeningBalance", "PartyGSTIN", "LedGSTRegDetails",
       "CreditPeriod", "BillCreditPeriod", "GUID",
       "MailingName", "Address", "LedStateName", "CountryName", "PinCode", "Email", "LedgerPhone",
     ],

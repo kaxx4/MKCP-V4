@@ -33,7 +33,17 @@ export interface NewLedger {
   state: string;
   country?: string;
   pincode?: string;
-  address?: string;
+  /**
+   * One line per element, or a single string which may contain newlines.
+   *
+   * Tally stores ADDRESS as SEVERAL lines inside ADDRESS.LIST and this house's
+   * parties really use them: 235 of 341 have more than one, and one has six.
+   * A single joined string was emitted as one <ADDRESS> element, so
+   * "PLOT NO. 13, GRAIN MARKET
+GILL ROAD, LUDHIANA-141003" came back as one
+   * run-on line — verified against this company, 17-Sep-2026.
+   */
+  address?: string | string[];
   mailingName?: string;
   gstin?: string;
   /** "Regular" | "Composition" | "Unregistered" | "Consumer" */
@@ -85,6 +95,25 @@ function envelope(company: string, body: string): string {
 }
 
 /**
+ * ADDRESS.LIST with one <ADDRESS> per line.
+ *
+ * Splitting on newlines as well as taking an array, because callers hold it
+ * both ways and a newline inside a single <ADDRESS> is not a second line to
+ * Tally — it is whitespace, and it comes back collapsed.
+ */
+/** Line break in either convention. Kept as a named constant because the
+ *  literal form kept getting mangled by shell heredocs. */
+const NEWLINE = new RegExp("\r?\n");
+
+function addressBlock(address: string | string[] | undefined): string {
+  const lines = (Array.isArray(address) ? address : String(address ?? "").split(NEWLINE))
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) return "";
+  return `<ADDRESS.LIST TYPE="String">${lines.map((l) => `<ADDRESS>${esc(l)}</ADDRESS>`).join("")}</ADDRESS.LIST>`;
+}
+
+/**
  * The ledger body.
  *
  * Exported so a test can assert the SHAPE without writing to Tally — the
@@ -97,7 +126,18 @@ export function buildLedgerXml(l: NewLedger, action: "Create" | "Alter" = "Creat
 
   /* Both nested blocks are emitted even when sparse. A LEDGSTREGDETAILS.LIST
      with no GSTIN is how an unregistered party is stated DELIBERATELY — the
-     alternative, omitting the block, is indistinguishable from forgetting. */
+     alternative, omitting the block, is indistinguishable from forgetting.
+
+     PARTYGSTIN is emitted FLAT as well, and that is not redundancy. Dumping a
+     party Tally's own UI created beside one this builder created (17-Sep-2026,
+     `NATIVEMETHOD *`) shows PARTYGSTIN present on the first and absent on the
+     second: it is a STORED field, not a view of the nested block. The sync
+     reads exactly that field, so without it an inline-created party arrives in
+     the mirror with no GSTIN, and a purchase against it files into a GSTR-2
+     exception with nothing on screen to say so.
+     Ruled out first: APPLICABLEFROM. Four parties created at 2022/2024/2025/
+     2026-04-01 all came back with an empty PartyGSTIN, so the date is not the
+     variable — the missing tag is. */
   return `
     <LEDGER NAME="${esc(l.name)}" ACTION="${action}">
       <NAME>${esc(l.name)}</NAME>
@@ -107,10 +147,12 @@ export function buildLedgerXml(l: NewLedger, action: "Create" | "Alter" = "Creat
       ${l.contact ? `<LEDGERCONTACT>${esc(l.contact)}</LEDGERCONTACT>` : ""}
       ${l.email ? `<EMAIL>${esc(l.email)}</EMAIL>` : ""}
       ${l.creditPeriod ? `<BILLCREDITPERIOD>${esc(l.creditPeriod)}</BILLCREDITPERIOD>` : ""}
+      <COUNTRYOFRESIDENCE>${esc(l.country ?? "India")}</COUNTRYOFRESIDENCE>
+      ${l.gstin ? `<PARTYGSTIN>${esc(l.gstin)}</PARTYGSTIN>` : ""}
       <LEDMAILINGDETAILS.LIST>
         <APPLICABLEFROM>${from}</APPLICABLEFROM>
         <MAILINGNAME>${esc(mailing)}</MAILINGNAME>
-        ${l.address ? `<ADDRESS.LIST TYPE="String"><ADDRESS>${esc(l.address)}</ADDRESS></ADDRESS.LIST>` : ""}
+        ${addressBlock(l.address)}
         <STATE>${esc(l.state)}</STATE>
         <COUNTRY>${esc(l.country ?? "India")}</COUNTRY>
         ${l.pincode ? `<PINCODE>${esc(l.pincode)}</PINCODE>` : ""}
