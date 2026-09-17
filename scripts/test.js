@@ -171,6 +171,46 @@ test('pushAgent never retries a rejection Tally answered', () => {
   );
 });
 
+test('the number-collision recovery keeps all three of its safety conditions', () => {
+  // Source-level only — no fake Tally here, so this proves the conditions are
+  // still written down, not that they hold at runtime.
+  //
+  // Dropping the voucher number and re-pushing is safe ONLY because of these:
+  //   created=0    Tally says it wrote nothing, so a second attempt cannot
+  //                duplicate. This is the one exception to "never retry".
+  //   Create only  an Alter/Cancel/Delete without its number is a different
+  //                instruction, not the same one retried.
+  //   once         the flag stops it recursing; a second refusal means the
+  //                number was never the problem.
+  const src = readFileSync('server/src/services/safePush.ts', 'utf8');
+  // Isolate the condition itself. An earlier version asserted these strings
+  // appeared ANYWHERE in the file and passed happily while the real condition
+  // was gutted — `createBecameAlter` on line 221 carries the same two tests for
+  // a different purpose, and it comes first. Mutation-testing caught that: two
+  // of three deliberate breakages went unnoticed.
+  const m = /const numberWasTaken =([\s\S]*?);/.exec(src);
+  assert(m, 'the numberWasTaken condition is gone entirely');
+  const cond = m[1];
+  assert(/count\("CREATED"\)\s*===\s*0/.test(cond), 'lost the created=0 condition — a retry could now duplicate a voucher');
+  assert(/action\s*===\s*"Create"/.test(cond), 'lost the Create-only condition');
+  assert(/!retriedWithoutNumber/.test(cond), 'lost the once-only condition — the recovery can now recurse');
+  assert(/exceptions\s*>\s*0/.test(cond), 'lost the exceptions condition');
+  assert(/retriedWithoutNumber = false,/.test(src), 'the recursion flag must default to false for every ordinary caller');
+});
+
+test('read-back matches on number first, and money only as a last resort', () => {
+  // Order matters: the money fallback must sit BELOW number and narration so
+  // it can only turn "not found" into "found", never re-match a numbered
+  // voucher onto a different one.
+  const src = readFileSync('server/src/services/safePush.ts', 'utf8');
+  const byNumber = src.indexOf('fld(x, "VOUCHERNUMBER") === payload.voucherNumber');
+  const byNarration = src.indexOf('fld(x, "NARRATION") === payload.narration');
+  const byMoney = src.indexOf('const byMoney = vouchers.filter');
+  assert(byNumber > 0 && byNarration > byNumber, 'number must be matched before narration');
+  assert(byMoney > byNarration, 'the party+amount fallback must come last');
+  assert(/byMoney\.length === 1/.test(src), 'the money fallback must accept ONE candidate or none — never pick between duplicates');
+});
+
 // ── Results ────────────────────────────────────────────────────────────────
 console.log(`\n${YELLOW}═══════════════════════════════════════${RESET}`);
 console.log(` Results: ${GREEN}${passed} passed${RESET}  ${RED}${failed} failed${RESET}`);
