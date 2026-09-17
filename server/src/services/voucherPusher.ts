@@ -187,6 +187,32 @@ function buildGstIdentity(p: VoucherPayload, masters?: TallyMasters): string {
     tag("STATENAME", state),
     `\n            <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>`,
     tag("PARTYMAILINGNAME", mailing),
+    /* The party's postal address, which this block built everything EXCEPT
+     * until 17-Sep-2026.
+     *
+     * The owner pushed a purchase from K.W.Engineering Works (Regd.) and sent
+     * a screenshot of Tally's Party Details: Mailing Name, State, Country,
+     * Pincode, Registration type, GSTIN and Place of Supply all populated —
+     * every one of them from the list above — and **Address blank**.
+     *
+     * It was never missing data. `TallyMasters.address` is fetched from the
+     * ledger, parsed into a string[] and sat in the struct unread
+     * (`tallyMasters.ts`), which is guardrail G4 in its purest form: a field
+     * fetched, stored, and dropped at the last step. The FILE export path
+     * emitted it from the bundled vendor master all along, so the same bill
+     * carried an address or not depending on which button was pressed — the
+     * identical divergence as `<REFERENCEDATE>` two days earlier, in the same
+     * function, and it was not looked for then.
+     *
+     * Every line the master holds is emitted. The file path caps at two, which
+     * is a display convention rather than a data one; this is a round-trip of
+     * what Tally itself stores against that ledger, so truncating it here
+     * would invent a difference rather than remove one. */
+    party.address.length
+      ? `\n            <ADDRESS.LIST TYPE="String">${party.address
+          .map((a) => `<ADDRESS>${esc(a)}</ADDRESS>`)
+          .join("")}</ADDRESS.LIST>`
+      : "",
     tag("PARTYPINCODE", pincode),
     // Consignee defaults to the buyer; this company does not ship to third
     // parties, and a blank consignee is itself a GSTR-1 exception.
