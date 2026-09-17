@@ -308,12 +308,34 @@ async function processJob(job: PushJob): Promise<void> {
       await writePushLog(job, "succeeded", result, resolvedAt);
       record(job.id, job.idempotency_key, "succeeded");
     } else {
-      // A voucher that Tally created but stored differently is NOT a success,
-      // and must not be retried either — it already exists.
+      /* ── Never retry a rejection Tally actually ANSWERED ─────────────────
+         safePush says it in its own comment — "an exception is structural, and
+         a retry risks a duplicate" — and then this line retried anyway, five
+         times, with a byte-identical payload. Five identical attempts can only
+         produce five identical failures.
+
+         Observed on the live queue: Payment "1867/26-27" (17-Sep, K.W.
+         Engineering) and "1853/26-27" (14-Sep, Birdi) each burned all five
+         attempts on the same duplicate-number rejection before being dismissed
+         hours later; "CHQ-545/26-27" burned three on a party ledger that does
+         not exist. A missing ledger does not appear because it was asked for a
+         fourth time.
+
+         The rule is about WHERE the failure came from, not which stage:
+
+           safePush RETURNED  → the guard refused, or Tally replied and said no.
+                                The same payload gets the same answer. Structural.
+           safePush THREW     → no answer at all: socket, timeout, Tally busy.
+                                That lands in the catch below and still retries,
+                                which is the case retries were built for.
+
+         So the retry budget is spent only on silence, never on a verdict. The
+         operator sees the failure on attempt one, while the money is still in
+         front of them, instead of finding it dismissed after lunch. */
       const why = res.differences.length
         ? `stored differently from what was sent: ${res.differences.join("; ")}`
         : res.errors.join("; ") || "push failed";
-      await fail(job, res.stage === "verify" ? job.max_attempts : newAttempts, why, result);
+      await fail(job, job.max_attempts, why, result);
     }
   } catch (e: any) {
     await fail(job, newAttempts, e?.message ?? String(e), null);

@@ -237,12 +237,11 @@ export async function safePush(
   if (!succeeded || exceptions > 0) {
     return {
       ok: false, stage: "push", voucherId: null,
-      // Never auto-retry: an exception is structural, and a retry risks a duplicate.
+      // Never auto-retry: an exception is structural, and a retry risks a
+      // duplicate. pushAgent honours this now — it used to retry five times.
       errors: result.lineErrors.length ? result.lineErrors
         : [`Tally rejected the voucher — created=${result.created} errors=${result.errors} exceptions=${exceptions}, with no reason given.`
-          + (payload.voucherNumber
-            ? ` The most common silent cause is a duplicate voucher number: "${payload.voucherNumber}" may already exist.`
-            : "")],
+          + (payload.voucherNumber ? duplicateNumberHint(payload.voucherNumber) : "")],
       warnings: guard.warnings, differences: [], requestXml: xml, responseXml, pushResult: result,
     };
   }
@@ -335,4 +334,33 @@ function checkWellFormed(xml: string): string | null {
   const bad = /&(?!amp;|lt;|gt;|quot;|apos;|#\d+;)/.exec(xml);
   if (bad) return `unescaped "&" at offset ${bad.index}`;
   return null;
+}
+
+
+/**
+ * What an unexplained `exceptions=1` almost always means, said usefully.
+ *
+ * Tally gives no reason, so this is an inference — but not a shrug. Three live
+ * cases this week were all the same thing, and all on the same series:
+ * Payments "1852/26-27", "1853/26-27" and "1867/26-27" rejected while
+ * "CHQ-544..547/26-27" went through untouched.
+ *
+ * The mechanism is a RACE, not staleness alone. The app picks the next number
+ * by reading the mirror, and the operator also types vouchers straight into
+ * Tally, which takes numbers from the same series. 1852 and 1853 turned out to
+ * be cash payments dated 12-Sep — entered in Tally, backdated, so nothing
+ * re-read that day and the mirror never saw them. By the time the app asked,
+ * the numbers were gone.
+ *
+ * A fresher mirror narrows that window; it cannot close it, because the two
+ * issuers share one series. The durable fixes are to let Tally number these
+ * itself, or to give the app a series of its own — and choosing between them
+ * needs to be checked against the numbering method set on the voucher type in
+ * Tally, which is not knowable from here.
+ */
+function duplicateNumberHint(voucherNumber: string): string {
+  return ` Tally almost certainly already holds a voucher numbered "${voucherNumber}"` +
+    ` — created=0 means nothing was written, so nothing is duplicated in the books.` +
+    ` The number was taken from the mirror, and a voucher entered directly in Tally` +
+    ` (especially a backdated one) claims it first. Re-sync, then push again with the next free number.`;
 }

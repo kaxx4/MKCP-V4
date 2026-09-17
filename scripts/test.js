@@ -144,6 +144,33 @@ test('no stray control characters in source strings', () => {
   );
 });
 
+// ── The money path ─────────────────────────────────────────────────────────
+test('pushAgent never retries a rejection Tally answered', () => {
+  // A source-level guard, and only that: this repo has no way to run the agent
+  // against a fake Tally, so nothing here proves the behaviour. What it does
+  // prove is that the rule has not been quietly reverted.
+  //
+  // The rule: retries are for SILENCE (socket, timeout, Tally busy) — those
+  // throw, and the catch block still retries them. A rejection that safePush
+  // RETURNS is a verdict on an identical payload, so repeating it can only
+  // repeat the verdict. Live evidence: Payments "1867/26-27" and "1853/26-27"
+  // each burned all five attempts on the same duplicate-number rejection, and
+  // "CHQ-545/26-27" burned three on a party ledger that does not exist.
+  const src = readFileSync('server/src/services/pushAgent.ts', 'utf8');
+  assert(
+    !/res\.stage\s*===\s*"verify"\s*\?\s*job\.max_attempts\s*:\s*newAttempts/.test(src),
+    'pushAgent is retrying answered rejections again — only the verify stage was being exhausted'
+  );
+  assert(
+    /await fail\(job, job\.max_attempts, why, result\);/.test(src),
+    'the !res.ok branch must exhaust the retry budget: Tally already gave its answer'
+  );
+  assert(
+    /await fail\(job, newAttempts, e\?\.message \?\? String\(e\), null\);/.test(src),
+    'the catch block must KEEP retrying — a thrown error is silence, not a verdict'
+  );
+});
+
 // ── Results ────────────────────────────────────────────────────────────────
 console.log(`\n${YELLOW}═══════════════════════════════════════${RESET}`);
 console.log(` Results: ${GREEN}${passed} passed${RESET}  ${RED}${failed} failed${RESET}`);
