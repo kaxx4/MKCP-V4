@@ -94,6 +94,19 @@ export interface ReportDef {
  * MAGNITUDE, and the raw `amount` is kept beside it rather than overwritten —
  * the sign is Tally's statement about direction and is not ours to discard.
  */
+/**
+ * OVERDUE IS MEASURED TO THE `to` DATE, NOT TO TODAY.
+ *
+ * The same bill came back as 180 days overdue when asked for with
+ * `to = 2026-09-30` and 167 with `to = 2026-09-17` — exactly the thirteen days
+ * between them. So a period whose end is in the FUTURE inflates every overdue
+ * figure on the page, silently and plausibly.
+ *
+ * The runner's default `to` is TODAY for this reason. Anything offering a date
+ * picker over these reports has to say what it is measuring to, or somebody
+ * will pick a financial-year end and read a collections list that is a fortnight
+ * angrier than the truth.
+ */
 const billOutstanding = (row: ReportRow): void => {
   const a = row.amount;
   row.outstanding = typeof a === "number" ? Math.abs(a) : null;
