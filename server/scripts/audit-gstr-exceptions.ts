@@ -42,8 +42,11 @@ function parseVoucher(block: string): AuditedVoucher {
   const entries = chosen.map((m) => ({
     ledgerName: (tagOf(m[1], "LEDGERNAME") ?? "").trim(),
     amount: Number(tagOf(m[1], "AMOUNT") ?? 0),
-    // The GST appropriation. Present means the line adjusts the assessable value.
-    hasAssessableValue: false,   // not observable from a read — see gstrExceptions.ts
+    /* Arrives only because the fetch list below names
+       ALLLEDGERENTRIES.APPROPRIATEFOR explicitly. Drop that line and this
+       silently reads "" on every entry, and every adjustment line in the book
+       becomes an exception. */
+    appropriateFor: (tagOf(m[1], "APPROPRIATEFOR") ?? "").trim(),
   }));
   return {
     entriesPopulated: entries.length > 0,
@@ -92,6 +95,10 @@ async function main(): Promise<void> {
         "DATE", "VOUCHERTYPENAME", "VOUCHERNUMBER", "PARTYLEDGERNAME",
         "PLACEOFSUPPLY", "PARTYGSTIN", "CONSIGNEESTATENAME", "NARRATION",
         "ALLLEDGERENTRIES.LIST",
+        /* Named explicitly: a bare ALLLEDGERENTRIES.LIST returns the entry
+           WITHOUT its appropriation, which is what made the check look
+           impossible. Verified present 18-Sep-2026. */
+        "ALLLEDGERENTRIES.APPROPRIATEFOR", "ALLLEDGERENTRIES.GSTAPPROPRIATETO",
       ],
       filter: dateBetween(mFrom, mTo), company: COMPANY,
     }), 300_000, true);
