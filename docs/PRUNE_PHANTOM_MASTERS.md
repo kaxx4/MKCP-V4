@@ -1,7 +1,39 @@
 # Pruning the name-keyed master rows
 
-**Status: NOT APPLIED. Needs the owner.** Every statement below was measured
-read-only against `vmkytsytxlofjyeotmgb` on 2026-09-15.
+**Status: APPLIED 2026-09-18.** 903 of the 914 rows are gone; the 11 the
+warning below is about were deliberately kept. Everything under "What is
+there" was measured read-only on 2026-09-15 and still described the database
+exactly when the prune ran.
+
+## What was actually done
+
+| Table | Before | After | Pruned | Kept as orphans |
+|---|---|---|---|---|
+| `tally_stock_items` | 951 | 499 | 452 | 7 |
+| `tally_ledgers` | 941 | 490 | 451 | 4 |
+
+Afterwards `count(distinct upper(trim(name))) = count(*)` on both tables — no
+duplicate name remains, and no name was lost.
+
+**The split was decided by asking Tally, not by inference.** 903 phantoms had a
+real-GUID twin carrying the same name, so removing them could not lose a name.
+The other 11 had no twin, and `scripts/check-phantom-names.ts` checked all
+eleven against live Tally: **none of them exists there any more.** They are
+names referenced by vouchers whose master has since been renamed or deleted in
+Tally, so deleting the row would remove the only record of the name. That is
+the owner's call and it has not been made — they stay.
+
+**It is reversible.** Every deleted row is in
+`_phantom_prune_backup_20260918` as `jsonb`, with the source table alongside.
+The delete condition requires a real twin to EXIST, so it could never have
+matched everything (G6).
+
+**Nothing visible changed, which was expected.** `dataset.ts` already
+deduplicated by `normalizeId(name)` and picked the richer row, so the phantoms
+never reached a screen — the price list read 499 items and 489 rates both
+before and after. What they cost was ~900 extra master rows fetched and parsed
+on every boot, and the standing risk that a picker would one day offer a name
+Tally does not know.
 
 ## What is there
 
