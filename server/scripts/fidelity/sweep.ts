@@ -16,7 +16,7 @@ import { tallyPost } from "../../src/tally.js";
 import { pushVoucherToTally } from "../../src/services/voucherPusher.js";
 import { loadMasters } from "../../src/services/tallyMasters.js";
 import type { VoucherPayload } from "../../src/types.js";
-import { U, MARK, company, vouchersOnDayXml, objects, fld, esc, importSummary, allFieldsXml } from "./harness.js";
+import { U, MARK, company, vouchersOnDayXml, objects, fld, esc, importSummary, allFieldsXml, journal } from "./harness.js";
 
 const DO = process.argv.includes("--delete");
 const DAYS = 40;
@@ -61,8 +61,34 @@ async function main(): Promise<void> {
            accumulated. The pusher's own envelope works first time. Using it
            here also means the sweep exercises the delete path the app uses
            rather than a private imitation of it. */
+        /* The JOURNAL decides the REMOTEID, not the voucher's current type.
+           Reconstructing it from `f.type` is right only while a voucher is
+           still the type it was created as. A Sales Order Note that has since
+           been ALTERED into a Sales invoice — which case D does deliberately,
+           every run — now reports its type as SALES, so the id rebuilt here
+           was `MKCP-SALES-…` while the voucher answers only to
+           `MKCP-SALES-ORDER-NOTE-…`. Three of them survived a --delete sweep
+           that reported `deleted=0 errors=1` and moved on, and they are the
+           leftovers that later made case D compare this run's order against
+           the previous run's invoice.
+
+           The journal exists for exactly this and was not being read. It is
+           written at creation, before anything can alter the voucher, so it
+           holds the id the voucher will answer to for the rest of its life.
+           The reconstruction stays as the fallback for anything created
+           before the journal existed. */
+        /* The LAST entry for a number, not the first.
+           Test numbers repeat across runs — the collision case deliberately
+           reuses whatever `nextFreeNumber` hands it, so the same number is
+           journalled by several runs under different ids. Taking the first
+           match handed the sweep an id from a run days ago and it answered
+           `deleted=0 errors=1` while the voucher sat there. The newest entry
+           is the one that belongs to the voucher currently holding the
+           number. */
+        const hits = journal().filter((e) => e.number === f.number);
+        const remembered = hits.length ? hits[hits.length - 1].remoteId : undefined;
         const res = await pushVoucherToTally(U, co, {
-          remoteId: `MKCP-${f.type.toUpperCase().replace(/\s+/g, "-")}-${f.number}`,
+          remoteId: remembered ?? `MKCP-${f.type.toUpperCase().replace(/\s+/g, "-")}-${f.number}`,
           action: "Delete",
           voucherType: f.type,
           date: f.day,
