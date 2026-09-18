@@ -266,7 +266,7 @@ app.post("/api/tally/sync-price-list", syncGuard, async (req, res) => {
       console.log(`[SYNC] ✗ origin=${origin} company=${company} route=sync-price-list rows=0 ${Date.now() - t0}ms`);
       return;
     }
-    await supabaseSync.syncPriceList(entries, company);
+    await supabaseSync.syncPriceList(entries, company, origin);
     const items = new Set(entries.map((e) => e.itemName)).size;
     if (!res.writableEnded) res.json({ success: true, count: entries.length, items, elapsedMs: Date.now() - t0 });
     console.log(`[SYNC] ✓ origin=${origin} company=${company} route=sync-price-list rows=${entries.length} items=${items} ${Date.now() - t0}ms`);

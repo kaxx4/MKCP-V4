@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { recordPricePull } from "./priceChangeLog.js";
 import ws from "ws";
 import { supabaseClient } from "./supabaseClient.js";
 import {
@@ -1271,9 +1272,18 @@ export class SupabaseSync {
       date: string; rate: number; unit: string; discountPct: number;
     }>,
     company: string,
+    origin: string = "manual",
   ): Promise<void> {
     if (!this.client || !entries.length) return;
     const t0 = Date.now();
+
+    /* BEFORE the upsert, and that ordering is the whole thing.
+       The log records what THIS pull changed, which it can only know by
+       comparing against what is stored right now. One line further down and
+       the "before" side has already been overwritten with the "after" side,
+       and the diff is silently empty on every pull for ever — a failure that
+       looks exactly like "nothing ever changes". */
+    await recordPricePull(this.client, company, entries, origin);
     const mapped = entries.map((e) => ({
       company,
       item_name: e.itemName,
