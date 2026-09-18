@@ -19,6 +19,7 @@
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { pushVoucherToTally, buildVoucherImportXml } from "../src/services/voucherPusher.js";
+import { loadMasters } from "../src/services/tallyMasters.js";
 import type { VoucherPayload } from "../src/types.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
@@ -142,7 +143,7 @@ async function main() {
     if (!PUSH) { console.log("built OK (dry run)"); results.push([k, "built"]); continue; }
 
     try {
-      const r = await pushVoucherToTally(TALLY_URL, company, p);
+      const r = await pushVoucherToTally(TALLY_URL, company, p, await loadMasters(TALLY_URL, company));
       if (r.success) { console.log(`✓ created — id ${r.lastVoucherId}`); results.push([k, `created ${r.lastVoucherId}`]); }
       else {
         const why = r.lineErrors[0] ?? `exceptions in response`;

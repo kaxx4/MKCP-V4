@@ -168,7 +168,13 @@ function buildGstIdentity(p: VoucherPayload, masters?: TallyMasters): string {
    */
   const placeOfSupply = isInwardSupply(p.voucherType) ? HOME_STATE_NAME : state;
 
-  const mailing = (party.mailingName ?? "").trim() || party.name;
+  /* A typed buyer overrides the LEDGER's mailing name.
+     On a counter sale the ledger is the shared `Cash`, whose mailing name is
+     literally "Cash" — so without this the invoice is addressed to nobody even
+     when the operator has typed the customer's name in. Where no buyer is
+     given this is unchanged, and a sale to a real party keeps its master's
+     mailing name, which is the one thing that must not be overridden. */
+  const mailing = p.buyerName?.trim() || (party.mailingName ?? "").trim() || party.name;
   const pincode = (party.pincode ?? "").trim();
   const registered = gstin.length > 0;
 
@@ -208,8 +214,17 @@ function buildGstIdentity(p: VoucherPayload, masters?: TallyMasters): string {
      * is a display convention rather than a data one; this is a round-trip of
      * what Tally itself stores against that ledger, so truncating it here
      * would invent a difference rather than remove one. */
-    party.address.length
-      ? `\n            <ADDRESS.LIST TYPE="String">${party.address
+    /* ONE address emitter, not two.
+     *
+     * A counter sale bills the shared `Cash` ledger, which holds no address of
+     * its own, so the lines an operator typed for the walk-in are the only ones
+     * there are — and they belong in the SAME block a registered party's
+     * address uses, because that is the block Tally prints from. An earlier
+     * draft emitted the typed address from a second builder, which would have
+     * put two <ADDRESS.LIST> blocks on any voucher whose ledger carried one
+     * too. */
+    addressFor(p, party).length
+      ? `\n            <ADDRESS.LIST TYPE="String">${addressFor(p, party)
           .map((a) => `<ADDRESS>${esc(a)}</ADDRESS>`)
           .join("")}</ADDRESS.LIST>`
       : "",
@@ -222,6 +237,44 @@ function buildGstIdentity(p: VoucherPayload, masters?: TallyMasters): string {
     tag("CONSIGNEEPINCODE", pincode),
   ].join("");
 }
+
+
+/**
+ * Which address lines the voucher carries — the typed buyer's, or the ledger's.
+ *
+ * ── Corrected 18-Sep-2026, against 413 real counter sales ─────────────────
+ * The first attempt at this was modelled on ONE voucher (26-27/0657) and got
+ * the shape backwards. That voucher is billed to a registered dealer's own
+ * ledger; a counter sale is a different animal. Reading every Sales voucher in
+ * these books whose PARTYLEDGERNAME is `Cash` settles it — 403 of the 413 name
+ * their customer, and they all name them the same way:
+ *
+ *   PARTYNAME ............ Cash    ┐ all three stay the LEDGER; nobody
+ *   BASICBUYERNAME ....... Cash    │ retypes them, and Tally fills them
+ *   BASICBASEPARTYNAME ... Cash    ┘ from PARTYLEDGERNAME
+ *   PARTYMAILINGNAME ..... CYCLE TRADERS   ← the customer
+ *   ADDRESS.LIST ......... ["JHALDAH"]     ← their address
+ *   BASICBUYERADDRESS .... (empty on all 413)
+ *
+ * So the name rides on PARTYMAILINGNAME and the address on ADDRESS.LIST, both
+ * built in `buildGstIdentity`, and neither needs a builder of its own.
+ *
+ * `BASICBUYERADDRESS` is deliberately not emitted: zero of 413 carry it.
+ *
+ * ── What the read-back first appeared to say, and did not ─────────────────
+ * Two test pushes came back with the mailing name EMPTY, which read as Tally
+ * refusing the field — and nearly bought a second, invented shape to work
+ * around a refusal that never happened. Tally stored it correctly every time:
+ * four hand-written orderings of the same voucher all read back intact. The
+ * harness was calling `pushVoucherToTally` without masters, which drops this
+ * whole block before it is ever sent. Position within the voucher does not
+ * matter; supplying the masters does.
+ */
+function addressFor(p: VoucherPayload, party: { address: string[] }): string[] {
+  const typed = (p.buyerAddress ?? []).map((l) => l.trim()).filter(Boolean);
+  return typed.length ? typed : party.address;
+}
+
 
 function buildLedgerEntries(entries: LedgerEntry[], isInvoice: boolean, voucherDate: string): string {
   const tag = isInvoice ? "LEDGERENTRIES.LIST" : "ALLLEDGERENTRIES.LIST";
@@ -453,13 +506,36 @@ export function parseImportResponse(rawXml: string): PushResult {
   }
 }
 
-/** Push a single voucher to Tally */
+/**
+ * Push a single voucher to Tally.
+ *
+ * ⚠ `masters` is REQUIRED, and that is not a formality.
+ *
+ * `buildGstIdentity` opens with `if (!masters) return ""`, so calling this
+ * without them builds a voucher carrying no PARTYMAILINGNAME, no ADDRESS.LIST,
+ * no STATENAME, no PLACEOFSUPPLY and no GSTIN — and Tally accepts it with
+ * `created=1` and no exception. Production has always passed them, through
+ * `safePush`; the fidelity harness did not, and so spent a session verifying a
+ * structurally weaker voucher than the one the app actually sends. The missing
+ * block read back as a missing buyer name, which looked exactly like Tally
+ * refusing the field.
+ *
+ * Nothing typechecks these call sites — `tsconfig.json` includes only `src` —
+ * so the signature is the only guard there is. It throws rather than degrading.
+ */
 export async function pushVoucherToTally(
   tallyUrl: string,
   company: string,
-  payload: VoucherPayload
+  payload: VoucherPayload,
+  masters: TallyMasters
 ): Promise<PushResult> {
-  const xml = buildVoucherImportXml(company, payload);
+  if (!masters) {
+    throw new Error(
+      "pushVoucherToTally requires masters — without them the voucher is built " +
+      "with no GST identity block and Tally accepts it silently. See the note above.",
+    );
+  }
+  const xml = buildVoucherImportXml(company, payload, masters);
   const rawResponse = await tallyPost(tallyUrl, xml, 30_000, true);
   const responseText = typeof rawResponse === "string" ? rawResponse : JSON.stringify(rawResponse);
   return parseImportResponse(responseText);
