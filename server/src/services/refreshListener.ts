@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
 import { postTallySync } from "./localSyncClient.js";
 import { supabaseClient } from "./supabaseClient.js";
+import { refuseSharedWrite } from "./tallyRole.js";
 
 // Same WebSocket polyfill used by SupabaseSync
 if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
@@ -89,6 +90,17 @@ const COMPANY_RECHECK_MS = 30 * 60 * 1000; // 30 minutes
 export function startRefreshListener(localPort: number, fallbackCompany: string): void {
   if (started) return;
   started = true;
+
+  /* A sandbox must not serve this. Second layer, said out loud.
+     This was ALREADY safe: `supabaseClient()` returns null on a sandbox and
+     the call below bails on it, so a copy never subscribed. What it did not do
+     was SAY so — the refusal looked identical to "no service key configured",
+     and this is the path a person triggers, the web dashboard's "refresh now".
+     Refusing here names the machine and the reason in the boot log, next to
+     the other six, so which machine is serving refreshes is never inferred
+     from an absence. It is not what makes this safe; it is what makes it
+     legible. */
+  if (refuseSharedWrite("Remote refresh listener")) return;
 
   // Service-role key must come from the env — no hardcoded fallback. A
   // literal key used to sit here (and in supabaseSync.ts's constructor) and

@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json"
+    "typecheck": "npm run test:arch && tsc --noEmit && tsc -p tsconfig.scripts.json",
+    "test:arch": "tsx scripts/test-offline-mode.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",
