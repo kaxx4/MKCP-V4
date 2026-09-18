@@ -128,7 +128,13 @@ async function main(): Promise<void> {
       check("landed", "yes", stored ? "yes" : ""),
       check("no bill allocation", "", stored ? fld(ba, "NAME") : null,
         { note: "an allocation appearing here would be one nobody asked for" }),
-      check("bill type if any", "", stored ? fld(ba, "BILLTYPE") : null),
+      /* "On Account" IS the right answer, not a leftover.
+         Tally records an unallocated payment as a bill allocation whose TYPE
+         is On Account and whose NAME is blank — which is why the check above
+         reads NAME and this one reads BILLTYPE. Expecting an empty type
+         reported a correct on-account payment as wrong on every run. */
+      check("bill type if any", "On Account", stored ? fld(ba, "BILLTYPE") : null,
+        { note: "an unallocated payment is On Account in Tally's own books, with a blank bill name" }),
     ]});
   }
 
@@ -143,10 +149,22 @@ async function main(): Promise<void> {
     ] as never;
     const { stored } = await pushAndRead(co, masters, p, "C no number");
     const assigned = stored ? fld(stored.body, "VOUCHERNUMBER") : "";
-    all.push({ title: "C — no number sent, Tally numbers it (Automatic Manual Override)", checks: [
-      check("landed", "yes", stored ? "yes" : ""),
-      check("Tally assigned a number", "yes", stored ? (assigned ? "yes" : "") : null,
-        { note: assigned ? `it chose "${assigned}"` : "blank number — this type is NOT auto-numbered" }),
+    /* This case asserts the REFUSAL, because the refusal is the finding.
+       It was written expecting Tally to assign a number — the voucher type is
+       set to "Automatic (Manual Override)", which says it should. It does not:
+       an XML import with no <VOUCHERNUMBER> comes back created=0 exceptions=1
+       and nothing lands. That was established on 17-Sep-2026 over four pushes,
+       and it invalidated a committed fix (751438c) that recovered a taken
+       number by dropping it.
+
+       Asserting the hoped-for behaviour left this permanently red, which is
+       how a suite stops being read. It now asserts what Tally actually does,
+       so it turns red only if Tally's behaviour CHANGES — at which point
+       `nextFreeNumber`, which exists solely to work around this, could be
+       retired. */
+    all.push({ title: "C — no number sent: Tally REFUSES, it does not auto-number", checks: [
+      check("nothing landed", "nothing landed", stored ? `it landed as "${assigned || "(blank)"}"` : "nothing landed",
+        { note: '"Automatic (Manual Override)" does not number an XML import — this is why nextFreeNumber exists' }),
     ]});
   }
 
@@ -164,10 +182,18 @@ async function main(): Promise<void> {
     const type = stored ? fld(ba, "BILLTYPE") : "";
     all.push({ title: `D — citing ${other.party}'s bill "${other.name}" on a payment to ${mine.party}`, checks: [
       check("Tally reported success", "yes", res.created > 0 ? "yes" : ""),
-      check("bill type stored", "Agst Ref", stored ? type : null,
-        { note: type === "New Ref"
-          ? "REWRITTEN to New Ref — accepted, reported as success, and it has opened a NEW liability"
-          : "stayed as sent" }),
+      /* The TRAP is the expected result here, so that is what is asserted.
+         Citing one party's bill on another party's payment is accepted,
+         reported as created, and SILENTLY REWRITTEN to New Ref — which opens
+         a fresh liability instead of settling the debt that was named. Tally
+         raises nothing; only safePush's read-back catches it.
+
+         Written as "intended: Agst Ref" this check was red every run for a
+         behaviour that is understood and already defended against, which
+         trains the reader to skip it. Asserting the rewrite means it goes red
+         only if Tally stops rewriting — and THAT would be the news. */
+      check("cross-party ref is rewritten", "New Ref", stored ? type : null,
+        { note: "accepted, reported as success, and it opens a NEW liability rather than settling the named bill — safePush's read-back is the only thing that sees this" }),
     ]});
   }
 

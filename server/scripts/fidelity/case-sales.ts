@@ -78,7 +78,7 @@ async function main(): Promise<void> {
 
   // ── A: local ──────────────────────────────────────────────────────────────
   {
-    const n = `${MARK}/SL${tag}`, narr = `${MARK} sales local`;
+    const n = `${MARK}/SL${tag}`, narr = `${MARK} sales local ${tag}`;
     const p = sale(n, wb.name, "SALES  ( GST W.B. )",
       [{ ledger: "OUTPUT CGST", amount: 25 }, { ledger: "OUTPUT SGST", amount: 25 }], narr);
     const res = await pushVoucherToTally(U, co, p, masters);
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
 
   // ── B: interstate ─────────────────────────────────────────────────────────
   {
-    const n = `${MARK}/SI${tag}`, narr = `${MARK} sales interstate`;
+    const n = `${MARK}/SI${tag}`, narr = `${MARK} sales interstate ${tag}`;
     const p = sale(n, out.name, "SALES  ( GST CENTRAL )", [{ ledger: "OUTPUT IGST", amount: 50 }], narr);
     const res = await pushVoucherToTally(U, co, p, masters);
     remember({ remoteId: p.remoteId!, voucherType: "Sales", number: n, date: TODAY });
@@ -117,7 +117,7 @@ async function main(): Promise<void> {
 
   // ── C: with a discount line ───────────────────────────────────────────────
   {
-    const n = `${MARK}/SD${tag}`, narr = `${MARK} sales discount`;
+    const n = `${MARK}/SD${tag}`, narr = `${MARK} sales discount ${tag}`;
     const DISC = 40;
     const grand = r2(TAXABLE - DISC + 48);
     const p: VoucherPayload = {
@@ -146,14 +146,28 @@ async function main(): Promise<void> {
       check("  is a CREDIT (ISDEEMEDPOSITIVE=No)", "No", disc ? fld(disc, "ISDEEMEDPOSITIVE") : null),
       checkNum("  amount is NEGATIVE", -DISC, disc ? fld(disc, "AMOUNT") : null,
         { note: "a negative credit — the shape Tally itself writes on this company's 444 discount lines" }),
-      check("  appropriates to GST", "Goods", disc ? fld(disc, "APPROPRIATEFOR") : null,
-        { note: "without this Tally expects tax on the GROSS and files a GSTR-1 mismatch" }),
+      /* Sent as "Goods", STORED as "GST" — and "GST" is right.
+         Every one of the 236 discount lines in this company's own August and
+         September sales carries APPROPRIATEFOR=GST, so Tally is normalising
+         our value to the one it uses, not discarding it. Asserting the value
+         we SENT rather than the one the books hold reported a correct voucher
+         as wrong for as long as this check has existed. */
+      check("  appropriates to GST", "GST", disc ? fld(disc, "APPROPRIATEFOR") : null,
+        { note: "236 of 236 real discount lines store GST; without it Tally expects tax on the GROSS" }),
     ]});
   }
 
   // ── D: order → invoice on the same REMOTEID ───────────────────────────────
   {
-    const n = `${MARK}/SO${tag}`, narr = `${MARK} order`;
+    /* The narration carries `tag` because it is the KEY this case reads back
+       by, and a constant one matches a leftover from any earlier run. That is
+       not hypothetical: this check reported a changed MASTERID — "the goods are
+       now on two vouchers", the most alarming thing it can say — while the
+       conversion was working correctly. It had found a previous run's invoice,
+       which still carried the identical narration, and compared today's order
+       against last hour's invoice. The voucher NUMBER was already per-run; the
+       narration was not, and the read-back used the narration. */
+    const n = `${MARK}/SO${tag}`, narr = `${MARK} order ${tag}`;
     const rid = `MKCP-SALES-ORDER-NOTE-${n}`;
     const orderGrand = r2(TAXABLE + 50);
     const order: VoucherPayload = {
@@ -171,7 +185,7 @@ async function main(): Promise<void> {
     const before = await read(co, narr);
     const masterBefore = before ? fld(before.body, "MASTERID") : "";
 
-    const narr2 = `${MARK} order billed`;
+    const narr2 = `${MARK} order billed ${tag}`;
     const invoice = {
       ...order, action: "Alter", voucherType: "Sales", isInvoice: true, narration: narr2,
     } as unknown as VoucherPayload;
@@ -186,7 +200,12 @@ async function main(): Promise<void> {
         iRes.altered > 0 ? "altered" : iRes.created > 0 ? "created a SECOND voucher" : "neither"),
       check("same MASTERID kept", masterBefore || "?", masterAfter || "",
         { note: "a new id means the goods are now on two vouchers" }),
-      check("it is a Sales invoice now", "Sales", after ? fld(after.body, "VOUCHERTYPENAME") : null),
+      /* Tally echoes the voucher TYPE in upper case on read-back while taking
+         it in title case on import, so compare case-insensitively. Reading
+         "SALES" as a mismatch for "Sales" is the reader disagreeing with
+         itself, not the conversion failing. */
+      check("it is a Sales invoice now", "sales",
+        after ? fld(after.body, "VOUCHERTYPENAME").toLowerCase() : null),
       check("the order is gone", "", still ? "the order is STILL there as well" : ""),
     ]});
   }
