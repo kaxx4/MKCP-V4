@@ -23,6 +23,8 @@
  * Exit code 0 = ready. 1 = something would silently swallow the day's work.
  */
 import { createClient } from "@supabase/supabase-js";
+import { offlineReason } from "../server/src/services/supabaseClient.js";
+import { isSandbox } from "../server/src/services/tallyRole.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
@@ -113,11 +115,24 @@ function checkFiledPeriod(): void {
   }
 }
 
-/* ── 2. Offline mode ──────────────────────────────────────────────────── */
+/* ── 2. Offline mode ──────────────────────────────────────────────────────
+   Asks the SAME function the agent asks, rather than re-reading one env var.
+
+   This checked `MKCP_OFFLINE` alone, and a sandbox machine is offline WITHOUT
+   it — `isOffline()` is true whenever `MKCP_TALLY_ROLE=sandbox`, which is how
+   `supabaseClient()` comes back null. So on this machine the check printed
+   "Supabase connection: Online." while the running agent could not reach
+   Supabase at all. The overall verdict was still right, because the role check
+   above STOPs — but a green line asserting a capability the machine does not
+   have is the worst kind of output from the one tool whose entire job is
+   telling you whether work will actually reach Tally. */
 function checkOffline(): void {
-  if ((process.env.MKCP_OFFLINE ?? "").trim().toLowerCase() === "true") {
-    add("Supabase connection", "blocked", "MKCP_OFFLINE=true — the agent will not talk to Supabase at all.",
-      "Remove MKCP_OFFLINE from server/.env, or set it to false.");
+  const why = offlineReason();
+  if (why) {
+    add("Supabase connection", "blocked", `${why} — the agent will not talk to Supabase at all.`,
+      why === "MKCP_OFFLINE=true"
+        ? "Remove MKCP_OFFLINE from server/.env, or set it to false."
+        : "Expected on a machine holding a COPY of the company. On the machine with the real books, set MKCP_TALLY_ROLE=primary.");
   } else {
     add("Supabase connection", "ready", "Online.");
   }
@@ -129,6 +144,11 @@ function checkPushAgent(): void {
   if (raw === "false" || raw === "0") {
     add("Push agent", "blocked", "PUSH_AGENT_ENABLED=false — nothing queued will ever reach Tally.",
       "Set PUSH_AGENT_ENABLED=true in server/.env.");
+  } else if (isSandbox()) {
+    /* `pushAgent` calls `refuseSharedWrite` before it drains anything, so
+       "Enabled" was true of the setting and false of the behaviour. */
+    add("Push agent", "blocked", "Enabled by setting, but refused: MKCP_TALLY_ROLE=sandbox.",
+      "Expected on a copy of the company. Nothing queued will reach Tally from this machine.");
   } else {
     add("Push agent", "ready", raw ? "Enabled." : "Enabled (default).");
   }
