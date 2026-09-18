@@ -15,10 +15,10 @@
 --   · 903 phantom master rows pruned, 11 orphans deliberately kept, backup in
 --     _phantom_prune_backup_20260918
 --
--- HOW TO RUN: nothing here is waiting on you except the DECISIONS. Section 1
--- was a hole rather than a choice, so it has been applied and verified already.
--- Sections 2 and 3 are genuine decisions — each states the options and what
--- each one costs — and section 5 needs the dashboard, which I cannot reach.
+-- STATUS: sections 1–4 are DONE. Both decisions in 2 and 3 were made and the
+-- reasoning is written next to each, with the reversal kept one paste away.
+-- Only section 5 is outstanding, and it needs the Supabase and Vercel
+-- dashboards, which I cannot reach.
 --
 -- ============================================================================
 
@@ -88,7 +88,7 @@ create policy voucher_locks_release
 
 
 -- ============================================================================
--- 2.  "RESET MIRROR YEAR" CANNOT WORK                          [YOUR DECISION]
+-- 2.  "RESET MIRROR YEAR"  —  DECIDED: stays read-only   [CLOSED 18-Sep-2026]
 -- ============================================================================
 --
 -- Measured:  tally_vouchers has RLS enabled and exactly ONE policy —
@@ -118,7 +118,16 @@ create policy voucher_locks_release
 --   full pull restores it — but the app is empty and every screen reads zero
 --   until that pull finishes, which takes minutes.
 --
--- Uncomment ONLY if you choose B.
+-- DECIDED: OPTION A. The browser keeps read-only access to the authoritative
+-- mirror and nothing was run. Clearing a year stays a desktop-agent operation,
+-- where the service-role key already lives and where Tally is reachable anyway
+-- — so option B would have granted a new power to the one place that does not
+-- need it, in exchange for removing a trip to another machine. The app now
+-- refuses honestly and names the alternative.
+--
+-- Option B is kept below so the decision can be reversed with one paste. Do
+-- understand what it grants: anyone holding the publishable key could delete a
+-- financial year of the mirror.
 --
 -- drop policy if exists tally_vouchers_web_year_reset on public.tally_vouchers;
 -- create policy tally_vouchers_web_year_reset
@@ -130,7 +139,7 @@ create policy voucher_locks_release
 
 
 -- ============================================================================
--- 3.  perf_logs CAN BE WRITTEN BUT NEVER READ                  [YOUR DECISION]
+-- 3.  perf_logs  —  DECIDED: ingest-only, now pruned     [CLOSED 18-Sep-2026]
 -- ============================================================================
 --
 -- Measured:  one policy, INSERT only.
@@ -145,9 +154,24 @@ create policy voucher_locks_release
 -- design. So this is probably NOT a bug, and the fix is documentation rather
 -- than SQL.
 --
--- Run the policy below ONLY if you want the /perf-logs page to read directly
--- from the browser again. Otherwise leave it and know that a zero row count
--- there means "not readable", never "not recorded".
+-- DECIDED: stays ingest-only. Reads already work through the service-role
+-- endpoint (api/secure.ts), which is the right shape for a table the browser
+-- only ever appends to, so no policy was added. A zero row count read directly
+-- means "not readable", never "not recorded".
+--
+-- WHAT WAS RUN, and why it mattered more than the policy question: the table
+-- had reached **200 MB across 555,669 rows** — four times the entire business
+-- dataset, every Tally table together being about 45 MB — growing ~7,200 rows
+-- a day with nothing pruning it. Trimmed to 30 days (452,572 rows removed,
+-- 103,097 kept) and VACUUM FULL'd: **200 MB → 37 MB**.
+--
+-- And it will not come back. `services/housekeeping.ts` now prunes perf_logs
+-- to 30 days and mirror_change_signal to 24 hours, once a day, wherever the
+-- agent runs. That wires up `pruneMirrorSignals`, which had existed with ZERO
+-- callers under a comment reading "an append-only table nobody prunes becomes
+-- the next thing someone has to discover". It was.
+--
+-- Uncomment only to let the browser read perf_logs directly again.
 --
 -- drop policy if exists perf_logs_read on public.perf_logs;
 -- create policy perf_logs_read on public.perf_logs for select using (true);
@@ -170,10 +194,12 @@ create policy voucher_locks_release
 --
 -- drop table if exists public._phantom_prune_backup_20260918;
 
--- 4b. mirror_change_signal grows without bound — `pruneMirrorSignals` exists in
---     the agent and has no callers. Until it is wired up:
+-- 4b. mirror_change_signal — HANDLED. `pruneMirrorSignals` is wired into
+--     `services/housekeeping.ts` and runs daily, keeping 24 hours. Nothing to
+--     run by hand; the manual delete below is kept only for a one-off catch-up
+--     if the agent has been off for a long stretch.
 --
--- delete from public.mirror_change_signal where created_at < now() - interval '30 days';
+-- delete from public.mirror_change_signal where created_at < now() - interval '24 hours';
 
 
 -- ============================================================================
