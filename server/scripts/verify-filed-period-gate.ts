@@ -30,9 +30,9 @@ config({ path: join(here, "..", ".env") });
 
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
-import { loadMasters } from "../src/services/tallyMasters.js";
+import { loadMasters, type TallyMasters } from "../src/services/tallyMasters.js";
 import { guardVoucher } from "../src/services/pushGuard.js";
-import type { VoucherPayload, TallyMasters } from "../src/types.js";
+import type { VoucherPayload } from "../src/types.js";
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 
@@ -50,7 +50,7 @@ function alterInFiledPeriod(m: TallyMasters): VoucherPayload {
   return {
     remoteId: "MKCP|Sales|FILEDGATE-1|2026-27",
     action: "Alter",
-    voucherType: "SALES",
+    voucherType: "Sales",
     date: "2026-07-15",            // well inside any plausible filed period
     voucherNumber: "FILEDGATE-1",
     partyLedgerName: party.name,

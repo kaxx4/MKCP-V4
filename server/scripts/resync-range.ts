@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 loadEnv({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".env") });
 import { SyncOrchestrator } from "../src/services/syncOrchestrator.js";
-import { SupabaseSync } from "../src/services/supabaseSync.js";
+import { ChangeDetector } from "../src/services/changeDetector.js";
 
 const [, , from, to] = process.argv;
 const COMPANY = process.env.SYNC_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
@@ -37,8 +37,11 @@ if (!from || !to || !/^\d{8}$/.test(from) || !/^\d{8}$/.test(to)) {
 }
 
 (async () => {
-  const supabase = new SupabaseSync();
-  const orch = new SyncOrchestrator(TALLY, supabase);
+  /* Second argument is a ChangeDetector, not a SupabaseSync — the orchestrator
+     owns its own writer. This passed a SupabaseSync until 18-Sep-2026, which
+     typechecked nowhere and would have thrown the moment the orchestrator asked
+     it for a watermark. Matches `src/index.ts:43`. */
+  const orch = new SyncOrchestrator(TALLY, new ChangeDetector());
   console.log(`Re-pulling ${from} → ${to} for "${COMPANY}"`);
   const res = await orch.syncVouchersOnly(COMPANY, from, to, "daily", undefined, (p) => {
     if (p.detail) console.log(`  [${p.phase}] ${p.step}/${p.totalSteps} ${p.detail}`);

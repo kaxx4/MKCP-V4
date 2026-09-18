@@ -153,7 +153,7 @@ async function main(): Promise<void> {
   const [allocs, vmeta] = await Promise.all([loadAllocations(), loadVoucherDates()]);
   for (const a of allocs) {
     const v = vmeta.get(a.guid);
-    if (v) { a.date = v.date; a.type = v.type; }
+    if (v) { a.date = v.date; a.voucher_type = v.type; }
   }
   const live = allocs.filter((a) => a.date);       // cancelled vouchers dropped
   console.log(`  ${allocs.length} named allocations · ${live.length} on live vouchers\n`);

@@ -45,7 +45,7 @@ async function main(): Promise<void> {
 
   const { data: rows } = await db.from("push_queue").select("id,status,payload").eq("company", COMPANY);
   const pending = (rows ?? []).filter((r) => r.status === "pending");
-  const real = pending.filter((r) => !isTest((r.payload as VoucherPayload)?.voucherNumber));
+  const real = pending.filter((r) => !isTest((r.payload as VoucherPayload)?.voucherNumber ?? ""));
 
   console.log(`\n  WATCH THE AGENT DRAIN\n  ` + "─".repeat(58));
   console.log(`  role=${process.env.MKCP_TALLY_ROLE}  filedThrough=${process.env.MKCP_FILED_THROUGH ?? "(unset)"}`);

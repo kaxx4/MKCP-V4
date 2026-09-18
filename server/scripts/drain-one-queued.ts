@@ -32,6 +32,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 config({ path: join(here, "..", ".env") });
 
 import { createClient } from "@supabase/supabase-js";
+
+/* The client's type is inferred from the call, so capture it from a call rather
+   than writing `ReturnType<typeof createClient>` — that spells the generic
+   DEFAULTS, which are not what `createClient(url, key, …)` actually returns, and
+   every helper taking one then rejected the real thing with "not assignable to
+   parameter of type 'never'". */
+const makeDb = (url: string, key: string) =>
+  createClient(url, key, { auth: { persistSession: false } });
+type Db = ReturnType<typeof makeDb>;
 import { safePush } from "../src/services/safePush.js";
 import { tallyPost } from "../src/tally.js";
 import type { VoucherPayload } from "../src/types.js";
@@ -130,7 +139,7 @@ function vouchersIn(xml: string): { count: number; data: string } {
  * were all built; the only fix is to read it.
  */
 async function setStatus(
-  db: ReturnType<typeof createClient>,
+  db: Db,
   id: string,
   patch: Record<string, unknown>,
 ): Promise<void> {
@@ -248,7 +257,7 @@ async function main(): Promise<void> {
   if (wanted && asTest) {
     const url0 = process.env.SUPABASE_URL, key0 = process.env.SUPABASE_SERVICE_KEY;
     if (!url0 || !key0) { console.error("SUPABASE_URL / SUPABASE_SERVICE_KEY missing"); process.exit(2); }
-    const db0 = createClient(url0, key0, { auth: { persistSession: false } });
+    const db0 = makeDb(url0, key0);
     const { data: rs } = await db0.from("push_queue").select("*").eq("company", COMPANY).limit(200);
     const hits = (rs ?? []).filter((r) => (r.payload as VoucherPayload)?.voucherNumber === wanted);
     if (!hits.length) { console.error(`  no queued voucher numbered ${wanted}`); process.exit(1); }
@@ -276,7 +285,7 @@ async function main(): Promise<void> {
 
   const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SERVICE_KEY;
   if (!url || !key) { console.error("SUPABASE_URL / SUPABASE_SERVICE_KEY missing from server/.env"); process.exit(2); }
-  const db = createClient(url, key, { auth: { persistSession: false } });
+  const db = makeDb(url, key);
 
   const { data: rows, error } = await db
     .from("push_queue").select("*").eq("company", COMPANY).order("created_at", { ascending: true }).limit(200);
@@ -287,7 +296,7 @@ async function main(): Promise<void> {
      by a script whose whole point is that it cannot touch trade. */
   const queue = (rows ?? []) as Job[];
   const mine = all
-    ? queue.filter((r) => isTestNumber((r.payload as VoucherPayload)?.voucherNumber))
+    ? queue.filter((r) => isTestNumber((r.payload as VoucherPayload)?.voucherNumber ?? ""))
     : queue.filter((r) => (r.payload as VoucherPayload)?.voucherNumber === wanted);
 
   if (all) {
@@ -323,12 +332,17 @@ async function main(): Promise<void> {
 /** One voucher, all the way to Tally and back. Throws rather than exiting, so
  *  a batch can record the failure and carry on to the next. */
 async function drainOne(
-  db: ReturnType<typeof createClient>,
+  db: Db,
   job: Job,
   alsoDelete: boolean,
 ): Promise<void> {
   const payload = job.payload as VoucherPayload;
+  /* Every read-back below identifies the voucher by this number, so a row
+     without one cannot be verified at all. Fail loudly rather than push
+     something we would then be unable to find — the failure this whole script
+     exists to distinguish from "the path does not work". */
   const wanted = payload.voucherNumber;
+  if (!wanted) throw new Error(`queue row ${job.id} carries no voucherNumber — nothing to read back by`);
   console.log(`\n  ── ${payload.voucherType} ${wanted} ` + "─".repeat(Math.max(0, 40 - wanted.length)));
   console.log(`  found queue row ${job.id} — ${payload.voucherType} ${payload.voucherNumber}, status "${job.status}"`);
   console.log(`  remoteId: ${payload.remoteId}`);

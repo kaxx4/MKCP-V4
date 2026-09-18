@@ -55,8 +55,12 @@ async function main(): Promise<void> {
 
   const siDef = def("stockItems");
   const FOUR = ["CostingMethod", "ValuationMethod", "IsBatchWiseOn", "IsCostCentresOn"];
-  ok("all four are in the fetch list now", FOUR.every((f) => siDef.fetch.includes(f)),
-    FOUR.filter((f) => !siDef.fetch.includes(f)).join(", ") || "");
+  /* An absent fetch list and an empty one mean the same thing to Tally — it
+     returns the standard fields — but they are not the same to `.includes`,
+     which throws on undefined. Missing is the answer this check wants anyway. */
+  const siFetch = siDef.fetch ?? [];
+  ok("all four are in the fetch list now", FOUR.every((f) => siFetch.includes(f)),
+    FOUR.filter((f) => !siFetch.includes(f)).join(", ") || "");
 
   const siRaw = await tallyPostWithRetry(TALLY, buildCollectionXml(siDef, COMPANY), siDef.timeout, false, 1);
   const items = convertStockItems(siRaw).tallymessage as Record<string, unknown>[];

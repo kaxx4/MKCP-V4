@@ -69,7 +69,7 @@ async function main(): Promise<void> {
   const supplier = [...m.ledgers.values()]
     .find((l) => /SUNDRY CREDITORS/i.test(l.parent) && l.state && !/WEST BENGAL/i.test(l.state))!;
   const item = [...m.items.values()].find((i) => i.closingStock > 20 && i.closingRate > 20)!;
-  const godown = [...m.godowns.values()][0]?.name ?? "Main Location";
+  const godown = [...m.godowns][0] ?? "Main Location";
 
   const num = `${TAG}/1`;
   const amount = r2(2 * item.closingRate);
