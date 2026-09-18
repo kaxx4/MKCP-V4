@@ -16,6 +16,7 @@ import { startPushListener, listPendingPushes, approvePush, rejectPush } from ".
 import { startReportRunner } from "./services/reportRunner.js";
 import { startNightlySync } from "./services/nightlySync.js";
 import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
+import { startHousekeeping } from "./services/housekeeping.js";
 import { announceRole, tallyRole } from "./services/tallyRole.js";
 import { isOffline, offlineReason } from "./services/supabaseClient.js";
 import { buildMirrorPanel } from "./services/mirrorPanel.js";
@@ -727,6 +728,7 @@ const httpServer = app.listen(PORT, BIND_HOST, () => {
 
   // Two-way file handoff with the web dashboard (see server/src/services/fileTransferSync.ts).
   startFileTransferSync();
+  startHousekeeping();
   // Outbound half: anything dropped in the watch folder is sent up automatically.
   startWatchFolder(company);
 });
