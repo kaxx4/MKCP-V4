@@ -117,9 +117,49 @@ async function baseline(): Promise<void> {
   console.log(`\nNothing was written.\n`);
 }
 
+/* ── Dispatch ───────────────────────────────────────────────────────────────
+   The header above has always documented `--case` and `--sweep`. Neither
+   existed: `--sweep` printed "nothing to do yet" and `--case` fell through to
+   the baseline, so every `--case sales` run reported "Nothing was written" and
+   looked like a push that had quietly done nothing — the exact failure shape
+   this whole directory exists to catch.
+
+   The work was never missing, only unreachable: the cases are the twelve
+   `fidelity/case-*.ts` files and the sweep is `fidelity/sweep.ts`, each
+   runnable on its own. This forwards to them, so the documented interface is
+   the real one (G8). */
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const FIDELITY = join(HERE, "fidelity");
+
+function run(script: string, extra: string[] = []): never {
+  const r = spawnSync("npx", ["tsx", script, ...extra], { stdio: "inherit", shell: process.platform === "win32" });
+  process.exit(r.status ?? 1);
+}
+
 const args = process.argv.slice(2);
+const caseAt = args.indexOf("--case");
+
 if (args.includes("--sweep")) {
-  console.log("sweep is implemented in the case runner; nothing to do yet.");
+  run(join(FIDELITY, "sweep.ts"), args.filter((a) => a !== "--sweep"));
+} else if (caseAt !== -1) {
+  const name = args[caseAt + 1];
+  const file = name ? join(FIDELITY, `case-${name}.ts`) : "";
+  if (!name || !existsSync(file)) {
+    console.error(`
+  --case needs one of:
+`);
+    for (const f of require("node:fs").readdirSync(FIDELITY) as string[]) {
+      if (f.startsWith("case-")) console.error(`    ${f.replace(/^case-|\.ts$/g, "")}`);
+    }
+    console.error("");
+    process.exit(1);
+  }
+  run(file, args.slice(caseAt + 2));
 } else {
   baseline().catch((e) => { console.error(e); process.exit(1); });
 }
