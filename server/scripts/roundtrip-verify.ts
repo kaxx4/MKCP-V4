@@ -24,6 +24,23 @@ import { convertCompanies } from "../src/converters/convert.js";
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
 const TAG = `RT${Date.now().toString().slice(-6)}`;
+
+/**
+ * A REMOTEID, so this harness can clean up after itself.
+ *
+ * It pushed without one, and a voucher created without a REMOTEID is
+ * PERMANENTLY unaddressable: it is the only handle Tally accepts for Alter,
+ * Cancel or Delete — GUID and VCHKEY both fail. So every run left its four
+ * vouchers in the books for a human to delete by hand in the Tally UI, and
+ * four became eight became twelve.
+ *
+ * That is guardrail G5 ("every write carries identity, from creation"), and the
+ * harness that exists to verify pushes was the thing breaking it.
+ */
+function remoteIdFor(s: { type: string; number: string }): string {
+  return `MKCP-RT|${s.type}|${s.number}`;
+}
+
 const D = new Date();
 const YMD = `${D.getFullYear()}${String(D.getMonth() + 1).padStart(2, "0")}${String(D.getDate()).padStart(2, "0")}`;
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -232,7 +249,7 @@ function buildXml(company: string, s: Spec): string {
 <REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME><STATICVARIABLES>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES></REQUESTDESC>
 <REQUESTDATA><TALLYMESSAGE xmlns:UDF="TallyUDF">
-<VOUCHER VCHTYPE="${esc(s.type)}" ACTION="Create" OBJVIEW="${objView}">
+<VOUCHER REMOTEID="${esc(remoteIdFor(s))}" VCHTYPE="${esc(s.type)}" ACTION="Create" OBJVIEW="${objView}">
 ${header(s)}
 ${led}
 ${inv}
