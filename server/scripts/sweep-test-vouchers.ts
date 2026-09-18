@@ -59,13 +59,27 @@ const fld = (v: string, t: string) => {
   for (const v of found) {
     const type = fld(v, "VOUCHERTYPENAME");
     const number = fld(v, "VOUCHERNUMBER");
-    // The REMOTEID these were created with. Tally accepts no other handle.
-    const remoteId = `MKCP|${type}|${number}|2026-27`;
+    /* The REMOTEID these were created with. Tally accepts no other handle, so
+       a wrong guess reads as "Voucher does not exist!" — which is exactly what
+       this printed for every RT voucher until `roundtrip-verify.ts` started
+       assigning one. Two producers, two spellings; try each. */
+    const remoteIds = [
+      `MKCP|${type}|${number}|2026-27`,
+      `MKCP-RT|${type}|${number}`,
+    ];
+    const remoteId = remoteIds[0];
     const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Import</TALLYREQUEST><TYPE>Data</TYPE><ID>Vouchers</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES></DESC>
 <DATA><TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="${esc(remoteId)}" VCHTYPE="${esc(type)}" ACTION="Delete"><DATE>${DAY}</DATE><VOUCHERTYPENAME>${esc(type)}</VOUCHERTYPENAME><VOUCHERNUMBER>${esc(number)}</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
-    const res: string = await tallyPost(U, xml, 60_000, true);
-    const n = parseInt(fld(res, "DELETED") || "0", 10) || 0;
+    let res: string = await tallyPost(U, xml, 60_000, true);
+    let n = parseInt(fld(res, "DELETED") || "0", 10) || 0;
+    if (!n) {
+      for (const alt of remoteIds.slice(1)) {
+        res = await tallyPost(U, xml.replace(remoteId, esc(alt)), 60_000, true);
+        n = parseInt(fld(res, "DELETED") || "0", 10) || 0;
+        if (n) break;
+      }
+    }
     console.log(`  ${n ? "\x1b[32m✓\x1b[0m removed" : "\x1b[31m✗\x1b[0m FAILED "} ${number}${n ? "" : ` — ${fld(res, "LINEERROR") || "no DELETED in response"}`}`);
     gone += n;
   }
