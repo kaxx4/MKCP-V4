@@ -656,9 +656,48 @@ app.get("/api/distance", async (req, res) => {
   }
 });
 
+/**
+ * ── Bind to the LOOPBACK interface, not to every interface ─────────────────
+ *
+ * `app.listen(PORT)` with no host binds 0.0.0.0 — every interface on the
+ * machine. The log line below has said "localhost" since this file was
+ * written, but that was display text, not a bind, and nothing else in the
+ * server contradicted it.
+ *
+ * None of these thirty routes authenticates. CORS is the only gate and it is
+ * not an access control: it permits requests carrying NO Origin header at all,
+ * which is every curl, script and non-browser client. So anyone who could
+ * reach TCP 3100 — another machine on the shop LAN, a guest on the same Wi-Fi,
+ * a phone — could:
+ *
+ *   · POST /api/local/push          create, alter, cancel or delete a voucher
+ *                                   in the live books
+ *   · POST /api/bank/push           book receipts and payments against bills
+ *   · POST …/pending-pushes/:id/approve
+ *                                   approve a queued push, bypassing the human
+ *                                   gate the Supabase policy carefully enforces
+ *   · POST /api/file-transfer/push  read ANY file on this machine and upload it
+ *                                   — including server/.env and the
+ *                                   service-role key in it
+ *   · POST /api/tally/debug         send arbitrary XML to TallyPrime
+ *
+ * The listener serves exactly two clients, both on this machine: the Electron
+ * renderer, and a browser tab the operator has open. Neither needs the port
+ * published to the network.
+ *
+ * `MKCP_BIND_HOST` exists for the case where a second machine on the LAN
+ * genuinely has to reach this agent. Setting it is a deliberate act with the
+ * above as its consequence, which is the point.
+ */
+const BIND_HOST = process.env.MKCP_BIND_HOST || "127.0.0.1";
+
 // ── Start ──────────────────────────────────────────────────────────────────────
-const httpServer = app.listen(PORT, () => {
-  console.log(`\n✓ MKCP Tally Proxy → http://localhost:${PORT}`);
+const httpServer = app.listen(PORT, BIND_HOST, () => {
+  console.log(`\n✓ MKCP Tally Proxy → http://${BIND_HOST}:${PORT}`);
+  if (BIND_HOST !== "127.0.0.1") {
+    console.log(`   ⚠ MKCP_BIND_HOST=${BIND_HOST} — this port is reachable from the network`);
+    console.log(`     and NONE of its routes require authentication.`);
+  }
   console.log(`   Target: ${TALLY}\n`);
 
   // Remote refresh: web dashboard can trigger a Tally sync via Supabase Realtime.

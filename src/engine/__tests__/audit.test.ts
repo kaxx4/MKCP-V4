@@ -3,7 +3,9 @@
  * Tests verify the inventory identity: CLOSING = OPENING + INWARDS - OUTWARDS
  */
 
-import { describe, it, expect } from "vitest";
+/* This repo has no vitest and never has — see scripts/tiny-test.ts. These
+   fifteen tests were unrunnable until 18-Sep-2026. */
+import { describe, it, expect } from "../../../scripts/tiny-test.js";
 import type { CanonicalItem, CanonicalVoucher } from "../../types/canonical";
 import { buildVoucherIndex } from "../inventory";
 import {

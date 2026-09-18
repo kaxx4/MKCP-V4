@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient, type RealtimeChannel } from "@supaba
 import ws from "ws";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import chokidar, { type FSWatcher } from "chokidar";
 import { supabaseClient } from "./supabaseClient.js";
 
@@ -148,13 +149,59 @@ export function startFileTransferSync(): void {
   connect(client);
 }
 
-/** Upload a local file (already on disk — the operator picked it via a
- *  native file dialog in the renderer) to the web dashboard. Used by the
- *  POST /api/file-transfer/push route. */
+/**
+ * Files this route may read, and everything else it may not.
+ *
+ * `filePath` arrives in a request body and went straight into `readFileSync`.
+ * The doc comment says the operator picked it in a native dialog, and that is
+ * true of the renderer — but it is not a property of the ROUTE, and the route
+ * is an HTTP endpoint. Any caller able to reach it could name any path on the
+ * machine and have the bytes uploaded to Supabase Storage, where the web app
+ * downloads them. `server/.env` holds the Supabase service-role key, which
+ * bypasses RLS on every table; that made this the cleanest full-compromise
+ * primitive in either repo.
+ *
+ * Binding to loopback (see index.ts) removes the remote caller. This removes
+ * the primitive itself, because a local process should not be able to use the
+ * agent as a file-exfiltration proxy either.
+ *
+ * The allowlist is the two places files legitimately come from: the folder the
+ * operator has configured for transfers, and the OS temp directory the app's
+ * own exports are written to.
+ */
+function assertReadable(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  const roots = [
+    getSyncFolder(),                    // the operator's configured transfer folder
+    watchedDir,                         // whatever is being watched right now
+    os.tmpdir(),                        // where this app writes its own exports
+    process.env.MKCP_TRANSFER_ROOT,     // an explicit escape hatch, deliberately set
+  ]
+    .filter((r): r is string => !!r)
+    .map((r) => path.resolve(r));
+
+  const inside = roots.some((root) => {
+    const rel = path.relative(root, resolved);
+    // Empty means it IS the root; "..", or an absolute result, means outside.
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  });
+
+  if (!inside) {
+    throw new Error(
+      `Refusing to read "${resolved}": it is outside the folders this agent may send from ` +
+      `(${roots.join(", ")}). Set MKCP_TRANSFER_ROOT if the file genuinely belongs elsewhere.`,
+    );
+  }
+  return resolved;
+}
+
+/** Upload a local file — one the operator picked via a native dialog in the
+ *  renderer — to the web dashboard. Used by POST /api/file-transfer/push. */
 export async function pushFileToWeb(company: string, filePath: string, note: string | null): Promise<{ id: string }> {
   if (!client) throw new Error("File transfer sync isn't running (no Supabase credentials configured)");
-  const filename = path.basename(filePath);
-  const buf = fs.readFileSync(filePath);
+  const safePath = assertReadable(filePath);
+  const filename = path.basename(safePath);
+  const buf = fs.readFileSync(safePath);
   const safe = filename.replace(/[^\w.\-]+/g, "_");
   const storagePath = `desktop-to-web/${Date.now()}-${safe}`;
 
