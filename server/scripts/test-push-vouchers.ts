@@ -21,6 +21,7 @@ import { buildCollectionXml } from "../src/services/xmlBuilder.js";
 import { convertCompanies, convertLedgers, convertStockItems } from "../src/converters/convert.js";
 import { MASTER_COLLECTIONS } from "../src/config/collections.js";
 import { pushVoucherToTally } from "../src/services/voucherPusher.js";
+import { loadMasters } from "../src/services/tallyMasters.js";
 import type { VoucherPayload } from "../src/types.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
@@ -185,7 +186,7 @@ async function main() {
     }
     process.stdout.write(`[${key.padEnd(9)}] pushing… `);
     try {
-      const result = await pushVoucherToTally(TALLY_URL, company, payload);
+      const result = await pushVoucherToTally(TALLY_URL, company, payload, await loadMasters(TALLY_URL, company));
       if (result.success) {
         console.log(`✓ created (voucher id ${result.lastVoucherId})`);
       } else {

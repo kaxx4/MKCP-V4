@@ -233,6 +233,29 @@ export interface VoucherPayload {
    *  supplier's own dating and a bill received three weeks late read same-day.
    *  The file-export path has emitted it all along. */
   referenceDate?: string;     // YYYY-MM-DD
+
+  /**
+   * The WALK-IN buyer's own name and address, for a counter sale.
+   *
+   * A cash sale is billed to the shared `Cash` ledger, which has no name and no
+   * address of its own — so the person who actually bought the goods can only
+   * be recorded ON THE VOUCHER. Without these the invoice says "Cash" where the
+   * customer's name belongs, which is why the buyer's name was being smuggled
+   * into the NARRATION instead: a workaround that put it in a field nobody
+   * prints and left the printed invoice anonymous.
+   *
+   * Emitted the way Tally itself stores a typed buyer — read back off
+   * `26-27/0657` on 17-Sep-2026, which carries the name in BASICBUYERNAME,
+   * PARTYNAME and PARTYMAILINGNAME, and the address in BOTH
+   * `BASICBUYERADDRESS.LIST` and `ADDRESS.LIST`.
+   *
+   * Leave unset for a sale to a real party ledger: that ledger already carries
+   * its own name and address, and overriding them here would let a voucher
+   * disagree with its own master.
+   */
+  buyerName?: string;
+  /** One element per line, as Tally stores them. */
+  buyerAddress?: string[];
   narration?: string;
   partyLedgerName: string;
   /**

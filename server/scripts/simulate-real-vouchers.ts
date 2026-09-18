@@ -19,6 +19,7 @@
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { pushVoucherToTally, buildVoucherImportXml } from "../src/services/voucherPusher.js";
+import { loadMasters } from "../src/services/tallyMasters.js";
 import type { VoucherPayload, LedgerEntry, InventoryEntry } from "../src/types.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
@@ -304,7 +305,7 @@ async function main() {
 
     if (!PUSH) { console.log("   (dry run — not sent)"); continue; }
     try {
-      const res = await pushVoucherToTally(TALLY_URL, company, p);
+      const res = await pushVoucherToTally(TALLY_URL, company, p, await loadMasters(TALLY_URL, company));
       if (res.success) console.log(`   ✓ CREATED in Tally — voucher id ${res.lastVoucherId}`);
       else {
         console.log(`   ✗ REJECTED by Tally — created=${res.created} errors=${res.errors}`);
