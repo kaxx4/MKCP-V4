@@ -171,3 +171,9 @@ async function post(path: string, body: unknown): Promise<any> {
   console.log();
   process.exit(failed ? 1 : 0);
 })();
+
+/* Makes this file a module. Without a top-level import or export, TypeScript
+   treats a script as GLOBAL — so this file's `failures` collided with the one
+   in the other import-free script, and `failures === 0` was comparing a
+   string[] to a number in whichever lost. Six errors, one cause. */
+export {};

@@ -93,7 +93,7 @@ async function main(): Promise<void> {
 
   const base: VoucherPayload = {
     remoteId: `MKCP|CashSale|GUARDONLY-${Date.now()}`,
-    voucherType: "SALES", date: TODAY, voucherNumber: `GUARDONLY-${Date.now()}`,
+    voucherType: "Sales", date: TODAY, voucherNumber: `GUARDONLY-${Date.now()}`,
     partyLedgerName: cash!.name, isInvoice: true,
     // The whole point: the walk-in's place of supply, declared on the voucher.
     placeOfSupply: "West Bengal",

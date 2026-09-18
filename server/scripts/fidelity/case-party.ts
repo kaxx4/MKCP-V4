@@ -92,7 +92,11 @@ async function main(): Promise<void> {
   const reg = block(mine.body, "LEDGSTREGDETAILS\\.LIST");
   const addrLines = flds(block(mail, "ADDRESS\\.LIST") || mail, "ADDRESS");
 
-  const intendedAddr = INTENT.address!.split("\n");
+  /* `address` is authored either as one newline-joined string or as the lines
+     already split, depending on the case file. Both mean the same address. */
+  const intendedAddr = Array.isArray(INTENT.address)
+    ? INTENT.address
+    : String(INTENT.address ?? "").split("\n");
 
   const checks = [
     check("name", NAME, fld(mine.body, "NAME") || mine.name),
