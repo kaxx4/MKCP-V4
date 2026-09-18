@@ -52,7 +52,7 @@ async function pushAndRead(
   label: string,
 ) {
   const res = await pushVoucherToTally(U, co, p, masters);
-  remember({ remoteId: p.remoteId!, voucherType: "Receipt", number: p.voucherNumber!, date: p.date });
+  remember({ remoteId: p.remoteId!, voucherType: "Receipt", number: p.voucherNumber!, date: p.date, narration: p.narration });
   const vs = objects((await tallyPost(U, vouchersOnDayXml(co, p.date), 180_000, true)) as string, "VOUCHER");
   const stored = vs.find((v) => fld(v.body, "NARRATION") === p.narration);
   console.log(`\n   [${label}] created=${res.created} errors=${res.errors}` +

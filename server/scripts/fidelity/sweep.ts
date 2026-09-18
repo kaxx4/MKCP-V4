@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   console.log(`\ncompany  ${co}`);
   console.log(`window   last ${DAYS} days + 20 ahead\n`);
 
-  const found: { day: string; number: string; type: string; party: string }[] = [];
+  const found: { day: string; number: string; type: string; party: string; narration: string }[] = [];
   for (let i = -20; i < DAYS; i++) {
     const day = iso(new Date(Date.now() - i * 864e5));
     const vs = objects((await tallyPost(U, vouchersOnDayXml(co, day), 180_000, true)) as string, "VOUCHER");
@@ -42,6 +42,7 @@ async function main(): Promise<void> {
         number: num || ref,
         type: fld(v.body, "VOUCHERTYPENAME"),
         party: fld(v.body, "PARTYLEDGERNAME"),
+        narration: narr,
       });
     }
   }
@@ -85,7 +86,14 @@ async function main(): Promise<void> {
            `deleted=0 errors=1` while the voucher sat there. The newest entry
            is the one that belongs to the voucher currently holding the
            number. */
-        const hits = journal().filter((e) => e.number === f.number);
+        /* By number, or by NARRATION when there is no number. Journals and
+           Contras here have a blank VOUCHERNUMBER, so the number lookup found
+           nothing and every run left one behind — the same permanent-leftover
+           problem the journal was introduced to end. */
+        const all = journal();
+        const hits = f.number
+          ? all.filter((e) => e.number === f.number)
+          : all.filter((e) => !!e.narration && e.narration === f.narration);
         const remembered = hits.length ? hits[hits.length - 1].remoteId : undefined;
         const res = await pushVoucherToTally(U, co, {
           remoteId: remembered ?? `MKCP-${f.type.toUpperCase().replace(/\s+/g, "-")}-${f.number}`,

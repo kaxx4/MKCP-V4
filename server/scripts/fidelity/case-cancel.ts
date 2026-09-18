@@ -64,7 +64,7 @@ async function read(co: string, narration: string) {
     const n = `${MARK}/CN${stamp}`;
     const narr = `${MARK} cancel action ${stamp}`;
     const p = mk(n, narr);
-    remember({ remoteId: p.remoteId!, voucherType: "Payment", number: n, date: TODAY });
+    remember({ remoteId: p.remoteId!, voucherType: "Payment", number: n, date: TODAY, narration: narr });
     const made = await pushVoucherToTally(U, co, p, masters);
 
     const res = await pushVoucherToTally(U, co, { ...p, action: "Cancel" } as VoucherPayload, masters);
@@ -92,7 +92,7 @@ async function read(co: string, narration: string) {
     const n = `${MARK}/CF${stamp}`;
     const narr = `${MARK} cancel flag ${stamp}`;
     const p = mk(n, narr);
-    remember({ remoteId: p.remoteId!, voucherType: "Payment", number: n, date: TODAY });
+    remember({ remoteId: p.remoteId!, voucherType: "Payment", number: n, date: TODAY, narration: narr });
     await pushVoucherToTally(U, co, p, masters);
 
     /* The shape the contract warns about: Alter carrying ISCANCELLED=Yes.

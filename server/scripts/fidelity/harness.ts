@@ -299,7 +299,19 @@ export async function push(co: string, inner: string, label: string): Promise<st
  */
 const JOURNAL = new URL("./.created.json", import.meta.url);
 
-export interface Created { remoteId: string; voucherType: string; number: string; date: string }
+export interface Created {
+  remoteId: string;
+  voucherType: string;
+  number: string;
+  date: string;
+  /** The narration, when there is one.
+   *
+   *  Journals and Contras in this company carry NO voucher number — Tally
+   *  leaves VOUCHERNUMBER blank — so the sweep, which looks its REMOTEIDs up by
+   *  number, could not address them and left one behind on every run. The
+   *  narration is the only per-run handle those vouchers have. */
+  narration?: string;
+}
 
 export function remember(entry: Created): void {
   const all = journal();
