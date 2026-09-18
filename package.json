@@ -1,6 +1,6 @@
 {
   "name": "mkcycles-dashboard-electron",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "description": "MK Cycles Distribution Dashboard - Electron Desktop App",
   "author": "M.K. Cycles (P) Ltd.",
   "private": true,
