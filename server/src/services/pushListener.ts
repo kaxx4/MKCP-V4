@@ -23,6 +23,7 @@
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
+import { refuseSharedWrite } from "./tallyRole.js";
 import { tallyPost } from "../tally.js";
 import { withTally, TallyUnavailableError } from "./tallyGate.js";
 import { isTallyBusy } from "./tallyBusy.js";
@@ -186,6 +187,15 @@ async function take(row: any): Promise<void> {
  * crashing the proxy.
  */
 export function startPushListener(company: string, tally: string): void {
+  /* The OTHER push path — `pushAgent` drains `push_queue`, this drains
+     `tally_push_commands`. Also already safe, via `supabaseClient()` returning
+     null on a sandbox, and also silent about it. Stated explicitly for the same
+     reason as the refresh listener: the failure `tallyRole.ts` describes here
+     is a real voucher booked into the COPY while the web reads "succeeded",
+     and a protection you can only confirm by tracing a null through two files
+     is one nobody checks. */
+  if (refuseSharedWrite("Web voucher push listener")) return;
+
   tallyUrl = tally;
   const url = process.env.SUPABASE_URL || "https://vmkytsytxlofjyeotmgb.supabase.co";
   const key = process.env.SUPABASE_SERVICE_KEY;

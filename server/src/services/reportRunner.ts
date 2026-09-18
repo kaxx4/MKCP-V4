@@ -24,7 +24,8 @@
  * Tally is, and a bar that moves on a timer is a lie about work that has not
  * happened.
  */
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { supabaseClient, offlineReason } from "./supabaseClient.js";
 import { withTally } from "./tallyGate.js";
 import { fetchReport, reportByKey, REPORTS } from "./tallyReports.js";
 
@@ -189,13 +190,30 @@ export class ReportRunner {
  * whole office because a report cannot be fetched.
  */
 export function startReportRunner(tally: string): () => void {
-  const url = process.env.SUPABASE_URL || "https://vmkytsytxlofjyeotmgb.supabase.co";
-  const key = process.env.SUPABASE_SERVICE_KEY;
-  if (!key) {
-    console.error("📊 [REPORTS] SUPABASE_SERVICE_KEY not set — on-demand Tally reports disabled.");
+  /* THROUGH THE CHOKEPOINT, like the other eight services.
+     This was the one module still calling `createClient` directly, so the
+     sandbox short-circuit in supabaseClient.ts — which is what actually keeps a
+     copy of the company off the shared mirror — did not apply to it. It reads
+     from Tally but WRITES `tally_report_snapshots`, a shared table keyed on a
+     company name the copy shares with the real books: a report someone asked
+     for on the web would have been answered from the SANDBOX and stored as the
+     company's own figures, with nothing on screen saying which machine
+     answered. "Read-only against Tally" is not "safe to run from a copy".
+
+     `scripts/test-offline-mode.ts` asserts this exact property and had been
+     FAILING on this file — a red test nobody was running. Fixed by joining the
+     chokepoint rather than by adding a ninth hand-written guard, which is the
+     argument supabaseClient.ts makes in its own header. */
+  const client = supabaseClient();
+  if (!client) {
+    /* Say which, and say it here. `supabaseClient()` logs the offline reason
+       once for the whole process, and the other six services each announce
+       their own refusal by name — a service that simply never starts is
+       indistinguishable from one that started and is doing nothing, which is
+       the failure mode this repo keeps producing. */
+    console.log(`📊 [REPORTS] on-demand reports OFF — ${offlineReason() ?? "SUPABASE_SERVICE_KEY is not set"}`);
     return () => {};
   }
-  const client = createClient(url, key, { auth: { persistSession: false } });
   const runner = new ReportRunner(client, tally);
   console.log("📊 [REPORTS] on-demand report runner listening");
   return runner.start();
