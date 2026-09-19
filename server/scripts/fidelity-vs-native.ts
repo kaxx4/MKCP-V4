@@ -21,6 +21,13 @@
  * measuring one — using it to measure produced a wrong figure here on
  * 19-Sep-2026 that only surfaced because it contradicted an earlier count.
  *
+ * AND THE FETCH LIST MUST STAY WHOLE. Several of these fields are COMPUTED by
+ * Tally, not stored, and they come back empty unless the voucher's entry lists
+ * are requested alongside them. Measured the same day: asking for PARTYGSTIN,
+ * STATENAME and PLACEOFSUPPLY without ALLLEDGERENTRIES.LIST reported 0/39 on
+ * Sales Order Notes; asking for all of them together reported 39/39. Trimming
+ * this list to "just the interesting fields" silently inverts the answer.
+ *
  * ── Safety ────────────────────────────────────────────────────────────────
  *
  * Writes ONE marked voucher carrying a REMOTEID, reads it, deletes it, then
@@ -116,16 +123,21 @@ async function profile(company: string, filter: string, id: string): Promise<{ n
   const goods = r2(2 * item.closingRate), cgst = r2(goods * 0.025), sgst = r2(goods * 0.025);
   const total = r2(goods + cgst + sgst);
   const number = `${TAG}-1`;
+  /* An order RESERVES and carries no bill; an invoice raises a citable one.
+     Sending a bill allocation on an order would invent a debt from a
+     reservation, so the shape follows the type under test. */
+  const isOrder = /order/i.test(TYPE);
   const p: VoucherPayload = {
     remoteId: `MKCP|Fidelity|${number}|2026-27`,
-    voucherType: "Sales", date: TODAY, voucherNumber: number,
-    partyLedgerName: party.name, isInvoice: true,
+    voucherType: (isOrder ? "Sales Order Note" : "Sales") as VoucherPayload["voucherType"],
+    date: TODAY, voucherNumber: number,
+    partyLedgerName: party.name, isInvoice: !isOrder,
     /* The one field Tally does not resolve from the ledger master itself. */
     partyAddress: party.address,
     narration: "Fidelity probe. Delete if this survives.",
     ledgerEntries: [
       { ledgerName: party.name, amount: total, isDeemedPositive: true, isPartyLedger: true,
-        billAllocations: [{ name: number, billType: "New Ref", amount: total }] },
+        ...(isOrder ? {} : { billAllocations: [{ name: number, billType: "New Ref" as const, amount: total }] }) },
       { ledgerName: "OUTPUT CGST", amount: cgst, isDeemedPositive: false, isPartyLedger: false },
       { ledgerName: "OUTPUT SGST", amount: sgst, isDeemedPositive: false, isPartyLedger: false },
     ],
@@ -166,8 +178,8 @@ async function profile(company: string, filter: string, id: string): Promise<{ n
   const delXml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Import</TALLYREQUEST><TYPE>Data</TYPE><ID>Vouchers</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES></DESC>
 <DATA><TALLYMESSAGE xmlns:UDF="TallyUDF">
-<VOUCHER REMOTEID="${esc(p.remoteId!)}" VCHTYPE="SALES" ACTION="Delete">
-<DATE>${TODAY.replace(/-/g, "")}</DATE><VOUCHERTYPENAME>SALES</VOUCHERTYPENAME>
+<VOUCHER REMOTEID="${esc(p.remoteId!)}" VCHTYPE="${esc(TYPE)}" ACTION="Delete">
+<DATE>${TODAY.replace(/-/g, "")}</DATE><VOUCHERTYPENAME>${esc(TYPE)}</VOUCHERTYPENAME>
 <VOUCHERNUMBER>${esc(number)}</VOUCHERNUMBER></VOUCHER>
 </TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
   await tallyPost(U, delXml, 120_000, true);

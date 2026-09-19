@@ -1,7 +1,7 @@
 {
   "company": "M.K.CYCLES (P) LTD. - (from 1-Apr-26)",
-  "type": "SALES",
-  "nativeCount": 1030,
+  "type": "Sales Order Note",
+  "nativeCount": 39,
   "standard": [
     "VOUCHERTYPENAME",
     "VOUCHERNUMBER",
