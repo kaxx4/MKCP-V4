@@ -391,7 +391,19 @@ export function buildVoucherImportXml(company: string, payload: VoucherPayload, 
       <REQUESTDATA>
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
           <VOUCHER${payload.remoteId ? ` REMOTEID="${esc(payload.remoteId)}"` : ""} VCHTYPE="${esc(payload.voucherType)}" ACTION="${esc(payload.action ?? "Create")}" OBJVIEW="${esc(objView)}">
-            <DATE>${date}</DATE>
+            <DATE>${date}</DATE>${
+              /* Tally fills every other party identity field from the ledger
+                 master on import; the address is the one it expects from us.
+                 Emitted before VOUCHERTYPENAME to match the shape Tally's own
+                 export writes. Empty lines are dropped rather than sent as
+                 blank ADDRESS elements. */
+              (payload.partyAddress ?? []).filter((l) => l && l.trim()).length
+                ? `
+            <ADDRESS.LIST TYPE="String">${(payload.partyAddress ?? [])
+                    .filter((l) => l && l.trim())
+                    .map((l) => `<ADDRESS>${esc(l.trim())}</ADDRESS>`).join("")}</ADDRESS.LIST>`
+                : ""
+            }
             <VOUCHERTYPENAME>${esc(payload.voucherType)}</VOUCHERTYPENAME>
             <ISINVOICE>${payload.isInvoice ? "Yes" : "No"}</ISINVOICE>
             ${/RECEIPT NOTE/.test(payload.voucherType.toUpperCase()) ? "" : `<PERSISTEDVIEW>${esc(objView)}</PERSISTEDVIEW>`}
