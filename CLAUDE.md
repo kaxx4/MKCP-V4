@@ -110,6 +110,45 @@ ledgers read `APPROPRIATEFOR = Not Applicable` there. It is set per transaction.
 **Before concluding Tally does not hold something, check the fetch list.**
 `probe-gst-appropriation.ts` is the template for settling this kind of question.
 
+## Proving a push is COMPLETE, not merely accepted
+
+`safePush`'s read-back asks "did Tally store what we sent". It is blind to a
+field we never sent, and that blind spot has now produced three separate silent
+failures: the missing GST identity block, the unappropriated discount line, and
+the party address.
+
+`scripts/fidelity-vs-native.ts` is the check that can see them. It profiles a
+voucher type from vouchers the OPERATOR keyed in, pushes one of ours, reads it
+back and diffs field by field. **A field most of theirs carry and ours does not
+is a defect.** Run it after any change to the push path.
+
+Two rules it encodes, both of which produced wrong answers here first:
+
+- **Fetch fields EXPLICITLY, and never trim the list.** Several fields are
+  COMPUTED by Tally, not stored, and come back empty unless the voucher's entry
+  lists are requested alongside them. Asking for PARTYGSTIN/STATENAME/
+  PLACEOFSUPPLY without ALLLEDGERENTRIES.LIST reported 0/39 on Sales Order
+  Notes; with them, 39/39.
+- **`NATIVEMETHOD *` is for discovery, never measurement.** Same lesson, one
+  layer up.
+
+Current state (19-Sep-2026): SALES and Sales Order Note both read back with
+**zero** missing fields against 1,030 and 39 hand-typed vouchers.
+
+## Adoption: a voucher Tally created cannot be altered
+
+Settled 19-Sep-2026 against the live company. MASTERID and VOUCHERKEY were the
+last untried handles; both returned `altered=0 created=0`, as did the no-handle
+control. GUID and VCHKEY had already failed, and the `<GUID>` element silently
+CREATES instead.
+
+So a Tally-typed voucher can be **read and copied, never altered or deleted**
+from this app. "Edit it in place" is not buildable — do not plan around it. The
+only honest flow is read-only plus an editable COPY carrying our own REMOTEID.
+
+13 vouchers are now permanently unreachable because they were written without
+identity. That is the whole argument for G5 in one number.
+
 ## GST and the returns
 
 **Tally's own GSTR exception list is not readable over XML.** `GSTR-1`, `GSTR1`,
