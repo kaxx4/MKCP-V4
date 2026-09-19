@@ -90,3 +90,10 @@ server/server/
 # it is the config that puts the live service-role key inside an installer.
 electron-builder.provisioning.json5
 server/data/*-probe.json
+
+# Real-business sample data. These were already ignored at public/sample/, but
+# .gitignore only keeps a file out of the REPO — Vite copies public/ into dist/
+# and electron-builder's extraResources bundles dist/** into the installer, so
+# they were shipping in every build and would have been uploaded to the PUBLIC
+# kaxx4/MKCP-V4 release. Moved here on 19-Sep-2026, where nothing bundles them.
+sample-data/

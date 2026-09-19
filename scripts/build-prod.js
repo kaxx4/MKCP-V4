@@ -327,7 +327,44 @@ async function main() {
     fail('kaxx4/MKCP-V4 is PUBLIC — publishing this artifact would expose the Supabase service-role key.');
     process.exit(1);
   } else {
-    ok('Verified: no .env inside the package — safe to publish');
+    ok('Verified: no .env inside the package');
+  }
+
+  /* The .env check above guards ONE way a secret gets into the artifact, and on
+     19-Sep-2026 a second one was found the hard way.
+
+     `public/sample/transactions.json` and `public/sample/masters.json` held real
+     business data — 13 GST e-invoice QR payloads (signed by NIC, carrying seller
+     and buyer GSTINs, consignee names, pincodes, invoice numbers, IRNs and
+     totals) and 7 more GSTINs with 23 party names. Both were in `.gitignore`,
+     so somebody had already judged them too sensitive for the repo. But
+     .gitignore only keeps a file out of the REPO: Vite copies `public/` into
+     `dist/`, and extraResources bundles `dist/**` into the installer. They
+     shipped in every build, and the next `--publish always` would have put
+     customers' GSTINs and addresses on a PUBLIC GitHub release.
+
+     So: read the packed asar and refuse anything that looks like a real
+     identity document. Two signatures, both cheap and both specific enough not
+     to fire on code — a GSTIN is a fixed 15-character shape, and an RS256 JWT
+     with `iss` NIC is a government e-invoice signature. Nothing legitimate in
+     this app's source contains either. */
+  const asarPath = join(outDir, 'win-unpacked', 'resources', 'app.asar');
+  if (existsSync(asarPath)) {
+    const blob = readFileSync(asarPath).toString('latin1');
+    const gstins = new Set(blob.match(/[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]/g) || []);
+    /* `eyJhbGciOiJSUzI1NiJ9` is the base64 of {"alg":"RS256"} EXACTLY, and the
+       real payloads carry {"alg":"RS256","typ":"JWT"} — a different string. The
+       strict form read 0 on a file holding 13 of them while the GSTIN signal
+       caught it, i.e. half the guard was dead and looked fine. Match any RS*
+       header instead, and verify against sample-data/ when changing this. */
+    const nicJwts = (blob.match(/eyJhbGciOiJS[A-Za-z0-9_-]{6,}\.eyJ[A-Za-z0-9_-]{40,}/g) || []).length;
+    if (gstins.size || nicJwts) {
+      fail(`The packaged app contains real business data: ${gstins.size} GSTIN(s), ${nicJwts} e-invoice signature(s).`);
+      fail('kaxx4/MKCP-V4 is PUBLIC — publishing this would expose customer identities.');
+      fail('Look for sample/fixture data under public/, which Vite copies into dist/.');
+      process.exit(1);
+    }
+    ok('Verified: no GSTINs or e-invoice signatures in the package — safe to publish');
   }
 
   console.log(`\n${GREEN}════════════════════════════════════════${RESET}`);
