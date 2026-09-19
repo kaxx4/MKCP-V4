@@ -152,7 +152,22 @@
    tabular treatment that is correct in a table column is wrong here.       */
 [data-theme="bento"] .stat-figure {
   font-family: var(--font-sans);
-  font-size: clamp(26px, 2.6vw, 34px);
+  /* Sized from the TILE, not the viewport.
+     This rule used to read clamp(26px, 2.6vw, 34px), and at specificity 0,2,0
+     it silently beat the utility class StatTile.tsx sets (0,1,0) — so the
+     component's whole "never crop a figure, shrink the type instead" mechanism
+     was dead under this theme, which is the active one. Two consequences, both
+     measured at 375px on /invoices, 19-Sep-2026:
+       · the floor was 26px however narrow the tile got, and
+       · vw asks the VIEWPORT, which knows nothing about how many tiles share
+         the row — the exact mistake the container query exists to avoid.
+     Result: ₹80,18,13,611 rendered 178px wide inside a 164px tile and ran off
+     the right of the page. Nothing caught it, because `html` is
+     overflow-x:hidden and `body` is clip, so the route sweep's
+     `scrollWidth - clientWidth` reads 0 however far content overruns.
+     14cqw fits a 13-digit rupee figure in a 164px tile (~157px) and still
+     reaches the 34px display size on a desktop tile. */
+  font-size: clamp(15px, 14cqw, 34px);
   line-height: 0.98;
   font-weight: 800;
   letter-spacing: -0.035em;
