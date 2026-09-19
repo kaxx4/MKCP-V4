@@ -142,7 +142,16 @@ export async function loadMasters(
 
   const [ledXml, itemXml] = await Promise.all([
     tallyPost(tallyUrl, collectionXml("MkLedgers", "Ledger",
-      ["Name", "Parent", "PartyGSTIN", "GSTIN", "LedStateName", "PinCode", "MailingName", "Address", "LedGSTRegDetails"],
+      /* `LedMailingDetails` is why the party address reaches Tally at all.
+         "Address" alone returns NOTHING on a Ledger — the postal address is
+         nested inside LEDMAILINGDETAILS.LIST -> ADDRESS.LIST -> ADDRESS, dated
+         with APPLICABLEFROM exactly like the GST registrations below. Without
+         it the parser below found zero addresses on all 482 ledgers and every
+         pushed voucher went to Tally with none, which is precisely what the
+         operator reported on 19-Sep-2026. A field we never asked for is
+         indistinguishable from a field Tally does not hold (G7). */
+      ["Name", "Parent", "PartyGSTIN", "GSTIN", "LedStateName", "PinCode", "MailingName",
+       "Address", "LedMailingDetails", "LedGSTRegDetails"],
       company), 180_000, true) as Promise<string>,
     tallyPost(tallyUrl, collectionXml("MkItems", "StockItem",
       ["Name", "Parent", "BaseUnits", "Denominator", "ClosingBalance", "ClosingRate", "GSTDetails", "SrcOfGSTDetails"],

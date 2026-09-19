@@ -221,6 +221,24 @@ export interface VoucherPayload {
   voucherType: "Sales" | "Purchase" | "Receipt" | "Payment" | "Contra" | "Credit Note"
     | "Debit Note" | "Journal" | "Sales Order Note" | "Delivery Note" | "Receipt Note";
   date: string;               // YYYY-MM-DD
+  /**
+   * The party's postal address, one line per element.
+   *
+   * The ONE field Tally does not fill in for us. Measured 19-Sep-2026 against
+   * 1,030 hand-typed SALES invoices in the live book: every other identity
+   * field we care about — PARTYGSTIN, STATENAME, PLACEOFSUPPLY,
+   * GSTREGISTRATIONTYPE, CONSIGNEESTATENAME, CONSIGNEEGSTIN, BASICBUYERNAME,
+   * PARTYMAILINGNAME — arrives on our pushed voucher without being sent,
+   * because Tally resolves them from the party ledger master on import.
+   * ADDRESS.LIST is populated on 842 of those 1,030 and on NONE of ours,
+   * because it is the one Tally expects the caller to supply.
+   *
+   * That is why the operator saw a pushed voucher with no address while every
+   * check passed: `safePush` compares what we sent to what Tally stored, and
+   * neither had it. See `scripts/fidelity-vs-native.ts`, which is the check
+   * that can see it.
+   */
+  partyAddress?: string[];
   voucherNumber?: string;
   /** Tally's `<REFERENCE>` — the OTHER party's document number. On a Purchase
    *  that is the supplier's invoice number and it is accounting data. It also
