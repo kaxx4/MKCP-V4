@@ -47,10 +47,30 @@ const ok = (s: string) => console.log(`  ${G}✓${X} ${s}`);
 const warn = (s: string) => console.log(`  ${Y}!${X} ${s}`);
 const bad = (s: string) => console.log(`  ${R}✗${X} ${s}`);
 
-/** Every local file that holds the key, and the variable it holds it under. */
+/**
+ * Every local file that holds the key, and the variable it holds it under.
+ *
+ * The userData copies are NOT optional and were nearly missed. The desktop app
+ * reads `<userData>/.env` in preference to the bundled copy, while the server
+ * does `import "dotenv/config"` against the repo file — two processes, two
+ * files, and BOTH have to move together. Flipping this machine to `sandbox` in
+ * September needed both; changing one alone did nothing visible and left the
+ * two disagreeing.
+ *
+ * There are two userData directories because the app's productName changed:
+ * `mkcycles-dashboard-electron` is the old Electron default and
+ * `MK Cycles Dashboard` the current one. Both still exist here and both hold
+ * the key, so both are rewritten — otherwise the stale one quietly becomes a
+ * copy of a credential nobody remembers rotating.
+ */
+const APPDATA = process.env.APPDATA ?? "";
 const TARGETS: { file: string; vars: string[] }[] = [
   { file: join(ROOT, "mkcycles-dashboard", "server", ".env"), vars: ["SUPABASE_SERVICE_KEY"] },
   { file: join(ROOT, "MKCP MOB2", "web-dashboard", ".env"), vars: ["SUPABASE_SERVICE_KEY", "SUPABASE_SERVICE_ROLE_KEY"] },
+  ...(APPDATA ? [
+    { file: join(APPDATA, "MK Cycles Dashboard", ".env"), vars: ["SUPABASE_SERVICE_KEY"] },
+    { file: join(APPDATA, "mkcycles-dashboard-electron", ".env"), vars: ["SUPABASE_SERVICE_KEY"] },
+  ] : []),
 ];
 
 /** Stale copies — same secret, no longer serving any purpose. */
@@ -59,7 +79,12 @@ const STALE = [
   join(ROOT, "mkcycles-dashboard", "server", ".env.bak-role-flip-20260915-114650"),
 ];
 
-const rel = (p: string) => relative(ROOT, p).replace(/\\/g, "/");
+/** Repo files print relative to the workspace; userData is outside it, so an
+ *  ugly ../../.. would obscure exactly the paths most easily overlooked. */
+const rel = (p: string) => {
+  const r = relative(ROOT, p).replace(/\\/g, "/");
+  return r.startsWith("..") ? p.replace(/\\/g, "/") : r;
+};
 
 /** Replace `VAR=…` in place, preserving every other line and the file's order. */
 function rewrite(text: string, vars: string[], value: string): { text: string; changed: string[] } {
@@ -95,6 +120,29 @@ async function verify(url: string, key: string): Promise<{ ok: boolean; status: 
 (async () => {
   console.log(`\n  ROTATE THE SUPABASE SERVICE-ROLE KEY\n  ${"─".repeat(66)}`);
 
+  /* `--list-targets` needs no key, so the list of files this will rewrite can
+     be checked BEFORE the rotation rather than discovered during it. Without
+     it every other path is gated behind a valid key, which means the target
+     list is the one part of this script nobody can verify until the moment it
+     matters. Prints names and existence only — never a value. */
+  if (process.argv.includes("--list-targets")) {
+    console.log(`  files this would rewrite:
+`);
+    for (const t of TARGETS) {
+      const here = existsSync(t.file);
+      const has = here && t.vars.some((v) => new RegExp(`^${v}=`, "m").test(readFileSync(t.file, "utf8")));
+      console.log(`    ${here ? (has ? "holds the key " : "present, no key") : "absent        "}  ${rel(t.file)}`);
+    }
+    console.log(`
+  stale copies of the old key:
+`);
+    const st = STALE.filter(existsSync);
+    if (!st.length) console.log(`    none`);
+    for (const f of st) console.log(`    holds the key   ${rel(f)}`);
+    console.log();
+    return;
+  }
+
   if (!NEW) {
     bad("NEW_SUPABASE_SERVICE_KEY is not set.");
     console.log(`\n  Rotate it first:  Supabase dashboard → Project Settings → API`);
@@ -114,7 +162,13 @@ async function verify(url: string, key: string): Promise<{ ok: boolean; status: 
   if (!url) { bad(`No SUPABASE_URL in ${rel(TARGETS[0].file)} — cannot verify.`); process.exit(2); }
   const v = await verify(url, NEW);
   (v.ok ? ok : bad)(`new key against Supabase: ${v.note}`);
-  if (!v.ok) { console.log(`\n  Not writing anything. Fix the key first.\n`); process.exit(1); }
+  /* `process.exitCode` and RETURN, not `process.exit()`. Calling exit() here
+     tore down the loop while the verify() fetch handle was still closing, and
+     Windows raised `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` —
+     after the verdict had printed, so it read as cosmetic. It is not: on that
+     path the exit code is whatever the abort leaves behind, and a script whose
+     own pass/fail cannot be trusted is the exact thing this week was about. */
+  if (!v.ok) { console.log(`\n  Not writing anything. Fix the key first.\n`); process.exitCode = 1; return; }
 
   console.log(`\n  ── local files`);
   for (const t of TARGETS) {
@@ -141,7 +195,8 @@ async function verify(url: string, key: string): Promise<{ ok: boolean; status: 
   console.log(`     1. Vercel · project mkcpweb · SUPABASE_SERVICE_KEY`);
   console.log(`        set for BOTH production and preview (it is today).`);
   console.log(`        ${D}vercel env rm SUPABASE_SERVICE_KEY production && vercel env add SUPABASE_SERVICE_KEY production${X}`);
-  console.log(`     2. The OFFICE machine's userData .env — the desktop app provisions`);
+  console.log(`     2. The OFFICE machine's userData .env — the two on THIS machine
+        are handled above, but the office box has its own. The app provisions`);
   console.log(`        this on first run, so either re-provision it (MKCP_EMBED_ENV=1`);
   console.log(`        build, carried by hand — never published) or edit the file in`);
   console.log(`        place and restart the agent.`);
