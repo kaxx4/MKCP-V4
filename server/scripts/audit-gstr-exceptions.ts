@@ -113,6 +113,36 @@ async function main(): Promise<void> {
   console.log(`\n  ${r.vouchersChecked} vouchers read · ${r.outwardChecked} outward supplies audited`);
   console.log(`  ${r.exceptions.length} exception condition(s) found\n`);
 
+  /* An empty denominator is a FAILED CHECK, not a clean result.
+
+     Without this, a run that read nothing printed "Nothing. Every outward
+     supply carries what the return needs." and exited 0 — the nightly gate
+     passing having examined zero vouchers. Not hypothetical here: an
+     unescaped `>=` in a Tally filter returns zero rows with no error, and a
+     renamed sales voucher type would empty `outwardChecked` while
+     `vouchersChecked` stayed healthy. Both look exactly like a clean book.
+
+     This is the one check standing between a wrong return and the 11th, so
+     it refuses to report success on a sample it never took. Added
+     20-Sep-2026, after four separate instruments were found reporting zero
+     because they were broken rather than because the thing was absent. */
+  if (r.vouchersChecked === 0) {
+    console.log(`  ${"═".repeat(66)}`);
+    console.log(`  CHECK FAILED — zero vouchers were read for ${from}…${to}.`);
+    console.log(`  This is NOT a clean result. Nothing was audited, so nothing is known.`);
+    console.log(`  Look at the date range, the Tally filter, and whether the company is open.`);
+    console.log(`  ${"═".repeat(66)}`);
+    process.exit(1);
+  }
+  if (r.outwardChecked === 0) {
+    console.log(`  ${"═".repeat(66)}`);
+    console.log(`  CHECK FAILED — ${r.vouchersChecked} vouchers read but NOT ONE was an`);
+    console.log(`  outward supply. Every rule here audits outward supplies, so this run`);
+    console.log(`  asserted nothing. Most likely the sales voucher-type names moved.`);
+    console.log(`  ${"═".repeat(66)}`);
+    process.exit(1);
+  }
+
   if (r.exceptions.length) {
     for (const [kind, n] of Object.entries(r.byKind).sort((a, b) => b[1] - a[1])) {
       console.log(`    ${String(n).padStart(5)}  ${kind}`);

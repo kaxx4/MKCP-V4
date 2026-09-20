@@ -93,6 +93,12 @@ async function tallyDay(company: string, iso: string): Promise<Set<string>> {
   console.log(`mode     read-only\n`);
 
   let phantomTotal = 0;
+  /* How many days actually had mirror rows. Without this, a run where EVERY
+     day returns zero — wrong company key, an RLS block, a renamed table —
+     skips every day, leaves phantomTotal at 0 and reports a clean mirror.
+     That is the same shape as the GSTR gate passing on zero vouchers, and
+     this script's whole job is to stop a destructive prune. */
+  let daysWithRows = 0;
 
   for (let i = 0; i < DAYS; i++) {
     const d = new Date(from);
@@ -107,6 +113,7 @@ async function tallyDay(company: string, iso: string): Promise<Set<string>> {
     if (error) { console.error(`  ${iso}  supabase error: ${error.message}`); continue; }
     const rows = data ?? [];
     if (rows.length === 0) continue;
+    daysWithRows++;
 
     const inTally = await tallyDay(company, iso);
     const phantoms = rows.filter((r) => !inTally.has(String(r.guid)));
@@ -125,6 +132,19 @@ async function tallyDay(company: string, iso: string): Promise<Set<string>> {
     }
   }
 
+
+  if (daysWithRows === 0) {
+    console.log(`
+  ${"═".repeat(66)}`);
+    console.log(`  CHECK FAILED — not one day in the window had ANY mirror rows.`);
+    console.log(`  Nothing was compared, so "no phantoms" means nothing. Check the`);
+    console.log(`  company key, RLS, and that tally_vouchers is populated at all.`);
+    console.log(`  ${"═".repeat(66)}
+`);
+    process.exit(1);
+  }
+
+  console.log(`  compared ${daysWithRows} day(s) that had mirror rows.`);
   console.log(`\n${phantomTotal} phantom row(s) across the window.`);
 
   console.log(`
