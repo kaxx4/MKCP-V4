@@ -1057,21 +1057,6 @@ export default function AgentStatus() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mx-auto">
 
-        {/* ── Tally ─────────────────────────────────────────────── */}
-        <SectionCard title="Tally" icon={connected ? <Wifi size={15} /> : <WifiOff size={15} />}>
-          <TallyPanel health={health} configuredCompany={companyName} base={BASE} />
-        </SectionCard>
-
-        {/* ── Updates ───────────────────────────────────────────────
-            Sits directly under Tally because it answers the question an
-            operator asks in the same breath as "is the agent working?" —
-            namely "am I running the build that fixes it?". `electron-updater`
-            alone cannot answer that: it reads latest.yml from the newest
-            release and nothing else, so it has no history and no way back. */}
-        <SectionCard title="Updates" icon={<Download size={15} />}>
-          <UpdatesPanel />
-        </SectionCard>
-
         {/* ── Cloud / Supabase ──────────────────────────────────── */}
         <SectionCard title="Supabase Cloud" icon={cloudOk ? <Cloud size={15} /> : <CloudOff size={15} />}>
           <SupabaseCloudPanel
@@ -1082,6 +1067,11 @@ export default function AgentStatus() {
             readHost={SUPA_URL ? new URL(SUPA_URL).host : null}
             fmtTime={fmt}
           />
+        </SectionCard>
+
+        {/* ── Tally ─────────────────────────────────────────────── */}
+        <SectionCard title="Tally" icon={connected ? <Wifi size={15} /> : <WifiOff size={15} />}>
+          <TallyPanel health={health} configuredCompany={companyName} base={BASE} />
         </SectionCard>
 
         {/* ── Quick Sync (Tally → then push → Supabase) ────────── */}
@@ -1392,6 +1382,19 @@ export default function AgentStatus() {
                   )}
                 </div>
             </>
+          </SectionCard>
+        </div>
+
+        {/* ── Updates ───────────────────────────────────────────────
+            Last on the page, and full width. It is the only section that is
+            not about today's work: everything above answers "is the agent
+            doing its job right now", and this answers "which build am I on" —
+            a question asked occasionally and deliberately, not scanned.
+            Full width because it ends the grid, and a half-width card beside
+            nothing reads as a layout fault rather than a choice. */}
+        <div className="md:col-span-2">
+          <SectionCard title="Updates" icon={<Download size={15} />}>
+            <UpdatesPanel />
           </SectionCard>
         </div>
 
