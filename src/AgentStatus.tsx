@@ -24,6 +24,7 @@ import { SupabaseCloudPanel } from "./components/SupabaseCloudPanel";
 import { QuickSyncPanel } from "./components/QuickSyncPanel";
 import { PullSyncPanel, type PullAction } from "./components/PullSyncPanel";
 import { LogsPanel, isErrorLine } from "./components/LogsPanel";
+import { UpdatesPanel } from "./components/UpdatesPanel";
 /* The four KPI facts are derived here AND in QuickView.tsx, so the reasoning
    lives in one module rather than in whichever window was edited last. The part
    that must not drift is telling "zero" apart from "never counted". */
@@ -1059,6 +1060,16 @@ export default function AgentStatus() {
         {/* ── Tally ─────────────────────────────────────────────── */}
         <SectionCard title="Tally" icon={connected ? <Wifi size={15} /> : <WifiOff size={15} />}>
           <TallyPanel health={health} configuredCompany={companyName} base={BASE} />
+        </SectionCard>
+
+        {/* ── Updates ───────────────────────────────────────────────
+            Sits directly under Tally because it answers the question an
+            operator asks in the same breath as "is the agent working?" —
+            namely "am I running the build that fixes it?". `electron-updater`
+            alone cannot answer that: it reads latest.yml from the newest
+            release and nothing else, so it has no history and no way back. */}
+        <SectionCard title="Updates" icon={<Download size={15} />}>
+          <UpdatesPanel />
         </SectionCard>
 
         {/* ── Cloud / Supabase ──────────────────────────────────── */}

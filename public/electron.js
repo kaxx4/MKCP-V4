@@ -32,7 +32,7 @@ process.on('unhandledRejection', (reason) => {
   // Never crash/relaunch on an unhandled promise rejection — just log it.
   console.error('[electron] unhandledRejection:', reason);
 });
-const { startAutoUpdate, getUpdateState } = require('./autoUpdate');
+const { startAutoUpdate, getUpdateState, listReleases, downloadRelease } = require('./autoUpdate');
 let updater = null;
 /** True while the push agent holds a claimed job — see `isBusy` below.
  *  Starts TRUE so an install cannot slip through before the first probe. */
@@ -630,6 +630,24 @@ ipcMain.handle('update:check-now', async () => (updater ? updater.checkNow() : g
    mid-push is the one thing this must not do casually. */
 ipcMain.handle('update:install-now', async (_e, opts) =>
   (updater ? updater.installNow(opts ?? {}) : { ok: false, reason: 'Updates are not running.' }));
+
+/* Every published release, not just "is there something newer".
+   `electron-updater` reads latest.yml from the NEWEST release and nothing else,
+   so it can neither show history nor go back a version — and the day you need
+   either is the day an update misbehaved. Sourced from autoUpdate.js so there
+   is one definition of where releases come from (G1). */
+ipcMain.handle('update:list-releases', async (_e, opts) => listReleases(opts ?? {}));
+
+/* Download one version's installer and reveal it in Explorer. It never runs it:
+   the operator runs installers, in a place where Windows can tell them what
+   they are about to run. Progress goes back over `update:download-progress`,
+   because an 85 MB download with no feedback reads as a dead button. */
+ipcMain.handle('update:download-release', async (e, version) =>
+  downloadRelease(version, {
+    onProgress: (p) => {
+      if (!e.sender.isDestroyed()) e.sender.send('update:download-progress', p);
+    },
+  }));
 
 // ── Discount Rules file persistence ──────────────────────────────────────────
 const discountRulesPath = path.join(app.getPath('userData'), 'discount-rules.json');
