@@ -48,6 +48,10 @@ config({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".env") });
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { esc, blocksOf, tagOf } from "../src/services/tallyRequest.js";
+/* One definition of "is this voucher ours" — the file that owns the patterns,
+   never a copy. A second copy of that predicate once listed nine real MONDAL
+   ENTERPRISE purchases as disposable (G1). */
+import { census } from "./find-stranded-test-vouchers.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
@@ -76,7 +80,7 @@ function record(stage: string, verdict: Verdict, note = "") {
  * whether or not anybody has opened TallyPrime, so its presence proves
  * nothing at all about the XML port.
  */
-async function preflight(): Promise<boolean> {
+async function preflight(): Promise<string | null> {
   console.log(`\n  ── preflight`);
   const port = Number(new URL(TALLY_URL).port || 9000);
 
@@ -91,7 +95,7 @@ async function preflight(): Promise<boolean> {
     record(`Tally answers on ${TALLY_URL}`, "pass", open.length ? open.join(", ") : "no company open");
     if (!open.length) {
       console.log(`\n  ${R}Tally is listening but no company is open.${X} Open the company and re-run.\n`);
-      return false;
+      return null;
     }
     /* The sandbox rule, restated where it bites. This machine's Tally holds an
        OLD BACKUP company sharing production's name, and every mirror table is
@@ -103,7 +107,7 @@ async function preflight(): Promise<boolean> {
       ROLE === "sandbox"
         ? `local Tally only — nothing shared is touched; "${open[0]}" is the BACKUP copy`
         : `this is the real book — pushes below are marked and removed`);
-    return true;
+    return open[0];
   } catch (e) {
     record(`Tally answers on ${TALLY_URL}`, "cannot-run", (e as Error).message.slice(0, 60));
   }
@@ -125,7 +129,7 @@ async function preflight(): Promise<boolean> {
     console.log(`  ${Y}→ Open TallyPrime, load the company, then re-run this.${X}`);
   }
   console.log();
-  return false;
+  return null;
 }
 
 /**
@@ -181,7 +185,8 @@ function runHarness(stage: string, script: string, args: string[] = []) {
   console.log(`\n  TALLY — PULL AND PUSH, END TO END`);
   console.log(`  ${"─".repeat(72)}`);
 
-  if (!(await preflight())) {
+  const company = await preflight();
+  if (!company) {
     console.log(`  ${"─".repeat(72)}`);
     console.log(`  ${Y}Nothing was verified.${X} This is NOT a pass, and it is NOT a failure`);
     console.log(`  of the push path — it is the harness saying it could not look.\n`);
@@ -208,12 +213,43 @@ function runHarness(stage: string, script: string, args: string[] = []) {
     record("push · cleanup sweep", "skipped");
   } else {
     console.log(`\n  ── push  ${D}(writes marked vouchers, reads them back, removes them)${X}`);
+
+    /* A BEFORE census, so the cleanup can be judged on what it did rather than
+       on whether it exited 0.
+
+       The first version of this stage ran the sweep and passed on its exit
+       code. It printed "✓ cleanup · confirm books are clean" while ten test
+       vouchers sat in the books — the sweep exits 0 after merely LISTING the
+       ones it cannot delete, and my harness read that as success. A green line
+       that is not checking the thing it names is the exact failure this whole
+       gate exists to prevent, and it took thirty seconds to introduce.
+
+       What matters is not "are the books pristine" — ten vouchers from
+       September carry no REMOTEID and no code will ever remove them (they need
+       a human in the Tally UI). What matters is that THIS RUN adds nothing. So
+       the assertion is a set difference, and the pre-existing residue is
+       reported as a fact rather than hidden behind a tick or failing the gate. */
+    const before = await census(company);
+
     runHarness("round trip · build + push + diff", "roundtrip-verify.ts", ["--push"]);
-    /* Cleanup is part of the write test, not an afterthought — and it sweeps
-       what is ACTUALLY in the books rather than trusting the success list,
-       because `safePush` returning ok:false does not mean nothing was created. */
+    /* Sweeps what is ACTUALLY in the books rather than trusting the success
+       list, because `safePush` returning ok:false does not mean nothing was
+       created. */
     runHarness("cleanup · remove test vouchers", "find-stranded-test-vouchers.ts", ["--delete"]);
-    runHarness("cleanup · confirm books are clean", "find-stranded-test-vouchers.ts");
+
+    const after = await census(company);
+    const added = [...after].filter((v) => !before.has(v));
+    if (added.length) {
+      record("cleanup · this run left nothing behind", "fail",
+        `${added.length} voucher(s) survived: ${added.slice(0, 3).join(", ")}`);
+    } else {
+      record("cleanup · this run left nothing behind", "pass",
+        `${before.size} pre-existing test voucher(s) untouched`);
+    }
+    if (before.size) {
+      console.log(`  ${D}   ${before.size} test voucher(s) predate this run. They carry no REMOTEID,`);
+      console.log(`      so no script can remove them — Day Book → F2 → select → Alt+D.${X}`);
+    }
   }
 
   console.log(`\n  ${"─".repeat(72)}`);
@@ -227,7 +263,13 @@ function runHarness(stage: string, script: string, args: string[] = []) {
     process.exitCode = 1;
     return;
   }
-  console.log(`  ${G}Pull and push both verified against the live books.${X}`);
-  if (!PUSH) console.log(`  ${D}Reads only — re-run with --push to prove the write path too.${X}`);
+  /* Name only what actually ran. The first version printed "Pull and push both
+     verified" on a reads-only run — a summary line contradicting the `skipped`
+     rows three lines above it, and precisely the kind of claim this harness was
+     written to stop making. */
+  console.log(PUSH
+    ? `  ${G}Pull AND push verified against the live books.${X}`
+    : `  ${G}Pull verified against the live books.${X}  ${Y}The write path was NOT exercised${X}`
+      + `\n  ${D}— re-run with --push to prove it.${X}`);
   console.log();
 })();

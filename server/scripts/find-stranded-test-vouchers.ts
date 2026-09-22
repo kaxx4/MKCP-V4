@@ -57,7 +57,7 @@ const DO = process.argv.includes("--delete");
  * `--delete` also refuses anything that does not match a pattern, rather than
  * trusting the listing it printed a moment ago.
  */
-const NUMBER_PATTERNS: RegExp[] = [
+export const NUMBER_PATTERNS: RegExp[] = [
   /^MKCP-[A-Z]{2}\d{4,}/i,   // MKCP-QP90313-1, MKCP-VT12345-1
   /^RT\d{5,}\//i,            // RT741351/S
   /^ADOPT\d+\//i,            // ADOPT61309/SUBJECT
@@ -66,7 +66,7 @@ const NUMBER_PATTERNS: RegExp[] = [
   /^PROBE[-/]/i,
   /^FID[-/]/i,
 ];
-const NARRATION_MARKS = [
+export const NARRATION_MARKS = [
   "delete if this survives", "round-trip harness", "roundtrip harness",
   "probe. delete", "harness. delete",
 ];
@@ -79,7 +79,7 @@ const remoteIdGuesses = (type: string, number: string) => [
   `MKCP|TypeProbe|${number}|2026-27`,
 ];
 
-async function pull(company: string) {
+export async function pull(company: string) {
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>StrandScan</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
 <TDL><TDLMESSAGE><COLLECTION NAME="StrandScan" ISMODIFY="No"><TYPE>Voucher</TYPE>
@@ -115,16 +115,40 @@ async function tryDelete(company: string, type: string, number: string, date: st
   return null;
 }
 
-(async () => {
+/**
+ * Is this voucher one of ours, and therefore disposable?
+ *
+ * Exported so the end-to-end gate can take a BEFORE/AFTER census around a push
+ * without copying the patterns. A second definition of this predicate is not a
+ * style question — the first version matched a bare `MKCP-` prefix and listed
+ * nine REAL MONDAL ENTERPRISE purchases (~14 lakh) as disposable. One copy,
+ * here, where the reasoning lives (G1).
+ */
+export const isOurVoucher = (v: { number: string; narration: string }) =>
+  NUMBER_PATTERNS.some((re) => re.test(v.number))
+  || NARRATION_MARKS.some((m) => v.narration.toLowerCase().includes(m));
+
+/** Every test voucher currently in the books, keyed for set comparison. */
+export async function census(company: string): Promise<Set<string>> {
+  const all = await pull(company);
+  return new Set(all.filter(isOurVoucher).map((v) => `${v.date}|${v.type}|${v.number}`));
+}
+
+/* Only run the CLI when invoked directly, not when imported for a census. */
+const INVOKED_DIRECTLY = (process.argv[1] ?? "").includes("find-stranded-test-vouchers");
+
+/* `if (…) void (async …)()`, NOT `… && await (async …)()`. The await form
+   typechecks cleanly and then fails at RUNTIME — esbuild emits CJS here and
+   top-level await is not valid in it. tsc is not the runtime, which is the
+   whole reason this repo's gate is a script that executes rather than a
+   type-check that passes. */
+if (INVOKED_DIRECTLY) void (async () => {
   const company = convertCompanies(await tallyPost(U, HEALTH_XML, 10_000))[0]!.name;
   console.log(`\n  STRANDED TEST VOUCHERS\n  ${company}`);
   console.log(`  role=${process.env.MKCP_TALLY_ROLE ?? "primary"}\n  ${"─".repeat(72)}`);
 
   const all = await pull(company);
-  const isOurs = (v: { number: string; narration: string }) =>
-    NUMBER_PATTERNS.some((re) => re.test(v.number))
-    || NARRATION_MARKS.some((m) => v.narration.toLowerCase().includes(m));
-  const suspect = all.filter(isOurs);
+  const suspect = all.filter(isOurVoucher);
 
   console.log(`  ${all.length} vouchers scanned · ${suspect.length} look like ours\n`);
   if (!suspect.length) { console.log(`  Nothing stranded. Books are clean.\n`); return; }
@@ -141,7 +165,7 @@ async function tryDelete(company: string, type: string, number: string, date: st
   for (const v of suspect) {
     /* Re-check rather than trust the list printed a moment ago. Cheap, and the
        thing it guards against is deleting a real voucher. */
-    if (!isOurs(v)) { console.log(`     SKIP     ${v.number}   does not match a harness pattern`); continue; }
+    if (!isOurVoucher(v)) { console.log(`     SKIP     ${v.number}   does not match a harness pattern`); continue; }
     const via = await tryDelete(company, v.type, v.number, v.date.replace(/-/g, ""));
     if (via) console.log(`     removed  ${v.number}   via ${via}`);
     else { console.log(`     STUCK    ${v.number}   no reconstructable REMOTEID`); stuck.push(v); }
