@@ -365,6 +365,38 @@ async function main() {
       process.exit(1);
     }
     ok('Verified: no GSTINs or e-invoice signatures in the package — safe to publish');
+
+    /* The renderer's READ credentials, verified present rather than assumed.
+     *
+     * Found 22-Sep-2026 from the app's own Supabase Cloud panel: "no read
+     * client — this build has no Supabase read credentials", so the history and
+     * push-log lists were permanently empty. The cause was that the repo root
+     * had NO `.env` at all. Vite reads the root file, beside vite.config.ts;
+     * `server/.env` is a different file for a different process, and having one
+     * looks exactly like having the other until you check.
+     *
+     * Nothing failed. `import.meta.env.VITE_SUPABASE_URL` was simply undefined,
+     * the renderer skipped building a client, and the build shipped — this
+     * project's signature failure shape, and the reason the check belongs in the
+     * build rather than in a panel that reports it after the fact.
+     *
+     * It reads the PACKED asar, not the environment, because what matters is
+     * what got INLINED — a variable present at build time and then misspelled
+     * or tree-shaken would still pass an env check. Counts and yes/no only; no
+     * value is printed, though both are publishable and RLS-gated by design. */
+    const hasUrl = /https:\/\/[a-z0-9]{20}\.supabase\.co/.test(blob);
+    const hasPublishable = /sb_publishable_[A-Za-z0-9_-]{10,}/.test(blob)
+      || /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]*(cm9sZSI6ImFub24|InJvbGUiOiJhbm9u)/.test(blob);
+    if (!hasUrl || !hasPublishable) {
+      fail('The renderer has NO Supabase read credentials baked in.');
+      fail(`  project URL inlined: ${hasUrl ? 'yes' : 'NO'} · publishable key inlined: ${hasPublishable ? 'yes' : 'NO'}`);
+      fail('Vite reads the REPO ROOT .env (beside vite.config.ts), not server/.env.');
+      fail('Copy .env.example to .env, fill both VITE_ values, and rebuild.');
+      fail('Pushing would still work — only the history and push-log lists read');
+      fail('empty, which looks identical to "nothing has synced".');
+      process.exit(1);
+    }
+    ok('Verified: renderer carries its Supabase read credentials (URL + publishable key)');
   }
 
   console.log(`\n${GREEN}════════════════════════════════════════${RESET}`);
