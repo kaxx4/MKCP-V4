@@ -31,6 +31,22 @@
  * rotation that updates `.env` and leaves those behind has not reduced the
  * exposure at all — it has just made the live copy the odd one out. This
  * offers to shred them, and says so loudly if you decline.
+ *
+ * ── A target list is a claim, and this one was wrong ──────────────────────
+ *
+ * The first version reported `MKCP MOB2/web-dashboard/.env` as "holds the key"
+ * on the strength of the VARIABLE NAME being present. Measured 22-Sep-2026: the
+ * value there is 13 characters — a placeholder — and that repo's own
+ * `.env.example` states the policy beside it, *"NEVER commit a real key — set
+ * this in Vercel/Supabase env only"*. So `--apply` would have written a live
+ * service-role key into a file that today holds a harmless stub, **increasing**
+ * the number of places the secret exists. A rotation script doing the inverse
+ * of its job is worth more caution than the rotation itself.
+ *
+ * `--list-targets` now reports what each file ACTUALLY holds — live key,
+ * placeholder, variable absent, file absent — and fingerprints the live ones
+ * (a non-reversible 8-hex tag, never the value) so you can see at a glance
+ * whether the copies agree. They have silently disagreed before.
  */
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,14 +80,58 @@ const bad = (s: string) => console.log(`  ${R}✗${X} ${s}`);
  * copy of a credential nobody remembers rotating.
  */
 const APPDATA = process.env.APPDATA ?? "";
-const TARGETS: { file: string; vars: string[] }[] = [
+type Target = { file: string; vars: string[]; neverWrite?: string };
+const TARGETS: Target[] = [
   { file: join(ROOT, "mkcycles-dashboard", "server", ".env"), vars: ["SUPABASE_SERVICE_KEY"] },
-  { file: join(ROOT, "MKCP MOB2", "web-dashboard", ".env"), vars: ["SUPABASE_SERVICE_KEY", "SUPABASE_SERVICE_ROLE_KEY"] },
+  {
+    file: join(ROOT, "MKCP MOB2", "web-dashboard", ".env"),
+    vars: ["SUPABASE_SERVICE_KEY", "SUPABASE_SERVICE_ROLE_KEY"],
+    /* NOT a copy of the key, and it must not become one.
+       This file's SUPABASE_SERVICE_KEY is a 13-character PLACEHOLDER — measured
+       22-Sep-2026, and `web-dashboard/.env.example` states the policy on the
+       same line: "NEVER commit a real key — set this in Vercel/Supabase env
+       only." The web app's service-role writes happen in Vercel's serverless
+       functions, which read Vercel's own environment; nothing local needs the
+       real value, and `vercel dev` failing with "Invalid API key" is the
+       intended consequence of that.
+
+       The first version of this script listed the file as "holds the key"
+       because it only checked that the VARIABLE NAME was present. On `--apply`
+       it would have written a live service-role key into a file that today
+       holds a harmless stub — a rotation script INCREASING the number of places
+       the secret exists, which is the exact inverse of its job. */
+    neverWrite: "holds a deliberate placeholder — the real key belongs in Vercel's env, not on disk",
+  },
   ...(APPDATA ? [
     { file: join(APPDATA, "MK Cycles Dashboard", ".env"), vars: ["SUPABASE_SERVICE_KEY"] },
     { file: join(APPDATA, "mkcycles-dashboard-electron", ".env"), vars: ["SUPABASE_SERVICE_KEY"] },
   ] : []),
 ];
+
+/** A real Supabase secret, as opposed to `your-service-role-key-here`. Both
+ *  the legacy `service_role` JWT and the newer `sb_secret_*` form count. */
+const looksLikeRealKey = (v: string) => /^eyJ[A-Za-z0-9_-]+\.eyJ/.test(v) || /^sb_secret_/.test(v);
+
+/** A stable, NON-reversible 8-hex tag for a key, so two files can be compared
+ *  without either value being shown. Copies that disagree is the failure the
+ *  September role-flip hit — both userData `.env` files and `server/.env` have
+ *  to move together, and nothing said when they did not. */
+const fingerprint = (v: string) =>
+  ([...v].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7)).toString(16).padStart(8, "0");
+
+/** What a file currently holds, named honestly. */
+function inspect(file: string, vars: string[]) {
+  if (!existsSync(file)) return { state: "absent" as const };
+  const text = readFileSync(file, "utf8");
+  for (const v of vars) {
+    const found = text.match(new RegExp(`^${v}=(.*)$`, "m"))?.[1]?.trim();
+    if (found === undefined) continue;
+    return looksLikeRealKey(found)
+      ? { state: "live" as const, fp: fingerprint(found) }
+      : { state: "placeholder" as const, len: found.length };
+  }
+  return { state: "no-var" as const };
+}
 
 /** Stale copies — same secret, no longer serving any purpose. */
 const STALE = [
@@ -126,12 +186,29 @@ async function verify(url: string, key: string): Promise<{ ok: boolean; status: 
      list is the one part of this script nobody can verify until the moment it
      matters. Prints names and existence only — never a value. */
   if (process.argv.includes("--list-targets")) {
-    console.log(`  files this would rewrite:
+    console.log(`  local files, and what each one ACTUALLY holds:
 `);
     for (const t of TARGETS) {
-      const here = existsSync(t.file);
-      const has = here && t.vars.some((v) => new RegExp(`^${v}=`, "m").test(readFileSync(t.file, "utf8")));
-      console.log(`    ${here ? (has ? "holds the key " : "present, no key") : "absent        "}  ${rel(t.file)}`);
+      const i = inspect(t.file, t.vars);
+      const label =
+        i.state === "absent" ? "absent          "
+        : i.state === "no-var" ? "present, no key "
+        : i.state === "placeholder" ? `placeholder(${String(i.len).padStart(3)}) `
+        : `LIVE KEY ${i.fp}`;
+      const note = t.neverWrite ? `  ${D}— left alone: ${t.neverWrite}${X}` : "";
+      console.log(`    ${label}  ${rel(t.file)}${note}`);
+    }
+    /* Do the live copies agree? A rotation that moves some of them is worse
+       than one that moves none, because the disagreement is invisible — that is
+       exactly how the September role-flip left two files saying different
+       things with nothing on screen to say so. */
+    const live = TARGETS.map((t) => inspect(t.file, t.vars))
+      .filter((i): i is { state: "live"; fp: string } => i.state === "live");
+    if (live.length) {
+      const distinct = new Set(live.map((i) => i.fp));
+      console.log(`
+  ${live.length} live copy(ies), ${distinct.size} distinct key(s)`
+        + (distinct.size > 1 ? `  ${R}— they DISAGREE${X}` : `  ${G}— all the same${X}`));
     }
     console.log(`
   stale copies of the old key:
@@ -172,6 +249,9 @@ async function verify(url: string, key: string): Promise<{ ok: boolean; status: 
 
   console.log(`\n  ── local files`);
   for (const t of TARGETS) {
+    /* A target whose current value is a deliberate stub is NOT rotated. Writing
+       a live key here would add a copy of the secret to disk, not remove one. */
+    if (t.neverWrite) { warn(`${rel(t.file)} — ${t.neverWrite}`); continue; }
     if (!existsSync(t.file)) { warn(`${rel(t.file)} — not present, skipped`); continue; }
     const text = readFileSync(t.file, "utf8");
     const { text: next, changed } = rewrite(text, t.vars, NEW);
@@ -193,7 +273,10 @@ async function verify(url: string, key: string): Promise<{ ok: boolean; status: 
 
   console.log(`\n  ── NOT done by this script, and nothing can do them from here`);
   console.log(`     1. Vercel · project mkcpweb · SUPABASE_SERVICE_KEY`);
-  console.log(`        set for BOTH production and preview (it is today).`);
+  console.log(`        set for BOTH production and preview (it is today). This is the`);
+  console.log(`        ONLY place the web side's key lives — web-dashboard/.env keeps a`);
+  console.log(`        placeholder on purpose, so miss this and every /api/* write fails`);
+  console.log(`        with "Invalid API key" while the browser's own reads keep working.`);
   console.log(`        ${D}vercel env rm SUPABASE_SERVICE_KEY production && vercel env add SUPABASE_SERVICE_KEY production${X}`);
   console.log(`     2. The OFFICE machine's userData .env — the two on THIS machine
         are handled above, but the office box has its own. The app provisions`);
