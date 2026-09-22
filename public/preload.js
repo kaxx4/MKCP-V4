@@ -12,6 +12,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getState: ()  => ipcRenderer.invoke('update:get-state'),
     checkNow: ()  => ipcRenderer.invoke('update:check-now'),
     installNow: (opts) => ipcRenderer.invoke('update:install-now', opts ?? {}),
+    /* The whole published history, and a specific version on demand — the two
+       questions electron-updater cannot answer, since it only ever reads
+       latest.yml from the newest release. */
+    listReleases: (opts) => ipcRenderer.invoke('update:list-releases', opts ?? {}),
+    downloadRelease: (version) => ipcRenderer.invoke('update:download-release', version),
+    onDownloadProgress: (cb) => {
+      const handler = (_e, p) => cb(p);
+      ipcRenderer.on('update:download-progress', handler);
+      return () => ipcRenderer.removeListener('update:download-progress', handler);
+    },
     onState: (cb) => {
       const handler = (_e, state) => cb(state);
       ipcRenderer.on('update:state', handler);
