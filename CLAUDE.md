@@ -43,6 +43,20 @@ There is no vitest here. Tests are assertion scripts under `server/scripts/`
 (`test-push-guard.ts`, `test-edge-cases.ts`, `test-gstr-exceptions.ts`,
 `test-gate-recovery.ts`) that print `N passed, N failed` and exit non-zero.
 
+**To answer "is the Tally path broken?" run one thing:**
+
+```bash
+npx tsx server/scripts/tally-verify-all.ts          # preflight + every read
+npx tsx server/scripts/tally-verify-all.ts --push   # also the write path
+```
+
+It preflights, sweeps the reads with a non-zero floor on each, runs the four
+guard suites and — with `--push` — the round trip plus its cleanup. A stage it
+cannot run says **CANNOT RUN** and exits 2; it never reports a pass it did not
+earn. The preflight exists because `tallygatewayserver.exe` on 9999 is a Windows
+SERVICE that runs whether or not TallyPrime is open, so "Tally is open" and
+"port 9000 answers" are different facts that look identical in a timeout.
+
 ## Talking to Tally
 
 Everything goes through **one function**: `tallyPost()` in `server/src/tally.ts`.
