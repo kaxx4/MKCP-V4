@@ -1,6 +1,6 @@
 import type { VoucherPayload, LedgerEntry, InventoryEntry, BillAllocation, PushResult } from "../types.js";
 import { tallyPost } from "../tally.js";
-import { findLedger, registrationOn, type TallyMasters } from "./tallyMasters.js";
+import { findLedger, gstRateFor, registrationOn, type TallyMasters } from "./tallyMasters.js";
 import { HOME_STATE_NAME, isInwardSupply, resolvePartyState } from "./pushGuard.js";
 import { XMLParser } from "fast-xml-parser";
 
@@ -304,10 +304,54 @@ function buildLedgerEntries(entries: LedgerEntry[], isInvoice: boolean, voucherD
   }).join("");
 }
 
-function buildInventoryEntries(entries: InventoryEntry[]): string {
+/**
+ * Where a stock line's GST rate and HSN come from — the master that actually
+ * declares them, found the way Tally resolves it (item, then up the group tree).
+ *
+ * Without this block Tally cannot tie the line to any rate: the invoice
+ * balances, verifies and reads back fine, and GST Tax Analysis files every line
+ * under "Tax rate/tax type not specified". Found 23-Sep-2026 on the day's cash
+ * split invoices (26-27/0718..0723). The trap is that most items carry their
+ * OWN GST block with the rate at 0 — a placeholder; the real rate (5% from
+ * 22-Sep-25) is on the stock group. A hand-typed invoice therefore stores
+ * GSTSOURCETYPE "Stock Group" + the group's name, and so must ours.
+ *
+ * Returns "" when the masters are absent or no master in the chain declares a
+ * rate — the line then goes out exactly as before.
+ */
+function buildLineGstSource(itemName: string, masters: TallyMasters | undefined, asOf: string | undefined): string {
+  if (!masters) return "";
+  const item = masters.items.get(itemName);
+  if (!item) return "";
+  const r = gstRateFor(masters, itemName, asOf);
+  if (!(r.rate > 0)) return "";
+  let src: string;
+  if (r.source === "item") {
+    src = `
+    <GSTSOURCETYPE>Stock Item</GSTSOURCETYPE>
+    <GSTITEMSOURCE>${esc(item.name)}</GSTITEMSOURCE>
+    <HSNSOURCETYPE>Stock Item</HSNSOURCETYPE>
+    <HSNITEMSOURCE>${esc(item.name)}</HSNITEMSOURCE>`;
+  } else {
+    const group = /^stock group "(.*)"$/.exec(r.source)?.[1];
+    if (!group) return "";
+    src = `
+    <GSTSOURCETYPE>Stock Group</GSTSOURCETYPE>
+    <GSTSTOCKGROUPSOURCE>${esc(group)}</GSTSTOCKGROUPSOURCE>
+    <HSNSOURCETYPE>Stock Group</HSNSOURCETYPE>
+    <HSNSTOCKGROUPSOURCE>${esc(group)}</HSNSTOCKGROUPSOURCE>`;
+  }
+  return `
+    <GSTOVRDNTAXABILITY>Taxable</GSTOVRDNTAXABILITY>${src}
+    <GSTOVRDNTYPEOFSUPPLY>Goods</GSTOVRDNTYPEOFSUPPLY>
+    <GSTRATEINFERAPPLICABILITY>As per Masters/Company</GSTRATEINFERAPPLICABILITY>
+    <GSTHSNINFERAPPLICABILITY>As per Masters/Company</GSTHSNINFERAPPLICABILITY>`;
+}
+
+function buildInventoryEntries(entries: InventoryEntry[], masters?: TallyMasters, asOf?: string): string {
   return entries.map(e => `
   <ALLINVENTORYENTRIES.LIST>
-    <STOCKITEMNAME>${esc(e.stockItemName)}</STOCKITEMNAME>
+    <STOCKITEMNAME>${esc(e.stockItemName)}</STOCKITEMNAME>${buildLineGstSource(e.stockItemName, masters, asOf)}
     <ISDEEMEDPOSITIVE>${e.isDeemedPositive ? "Yes" : "No"}</ISDEEMEDPOSITIVE>
     <ACTUALQTY>${e.quantity} ${esc(e.unit)}</ACTUALQTY>
     <BILLEDQTY>${e.quantity} ${esc(e.unit)}</BILLEDQTY>
@@ -417,7 +461,7 @@ export function buildVoucherImportXml(company: string, payload: VoucherPayload, 
             <BASICBASEPARTYNAME>${esc(payload.partyLedgerName)}</BASICBASEPARTYNAME>
             <VCHENTRYMODE>${hasInventory ? "Item Invoice" : "Accounting Invoice"}</VCHENTRYMODE>` : ""}
             ${buildLedgerEntries(payload.ledgerEntries, isInvoiceShaped(payload), payload.date)}
-            ${hasInventory ? buildInventoryEntries(payload.inventoryEntries!) : ""}
+            ${hasInventory ? buildInventoryEntries(payload.inventoryEntries!, isInwardSupply(payload.voucherType) ? undefined : masters, payload.date) : ""}
           </VOUCHER>
         </TALLYMESSAGE>
       </REQUESTDATA>
