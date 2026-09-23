@@ -21,6 +21,22 @@ export interface LedgerRegistration {
   state: string;
 }
 
+/**
+ * One dated block of a party's mailing details (LEDMAILINGDETAILS.LIST) — the
+ * bill-to AND ship-to identity a voucher prints and the e-way bill / e-invoice
+ * read. Dated exactly like the GST registration: a party that moves keeps its
+ * old address for old vouchers.
+ */
+export interface LedgerMailing {
+  /** YYYYMMDD; "" when undated. */
+  applicableFrom: string;
+  mailingName: string;
+  address: string[];
+  pincode: string;
+  state: string;
+  country: string;
+}
+
 export interface MasterLedger {
   name: string;
   parent: string;
@@ -28,9 +44,21 @@ export interface MasterLedger {
   state: string;
   pincode: string;
   mailingName: string;
+  /**
+   * The CURRENT mailing address, one line per element, never repeated.
+   *
+   * Until 23-Sep-2026 this collected every <ADDRESS> anywhere in the ledger
+   * block — and the fetch returns the address twice (the flat ADDRESS.LIST and
+   * again inside LEDMAILINGDETAILS.LIST), so three ledgers read back with every
+   * line doubled ("G T ROAD, LUDHIANA", "G T ROAD, LUDHIANA"), and a party with
+   * two dated mailing blocks would have had both addresses glued together.
+   * Use `mailingOn(led, date)` for a voucher's own date.
+   */
   address: string[];
   /** Dated GST registration history, oldest first. Empty when Tally holds none. */
   registrations: LedgerRegistration[];
+  /** Dated mailing details, oldest first. Optional so hand-built fixtures still type. */
+  mailing?: LedgerMailing[];
 }
 
 export interface MasterItem {
@@ -66,6 +94,20 @@ export interface MasterItem {
   parent: string;
   /** Tally's own word for where the rate resolves from, e.g. "As per Company/Stock Group". */
   gstRateSource: string;
+  /** Dated HSN declarations (HSNDETAILS.LIST), oldest first. See `hsnFor`. */
+  hsnRevisions?: HsnRevision[];
+}
+
+/**
+ * One dated HSN declaration. Only a block whose SRCOFHSNDETAILS is "Specify
+ * Details Here" declares anything; "As per Company/Stock Group" inherits, and is
+ * skipped exactly like a 0 GST rate is.
+ */
+export interface HsnRevision {
+  /** ISO date, "" when undated. */
+  from: string;
+  code: string;
+  description: string;
 }
 
 /** A stock group's own GST rate, used when an item inherits rather than declares. */
@@ -79,6 +121,7 @@ export interface MasterStockGroup {
   igstRate: number;
   /** Every dated revision, oldest first. 16 of 22 groups carry three. */
   gstRevisions: GstRevision[];
+  hsnRevisions?: HsnRevision[];
 }
 
 export interface TallyMasters {
@@ -154,14 +197,14 @@ export async function loadMasters(
        "Address", "LedMailingDetails", "LedGSTRegDetails"],
       company), 180_000, true) as Promise<string>,
     tallyPost(tallyUrl, collectionXml("MkItems", "StockItem",
-      ["Name", "Parent", "BaseUnits", "Denominator", "ClosingBalance", "ClosingRate", "GSTDetails", "SrcOfGSTDetails"],
+      ["Name", "Parent", "BaseUnits", "Denominator", "ClosingBalance", "ClosingRate", "GSTDetails", "SrcOfGSTDetails", "HSNDetails"],
       company), 180_000, true) as Promise<string>,
   ]);
   const [godownXml, unitXml, vtXml, sgXml] = await Promise.all([
     tallyPost(tallyUrl, collectionXml("MkGodowns", "Godown", ["Name"], company), 60_000, true) as Promise<string>,
     tallyPost(tallyUrl, collectionXml("MkUnits", "Unit", ["Name"], company), 60_000, true) as Promise<string>,
     tallyPost(tallyUrl, collectionXml("MkVchTypes", "VoucherType", ["Name", "Parent"], company), 60_000, true) as Promise<string>,
-    tallyPost(tallyUrl, collectionXml("MkStkGroups", "StockGroup", ["Name", "Parent", "GSTDetails"], company), 60_000, true) as Promise<string>,
+    tallyPost(tallyUrl, collectionXml("MkStkGroups", "StockGroup", ["Name", "Parent", "GSTDetails", "HSNDetails"], company), 60_000, true) as Promise<string>,
   ]);
 
   const ledgers = new Map<string, MasterLedger>();
@@ -193,16 +236,39 @@ export async function loadMasters(
       .filter(r => r.applicableFrom || r.gstin)
       .sort((a, b2) => a.applicableFrom.localeCompare(b2.applicableFrom));
 
+    /* Mailing details are DATED, like the registration. Parsed per block so a
+       party that moved keeps its addresses apart instead of concatenated, and
+       the flat fields are read with those blocks cut out so nothing is read
+       twice. */
+    const lines = (blk: string) =>
+      [...(/<ADDRESS\.LIST[^>]*>([\s\S]*?)<\/ADDRESS\.LIST>/.exec(blk)?.[1] ?? "").matchAll(/<ADDRESS>([^<]*)<\/ADDRESS>/g)]
+        .map(x => unescapeXml(x[1].trim())).filter(Boolean);
+    const mailing: LedgerMailing[] = [...b.matchAll(/<LEDMAILINGDETAILS\.LIST>([\s\S]*?)<\/LEDMAILINGDETAILS\.LIST>/g)]
+      .map(x => x[1])
+      .map(blk => ({
+        applicableFrom: field(blk, "APPLICABLEFROM"),
+        mailingName: field(blk, "MAILINGNAME"),
+        address: lines(blk),
+        pincode: field(blk, "PINCODE"),
+        state: field(blk, "STATE"),
+        country: field(blk, "COUNTRY"),
+      }))
+      .filter(mb => mb.address.length || mb.mailingName || mb.pincode || mb.state)
+      .sort((a, b2) => a.applicableFrom.localeCompare(b2.applicableFrom));
+    const flatBlock = b.replace(/<LEDMAILINGDETAILS\.LIST>[\s\S]*?<\/LEDMAILINGDETAILS\.LIST>/g, "");
+    const current = mailing[mailing.length - 1];
+
     ledgers.set(name, {
       name,
       parent: field(b, "PARENT"),
       // Flat fields remain the fallback for parties with no dated history.
       gstin: field(b, "PARTYGSTIN") || field(b, "GSTIN"),
       state: field(b, "LEDSTATENAME"),
-      pincode: field(b, "PINCODE"),
-      mailingName: field(b, "MAILINGNAME") || name,
-      address: [...b.matchAll(/<ADDRESS>([^<]*)<\/ADDRESS>/g)].map(x => unescapeXml(x[1].trim())).filter(Boolean),
+      pincode: field(flatBlock, "PINCODE") || current?.pincode || "",
+      mailingName: field(flatBlock, "MAILINGNAME") || current?.mailingName || name,
+      address: current?.address.length ? current.address : dedupeLines(lines(flatBlock)),
       registrations,
+      mailing,
     });
     ledgerLoose.set(looseKey(name), name);
   }
@@ -215,6 +281,7 @@ export async function loadMasters(
     if (!name) continue;
     items.set(name, {
       name,
+      hsnRevisions: hsnRevisions(b),
       baseUnit: field(b, "BASEUNITS") || "PC",
       denominator: leadingNumber(field(b, "DENOMINATOR")) || 1,
       closingRate: leadingNumber(field(b, "CLOSINGRATE")),
@@ -254,6 +321,7 @@ export async function loadMasters(
       name,
       parent: field(b, "PARENT"),
       ...gstRates(b),
+      hsnRevisions: hsnRevisions(b),
     });
   }
 
@@ -348,6 +416,32 @@ export function registrationOn(led: MasterLedger, isoDate: string): {
   };
 }
 
+/** Collapse the same list read twice ("A","B","A","B"); otherwise keep Tally's lines as they are. */
+function dedupeLines(ls: string[]): string[] {
+  const half = ls.length / 2;
+  if (ls.length && Number.isInteger(half) && ls.slice(0, half).join("\n") === ls.slice(half).join("\n")) return ls.slice(0, half);
+  return ls;
+}
+
+/**
+ * The mailing details in force for a party on a date — bill-to and ship-to.
+ *
+ * Same rule as `registrationOn`: the latest block that has started by the
+ * voucher's own date, falling back to the flat ledger fields.
+ */
+export function mailingOn(led: MasterLedger, isoDate: string): LedgerMailing {
+  const stamp = isoDate.replace(/-/g, "");
+  const inForce = [...(led.mailing ?? [])].filter(mb => !mb.applicableFrom || mb.applicableFrom <= stamp).pop();
+  return {
+    applicableFrom: inForce?.applicableFrom ?? "",
+    mailingName: inForce?.mailingName || led.mailingName || led.name,
+    address: inForce?.address.length ? inForce.address : led.address,
+    pincode: inForce?.pincode || led.pincode,
+    state: inForce?.state || led.state,
+    country: inForce?.country || "India",
+  };
+}
+
 /**
  * The CGST rate that will actually apply to an item, and where it came from.
  *
@@ -425,6 +519,56 @@ function gstRevisions(block: string): GstRevision[] {
   }
   // Oldest first, so "the latest not after a date" is a simple scan.
   return out.sort((a, b) => a.from.localeCompare(b.from));
+}
+
+/** Every dated, DECLARED HSN block (SRCOFHSNDETAILS = "Specify Details Here"). */
+function hsnRevisions(block: string): HsnRevision[] {
+  const out: HsnRevision[] = [];
+  for (const [, b] of block.matchAll(/<HSNDETAILS\.LIST>([\s\S]*?)<\/HSNDETAILS\.LIST>/g)) {
+    const code = /<HSNCODE>\s*([^<]*?)\s*<\/HSNCODE>/.exec(b)?.[1] ?? "";
+    const src = /<SRCOFHSNDETAILS>\s*([^<]*?)\s*<\/SRCOFHSNDETAILS>/.exec(b)?.[1] ?? "";
+    if (!code || /as per/i.test(src)) continue;
+    const raw = /<APPLICABLEFROM>\s*([^<]*?)\s*<\/APPLICABLEFROM>/.exec(b)?.[1] ?? "";
+    out.push({
+      from: /^\d{8}$/.test(raw) ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}` : "",
+      code,
+      description: unescapeXml(/<HSN>\s*([^<]*?)\s*<\/HSN>/.exec(b)?.[1] ?? ""),
+    });
+  }
+  return out.sort((a, b) => a.from.localeCompare(b.from));
+}
+
+/**
+ * The HSN for an item as at a date, and the master that declares it.
+ *
+ * Resolved along its OWN chain, separately from the rate: an item can declare
+ * its own GST rate while inheriting its HSN (BABY TRICYCLE HUNTER: 18% on the
+ * item, HSN 950300 from its stock group). Naming the item as the HSN source
+ * there would point Tally at a master that declares nothing.
+ */
+export function hsnFor(
+  m: TallyMasters, itemName: string, asOf?: string,
+): { code: string; description: string; source: string } {
+  const pick = (rs: HsnRevision[] | undefined) => {
+    let best: HsnRevision | undefined;
+    for (const r of rs ?? []) { if (asOf && r.from && r.from > asOf) continue; if (!best || r.from >= best.from) best = r; }
+    return best;
+  };
+  const item = m.items.get(itemName);
+  if (!item) return { code: "", description: "", source: "none" };
+  const own = pick(item.hsnRevisions);
+  if (own) return { code: own.code, description: own.description, source: "item" };
+  let groupName = item.parent;
+  const seen = new Set<string>();
+  while (groupName && !seen.has(groupName)) {
+    seen.add(groupName);
+    const g = m.stockGroups.get(groupName);
+    if (!g) break;
+    const r = pick(g.hsnRevisions);
+    if (r) return { code: r.code, description: r.description, source: `stock group "${g.name}"` };
+    groupName = g.parent;
+  }
+  return { code: "", description: "", source: "none" };
 }
 
 /** The revision in force on a date — the newest one NOT AFTER it. */

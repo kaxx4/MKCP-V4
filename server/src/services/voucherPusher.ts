@@ -1,6 +1,6 @@
 import type { VoucherPayload, LedgerEntry, InventoryEntry, BillAllocation, PushResult } from "../types.js";
 import { tallyPost } from "../tally.js";
-import { findLedger, gstRateFor, registrationOn, type TallyMasters } from "./tallyMasters.js";
+import { findLedger, gstRateFor, hsnFor, mailingOn, registrationOn, type TallyMasters } from "./tallyMasters.js";
 import { HOME_STATE_NAME, isInwardSupply, resolvePartyState } from "./pushGuard.js";
 import { XMLParser } from "fast-xml-parser";
 
@@ -98,183 +98,146 @@ function buildBankAllocation(b: NonNullable<LedgerEntry["bankAllocation"]>, amou
 }
 
 /**
- * The party's GST identity on the voucher.
+ * Everything the voucher says about WHO it is for — bill-to (Buyer) and ship-to
+ * (Consignee) — as one value, so the builder and the read-back check in
+ * `safePush` cannot disagree about what was meant.
  *
- * Without this block Tally cannot classify the supply, and the voucher lands in
- * GSTR-1 under **"Transactions with Incomplete/Mismatch in Information → GST
- * Registration Details of the Party are invalid or not specified"** rather than
- * in B2B supplies. The amounts are right and the voucher looks fine in the day
- * book — it simply would not file. Found in the operator's own GSTR-1 on
- * 2026-09-11, after every push-path test had passed: the read-back diff checks
- * ledger amounts, bill allocations and stock, none of which notice this.
+ * ── Why this is a struct and not a string of tags ────────────────────────
+ * The owner, 23-Sep-2026: "You are adding the bill-to address but not the
+ * ship-to … when pushing a cash invoice the ship-to address is empty; when
+ * pushing a normal ledger invoice as well the ship-to is empty, and that's
+ * giving an error in the e-way bill." And: "the GST and party details in the
+ * e-way bill and e-invoice cannot be broken at any point."
  *
- * Everything here comes from the ledger master, which already carries it —
- * 163 of 237 debtors have a GSTIN on file. A party with no GSTIN is legitimately
- * unregistered and is marked as such rather than left blank, which is a
- * different (and valid) GSTR-1 category.
+ * Read back off a pushed invoice the same day (scripts/test-push-fidelity-
+ * sandbox.ts, S3 before the fix): BASICBUYERNAME, BASICBUYERADDRESS.LIST and
+ * CONSIGNEECOUNTRYNAME were all EMPTY. The comment on `VoucherPayload.
+ * partyAddress` claimed Tally fills BASICBUYERNAME from the ledger on import; it
+ * does not. Every hand-typed invoice carries all three, with the ship-to
+ * address identical to the bill-to (RANI CYCLE STORES 26-27/0658, DIBYASAKTI
+ * 26-27/0551, KAMALABHA order 360/QUOTE-26-27). So they are emitted here,
+ * always, from the same values as the bill-to block.
+ *
+ * ── Where each value comes from ──────────────────────────────────────────
+ *   a real party ledger → its master, dated to the voucher (registrationOn,
+ *                          mailingOn). A typed name or address on the payload
+ *                          is IGNORED — the web app's party address is a
+ *                          historical copy (src/data/partyAddresses.json), and
+ *                          on 23-Sep a test proved it reached Tally as a SECOND
+ *                          ADDRESS.LIST that Tally concatenated onto the real
+ *                          one, printing the copy on the invoice.
+ *   the shared Cash ledger → the walk-in the operator typed (buyerName,
+ *                          buyerAddress), home state, Unregistered/Consumer —
+ *                          on BOTH bill-to and ship-to.
+ *
+ * Money vouchers carry NO identity (Tally's own Payments, Contras and Journals
+ * carry a GSTIN 0% of the time) and return null.
  */
-function buildGstIdentity(p: VoucherPayload, masters?: TallyMasters): string {
-  if (!masters) return "";
-  // Money vouchers carry NO GST identity, and that is correct rather than a gap:
-  // they never enter GSTR-1. Measured across 3,335 native FY26-27 vouchers,
-  // Tally's own Payments, Contras and Journals carry a GSTIN 0% of the time,
-  // while Purchases carry one 88% of the time and Sales 37% (the rest being
-  // cash sales to unregistered walk-ins).
-  //
-  // This block used to be emitted unconditionally, so a Payment pushed from here
-  // came back stamped with the supplier's GSTIN and place of supply — a shape
-  // Tally itself never writes. It did not make the voucher wrong on the money,
-  // but it made every pushed money voucher structurally distinguishable from a
-  // hand-entered one, which is the kind of divergence that surfaces later as an
-  // unexplained line in a return.
-  if (!isInvoiceShaped(p)) return "";
+export interface PartyIdentity {
+  registrationType: string;
+  vatDealerType: string;
+  gstin: string;
+  /** Destination of the goods — see the note in `partyIdentity`. */
+  placeOfSupply: string;
+  /** The counterparty's state. */
+  state: string;
+  country: string;
+  mailingName: string;
+  address: string[];
+  pincode: string;
+  /** BASICBUYERNAME — the consignee LEDGER, which is the party ledger itself. */
+  consigneeLedger: string;
+  /** Ship-to. Always equal to the bill-to fields above for this company. */
+  consignee: { mailingName: string; address: string[]; pincode: string; state: string; country: string; gstin: string };
+}
+
+/** Tally's own words. "Unregistered" alone is not one of them for a sale — every
+ *  hand-typed unregistered sale stores "Unregistered/Consumer" (463 of 465 in
+ *  the FY26-27 books; the two exceptions are pushed ones). Two ledgers carry a
+ *  dated registration of "\x04 Unknown", which must never be sent verbatim. */
+export function normaliseRegistrationType(raw: string, registered: boolean): string {
+  const v = raw.replace(/[\x00-\x1f]/g, "").trim();
+  if (!v || /unknown|not applicable/i.test(v)) return registered ? "Regular" : "Unregistered/Consumer";
+  if (/^unregistered$/i.test(v)) return "Unregistered/Consumer";
+  return v;
+}
+
+/** A six-digit Indian PIN typed into a walk-in's address, if there is one. */
+export function pincodeIn(lines: string[]): string {
+  for (const l of lines) { const m = /(?:^|\D)([1-9]\d{5})(?!\d)/.exec(l); if (m) return m[1]; }
+  return "";
+}
+
+export function partyIdentity(p: VoucherPayload, masters?: TallyMasters): PartyIdentity | null {
+  if (!masters) return null;
+  if (!isInvoiceShaped(p)) return null;
   const party = findLedger(masters, p.partyLedgerName);
-  // A name the masters don't know is the guard's problem, not this function's —
-  // it rejects the voucher before the build. Emit nothing rather than guess.
-  if (!party || "miss" in party) return "";
+  // A name the masters don't know is the guard's problem — it rejects the
+  // voucher before the build. Emit nothing rather than guess.
+  if (!party || "miss" in party) return null;
 
-  // Use the registration in force on THIS voucher's date, not today's. A party's
-  // GSTIN and place of supply are dated in Tally, and 61% of vouchers here are
-  // backdated — taking the current one would stamp an old invoice with a
-  // registration that did not apply when it was raised.
+  // The registration and mailing details in force on THIS voucher's date — 61%
+  // of vouchers here are backdated.
   const reg = registrationOn(party, p.date);
+  const mail = mailingOn(party, p.date);
   const gstin = reg.gstin.trim();
-  // The counterparty's state, which the payload may supply when the ledger has
-  // none — the shared `Cash` ledger of a counter sale. The guard has already
-  // refused anything where that stand-in is not legitimate, and both read the
-  // SAME resolver so the voucher is stamped with exactly what was approved.
-  const state = resolvePartyState(p, (reg.placeOfSupply || reg.state).trim()).state;
-
-  /**
-   * Place of supply is the DESTINATION of the goods, so it depends on which way
-   * they are moving — it is not simply "the other party's state".
-   *
-   *   outward (Sales, Credit Note, Sales Order, Delivery Note)
-   *       goods go TO the buyer      → place of supply = the PARTY's state
-   *   inward (Purchase, Debit Note, Receipt Note)
-   *       goods come TO us           → place of supply = OUR state
-   *
-   * `STATENAME` is the counterparty's state either way.
-   *
-   * Confirmed against Tally's own vouchers: a native purchase from a Delhi
-   * supplier stores PLACEOFSUPPLY "West Bengal" with STATENAME "Delhi", while a
-   * native sale to a West Bengal buyer stores both as "West Bengal".
-   *
-   * This function used to set both to the party's state, which is right for a
-   * sale and wrong for every inter-state purchase — it declared the supply as
-   * having happened in the supplier's state. The tax heads still came out as
-   * IGST because those are chosen separately, so the voucher balanced, verified
-   * and looked correct; only the return would have disagreed.
-   */
-  const placeOfSupply = isInwardSupply(p.voucherType) ? HOME_STATE_NAME : state;
-
-  /* A typed buyer overrides the LEDGER's mailing name.
-     On a counter sale the ledger is the shared `Cash`, whose mailing name is
-     literally "Cash" — so without this the invoice is addressed to nobody even
-     when the operator has typed the customer's name in. Where no buyer is
-     given this is unchanged, and a sale to a real party keeps its master's
-     mailing name, which is the one thing that must not be overridden. */
-  const mailing = p.buyerName?.trim() || (party.mailingName ?? "").trim() || party.name;
-  const pincode = (party.pincode ?? "").trim();
   const registered = gstin.length > 0;
 
-  const tag = (t: string, v: string) => (v ? `\n            <${t}>${esc(v)}</${t}>` : "");
+  // The counterparty's state; the payload may stand in only where the ledger has
+  // none (the shared Cash ledger). The guard read the same resolver.
+  const state = resolvePartyState(p, (reg.placeOfSupply || reg.state || mail.state).trim()).state;
 
+  /* Place of supply is the DESTINATION of the goods: outward → the party's
+     state; inward (Purchase, Debit Note, Receipt Note) → OUR state. A native
+     purchase from a Delhi supplier stores PLACEOFSUPPLY West Bengal with
+     STATENAME Delhi. */
+  const placeOfSupply = isInwardSupply(p.voucherType) ? HOME_STATE_NAME : state;
+
+  /* A walk-in is a ledger with no identity of its own: no GSTIN, no address, no
+     state. Only then do the operator's typed name and address apply. */
+  const walkIn = !registered && !mail.address.length && !(party.state || "").trim();
+  const typed = (p.buyerAddress ?? []).map((l) => l.trim()).filter(Boolean);
+  const address = walkIn ? typed : mail.address;
+  const mailingName = (walkIn ? p.buyerName?.trim() : "") || (mail.mailingName ?? "").trim() || party.name;
+  const pincode = (mail.pincode ?? "").trim() || (walkIn ? pincodeIn(typed) : "");
+  const country = (mail.country || "India").trim();
+
+  const registrationType = normaliseRegistrationType(reg.registrationType, registered);
+  return {
+    registrationType,
+    vatDealerType: registered ? (/composition/i.test(registrationType) ? "Composition" : "Regular") : "Unregistered",
+    gstin, placeOfSupply, state, country, mailingName, address, pincode,
+    consigneeLedger: party.name,
+    // Bill-to and ship-to are always the same party here (owner, 23-Sep-2026).
+    consignee: { mailingName, address, pincode, state, country, gstin },
+  };
+}
+
+function renderIdentity(id: PartyIdentity): string {
+  const tag = (t: string, v: string) => (v ? `\n            <${t}>${esc(v)}</${t}>` : "");
+  const list = (t: string, ls: string[]) =>
+    ls.length ? `\n            <${t}.LIST TYPE="String">${ls.map((a) => `<${t}>${esc(a)}</${t}>`).join("")}</${t}.LIST>` : "";
   return [
-    // Tally's own word for the registration type on that date, when it has one —
-    // "Regular", "Composition", "Unregistered" are not interchangeable.
-    `\n            <GSTREGISTRATIONTYPE>${esc(reg.registrationType || (registered ? "Regular" : "Unregistered"))}</GSTREGISTRATIONTYPE>`,
-    registered ? "" : `\n            <VATDEALERTYPE>Unregistered</VATDEALERTYPE>`,
-    tag("PARTYGSTIN", gstin),
-    // Destination of the goods — see the note above on why this is not always
-    // the party's state.
-    tag("PLACEOFSUPPLY", placeOfSupply),
-    // The counterparty's state, whichever direction the goods move.
-    tag("STATENAME", state),
-    `\n            <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>`,
-    tag("PARTYMAILINGNAME", mailing),
-    /* The party's postal address, which this block built everything EXCEPT
-     * until 17-Sep-2026.
-     *
-     * The owner pushed a purchase from K.W.Engineering Works (Regd.) and sent
-     * a screenshot of Tally's Party Details: Mailing Name, State, Country,
-     * Pincode, Registration type, GSTIN and Place of Supply all populated —
-     * every one of them from the list above — and **Address blank**.
-     *
-     * It was never missing data. `TallyMasters.address` is fetched from the
-     * ledger, parsed into a string[] and sat in the struct unread
-     * (`tallyMasters.ts`), which is guardrail G4 in its purest form: a field
-     * fetched, stored, and dropped at the last step. The FILE export path
-     * emitted it from the bundled vendor master all along, so the same bill
-     * carried an address or not depending on which button was pressed — the
-     * identical divergence as `<REFERENCEDATE>` two days earlier, in the same
-     * function, and it was not looked for then.
-     *
-     * Every line the master holds is emitted. The file path caps at two, which
-     * is a display convention rather than a data one; this is a round-trip of
-     * what Tally itself stores against that ledger, so truncating it here
-     * would invent a difference rather than remove one. */
-    /* ONE address emitter, not two.
-     *
-     * A counter sale bills the shared `Cash` ledger, which holds no address of
-     * its own, so the lines an operator typed for the walk-in are the only ones
-     * there are — and they belong in the SAME block a registered party's
-     * address uses, because that is the block Tally prints from. An earlier
-     * draft emitted the typed address from a second builder, which would have
-     * put two <ADDRESS.LIST> blocks on any voucher whose ledger carried one
-     * too. */
-    addressFor(p, party).length
-      ? `\n            <ADDRESS.LIST TYPE="String">${addressFor(p, party)
-          .map((a) => `<ADDRESS>${esc(a)}</ADDRESS>`)
-          .join("")}</ADDRESS.LIST>`
-      : "",
-    tag("PARTYPINCODE", pincode),
-    // Consignee defaults to the buyer; this company does not ship to third
-    // parties, and a blank consignee is itself a GSTR-1 exception.
-    tag("CONSIGNEEGSTIN", gstin),
-    tag("CONSIGNEESTATENAME", state),
-    tag("CONSIGNEEMAILINGNAME", mailing),
-    tag("CONSIGNEEPINCODE", pincode),
+    // ── Buyer (bill to) ──
+    list("ADDRESS", id.address),
+    tag("GSTREGISTRATIONTYPE", id.registrationType),
+    tag("VATDEALERTYPE", id.vatDealerType),
+    tag("PARTYGSTIN", id.gstin),
+    tag("PLACEOFSUPPLY", id.placeOfSupply),
+    tag("STATENAME", id.state),
+    tag("COUNTRYOFRESIDENCE", id.country),
+    tag("PARTYMAILINGNAME", id.mailingName),
+    tag("PARTYPINCODE", id.pincode),
+    // ── Consignee (ship to) — what the e-way bill reads ──
+    tag("BASICBUYERNAME", id.consigneeLedger),
+    list("BASICBUYERADDRESS", id.consignee.address),
+    tag("CONSIGNEEGSTIN", id.consignee.gstin),
+    tag("CONSIGNEEMAILINGNAME", id.consignee.mailingName),
+    tag("CONSIGNEEPINCODE", id.consignee.pincode),
+    tag("CONSIGNEESTATENAME", id.consignee.state),
+    tag("CONSIGNEECOUNTRYNAME", id.consignee.country),
   ].join("");
 }
-
-
-/**
- * Which address lines the voucher carries — the typed buyer's, or the ledger's.
- *
- * ── Corrected 18-Sep-2026, against 413 real counter sales ─────────────────
- * The first attempt at this was modelled on ONE voucher (26-27/0657) and got
- * the shape backwards. That voucher is billed to a registered dealer's own
- * ledger; a counter sale is a different animal. Reading every Sales voucher in
- * these books whose PARTYLEDGERNAME is `Cash` settles it — 403 of the 413 name
- * their customer, and they all name them the same way:
- *
- *   PARTYNAME ............ Cash    ┐ all three stay the LEDGER; nobody
- *   BASICBUYERNAME ....... Cash    │ retypes them, and Tally fills them
- *   BASICBASEPARTYNAME ... Cash    ┘ from PARTYLEDGERNAME
- *   PARTYMAILINGNAME ..... CYCLE TRADERS   ← the customer
- *   ADDRESS.LIST ......... ["JHALDAH"]     ← their address
- *   BASICBUYERADDRESS .... (empty on all 413)
- *
- * So the name rides on PARTYMAILINGNAME and the address on ADDRESS.LIST, both
- * built in `buildGstIdentity`, and neither needs a builder of its own.
- *
- * `BASICBUYERADDRESS` is deliberately not emitted: zero of 413 carry it.
- *
- * ── What the read-back first appeared to say, and did not ─────────────────
- * Two test pushes came back with the mailing name EMPTY, which read as Tally
- * refusing the field — and nearly bought a second, invented shape to work
- * around a refusal that never happened. Tally stored it correctly every time:
- * four hand-written orderings of the same voucher all read back intact. The
- * harness was calling `pushVoucherToTally` without masters, which drops this
- * whole block before it is ever sent. Position within the voucher does not
- * matter; supplying the masters does.
- */
-function addressFor(p: VoucherPayload, party: { address: string[] }): string[] {
-  const typed = (p.buyerAddress ?? []).map((l) => l.trim()).filter(Boolean);
-  return typed.length ? typed : party.address;
-}
-
 
 function buildLedgerEntries(entries: LedgerEntry[], isInvoice: boolean, voucherDate: string): string {
   const tag = isInvoice ? "LEDGERENTRIES.LIST" : "ALLLEDGERENTRIES.LIST";
@@ -305,53 +268,91 @@ function buildLedgerEntries(entries: LedgerEntry[], isInvoice: boolean, voucherD
 }
 
 /**
- * Where a stock line's GST rate and HSN come from — the master that actually
- * declares them, found the way Tally resolves it (item, then up the group tree).
+ * Where a stock line's GST rate and HSN come from, AND the resolved values —
+ * the shape Tally itself stores on a line typed into an invoice.
  *
- * Without this block Tally cannot tie the line to any rate: the invoice
- * balances, verifies and reads back fine, and GST Tax Analysis files every line
- * under "Tax rate/tax type not specified". Found 23-Sep-2026 on the day's cash
- * split invoices (26-27/0718..0723). The trap is that most items carry their
- * OWN GST block with the rate at 0 — a placeholder; the real rate (5% from
- * 22-Sep-25) is on the stock group. A hand-typed invoice therefore stores
- * GSTSOURCETYPE "Stock Group" + the group's name, and so must ours.
+ * Without the source tags Tally cannot tie the line to any rate, and GST Tax
+ * Analysis files it under "Tax rate/tax type not specified" (cash split
+ * invoices 26-27/0718..0723, 23-Sep-2026). The source tags alone were not the
+ * whole shape: read back the same day, a pushed line carried GSTSOURCETYPE but
+ * an EMPTY GSTHSNNAME and no RATEDETAILS, while every hand-typed line
+ * (26-27/0654) stores the HSN, its description and one RATEDETAILS block per
+ * duty head. Tally does not compute these on an XML import — it stores what it
+ * is given — so they are sent, from the same master chain Tally resolves.
  *
- * Returns "" when the masters are absent or no master in the chain declares a
- * rate — the line then goes out exactly as before.
+ * The HSN is resolved along its own chain (`hsnFor`): an item may declare its
+ * own rate and still inherit its HSN from its group.
+ *
+ * Returns empty strings when the masters are absent or nothing in the chain
+ * declares a rate — the line then goes out exactly as before.
  */
-function buildLineGstSource(itemName: string, masters: TallyMasters | undefined, asOf: string | undefined): string {
-  if (!masters) return "";
+function buildLineGst(itemName: string, masters: TallyMasters | undefined, asOf: string | undefined): { head: string; rates: string } {
+  const none = { head: "", rates: "" };
+  if (!masters) return none;
   const item = masters.items.get(itemName);
-  if (!item) return "";
+  if (!item) return none;
   const r = gstRateFor(masters, itemName, asOf);
-  if (!(r.rate > 0)) return "";
-  let src: string;
+  if (!(r.rate > 0)) return none;
+  let gstSrc: string;
   if (r.source === "item") {
-    src = `
+    gstSrc = `
     <GSTSOURCETYPE>Stock Item</GSTSOURCETYPE>
-    <GSTITEMSOURCE>${esc(item.name)}</GSTITEMSOURCE>
-    <HSNSOURCETYPE>Stock Item</HSNSOURCETYPE>
-    <HSNITEMSOURCE>${esc(item.name)}</HSNITEMSOURCE>`;
+    <GSTITEMSOURCE>${esc(item.name)}</GSTITEMSOURCE>`;
   } else {
     const group = /^stock group "(.*)"$/.exec(r.source)?.[1];
-    if (!group) return "";
-    src = `
+    if (!group) return none;
+    gstSrc = `
     <GSTSOURCETYPE>Stock Group</GSTSOURCETYPE>
-    <GSTSTOCKGROUPSOURCE>${esc(group)}</GSTSTOCKGROUPSOURCE>
-    <HSNSOURCETYPE>Stock Group</HSNSOURCETYPE>
-    <HSNSTOCKGROUPSOURCE>${esc(group)}</HSNSTOCKGROUPSOURCE>`;
+    <GSTSTOCKGROUPSOURCE>${esc(group)}</GSTSTOCKGROUPSOURCE>`;
   }
-  return `
-    <GSTOVRDNTAXABILITY>Taxable</GSTOVRDNTAXABILITY>${src}
+  const h = hsnFor(masters, itemName, asOf);
+  const hsnGroup = /^stock group "(.*)"$/.exec(h.source)?.[1];
+  // No declared HSN anywhere: fall back to naming the rate's source, as before.
+  const hsnSrc = h.source === "item"
+    ? `
+    <HSNSOURCETYPE>Stock Item</HSNSOURCETYPE>
+    <HSNITEMSOURCE>${esc(item.name)}</HSNITEMSOURCE>`
+    : hsnGroup
+      ? `
+    <HSNSOURCETYPE>Stock Group</HSNSOURCETYPE>
+    <HSNSTOCKGROUPSOURCE>${esc(hsnGroup)}</HSNSTOCKGROUPSOURCE>`
+      : gstSrc.replace(/<GSTSOURCETYPE>/g, "<HSNSOURCETYPE>").replace(/<\/GSTSOURCETYPE>/g, "</HSNSOURCETYPE>")
+          .replace(/GSTITEMSOURCE/g, "HSNITEMSOURCE").replace(/GSTSTOCKGROUPSOURCE/g, "HSNSTOCKGROUPSOURCE");
+
+  const rev = r.revision;
+  const igst = rev?.igst || r.rate;
+  const cgst = rev?.cgst || igst / 2;
+  const sgst = rev?.sgst || cgst;
+  const num = (n: number) => String(Math.round(n * 1000) / 1000);
+  /* All five heads, exactly as a typed line stores them — including Cess with
+     Tally's own "&#4; Not Applicable" valuation type. Every hand-typed line
+     carries the Cess head; GSTR-1's one-off "Cess Valuation Type is invalid or
+     not specified" (tally-gst-identity-required, "still unexplained") is the
+     exception a line WITHOUT it would raise. */
+  const head = (duty: string, rate: number, valuation = "Based on Value") => `
+    <RATEDETAILS.LIST>
+      <GSTRATEDUTYHEAD>${duty}</GSTRATEDUTYHEAD>
+      <GSTRATEVALUATIONTYPE>${valuation}</GSTRATEVALUATIONTYPE>
+      <GSTRATE>${num(rate)}</GSTRATE>
+    </RATEDETAILS.LIST>`;
+
+  return {
+    head: `
+    <GSTOVRDNTAXABILITY>Taxable</GSTOVRDNTAXABILITY>${gstSrc}${hsnSrc}
     <GSTOVRDNTYPEOFSUPPLY>Goods</GSTOVRDNTYPEOFSUPPLY>
-    <GSTRATEINFERAPPLICABILITY>As per Masters/Company</GSTRATEINFERAPPLICABILITY>
-    <GSTHSNINFERAPPLICABILITY>As per Masters/Company</GSTHSNINFERAPPLICABILITY>`;
+    <GSTRATEINFERAPPLICABILITY>As per Masters/Company</GSTRATEINFERAPPLICABILITY>${h.code ? `
+    <GSTHSNNAME>${esc(h.code)}</GSTHSNNAME>${h.description ? `
+    <GSTHSNDESCRIPTION>${esc(h.description)}</GSTHSNDESCRIPTION>` : ""}` : ""}
+    <GSTHSNINFERAPPLICABILITY>As per Masters/Company</GSTHSNINFERAPPLICABILITY>`,
+    rates: head("CGST", cgst) + head("SGST/UTGST", sgst) + head("IGST", igst)
+      + head("Cess", 0, "&#4; Not Applicable") + head("State Cess", 0),
+  };
 }
 
 function buildInventoryEntries(entries: InventoryEntry[], masters?: TallyMasters, asOf?: string): string {
-  return entries.map(e => `
+  return entries.map(e => { const gst = buildLineGst(e.stockItemName, masters, asOf); return `
   <ALLINVENTORYENTRIES.LIST>
-    <STOCKITEMNAME>${esc(e.stockItemName)}</STOCKITEMNAME>${buildLineGstSource(e.stockItemName, masters, asOf)}
+    <STOCKITEMNAME>${esc(e.stockItemName)}</STOCKITEMNAME>${gst.head}
     <ISDEEMEDPOSITIVE>${e.isDeemedPositive ? "Yes" : "No"}</ISDEEMEDPOSITIVE>
     <ACTUALQTY>${e.quantity} ${esc(e.unit)}</ACTUALQTY>
     <BILLEDQTY>${e.quantity} ${esc(e.unit)}</BILLEDQTY>
@@ -370,8 +371,8 @@ function buildInventoryEntries(entries: InventoryEntry[], masters?: TallyMasters
       <LEDGERNAME>${esc(e.salesLedgerName)}</LEDGERNAME>
       <ISDEEMEDPOSITIVE>${e.isDeemedPositive ? "Yes" : "No"}</ISDEEMEDPOSITIVE>
       <AMOUNT>${tallyAmount(e.amount, e.isDeemedPositive)}</AMOUNT>
-    </ACCOUNTINGALLOCATIONS.LIST>` : ""}
-  </ALLINVENTORYENTRIES.LIST>`).join("");
+    </ACCOUNTINGALLOCATIONS.LIST>` : ""}${gst.rates}
+  </ALLINVENTORYENTRIES.LIST>`; }).join("");
 }
 
 /**
@@ -418,6 +419,13 @@ export function buildVoucherImportXml(company: string, payload: VoucherPayload, 
 
   const date = toVoucherDate(payload.date);
   const hasInventory = payload.inventoryEntries && payload.inventoryEntries.length > 0;
+  const identity = partyIdentity(payload, masters);
+  /* `partyAddress` is only a fallback for a build WITHOUT masters (the XML
+     dump scripts). With masters the identity block carries the address from
+     the ledger, and sending partyAddress as well put a second ADDRESS.LIST on
+     the voucher, which Tally CONCATENATES — the typed copy printed above the
+     real address (read back 23-Sep-2026). */
+  const fallbackAddress = identity ? [] : (payload.partyAddress ?? []).filter((l) => l && l.trim());
   const objView = getObjView(payload.voucherType, isInvoiceShaped(payload), !!hasInventory);
 
   return `<ENVELOPE>
@@ -441,10 +449,9 @@ export function buildVoucherImportXml(company: string, payload: VoucherPayload, 
                  Emitted before VOUCHERTYPENAME to match the shape Tally's own
                  export writes. Empty lines are dropped rather than sent as
                  blank ADDRESS elements. */
-              (payload.partyAddress ?? []).filter((l) => l && l.trim()).length
+              fallbackAddress.length
                 ? `
-            <ADDRESS.LIST TYPE="String">${(payload.partyAddress ?? [])
-                    .filter((l) => l && l.trim())
+            <ADDRESS.LIST TYPE="String">${fallbackAddress
                     .map((l) => `<ADDRESS>${esc(l.trim())}</ADDRESS>`).join("")}</ADDRESS.LIST>`
                 : ""
             }
@@ -456,7 +463,7 @@ export function buildVoucherImportXml(company: string, payload: VoucherPayload, 
             ${payload.referenceDate ? `<REFERENCEDATE>${esc(toVoucherDate(payload.referenceDate))}</REFERENCEDATE>` : ""}
             ${payload.narration ? `<NARRATION>${esc(payload.narration)}</NARRATION>` : ""}
             <PARTYLEDGERNAME>${esc(payload.partyLedgerName)}</PARTYLEDGERNAME>
-            ${buildGstIdentity(payload, masters)}
+            ${identity ? renderIdentity(identity) : ""}
             ${isInvoiceShaped(payload) ? `<PARTYNAME>${esc(payload.partyLedgerName)}</PARTYNAME>
             <BASICBASEPARTYNAME>${esc(payload.partyLedgerName)}</BASICBASEPARTYNAME>
             <VCHENTRYMODE>${hasInventory ? "Item Invoice" : "Accounting Invoice"}</VCHENTRYMODE>` : ""}
@@ -567,7 +574,7 @@ export function parseImportResponse(rawXml: string): PushResult {
  *
  * ⚠ `masters` is REQUIRED, and that is not a formality.
  *
- * `buildGstIdentity` opens with `if (!masters) return ""`, so calling this
+ * `partyIdentity` returns null without masters, so calling this
  * without them builds a voucher carrying no PARTYMAILINGNAME, no ADDRESS.LIST,
  * no STATENAME, no PLACEOFSUPPLY and no GSTIN — and Tally accepts it with
  * `created=1` and no exception. Production has always passed them, through

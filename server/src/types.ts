@@ -224,7 +224,17 @@ export interface VoucherPayload {
   /**
    * The party's postal address, one line per element.
    *
-   * The ONE field Tally does not fill in for us. Measured 19-Sep-2026 against
+   * ⚠ SUPERSEDED 23-Sep-2026 — only used when the voucher is built WITHOUT
+   * masters (offline XML dumps). With masters, voucherPusher.partyIdentity
+   * emits bill-to AND ship-to from the ledger's own mailing details and this
+   * field is ignored: the web app fills it from a historical copy of party
+   * addresses, and sent alongside the ledger's it became a SECOND ADDRESS.LIST
+   * that Tally concatenated onto the real one (read back, sandbox, 23-Sep).
+   * The claim below that Tally fills BASICBUYERNAME and the consignee from the
+   * ledger on import is also wrong: read back the same day, BASICBUYERNAME,
+   * BASICBUYERADDRESS.LIST and CONSIGNEECOUNTRYNAME were all EMPTY until sent.
+   *
+   * Original note (19-Sep-2026): the ONE field Tally does not fill in for us. Measured 19-Sep-2026 against
    * 1,030 hand-typed SALES invoices in the live book: every other identity
    * field we care about — PARTYGSTIN, STATENAME, PLACEOFSUPPLY,
    * GSTREGISTRATIONTYPE, CONSIGNEESTATENAME, CONSIGNEEGSTIN, BASICBUYERNAME,
