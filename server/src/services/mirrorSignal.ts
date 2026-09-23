@@ -165,6 +165,93 @@ export function selectMovedChanges(
   return { emit, unchangedAlterId, reasons };
 }
 
+/** One voucher's identity and AlterID, as `syncVouchers` already has it in hand. */
+export interface VoucherAlterState {
+  guid: string;
+  alterId: number | null;
+}
+
+/**
+ * What a voucher sync pass should report and act on, derived from the SAME
+ * before/after AlterID comparison `selectMovedChanges` uses for the mirror
+ * signal — but answering two different questions with it:
+ *
+ *   1. `tally_sync_history.row_counts` — how many rows actually moved, so the
+ *      web side can tell a real sync from a no-op one instead of treating
+ *      every completed row as "go reload everything" (see mirrorPanel.ts /
+ *      the freshness chips).
+ *   2. `unchangedGuids` — which voucher rows are safe to skip re-upserting
+ *      this pass, because their AlterID provably did not move.
+ *
+ * `changed` is OMITTED (not zero) when `prior` is null — a failed pre-image
+ * read or a pull above SIGNAL_CEILING. The web side must treat a missing
+ * `changed` as "unknown, reload to be safe", never as "nothing changed". An
+ * empty pull (`vouchers.length === 0`, e.g. a pure per-day prune pass with
+ * nothing to upsert) is NOT the same fact — there is nothing to compare, so
+ * `changed: 0` is a real, known answer, not an unknown one.
+ *
+ * `deleted` is always known (the orphan prune is authoritative regardless of
+ * whether the AlterID pre-image read succeeded) — the caller passes in
+ * whatever the prune actually removed, and this function never touches it
+ * beyond passing it through.
+ *
+ * `unchangedGuids` is empty whenever `prior` is null: "cannot tell" must fail
+ * open to "upsert everything", exactly like `selectMovedChanges` already does
+ * for the mirror signal via `priorAlterIds ?? new Map()`. This function must
+ * NEVER weaken the per-day prune / mass-deletion guard — it only decides
+ * which rows get re-upserted, not which days or GUIDs are authoritative for
+ * deletion. That set (`voucherGuids`, built from every pulled voucher
+ * regardless of whether its AlterID moved) is untouched by this function.
+ *
+ * Pure — no Supabase, no clock, no I/O. See
+ * server/scripts/test-sync-history-changed.ts for the fixtures.
+ */
+export interface VoucherSyncCounts {
+  changed?: number;
+  deleted: number;
+  maxAlterId: number | null;
+  unchangedGuids: ReadonlySet<string>;
+}
+
+export function summarizeVoucherSync(
+  vouchers: readonly VoucherAlterState[],
+  prior: PriorVersions | null,
+  deleted: number,
+): VoucherSyncCounts {
+  // Nothing pulled: there is nothing to compare, so 0 is a known answer, not
+  // an unknown one — do not fall through to the "prior is null" branch below,
+  // which would wrongly omit `changed` for an ordinary empty-day prune pass.
+  if (vouchers.length === 0) {
+    return { changed: 0, deleted, maxAlterId: null, unchangedGuids: new Set() };
+  }
+
+  let maxAlterId: number | null = null;
+  for (const v of vouchers) {
+    if (typeof v.alterId === "number" && (maxAlterId === null || v.alterId > maxAlterId)) {
+      maxAlterId = v.alterId;
+    }
+  }
+
+  if (prior === null) {
+    return { deleted, maxAlterId, unchangedGuids: new Set() };
+  }
+
+  const unchangedGuids = new Set<string>();
+  let changed = 0;
+  for (const v of vouchers) {
+    const before = prior.get(v.guid);
+    const hasPrior = prior.has(v.guid);
+    const same =
+      hasPrior && typeof before === "number" && typeof v.alterId === "number" && v.alterId === before;
+    if (same) {
+      unchangedGuids.add(v.guid);
+    } else {
+      changed++;
+    }
+  }
+  return { changed, deleted, maxAlterId, unchangedGuids };
+}
+
 /** One line saying which fact applied to how many changes. Empty when nothing was kept. */
 export function describeSelection(sel: ChangeSelection): string {
   const kept = (Object.entries(sel.reasons) as [EmitReason, number][])
