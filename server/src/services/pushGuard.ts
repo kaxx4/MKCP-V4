@@ -14,7 +14,7 @@
  * back; see the vault's "Tally Voucher Push Contract".
  */
 import type { VoucherPayload } from "../types.js";
-import { type TallyMasters, findLedger, findItem, isMiss, gstRateFor } from "./tallyMasters.js";
+import { type TallyMasters, findLedger, findItem, isMiss, gstRateFor, mailingOn } from "./tallyMasters.js";
 
 export interface GuardResult { ok: boolean; errors: string[]; warnings: string[]; }
 
@@ -359,6 +359,25 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters): GuardResult {
     }
     if (!party.gstin) {
       warnings.push(`Party "${party.name}" has no GSTIN, so this files as an unregistered (B2C) supply rather than B2B.`);
+    }
+
+    // Ship-to = bill-to, and the e-way bill / e-invoice read it (owner,
+    // 23-Sep-2026: an empty ship-to "is giving an error in the e-way bill").
+    // voucherPusher fills both from the ledger's mailing details — or, for a
+    // walk-in, from what the operator typed — so an empty one here means the
+    // SOURCE is empty. A warning, not a refusal: most invoices need no e-way
+    // bill, and the fix belongs in the Tally ledger, not in this voucher.
+    if (!isInwardSupply(p.voucherType)) {
+      const mail = mailingOn(party, p.date);
+      const walkIn = !party.gstin && !mail.address.length && !(party.state ?? "").trim();
+      const addr = walkIn ? (p.buyerAddress ?? []).filter((l) => l.trim()) : mail.address;
+      if (!addr.length) {
+        warnings.push(walkIn
+          ? `No address typed for this walk-in, so the invoice's bill-to and ship-to are blank — an e-way bill for it will be refused.`
+          : `Ledger "${party.name}" has no mailing address in Tally, so the invoice's bill-to and ship-to are blank — an e-way bill or e-invoice for it will be refused. Add the address to the ledger in Tally.`);
+      } else if (!walkIn && !(mail.pincode ?? "").trim()) {
+        warnings.push(`Ledger "${party.name}" has no pincode in Tally, so the ship-to has none — an e-way bill or e-invoice for it will be refused. Add the pincode to the ledger in Tally.`);
+      }
     }
 
     // "Mismatch between Expected Tax Amount and Modified Tax Amount".

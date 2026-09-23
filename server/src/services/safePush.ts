@@ -10,9 +10,9 @@
  * actually stored does that.
  */
 import { tallyPost } from "../tally.js";
-import { buildVoucherImportXml, parseImportResponse } from "./voucherPusher.js";
-import { loadMasters } from "./tallyMasters.js";
-import { guardVoucher } from "./pushGuard.js";
+import { buildVoucherImportXml, parseImportResponse, partyIdentity, type PartyIdentity } from "./voucherPusher.js";
+import { loadMasters, gstRateFor, hsnFor, type TallyMasters } from "./tallyMasters.js";
+import { guardVoucher, isInwardSupply } from "./pushGuard.js";
 import { nextFreeNumber, takenNumbers } from "./voucherNumbering.js";
 import { withTally } from "./tallyGate.js";
 import type { VoucherPayload, PushResult } from "../types.js";
@@ -79,6 +79,14 @@ function vouchersOnDateXml(company: string, isoDate: string): string {
 <NATIVEMETHOD>PartyLedgerName</NATIVEMETHOD><NATIVEMETHOD>IsCancelled</NATIVEMETHOD>
 <NATIVEMETHOD>AllLedgerEntries</NATIVEMETHOD><NATIVEMETHOD>LedgerEntries</NATIVEMETHOD>
 <NATIVEMETHOD>AllInventoryEntries</NATIVEMETHOD>
+<NATIVEMETHOD>Address</NATIVEMETHOD><NATIVEMETHOD>BasicBuyerAddress</NATIVEMETHOD>
+<NATIVEMETHOD>PartyMailingName</NATIVEMETHOD><NATIVEMETHOD>ConsigneeMailingName</NATIVEMETHOD>
+<NATIVEMETHOD>BasicBuyerName</NATIVEMETHOD><NATIVEMETHOD>PartyGSTIN</NATIVEMETHOD>
+<NATIVEMETHOD>ConsigneeGSTIN</NATIVEMETHOD><NATIVEMETHOD>StateName</NATIVEMETHOD>
+<NATIVEMETHOD>ConsigneeStateName</NATIVEMETHOD><NATIVEMETHOD>PlaceOfSupply</NATIVEMETHOD>
+<NATIVEMETHOD>PartyPincode</NATIVEMETHOD><NATIVEMETHOD>ConsigneePinCode</NATIVEMETHOD>
+<NATIVEMETHOD>CountryOfResidence</NATIVEMETHOD><NATIVEMETHOD>ConsigneeCountryName</NATIVEMETHOD>
+<NATIVEMETHOD>GSTRegistrationType</NATIVEMETHOD>
 <FILTER>MkVerifyDate</FILTER>
 </COLLECTION>
 <SYSTEM TYPE="Formulae" NAME="MkVerifyDate">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${stamp}</SYSTEM>
@@ -142,6 +150,74 @@ export function diffStored(p: VoucherPayload, v: string): string[] {
       out.push(`item "${l.stockItemName}": godown not stored`);
     if (l.salesLedgerName && !listOf(hit, "ACCOUNTINGALLOCATIONS\\.LIST").some(a => fld(a, "LEDGERNAME") === l.salesLedgerName))
       out.push(`item "${l.stockItemName}": accounting ledger "${l.salesLedgerName}" NOT STORED — the posting is missing`);
+  }
+  return out;
+}
+
+/**
+ * Did Tally store the bill-to / ship-to / GST identity we sent — and did every
+ * stock line keep its GST rate?
+ *
+ * `diffStored` compares money and stock. It is blind to identity, which is how
+ * three silent failures got through: no GST identity block (Sep-11), no party
+ * address (Sep-19), and on 23-Sep an empty ship-to that broke the e-way bill
+ * while every check passed. The owner's words: these "cannot be broken at any
+ * point". So a voucher whose stored identity differs from what we sent now
+ * fails verification here, on every push, not in a harness someone has to
+ * remember to run.
+ *
+ * Compares against `partyIdentity` — the same value the builder rendered — so
+ * the check can never drift from the build. Lines: each stock line we sent a
+ * rate for must come back with that IGST rate on its RATEDETAILS.
+ */
+export function diffIdentity(p: VoucherPayload, masters: TallyMasters, v: string, sent?: PartyIdentity | null): string[] {
+  const id = sent === undefined ? partyIdentity(p, masters) : sent;
+  if (!id) return [];
+  const out: string[] = [];
+  const header = v
+    .replace(/<ALLINVENTORYENTRIES\.LIST>[\s\S]*?<\/ALLINVENTORYENTRIES\.LIST>/g, "")
+    .replace(/<INVENTORYENTRIES\.LIST>[\s\S]*?<\/INVENTORYENTRIES\.LIST>/g, "")
+    .replace(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/g, "")
+    .replace(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/g, "")
+    .replace(/<EWAYBILLDETAILS\.LIST>[\s\S]*?<\/EWAYBILLDETAILS\.LIST>/g, "");
+  const lines = (t: string) => [...header.matchAll(new RegExp(`<${t}\\.LIST[^>]*>([\\s\\S]*?)</${t}\\.LIST>`, "g"))]
+    .flatMap(b => [...b[1].matchAll(new RegExp(`<${t}>([^<]*)</${t}>`, "g"))].map(x => unesc(x[1].trim())))
+    .filter(Boolean);
+  const same = (label: string, want: string, got: string) => {
+    if (want.trim() !== got.trim()) out.push(`${label}: sent "${want}", stored "${got}"`);
+  };
+  same("bill-to name (PARTYMAILINGNAME)", id.mailingName, fld(header, "PARTYMAILINGNAME"));
+  same("bill-to address", id.address.join(" | "), lines("ADDRESS").join(" | "));
+  same("bill-to GSTIN", id.gstin, fld(header, "PARTYGSTIN"));
+  same("bill-to state", id.state, fld(header, "STATENAME"));
+  same("bill-to pincode", id.pincode, fld(header, "PARTYPINCODE"));
+  same("place of supply", id.placeOfSupply, fld(header, "PLACEOFSUPPLY"));
+  same("registration type", id.registrationType, fld(header, "GSTREGISTRATIONTYPE"));
+  same("ship-to ledger (BASICBUYERNAME)", id.consigneeLedger, fld(header, "BASICBUYERNAME"));
+  same("ship-to name", id.consignee.mailingName, fld(header, "CONSIGNEEMAILINGNAME"));
+  same("ship-to address", id.consignee.address.join(" | "), lines("BASICBUYERADDRESS").join(" | "));
+  same("ship-to GSTIN", id.consignee.gstin, fld(header, "CONSIGNEEGSTIN"));
+  same("ship-to state", id.consignee.state, fld(header, "CONSIGNEESTATENAME"));
+  same("ship-to pincode", id.consignee.pincode, fld(header, "CONSIGNEEPINCODE"));
+  same("ship-to country", id.consignee.country, fld(header, "CONSIGNEECOUNTRYNAME"));
+
+  // Line rates. Only lines we sent a rate for (outward, rate resolved).
+  const stored = [...v.matchAll(/<ALLINVENTORYENTRIES\.LIST>([\s\S]*?)<\/ALLINVENTORYENTRIES\.LIST>/g)].map(m => m[1]);
+  // Inward lines are built without rate details (buildVoucherImportXml passes
+  // no masters to them), so there is nothing of ours to compare.
+  for (const l of isInwardSupply(p.voucherType) ? [] : p.inventoryEntries ?? []) {
+    const want = gstRateFor(masters, l.stockItemName, p.date).rate;
+    if (!(want > 0)) continue;
+    const blk = stored.find(b => fld(b, "STOCKITEMNAME") === l.stockItemName);
+    if (!blk) continue;   // diffStored already reports a missing line
+    const own = blk.replace(/<ACCOUNTINGALLOCATIONS\.LIST>[\s\S]*?<\/ACCOUNTINGALLOCATIONS\.LIST>/g, "");
+    const igst = [...own.matchAll(/<RATEDETAILS\.LIST>([\s\S]*?)<\/RATEDETAILS\.LIST>/g)]
+      .map(m => m[1]).find(b => fld(b, "GSTRATEDUTYHEAD") === "IGST");
+    const got = igst ? lead(fld(igst, "GSTRATE")) : NaN;
+    if (!(Math.abs(got - want) < 0.001)) {
+      out.push(`item "${l.stockItemName}": GST rate sent ${want}%, stored ${Number.isNaN(got) ? "none — Tally will file it as 'Tax rate not specified'" : `${got}%`}`);
+    }
+    if (hsnFor(masters, l.stockItemName, p.date).code && !fld(own, "GSTHSNNAME")) out.push(`item "${l.stockItemName}": no HSN stored on the line`);
   }
   return out;
 }
@@ -388,7 +464,7 @@ export async function safePush(
     };
   }
 
-  const differences = diffStored(payload, mine);
+  const differences = [...diffStored(payload, mine), ...diffIdentity(payload, masters, mine)];
   return {
     ok: differences.length === 0,
     stage: differences.length ? "verify" : "done",
