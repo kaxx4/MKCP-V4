@@ -6,6 +6,7 @@ import {
   emitMirrorChanges,
   selectMovedChanges,
   describeSelection,
+  summarizeVoucherSync,
   SIGNAL_CEILING,
   type PriorVersions,
 } from "./mirrorSignal.js";
@@ -235,10 +236,37 @@ export class SupabaseSync {
           ? await this.priorVoucherAlterIds(company, vouchers.map((v: any) => String(v.guid)))
           : null;
 
+      /* Same before/after AlterID comparison the mirror signal already needs,
+         reused for two things: which GUIDs are safe to skip re-upserting
+         below, and (once `deleted` is known further down) what
+         row_counts.changed/deleted/maxAlterId says in tally_sync_history. See
+         mirrorSignal.ts. `deleted: 0` here is a placeholder — the real prune
+         count is filled in just before logSyncHistory, not used above. */
+      const changeSummary = summarizeVoucherSync(
+        vouchers.map((v: any) => ({
+          guid: String(v.guid),
+          alterId: typeof v.alter_id === "number" ? v.alter_id : null,
+        })),
+        priorAlterIds,
+        0,
+      );
+
       // Batch vouchers in chunks of 200 (smaller than stock items due to JSONB payload)
+      // Rows whose AlterID provably did not move (changeSummary.unchangedGuids)
+      // are skipped — every 200-row write chunk is a network round trip, and on
+      // a normal pass most of the pulled window is unchanged. This ONLY affects
+      // which rows get re-upserted: `vouchers` (the full pulled set) still feeds
+      // voucherGuids / the per-day and range orphan prune below unchanged, so
+      // deletion authority for the day/range is exactly as strong as before —
+      // unchangedGuids never removes anything from that set, only from what
+      // gets written back.
       const BATCH_SIZE = 200;
-      for (let i = 0; i < vouchers.length; i += BATCH_SIZE) {
-        const batch = vouchers.slice(i, i + BATCH_SIZE);
+      const vouchersToUpsert =
+        changeSummary.unchangedGuids.size > 0
+          ? vouchers.filter((v: any) => !changeSummary.unchangedGuids.has(String(v.guid)))
+          : vouchers;
+      for (let i = 0; i < vouchersToUpsert.length; i += BATCH_SIZE) {
+        const batch = vouchersToUpsert.slice(i, i + BATCH_SIZE);
         await this.upsertBatch("tally_vouchers", batch);
       }
 
@@ -423,6 +451,18 @@ export class SupabaseSync {
         `[Supabase] ✓ Vouchers synced: ${vouchers.length} vouchers, ${ledgerEntries.length} ledger entries, ${inventoryEntries.length} inventory entries${deleted > 0 ? `, ${deleted} orphan(s) removed` : ""} (${elapsed}s)`
       );
 
+      /* row_counts.changed/deleted/maxAlterId (Phase perf): a history row now
+         says WHETHER anything actually moved, not just that a pass completed —
+         so a client can skip its whole-dataset reload when changed is 0 rather
+         than reloading on every successful no-op sync. `changed` is OMITTED
+         (not written, not zero) when the pre-image read failed or was skipped
+         above SIGNAL_CEILING — the web side must treat a missing `changed` as
+         "unknown, reload to be safe", never as "nothing changed" (see
+         summarizeVoucherSync in mirrorSignal.ts). `deleted` is always known —
+         it is the real prune count from below, authoritative regardless of
+         whether the AlterID pre-image read succeeded. `maxAlterId` is the
+         highest AlterID seen among the vouchers pulled this pass, or null when
+         none carried one. Documented in the Table Ownership Matrix vault note. */
       await this.logSyncHistory(
         company,
         "vouchers",
@@ -431,6 +471,9 @@ export class SupabaseSync {
           vouchers: vouchers.length,
           ledgerEntries: ledgerEntries.length,
           inventoryEntries: inventoryEntries.length,
+          ...(changeSummary.changed !== undefined ? { changed: changeSummary.changed } : {}),
+          deleted,
+          maxAlterId: changeSummary.maxAlterId,
         },
         errors.length === 0 ? null : errors,
         undefined,
