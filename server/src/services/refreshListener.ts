@@ -306,20 +306,28 @@ function subscribeForCompany(
   }
 
   /**
-   * The price-list-only path.
+   * The price-list (+ GST) path.
    *
    * Retries on 409 the same way `fireBatch` does, and for the same reason:
    * Tally's XML port is single-threaded, so "another sync is running" is a
    * wait, not a failure. Marking it `error` would put a red state on a button
    * whose request is perfectly good and about to be servable.
+   *
+   * `includeGst: true` — owner's words, 23-Sep-2026: "GST should also auto
+   * pull with that". A manual "refresh price list" click now refreshes GST
+   * too, via the same route the daily scheduler uses (priceGstDailySync.ts).
    */
   async function firePriceList(id: number, attempt = 0): Promise<void> {
     try {
       const resp = await postTallySync(
-        localPort, { company, origin: "web-price-list" }, "/api/tally/sync-price-list",
+        localPort, { company, origin: "web-price-list", includeGst: true }, "/api/tally/sync-price-list",
       );
       if (resp.ok && resp.json?.success) {
-        console.log(`🌐 [WEB-SYNC] ✓ Price list [${id}]: ${resp.json.count} rows, ${resp.json.items} items in ${resp.json.elapsedMs}ms`);
+        console.log(
+          `🌐 [WEB-SYNC] ✓ Price list [${id}]: ${resp.json.count} rows, ${resp.json.items} items` +
+            (resp.json.gst ? `, ${resp.json.gst.rows} GST rates` : resp.json.gstError ? ` (GST failed: ${resp.json.gstError})` : "") +
+            ` in ${resp.json.elapsedMs}ms`,
+        );
         await setStatus([id], "done");
         return;
       }
