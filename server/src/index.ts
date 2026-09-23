@@ -27,6 +27,8 @@ import { planBankRows, pushBankPlan, type BankPlan } from "./services/bankToRece
 import type { ExtractedBankRow } from "./services/extraction.js";
 import { loadMasters } from "./services/tallyMasters.js";
 import { fetchPriceList } from "./services/tallyPriceList.js";
+import { fetchGstRates } from "./services/tallyGstRates.js";
+import { startPriceGstDailySync } from "./services/priceGstDailySync.js";
 
 import {
   startFileTransferSync, pushFileToWeb, listRecentTransfers,
@@ -250,9 +252,19 @@ app.post("/api/tally/sync-masters", syncGuard, async (req, res) => {
  * missing from today's pull means Tally no longer reports that revision, not
  * that the price never existed, and pruning it would silently re-price every
  * backdated voucher that referenced it.
+ *
+ * `includeGst: true` also pulls `tally_gst_rates` — the SAME `fetchGstRates` +
+ * `syncGstRates` calls `syncMastersOnly` makes for GST (syncOrchestrator.ts),
+ * reused here rather than duplicated, and just as cheap (~0.06s, see
+ * tallyGstRates.ts). Used by the daily price/GST scheduler
+ * (priceGstDailySync.ts) and by the web dashboard's price-list refresh command
+ * (refreshListener.ts) — the owner asked that a manual price-list refresh also
+ * refresh GST. A GST failure is reported (`gstError`) but does not fail the
+ * whole request: the price list, which is what most callers came here for,
+ * already landed by the time GST is attempted.
  */
 app.post("/api/tally/sync-price-list", syncGuard, async (req, res) => {
-  const { company, origin = "manual" } = req.body;
+  const { company, origin = "manual", includeGst = false } = req.body;
   const t0 = Date.now();
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
@@ -269,8 +281,23 @@ app.post("/api/tally/sync-price-list", syncGuard, async (req, res) => {
     }
     await supabaseSync.syncPriceList(entries, company, origin);
     const items = new Set(entries.map((e) => e.itemName)).size;
-    if (!res.writableEnded) res.json({ success: true, count: entries.length, items, elapsedMs: Date.now() - t0 });
-    console.log(`[SYNC] ✓ origin=${origin} company=${company} route=sync-price-list rows=${entries.length} items=${items} ${Date.now() - t0}ms`);
+
+    let gst: { rows: number } | undefined;
+    let gstError: string | undefined;
+    if (includeGst && !ac.signal.aborted) {
+      try {
+        const gstRows = await fetchGstRates(TALLY, company);
+        await supabaseSync.syncGstRates(gstRows, company);
+        gst = { rows: gstRows.length };
+      } catch (e: any) {
+        // Does not fail the response — see the doc comment above.
+        gstError = e?.message ?? String(e);
+        console.error(`[SYNC] ✗ origin=${origin} company=${company} route=sync-price-list gst-error="${gstError}"`);
+      }
+    }
+
+    if (!res.writableEnded) res.json({ success: true, count: entries.length, items, elapsedMs: Date.now() - t0, gst, gstError });
+    console.log(`[SYNC] ✓ origin=${origin} company=${company} route=sync-price-list rows=${entries.length} items=${items}${gst ? ` gstRows=${gst.rows}` : ""} ${Date.now() - t0}ms`);
   } catch (e: any) {
     if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
     console.log(`[SYNC] ✗ origin=${origin} company=${company} route=sync-price-list error="${e.message}" ${Date.now() - t0}ms`);
@@ -725,6 +752,8 @@ const httpServer = app.listen(PORT, BIND_HOST, () => {
   // The recurring quick syncs, which used to run only while the Electron window
   // was open — see scheduledSyncs.ts.
   startScheduledSyncs(PORT, company);
+  // Daily price list + GST pull at 18:00 local (configurable via PRICE_GST_SYNC_*).
+  startPriceGstDailySync(PORT, company);
 
   // Two-way file handoff with the web dashboard (see server/src/services/fileTransferSync.ts).
   startFileTransferSync();
