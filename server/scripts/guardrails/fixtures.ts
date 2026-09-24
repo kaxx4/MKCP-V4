@@ -13,15 +13,18 @@
  */
 import type { TallyMasters, MasterItem, MasterStockGroup, MasterLedger, GstRevision, LedgerRegistration } from "../../src/services/tallyMasters.js";
 import type { VoucherPayload, LedgerEntry, InventoryEntry } from "../../src/types.js";
+import type { OpenBill } from "../../src/services/billSettlement.js";
 
 export const COMPANY = "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
 
 const rev = (from: string, igst: number): GstRevision => ({ from, rate: igst, cgst: igst / 2, sgst: igst / 2, igst, taxability: "Taxable" });
 const BIKE_REVS = [rev("2017-07-01", 12), rev("2022-04-01", 12), rev("2025-09-22", 5)];
 
-const group = (name: string, revisions: GstRevision[], parent = ""): MasterStockGroup => {
+const group = (name: string, revisions: GstRevision[], hsn = "", parent = ""): MasterStockGroup => {
   const now = revisions[revisions.length - 1];
-  return { name, parent, gstRate: now?.rate ?? 0, cgstRate: now?.cgst ?? 0, sgstRate: now?.sgst ?? 0, igstRate: now?.igst ?? 0, gstRevisions: revisions } as MasterStockGroup;
+  return { name, parent, gstRate: now?.rate ?? 0, cgstRate: now?.cgst ?? 0, sgstRate: now?.sgst ?? 0, igstRate: now?.igst ?? 0, gstRevisions: revisions,
+    // The HSN in the group's own name, declared the way Tally stores it (HSNDETAILS, "Specify Details Here").
+    hsnRevisions: hsn ? [{ from: "2017-07-01", code: hsn, description: name }] : [] } as MasterStockGroup;
 };
 const item = (name: string, parent: string, own: GstRevision[] = [rev("2022-04-01", 0)], baseUnit = "PC"): MasterItem =>
   ({ name, parent, baseUnit, denominator: 1, closingRate: 0, closingStock: 0, gstRate: 0, cgstRate: 0, sgstRate: 0, igstRate: 0,
@@ -44,22 +47,27 @@ export const PARTY_INTER = "DIBYASAKTI CYCLE STORE (JALESWAR)";
 export const PARTY_UNREG = "TAPAS CYCLE (RANAGHAT)";
 export const PARTY_LATE_REG = "LATE REG CYCLE (BARASAT)";
 export const SUPPLIER = "ACCURATE BYCYCLE PARTS";
+/** Several cash orders billed together for packing convenience, a different
+ *  buyer every time (owner, 24-Sep-2026). Live, 24-Sep-2026: its ledger carries
+ *  a state (unlike Cash) but no address and no pincode. */
+export const PARTY_MIXED_ORDER = "MIXED ORDER";
 
 export function fixtureMasters(): TallyMasters {
   const ledgers: MasterLedger[] = [
     ledger("Cash", "Cash-in-Hand"),
-    ledger(PARTY_LOCAL, "Sundry Debtors", { gstin: "19AAAAR0000R1Z5", state: "West Bengal", pincode: "743502", mailingName: "RANI CYCLE STORES",
-      address: ["BHANGAR-743502"], registrations: [reg("20170701", "19AAAAR0000R1Z5", "Regular", "West Bengal")] }),
-    ledger(PARTY_INTER, "Sundry Debtors", { gstin: "21AAAAD0000D1Z6", state: "Odisha", pincode: "756032", mailingName: "DIBYASAKTI CYCLE STORE",
-      address: ["JALESWAR", "BALASORE"], registrations: [reg("20170701", "21AAAAD0000D1Z6", "Regular", "Odisha")] }),
+    ledger(PARTY_MIXED_ORDER, "Sundry Debtors (EG)", { state: "West Bengal" }),
+    ledger(PARTY_LOCAL, "Sundry Debtors", { gstin: "19AAAAR0000R1ZJ", state: "West Bengal", pincode: "743502", mailingName: "RANI CYCLE STORES",
+      address: ["BHANGAR-743502"], registrations: [reg("20170701", "19AAAAR0000R1ZJ", "Regular", "West Bengal")] }),
+    ledger(PARTY_INTER, "Sundry Debtors", { gstin: "21AAAAD0000D1Z5", state: "Odisha", pincode: "756032", mailingName: "DIBYASAKTI CYCLE STORE",
+      address: ["JALESWAR", "BALASORE"], registrations: [reg("20170701", "21AAAAD0000D1Z5", "Regular", "Odisha")] }),
     // An unregistered party ledger, as TallyPrime 7 stores it.
     ledger(PARTY_UNREG, "Sundry Debtors", { state: "West Bengal", pincode: "741201", mailingName: "TAPAS CYCLE", address: ["RANAGHAT"],
       registrations: [reg("20170701", "", "Unregistered/Consumer", "West Bengal")] }),
     // Registered mid-way: a 2024 block with no GSTIN, a 2025 block with one (vault §2.3).
-    ledger(PARTY_LATE_REG, "Sundry Debtors", { gstin: "19AAAAL1234A1Z5", state: "West Bengal", pincode: "700124", mailingName: "LATE REG CYCLE",
-      address: ["BARASAT"], registrations: [reg("20240401", "", "Unregistered/Consumer", "West Bengal"), reg("20250601", "19AAAAL1234A1Z5", "Regular", "West Bengal")] }),
-    ledger(SUPPLIER, "Sundry Creditors", { gstin: "03AAAFA1234B1Z9", state: "Punjab", pincode: "141003", mailingName: "ACCURATE BYCYCLE PARTS",
-      address: ["GILL ROAD", "LUDHIANA-141003"], registrations: [reg("20170701", "03AAAFA1234B1Z9", "Regular", "Punjab")] }),
+    ledger(PARTY_LATE_REG, "Sundry Debtors", { gstin: "19AAAAL1234A1ZA", state: "West Bengal", pincode: "700124", mailingName: "LATE REG CYCLE",
+      address: ["BARASAT"], registrations: [reg("20240401", "", "Unregistered/Consumer", "West Bengal"), reg("20250601", "19AAAAL1234A1ZA", "Regular", "West Bengal")] }),
+    ledger(SUPPLIER, "Sundry Creditors", { gstin: "03AAAFA1234B1ZM", state: "Punjab", pincode: "141003", mailingName: "ACCURATE BYCYCLE PARTS",
+      address: ["GILL ROAD", "LUDHIANA-141003"], registrations: [reg("20170701", "03AAAFA1234B1ZM", "Regular", "Punjab")] }),
     ledger(SALES_WB, "Sales Accounts"), ledger(SALES_CENTRAL, "Sales Accounts"),
     ledger("PURCHASE ( GST W.B. )", "Purchase Accounts"), ledger(PURCHASE_CENTRAL, "Purchase Accounts"),
     ledger("OUTPUT CGST", "Duties & Taxes"), ledger("OUTPUT SGST", "Duties & Taxes"), ledger("OUTPUT IGST", "Duties & Taxes"),
@@ -67,7 +75,8 @@ export function fixtureMasters(): TallyMasters {
     ledger("ROUNDED OFF", "Indirect Expenses"), ledger(DISCOUNT, "Indirect Expenses"),
     ledger("STATE BANK OF INDIA", "Bank Accounts"),
   ];
-  const groups = [group(G_PARTS, BIKE_REVS), group(G_TRIKE, BIKE_REVS), group(G_EV, [])];
+  // GSTINs carry real check digits (the guard refuses a checksum failure, as the web does).
+  const groups = [group(G_PARTS, BIKE_REVS, "87149990"), group(G_TRIKE, BIKE_REVS, "950300"), group(G_EV, [])];
   const items = [
     item("BICYCLE BASKET EHD", G_PARTS), item("BRAKE SHOE  ( POWER )", G_PARTS), item("CARRIER CLIP", G_PARTS),
     item("BABY TRICYCLE MUGHAL DLX RACER BB MSC AMPHA", G_TRIKE),
@@ -88,6 +97,15 @@ export function fixtureMasters(): TallyMasters {
     ledgerLoose: new Map(ledgers.map((l) => [lower(l.name), l.name])),
     itemLoose: new Map(items.map((i) => [lower(i.name), i.name])),
   } as unknown as TallyMasters;
+}
+
+/** Open bills as billSettlement.loadOpenBills returns them. 26-27/0460 is open
+ *  for the local party; TI/26-27/34 is open for the SUPPLIER, not for it. */
+export function fixtureOpenBills(): OpenBill[] {
+  return [
+    { name: "26-27/0460", party: PARTY_LOCAL, date: "20260901", closing: -5000, outstanding: 5000, creditPeriod: "20 Days" },
+    { name: "TI/26-27/34", party: SUPPLIER, date: "20260810", closing: 12000, outstanding: 12000, creditPeriod: "" },
+  ];
 }
 
 // ── Payload builders ─────────────────────────────────────────────────────────

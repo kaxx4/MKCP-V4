@@ -44,8 +44,17 @@ function expectReject(name: string, p: VoucherPayload, m: TallyMasters, mustMent
   record(name, !r.ok && !!hit, !r.ok ? (hit ? "refused locally" : `refused, but for the wrong reason: ${r.errors[0]}`) : "ACCEPTED — should have been refused");
 }
 
+/**
+ * G5: every Create carries identity (pushGuard refuses one without, 24-Sep-2026
+ * — and a test voucher created without it can only be removed by hand).
+ * Derived from the voucher number, so a re-run alters rather than duplicates.
+ */
+const withId = (p: VoucherPayload): VoucherPayload =>
+  p.remoteId ? p : { ...p, remoteId: `MKCP|TEST|${p.date}|${p.voucherType}|${p.voucherNumber ?? p.narration ?? ""}` };
+
 /** Must reach Tally, be created, and read back identically. */
-async function expectPush(name: string, p: VoucherPayload, company: string) {
+async function expectPush(name: string, p0: VoucherPayload, company: string) {
+  const p = withId(p0);
   if (halted) { skipped++; counter++; console.log(`  – ${String(counter).padStart(2)}. ${name} — skipped, Tally halted`); return; }
   if (!PUSH) { skipped++; counter++; return; }
   try {
@@ -153,7 +162,7 @@ async function main() {
     };
     await expectPush("quantity of 1", qty(1), company);
     const frac = qty(1.5);
-    const fg = guardVoucher(frac, m);
+    const fg = guardVoucher(withId(frac), m);
     record("fractional quantity warns that Tally may round it",
       fg.warnings.some(w => /fractional/i.test(w)),
       fg.warnings.find(w => /fractional/i.test(w)) ? "warned before sending" : "no warning raised");
@@ -291,7 +300,7 @@ async function main() {
     if (noStateParty) {
       const p = purchase({ partyLedgerName: noStateParty.name });
       p.ledgerEntries[0].ledgerName = noStateParty.name;
-      const g = guardVoucher(p, m);
+      const g = guardVoucher(withId(p), m);
       record("party with no state on its master warns", g.warnings.some(w => /no state/i.test(w)),
         g.warnings.find(w => /no state/i.test(w)) ? "warned, not blocked" : "no warning raised");
     } else { counter++; skipped++; console.log(`  – ${counter}. party with no state — none found`); }
@@ -384,7 +393,7 @@ async function main() {
     await expectPush('bank instrument of type "Others"', payment(true, "Others"), company);
 
     const noInstrument = payment(false);
-    const g = guardVoucher(noInstrument, m);
+    const g = guardVoucher(withId(noInstrument), m);
     record("bank ledger with no instrument warns (does not block)",
       g.ok && g.warnings.some(w => /Bank Allocation prompt/i.test(w)),
       g.warnings.length ? "warned, still pushable" : "no warning raised");

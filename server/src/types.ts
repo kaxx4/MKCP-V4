@@ -250,6 +250,28 @@ export interface VoucherPayload {
    */
   partyAddress?: string[];
   voucherNumber?: string;
+  /**
+   * True when `voucherNumber` was TYPED BY A PERSON overriding the auto-assigned
+   * one (Split Invoice's per-voucher override, 24-Sep-2026), rather than learned
+   * from the mirror by `nextNumberForType`/`nextSalesNumbers`.
+   *
+   * Two things change when this is set:
+   *
+   *  1. `pushGuard` checks it against `GuardContext.existingVoucherNumbers`
+   *     (loaded from the mirror only for an override — see `safePush`) and
+   *     refuses a duplicate outright, rather than letting a hand-typed number
+   *     collide.
+   *  2. `safePush`'s one silent-renumber recovery (see the comment at
+   *     `numberMayBeTaken`) is DISABLED. That recovery exists because
+   *     auto-assigned numbers can race a number typed straight into Tally, and
+   *     substituting the next free one is the right repair for a number nobody
+   *     chose on purpose. An override is the opposite case — a person picked
+   *     this exact number, often for a specific GST-series reason — so a
+   *     collision is reported and refused rather than quietly renumbered out
+   *     from under them, and the read-back requires the stored number to equal
+   *     the one requested rather than falling back to a narration/money match.
+   */
+  numberOverride?: boolean;
   /** Tally's `<REFERENCE>` — the OTHER party's document number. On a Purchase
    *  that is the supplier's invoice number and it is accounting data. It also
    *  carries the push agent's idempotency key for vouchers that have no such
