@@ -29,6 +29,14 @@ export interface GuardResult { ok: boolean; errors: string[]; warnings: string[]
 export interface GuardContext {
   /** Open bills (billSettlement.loadOpenBills). Needed to check an Agst Ref. */
   openBills?: OpenBill[];
+  /**
+   * Every voucher number this TYPE already holds in the mirror, for the same
+   * financial year as the voucher being pushed — trimmed, upper-cased. Loaded
+   * by `safePush` only when the payload carries an explicit `numberOverride`
+   * (see there); absent otherwise, including for an ordinary auto-numbered
+   * Create, so this never costs a read on the common path.
+   */
+  existingVoucherNumbers?: Set<string>;
 }
 
 /**
@@ -208,6 +216,25 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
   // Tally does not auto-number an XML import. (TG-P03)
   if (action === "Create" && NUMBERED.has(p.voucherType.trim().toUpperCase()) && !p.voucherNumber?.trim()) {
     errors.push(`Create refused: ${p.voucherType} has no voucherNumber. Tally does not number a voucher arriving over XML — it answers created=0 exceptions=1 with no reason.`);
+  }
+  /*
+   * A hand-typed OVERRIDE number gets a duplicate check the auto-assigned path
+   * does not — an auto-assigned number was just learned from the same mirror a
+   * moment ago, so a collision there is already unlikely; a typed one has no
+   * such guarantee. `existingVoucherNumbers` is loaded by `safePush` ONLY when
+   * `numberOverride` is set (a mirror read on every push was not worth it), so
+   * this degrades to a warning rather than a silent pass when it is absent —
+   * same rule as `openBills` above.
+   */
+  if (action === "Create" && p.numberOverride && p.voucherNumber?.trim()) {
+    if (ctx.existingVoucherNumbers) {
+      const key = p.voucherNumber.trim().toUpperCase();
+      if (ctx.existingVoucherNumbers.has(key)) {
+        errors.push(`Create refused: the overridden voucher number "${p.voucherNumber}" already exists for ${p.voucherType} in the mirror. Pick a different number — an explicit override is never renumbered automatically.`);
+      }
+    } else {
+      warnings.push(`Overridden voucher number "${p.voucherNumber}" could not be checked against existing ${p.voucherType} numbers — the mirror was not loaded.`);
+    }
   }
 
   // ── Names must resolve EXACTLY. Near misses are the dangerous case: Tally

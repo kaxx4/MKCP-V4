@@ -16,7 +16,53 @@ import { guardVoucher, isInwardSupply, type GuardContext } from "./pushGuard.js"
 import { loadOpenBills } from "./billSettlement.js";
 import { nextFreeNumber, takenNumbers } from "./voucherNumbering.js";
 import { withTally } from "./tallyGate.js";
+import { supabaseClient } from "./supabaseClient.js";
+import { financialYearOf } from "./remoteId.js";
 import type { VoucherPayload, PushResult } from "../types.js";
+
+/**
+ * Every voucher number the mirror already holds for one type, in the same
+ * financial year as `date` — for the override duplicate check in `pushGuard`.
+ *
+ * Read ONLY when a payload carries `numberOverride` (see `types.ts`), never on
+ * an ordinary auto-numbered push — a mirror read on every single push was not
+ * worth it, and an auto-assigned number was just learned from this same mirror
+ * a moment ago so a collision there is already unlikely. A typed-in override
+ * has no such guarantee, which is the whole reason this exists.
+ *
+ * Returns null (not an empty set) on any failure — offline, no service key, a
+ * query error — so the guard can tell "checked, none found" from "could not
+ * check" and warn rather than silently pass (G7).
+ */
+async function existingNumbersForOverride(
+  company: string, voucherType: string, date: string,
+): Promise<Set<string> | null> {
+  const client = supabaseClient();
+  if (!client) return null;
+  const fy = financialYearOf(date);
+  const startYear = parseInt(fy.slice(0, 4), 10);
+  if (!startYear) return null;
+  const fyStart = `${startYear}-04-01`;
+  const fyEnd = `${startYear + 1}-04-01`;
+  try {
+    const { data, error } = await client
+      .from("tally_vouchers")
+      .select("voucher_number")
+      .eq("company", company)
+      .ilike("voucher_type", voucherType)
+      .gte("date", fyStart)
+      .lt("date", fyEnd);
+    if (error) throw error;
+    return new Set(
+      (data ?? [])
+        .map((r: { voucher_number?: string | null }) => String(r.voucher_number ?? "").trim().toUpperCase())
+        .filter(Boolean),
+    );
+  } catch (e) {
+    console.warn(`[safePush] could not load existing ${voucherType} numbers from the mirror for the override check: ${(e as Error).message}`);
+    return null;
+  }
+}
 
 export interface SafePushResult {
   ok: boolean;
@@ -245,6 +291,11 @@ export async function safePush(
     try { ctx.openBills = await loadOpenBills(tallyUrl, company); }
     catch (e) { console.warn(`[safePush] open bills could not be read (${(e as Error).message}) — the Agst Ref check falls back to the read-back.`); }
   }
+  // See existingNumbersForOverride's header: only for an explicit override.
+  if ((payload.action ?? "Create") === "Create" && payload.numberOverride && payload.voucherNumber?.trim()) {
+    const existing = await existingNumbersForOverride(company, payload.voucherType, payload.date);
+    if (existing) ctx.existingVoucherNumbers = existing;
+  }
   let guard = guardVoucher(payload, masters, ctx);
 
   // The master cache has a ten-minute TTL, so a ledger or item created in Tally
@@ -360,7 +411,11 @@ export async function safePush(
      recorded can never be altered or removed again. */
   const numberMayBeTaken =
     !succeeded && exceptions > 0 && count("CREATED") === 0 &&
-    action === "Create" && !!payload.voucherNumber && !retriedWithoutNumber;
+    action === "Create" && !!payload.voucherNumber && !retriedWithoutNumber &&
+    // An explicit override is never silently renumbered — see types.ts. The
+    // person chose this exact number; substituting one and reporting success
+    // is precisely the failure this whole feature exists to prevent.
+    !payload.numberOverride;
 
   if (numberMayBeTaken) {
     const taken = await withTally(tallyUrl, `list ${payload.voucherType} numbers`,
@@ -390,7 +445,9 @@ export async function safePush(
       // Never auto-retry: an exception is structural, and a retry risks a
       // duplicate. pushAgent honours this now — it used to retry five times.
       errors: result.lineErrors.length ? result.lineErrors
-        : [`Tally rejected the voucher — created=${result.created} errors=${result.errors} exceptions=${exceptions}, with no reason given.`
+        : [(payload.numberOverride
+            ? `Overridden voucher number "${payload.voucherNumber}" was refused by Tally (created=0 exceptions=${exceptions}) and was NOT substituted — it was an explicit override, so a collision is reported rather than silently renumbered.`
+            : `Tally rejected the voucher — created=${result.created} errors=${result.errors} exceptions=${exceptions}, with no reason given.`)
           + (payload.voucherNumber ? duplicateNumberHint(payload.voucherNumber) : "")],
       warnings: guard.warnings, differences: [], requestXml: xml, responseXml, pushResult: result,
     };
@@ -412,7 +469,20 @@ export async function safePush(
     ? vouchers.find(x => fld(x, "VOUCHERNUMBER") === payload.voucherNumber)
     : undefined;
 
-  if (!mine && payload.narration) {
+  // An explicit override is verified by NUMBER ONLY. The narration/money
+  // fallbacks below exist for a Journal-shaped voucher that carries no number
+  // of its own — they are not a licence to accept a voucher that landed under
+  // a DIFFERENT number than the one the operator typed, which is exactly the
+  // silent-renumber failure this whole feature exists to catch (rule 3).
+  if (!mine && payload.numberOverride && payload.voucherNumber) {
+    return {
+      ok: false, stage: "verify", voucherId: result.lastVoucherId,
+      errors: [`Created (id ${result.lastVoucherId}), but the read-back does not show a ${payload.voucherType} numbered "${payload.voucherNumber}" — the overridden number was not confirmed as stored.`],
+      warnings: guard.warnings, differences: [], requestXml: xml, responseXml, pushResult: result,
+    };
+  }
+
+  if (!mine && !payload.numberOverride && payload.narration) {
     // Falling back to narration is only safe when it identifies ONE voucher.
     // Narrations repeat constantly in real books ("AS PER BILL" is on hundreds),
     // and comparing against an arbitrary one of several silently reports another

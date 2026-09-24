@@ -112,6 +112,21 @@ function offlineCases() {
   console.log("\nIdentity, numbering, tax, round-off (offline):");
   expectRejected("a Create with no remoteId (G5)", sale({ number: "PG/10", party: PARTY_LOCAL, lines: clip, remoteId: null }), m, "remoteId");
   expectRejected("a Sales Create with no voucher number", { ...sale({ number: "PG/11", party: PARTY_LOCAL, lines: clip }), voucherNumber: undefined }, m, "voucherNumber");
+  {
+    // Split Invoice's manual override (24-Sep-2026): pushGuard refuses a
+    // duplicate of an existing number, but ONLY when the mirror was loaded
+    // (safePush does that just for an override — see GuardContext). Absent,
+    // it degrades to a warning rather than a silent pass (G7).
+    const overridden = { ...sale({ number: "26-27/0733", party: PARTY_LOCAL, lines: clip }), numberOverride: true };
+    const mirror = { existingVoucherNumbers: new Set(["26-27/0733"]) };
+    expectRejected("an overridden number that duplicates one already in the mirror", overridden, m, "already exists", mirror);
+    expectAccepted("an overridden number the mirror confirms is free", { ...overridden, voucherNumber: "26-27/0740" }, m, { existingVoucherNumbers: new Set(["26-27/0733"]) });
+    {
+      const r = guardVoucher(overridden, m, {});
+      if (r.ok && r.warnings.some(w => /could not be checked/i.test(w))) { console.log("  ✓ an overridden number with no mirror loaded — warns, does not silently pass"); pass++; }
+      else { console.log("  ✗ an overridden number with no mirror loaded — expected an ACCEPT carrying a warning"); fail++; }
+    }
+  }
   expectRejected("tax at 12% on an item whose dated rate is 5%", sale({ number: "PG/12", party: PARTY_LOCAL, lines: [{ item: "CARRIER CLIP", amount: 1000, rate: 12 }] }), m, "Tax booked");
   expectRejected("an outward line with no rate anywhere in its chain", sale({ number: "PG/13", party: PARTY_LOCAL, lines: [{ item: "EV THING", amount: 1000, rate: 5 }] }), m, "No GST rate resolves");
   expectRejected("a Credit Note (never automated)", { ...sale({ number: "PG/14", party: PARTY_LOCAL, lines: clip }), voucherType: "Credit Note" }, m, "never automated");
