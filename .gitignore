@@ -97,3 +97,11 @@ server/data/*-probe.json
 # they were shipping in every build and would have been uploaded to the PUBLIC
 # kaxx4/MKCP-V4 release. Moved here on 19-Sep-2026, where nothing bundles them.
 sample-data/
+
+# Push-fidelity / native-shape harness output: real party names, GSTINs and
+# addresses read back from Tally. Never commit (this repo is public).
+server/data/native-shape/
+server/data/native-sales-census.json
+server/data/push-fidelity-*
+# Throwaway probe scripts written during investigations.
+server/scripts/_scratch-*.ts
