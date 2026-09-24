@@ -79,3 +79,27 @@ export function isGstinChecksumValid(s: string): boolean {
 
 export const PIN_RE = /^[1-9]\d{5}$/;
 export const HSN_RE = /^\d{4}(\d{2}(\d{2})?)?$/;
+
+/**
+ * "MIXED ORDER" is a real Tally ledger (`SUNDRY DEBTORS (EG)`) but not a real
+ * party: it is several cash orders billed together for packing convenience,
+ * and the buyer is different on every invoice. Owner, 24-Sep-2026: treat it
+ * like `Cash` — a typed buyer name and address on every invoice, place of
+ * supply West Bengal, the same ₹50,000 ceiling — because it IS cash, just
+ * batched. Its ledger carries a state (West Bengal) that `Cash` does not, but
+ * no address and no pincode, so it cannot be checked the way an ordinary
+ * party ledger is.
+ *
+ * SAME definition as the web's `domain/accounting.ts` `isCashLikeParty`
+ * (24-Sep-2026); the two are checked against each other, not each carrying
+ * its own copy of the reasoning (G1).
+ */
+export const MIXED_ORDER_PARTY = "MIXED ORDER";
+
+/** True for the shared `Cash` ledger or `MIXED ORDER` by NAME. Does not read
+ *  the ledger group — callers that also treat any ledger under a "cash" group
+ *  as a walk-in (`isWalkInLedger` in pushGuard.ts) OR this. */
+export function isCashLikeParty(name: string | null | undefined): boolean {
+  const n = String(name ?? "").trim().toUpperCase();
+  return n === "CASH" || n === MIXED_ORDER_PARTY;
+}

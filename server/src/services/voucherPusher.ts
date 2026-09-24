@@ -2,6 +2,7 @@ import type { VoucherPayload, LedgerEntry, InventoryEntry, BillAllocation, PushR
 import { tallyPost } from "../tally.js";
 import { findLedger, gstRateFor, hsnFor, mailingOn, registrationOn, type TallyMasters } from "./tallyMasters.js";
 import { HOME_STATE_NAME, isInwardSupply, resolvePartyState } from "./pushGuard.js";
+import { isCashLikeParty } from "./gstIdentity.js";
 import { XMLParser } from "fast-xml-parser";
 
 const parser = new XMLParser({ ignoreAttributes: false, parseTagValue: false, trimValues: true });
@@ -194,8 +195,14 @@ export function partyIdentity(p: VoucherPayload, masters?: TallyMasters): PartyI
   const placeOfSupply = isInwardSupply(p.voucherType) ? HOME_STATE_NAME : state;
 
   /* A walk-in is a ledger with no identity of its own: no GSTIN, no address, no
-     state. Only then do the operator's typed name and address apply. */
-  const walkIn = !registered && !mail.address.length && !(party.state || "").trim();
+     state. Only then do the operator's typed name and address apply.
+     `MIXED ORDER` is the exception that PROVES this can't be state-derived
+     alone: its ledger carries a state (West Bengal, unlike Cash) but is not a
+     real, single, addressable buyer — several cash orders billed together,
+     a different buyer every time (owner, 24-Sep-2026). So it is forced onto
+     the walk-in path by name (`isCashLikeParty`) even though the state test
+     alone would say otherwise. */
+  const walkIn = isCashLikeParty(party.name) || (!registered && !mail.address.length && !(party.state || "").trim());
   const typed = (p.buyerAddress ?? []).map((l) => l.trim()).filter(Boolean);
   const address = walkIn ? typed : mail.address;
   const mailingName = (walkIn ? p.buyerName?.trim() : "") || (mail.mailingName ?? "").trim() || party.name;

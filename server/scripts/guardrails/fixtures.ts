@@ -47,10 +47,15 @@ export const PARTY_INTER = "DIBYASAKTI CYCLE STORE (JALESWAR)";
 export const PARTY_UNREG = "TAPAS CYCLE (RANAGHAT)";
 export const PARTY_LATE_REG = "LATE REG CYCLE (BARASAT)";
 export const SUPPLIER = "ACCURATE BYCYCLE PARTS";
+/** Several cash orders billed together for packing convenience, a different
+ *  buyer every time (owner, 24-Sep-2026). Live, 24-Sep-2026: its ledger carries
+ *  a state (unlike Cash) but no address and no pincode. */
+export const PARTY_MIXED_ORDER = "MIXED ORDER";
 
 export function fixtureMasters(): TallyMasters {
   const ledgers: MasterLedger[] = [
     ledger("Cash", "Cash-in-Hand"),
+    ledger(PARTY_MIXED_ORDER, "Sundry Debtors (EG)", { state: "West Bengal" }),
     ledger(PARTY_LOCAL, "Sundry Debtors", { gstin: "19AAAAR0000R1ZJ", state: "West Bengal", pincode: "743502", mailingName: "RANI CYCLE STORES",
       address: ["BHANGAR-743502"], registrations: [reg("20170701", "19AAAAR0000R1ZJ", "Regular", "West Bengal")] }),
     ledger(PARTY_INTER, "Sundry Debtors", { gstin: "21AAAAD0000D1Z5", state: "Odisha", pincode: "756032", mailingName: "DIBYASAKTI CYCLE STORE",

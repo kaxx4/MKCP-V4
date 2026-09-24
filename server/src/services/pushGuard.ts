@@ -15,8 +15,8 @@
  */
 import type { VoucherPayload } from "../types.js";
 import { type TallyMasters, type MasterLedger, findLedger, findItem, isMiss, gstRateFor, revisionOn, registrationOn, hsnFor } from "./tallyMasters.js";
-import { partyIdentity, pincodeIn } from "./voucherPusher.js";
-import { sameState, codeForState, stateFromGstin, normalizeGstin, isGstinChecksumValid, PIN_RE, HSN_RE } from "./gstIdentity.js";
+import { partyIdentity } from "./voucherPusher.js";
+import { sameState, codeForState, stateFromGstin, normalizeGstin, isGstinChecksumValid, isCashLikeParty, PIN_RE, HSN_RE } from "./gstIdentity.js";
 import type { OpenBill } from "./billSettlement.js";
 
 export interface GuardResult { ok: boolean; errors: string[]; warnings: string[]; }
@@ -58,14 +58,16 @@ const NEVER_AUTOMATED = new Set(["CREDIT NOTE", "DEBIT NOTE"]);
 const OUTWARD_TAXED = new Set(["SALES", "SALES ORDER", "SALES ORDER NOTE"]);
 
 /**
- * The e-way bill threshold: CGST Rule 138, consignment value above ₹50,000.
- * Used ONLY for a cash walk-in, whose ship-to is whatever the operator typed —
- * native cash invoices carry no ship-to address or pincode (mirror, 24-Sep-2026:
- * 0 of 251 hand-typed FY26-27 cash sales carry an e-way bill or consignee
- * pincode), so demanding one on every counter sale would refuse what the
- * operator does by hand. Above the threshold an e-way bill is due and cannot be
- * generated without the address and PIN. Hypothesis, not measured: West
- * Bengal's intra-state threshold is taken to equal the Rule 138 figure.
+ * The e-way bill threshold: CGST Rule 138, consignment (goods) value above
+ * ₹50,000. Used for a cash walk-in or MIXED ORDER (`isCashLikeParty`), whose
+ * ship-to is whatever the operator typed.
+ *
+ * Owner, 24-Sep-2026, superseding the earlier "optional below the limit"
+ * rule: a buyer address is now ALWAYS required on a cash sale, and a cash
+ * sale over this figure is refused outright rather than merely needing an
+ * e-way bill — this is not just an e-way bill gate any more, the name is kept
+ * because it is still the same figure (Rule 138). Hypothesis, not measured:
+ * West Bengal's intra-state threshold is taken to equal the Rule 138 figure.
  */
 export const EWAY_BILL_THRESHOLD = 50_000;
 
@@ -499,19 +501,28 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
         }
       }
       if (walkIn) {
-        // A counter sale: the buyer is in the shop, so the supply is local.
+        // A counter sale (or MIXED ORDER): the buyer is in the shop, so the
+        // supply is local.
         if (declared && !sameState(declared, HOME_STATE_NAME)) {
           errors.push(`A cash sale's place of supply is ${HOME_STATE_NAME}, not "${declared}" — the buyer is standing in the shop and the tax is charged as local.`);
         }
         if (!p.buyerName?.trim()) {
-          errors.push(`A cash sale needs the buyer's name — it is the bill-to and ship-to on the invoice, and the Cash ledger has neither.`);
+          errors.push(`A cash sale needs the buyer's name — it is the bill-to and ship-to on the invoice, and the Cash/MIXED ORDER ledger has neither.`);
         }
         const typed = (p.buyerAddress ?? []).map(l => l.trim()).filter(Boolean);
         const goods = (p.inventoryEntries ?? []).reduce((t, i) => t + Math.abs(i.amount), 0);
-        if (goods > EWAY_BILL_THRESHOLD && (!typed.length || !pincodeIn(typed))) {
-          errors.push(`This cash sale is ₹${goods.toFixed(0)} of goods, over the ₹${EWAY_BILL_THRESHOLD} e-way bill limit, so the buyer's address ${typed.length ? "needs a 6-digit pincode" : "and pincode are needed"} — the e-way bill cannot be generated without the ship-to.`);
-        } else if (!typed.length) {
-          warnings.push(`No address typed for this walk-in, so the ship-to carries only the name and state — as hand-typed cash invoices do. Fine below the e-way bill limit.`);
+        // Owner, 24-Sep-2026: a buyer address is ALWAYS required on a cash
+        // sale, not only above the e-way bill limit — reversing the earlier
+        // "optional at the counter" rule.
+        if (!typed.length) {
+          errors.push(`A cash sale needs the buyer's address — it is the ship-to on the invoice; type it on the voucher.`);
+        }
+        // Owner, 24-Sep-2026: "a cash sale above ₹50,000 is not allowed at
+        // all" — not merely needing an e-way bill, refused outright. Basis is
+        // goods (consignment) value, the same basis EWAY_BILL_THRESHOLD
+        // already used here, per CGST Rule 138.
+        if (goods > EWAY_BILL_THRESHOLD) {
+          errors.push(`This cash sale is ₹${goods.toFixed(0)} of goods, over the ₹${EWAY_BILL_THRESHOLD} limit for a cash sale. Split it into smaller cash sales, or bill it to the party's own ledger.`);
         }
       } else if (p.buyerName?.trim() || (p.buyerAddress ?? []).some(l => l.trim())) {
         // Bill-to and ship-to both come from the ledger; a typed buyer would
@@ -677,7 +688,7 @@ export function taxCheck(p: VoucherPayload, m: TallyMasters): {
 }
 
 /** The shared walk-in ledger — the same test as the web's `isWalkIn`:
- *  named Cash, or under a cash group. */
+ *  named Cash or MIXED ORDER (`isCashLikeParty`), or under a cash group. */
 export function isWalkInLedger(l: Pick<MasterLedger, "name" | "parent">): boolean {
-  return /^\s*cash\s*$/i.test(l.name) || /cash/i.test(l.parent ?? "");
+  return isCashLikeParty(l.name) || /cash/i.test(l.parent ?? "");
 }
