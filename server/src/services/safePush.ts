@@ -12,7 +12,8 @@
 import { tallyPost } from "../tally.js";
 import { buildVoucherImportXml, parseImportResponse, partyIdentity, type PartyIdentity } from "./voucherPusher.js";
 import { loadMasters, gstRateFor, hsnFor, type TallyMasters } from "./tallyMasters.js";
-import { guardVoucher, isInwardSupply } from "./pushGuard.js";
+import { guardVoucher, isInwardSupply, type GuardContext } from "./pushGuard.js";
+import { loadOpenBills } from "./billSettlement.js";
 import { nextFreeNumber, takenNumbers } from "./voucherNumbering.js";
 import { withTally } from "./tallyGate.js";
 import type { VoucherPayload, PushResult } from "../types.js";
@@ -66,7 +67,7 @@ const escXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").rep
  * verification step that can be defeated by a date change is not a verification
  * step.
  */
-function vouchersOnDateXml(company: string, isoDate: string): string {
+export function vouchersOnDateXml(company: string, isoDate: string): string {
   const stamp = parseInt(isoDate.replace(/-/g, ""), 10);
   return `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkVerify</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
@@ -234,7 +235,17 @@ export async function safePush(
 
   // ── 1. Guard ──────────────────────────────────────────────────────────────
   let masters = await loadMasters(tallyUrl, company);
-  let guard = guardVoucher(payload, masters);
+  /* An Agst Ref is checked against Tally's own open bills BEFORE the push:
+     Tally rewrites one that is not open for this party as a New Ref and
+     reports success (TG-P20). Same Bills read bulkEntry already uses live.
+     Loaded only when the voucher carries one — it is a full-book read. */
+  const ctx: GuardContext = {};
+  const hasAgstRef = (payload.ledgerEntries ?? []).some(e => (e.billAllocations ?? []).some(b => b.billType === "Agst Ref"));
+  if (hasAgstRef && (payload.action ?? "Create") === "Create") {
+    try { ctx.openBills = await loadOpenBills(tallyUrl, company); }
+    catch (e) { console.warn(`[safePush] open bills could not be read (${(e as Error).message}) — the Agst Ref check falls back to the read-back.`); }
+  }
+  let guard = guardVoucher(payload, masters, ctx);
 
   // The master cache has a ten-minute TTL, so a ledger or item created in Tally
   // moments ago is not in it yet and the guard rejects the voucher as "does not
@@ -243,7 +254,7 @@ export async function safePush(
   // therefore worth one forced reload before it is believed.
   if (!guard.ok && guard.errors.some(e => /does not exist/i.test(e))) {
     masters = await loadMasters(tallyUrl, company, { force: true });
-    const retried = guardVoucher(payload, masters);
+    const retried = guardVoucher(payload, masters, ctx);
     if (retried.ok) console.warn("[safePush] a master was missing from the cache; reloaded and the voucher now passes.");
     guard = retried;
   }

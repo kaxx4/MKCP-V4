@@ -10,13 +10,13 @@
  *     "NOT ENFORCED" is the finding.
  */
 import { readFileSync, existsSync } from "node:fs";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { XMLValidator } from "fast-xml-parser";
 import { check, unverified, parseVoucher, checkVoucherShape, tag } from "./lib.js";
 import {
   fixtureMasters, sale, purchase, receipt, stock, COMPANY, PARTY_LOCAL, PARTY_INTER, PARTY_UNREG, PARTY_LATE_REG, SUPPLIER,
-  SALES_WB, DISCOUNT,
+  SALES_WB, DISCOUNT, fixtureOpenBills,
 } from "./fixtures.js";
 import type { VoucherPayload } from "../../src/types.js";
 import type { TallyMasters } from "../../src/services/tallyMasters.js";
@@ -31,7 +31,7 @@ export async function runStatic(opts: { replay: boolean }): Promise<void> {
   const m = fixtureMasters();
 
   const build = (p: VoucherPayload, masters: TallyMasters = m) => buildVoucherImportXml(COMPANY, p, masters);
-  const guard = (p: VoucherPayload, masters: TallyMasters = m) => guardVoucher(p, masters);
+  const guard = (p: VoucherPayload, masters: TallyMasters = m) => guardVoucher(p, masters, masters === m ? { openBills: fixtureOpenBills() } : {});
   // The "this company spells it SALES" warning is noise here; show the one about the rule.
   const relevant = (w: string[]) => w.find((x) => !/spells it/.test(x)) ?? undefined;
   const refused = (id: string, what: string, p: VoucherPayload, errorLike?: RegExp) => {
@@ -43,6 +43,10 @@ export async function runStatic(opts: { replay: boolean }): Promise<void> {
     const g = guard(p);
     check(id, g.ok, `guard wrongly refuses ${what}: ${g.errors[0] ?? ""}`);
   };
+
+  // Backdated fixtures test RATE and REGISTRATION dating, not filing: they
+  // declare the amendment so the filed-period rule (TG-P05) stays out of it.
+  const filedOk = (p: VoucherPayload): VoucherPayload => ({ ...p, allowFiledPeriodEdit: true });
 
   // ── Good vouchers: build and check the shape ──────────────────────────────
   const scenarios: { label: string; p: VoucherPayload; expectMailing?: string }[] = [
@@ -57,10 +61,10 @@ export async function runStatic(opts: { replay: boolean }): Promise<void> {
       number: "GUARD/S3", party: PARTY_INTER, inter: true, lines: [{ item: "BICYCLE BASKET EHD", amount: 10000, rate: 5 }] }) },
     { label: "unregistered party ledger", expectMailing: "TAPAS CYCLE", p: sale({
       number: "GUARD/S4", party: PARTY_UNREG, lines: [{ item: "CARRIER CLIP", amount: 999, rate: 5 }] }) },
-    { label: "backdated across 22-Sep-2025 (12% then) to a party registered 01-Jun-2025", p: sale({
-      number: "GUARD/S5", date: "2025-09-01", party: PARTY_LATE_REG, lines: [{ item: "CARRIER CLIP", amount: 1000, rate: 12 }] }) },
-    { label: "backdated to before that party's registration", p: sale({
-      number: "GUARD/S6", date: "2025-05-01", party: PARTY_LATE_REG, lines: [{ item: "CARRIER CLIP", amount: 1000, rate: 12 }] }) },
+    { label: "backdated across 22-Sep-2025 (12% then) to a party registered 01-Jun-2025", p: filedOk(sale({
+      number: "GUARD/S5", date: "2025-09-01", party: PARTY_LATE_REG, lines: [{ item: "CARRIER CLIP", amount: 1000, rate: 12 }] })) },
+    { label: "backdated to before that party's registration", p: filedOk(sale({
+      number: "GUARD/S6", date: "2025-05-01", party: PARTY_LATE_REG, lines: [{ item: "CARRIER CLIP", amount: 1000, rate: 12 }] })) },
     { label: "names with & and inch mark", p: sale({
       number: "GUARD/S7", party: PARTY_LOCAL, lines: [{ item: "B.B. AXLE & CUP BHOGAL PT", amount: 500, rate: 5 }, { item: 'PLIER BOX JT. 10" ( 50 PCS )', amount: 300, rate: 5 }] }) },
     { label: "interstate purchase (Punjab)", p: purchase("GUARD/P1", [{ item: "CARRIER CLIP", amount: 20000, rate: 5 }, { item: "HORN X", amount: 1000, rate: 18 }]) },
@@ -203,7 +207,8 @@ export async function runStatic(opts: { replay: boolean }): Promise<void> {
   // ── Second sources of rates ──────────────────────────────────────────────
   const agentSrc = ["voucherPusher.ts", "pushGuard.ts", "safePush.ts"].map((f) => readFileSync(join(here, "..", "..", "src", "services", f), "utf8")).join("\n");
   check("TG-P32", !/gstMasterRates|gstMasterHsn/.test(agentSrc), `the agent push path reads a checked-in rate file`);
-  const webDir = resolve(process.env.MKCP_WEB_DIR || join(here, "..", "..", "..", "..", "MKCP MOB2", "web-dashboard"));
+  const { webDir: findWebDir } = await import("./lib.js");
+  const webDir = findWebDir();
   const webCash = join(webDir, "src", "engine", "cashInvoice.ts");
   if (existsSync(webCash)) {
     const src = readFileSync(webCash, "utf8");
