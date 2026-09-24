@@ -170,7 +170,7 @@ export function startRefreshListener(localPort: number, fallbackCompany: string)
   }
 
   let currentCompany: string | null = null;
-  let currentChannel: ReturnType<typeof subscribeForCompany> | null = null;
+  let currentHandle: SubscriptionHandle | null = null;
 
   async function resolveAndSubscribe(): Promise<void> {
     const company = await resolveCompany();
@@ -187,21 +187,67 @@ export function startRefreshListener(localPort: number, fallbackCompany: string)
       );
     }
 
-    if (currentChannel) supabase.removeChannel(currentChannel);
+    // Mark the old handle retired BEFORE tearing it down, so its own
+    // CHANNEL_ERROR/CLOSED handler (fired by removeChannel itself) does not
+    // read as a drop worth reconnecting — it is expected, this is a deliberate
+    // swap, not the dropped-connection case reconnectChannel exists for.
+    if (currentHandle) {
+      currentHandle.retired = true;
+      supabase.removeChannel(currentHandle.channel);
+    }
     currentCompany = company;
     await sweepStaleCommands(company);
-    currentChannel = subscribeForCompany(supabase, localPort, company);
+    currentHandle = subscribeForCompany(supabase, localPort, company);
   }
 
   void resolveAndSubscribe();
   setInterval(() => void resolveAndSubscribe(), COMPANY_RECHECK_MS);
 }
 
+/**
+ * A live subscription plus the flag that tells its own status callback
+ * whether a CHANNEL_ERROR/TIMED_OUT/CLOSED is a real drop (reconnect) or an
+ * expected teardown from `resolveAndSubscribe` swapping companies (don't).
+ */
+interface SubscriptionHandle {
+  channel: ReturnType<SupabaseClient["channel"]>;
+  retired: boolean;
+}
+
+// Reconnect backoff after a dropped channel: 2s, 4s, 8s, 16s, capped at 30s.
+// This is the fix for the root cause found 24-Sep-2026 — the Realtime
+// channel's own `.subscribe()` callback logged CHANNEL_ERROR/TIMED_OUT and
+// did nothing else, so a single dropped websocket permanently stopped this
+// listener from ever seeing another INSERT until the whole desktop process
+// restarted. `resolveAndSubscribe` only re-subscribes when the COMPANY name
+// changes (rare), so a dead channel under an unchanged company name sat dead
+// indefinitely — live evidence: tally_refresh_commands rows inserted after
+// 2026-09-23 18:16 sat at status="pending" forever, both price-list-scoped
+// and full-refresh, while the desktop's own scheduled syncs kept running
+// fine (they don't go through this channel) — the channel, not Tally, was
+// the broken link.
+export const RECONNECT_BASE_MS = 2_000;
+export const RECONNECT_MAX_MS = 30_000;
+
+/** Exponential backoff for the Nth reconnect attempt, capped. Pure, so the
+ *  schedule is testable without a real channel or a real clock. */
+export function reconnectDelayMs(attempt: number): number {
+  return Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** Math.max(0, attempt));
+}
+
+/** Whether a channel status callback should trigger a reconnect. `retired`
+ *  means this handle was deliberately torn down (company swap) — its own
+ *  CLOSED/CHANNEL_ERROR is expected and must not spawn a competing handle. */
+export function shouldReconnect(status: string, retired: boolean): boolean {
+  return !retired && (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED");
+}
+
 function subscribeForCompany(
   supabase: SupabaseClient,
   localPort: number,
-  company: string
-): ReturnType<SupabaseClient["channel"]> {
+  company: string,
+  attempt = 0
+): SubscriptionHandle {
   // ── Burst coalescing ───────────────────────────────────────────────────────
   // Rapid commands (e.g. the user clicking "7-day" then "30-day" within seconds)
   // are merged into ONE sync at the WIDEST requested scope, which supersets every
@@ -306,7 +352,14 @@ function subscribeForCompany(
   }
 
   /**
-   * The price-list (+ GST) path.
+   * The price-list (+ GST) path — coalesced the same way `fireBatch` coalesces
+   * full-refresh commands, and for a reason unique to this catch-up path:
+   * a channel drop can leave SEVERAL price_list commands stuck pending at
+   * once (the web's "Refresh now" retried, or several tabs), and catch-up on
+   * reconnect replays all of them in one pass. Without coalescing that would
+   * fire the same 0.18s pull N times in a row for one missed evening — cheap
+   * individually, but pointless, and it made the pull log noisy in testing.
+   * A single-item "batch" is the ordinary case and behaves exactly as before.
    *
    * Retries on 409 the same way `fireBatch` does, and for the same reason:
    * Tally's XML port is single-threaded, so "another sync is running" is a
@@ -317,34 +370,178 @@ function subscribeForCompany(
    * pull with that". A manual "refresh price list" click now refreshes GST
    * too, via the same route the daily scheduler uses (priceGstDailySync.ts).
    */
-  async function firePriceList(id: number, attempt = 0): Promise<void> {
+  type PriceBatch = { ids: number[]; retries: number };
+  let priceBatch: PriceBatch | null = null;
+  let priceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const armPriceTimer = () => {
+    if (priceTimer) clearTimeout(priceTimer);
+    priceTimer = setTimeout(() => void firePriceListBatch(), COALESCE_MS);
+  };
+
+  const requeuePriceBatch = (b: PriceBatch): void => {
+    if (!priceBatch) {
+      priceBatch = b;
+    } else {
+      priceBatch.ids = Array.from(new Set([...b.ids, ...priceBatch.ids]));
+      priceBatch.retries = Math.max(priceBatch.retries, b.retries);
+    }
+    armPriceTimer();
+  };
+
+  /** Queue one price_list command. Several queued within COALESCE_MS collapse
+   *  into the single fire below — see the comment on the batch above. */
+  function queuePriceList(id: number): void {
+    if (!priceBatch) {
+      priceBatch = { ids: [id], retries: 0 };
+    } else {
+      priceBatch.ids.push(id);
+    }
+    armPriceTimer();
+    console.log(
+      `🌐 [WEB-SYNC] Queued price-list pull id=${id} — coalescing, firing in ${COALESCE_MS / 1000}s`
+    );
+  }
+
+  async function firePriceListBatch(): Promise<void> {
+    const b = priceBatch;
+    priceBatch = null;
+    priceTimer = null;
+    if (!b) return;
+    const { ids } = b;
     try {
       const resp = await postTallySync(
         localPort, { company, origin: "web-price-list", includeGst: true }, "/api/tally/sync-price-list",
       );
       if (resp.ok && resp.json?.success) {
         console.log(
-          `🌐 [WEB-SYNC] ✓ Price list [${id}]: ${resp.json.count} rows, ${resp.json.items} items` +
+          `🌐 [WEB-SYNC] ✓ Price list [${ids.join(", ")}]: ${resp.json.count} rows, ${resp.json.items} items` +
             (resp.json.gst ? `, ${resp.json.gst.rows} GST rates` : resp.json.gstError ? ` (GST failed: ${resp.json.gstError})` : "") +
             ` in ${resp.json.elapsedMs}ms`,
         );
-        await setStatus([id], "done");
+        await setStatus(ids, "done");
         return;
       }
-      if (resp.status === 409 && attempt < MAX_BUSY_RETRIES) {
-        console.log(`🌐 [WEB-SYNC] ⏭ Price list busy — retry ${attempt + 1}/${MAX_BUSY_RETRIES} in ${COALESCE_MS / 1000}s [${id}]`);
-        setTimeout(() => void firePriceList(id, attempt + 1), COALESCE_MS);
+      if (resp.status === 409 && b.retries < MAX_BUSY_RETRIES) {
+        b.retries++;
+        requeuePriceBatch(b);
+        console.log(
+          `🌐 [WEB-SYNC] ⏭ Price list busy — retry ${b.retries}/${MAX_BUSY_RETRIES} in ${COALESCE_MS / 1000}s [${ids.join(", ")}]`
+        );
         return;
       }
       /* A zero-row pull comes back 200 with success:false — the wrong company,
          or Tally closed. It is reported as an error rather than passing as a
          refresh, because the alternative is yesterday's rates wearing today's
          timestamp. */
-      console.error(`🌐 [WEB-SYNC] ✗ Price list [${id}]: ${resp.json?.error ?? `HTTP ${resp.status}`}`);
-      await setStatus([id], "error");
+      console.error(`🌐 [WEB-SYNC] ✗ Price list [${ids.join(", ")}]: ${resp.json?.error ?? `HTTP ${resp.status}`}`);
+      await setStatus(ids, "error");
     } catch (err: any) {
-      console.error(`🌐 [WEB-SYNC] ✗ Price list [${id}]: ${err.message}`);
-      await setStatus([id], "error");
+      console.error(`🌐 [WEB-SYNC] ✗ Price list [${ids.join(", ")}]: ${err.message}`);
+      await setStatus(ids, "error");
+    }
+  }
+
+  /**
+   * Atomically claim one command: flips it pending → ack ONLY if it is still
+   * pending, and reports whether THIS call was the one that flipped it.
+   *
+   * This is what makes catch-up safe to run alongside realtime: a command can
+   * arrive on both paths (the INSERT fires while catch-up's SELECT is still
+   * in flight) and Postgres's row lock on the UPDATE means exactly one of the
+   * two racing calls sees `pending` and wins. The loser sees zero rows
+   * affected and treats it as already handled — never a second pull, never a
+   * double-counted push to Tally's single-threaded port.
+   */
+  async function claimCommand(id: number): Promise<boolean> {
+    const { data, error } = await supabase
+      .from("tally_refresh_commands")
+      .update({ status: "ack" })
+      .eq("id", id)
+      .eq("status", "pending")
+      .select("id");
+    if (error) {
+      console.warn(`🌐 [WEB-SYNC] Claim failed for id=${id}: ${error.message}`);
+      return false;
+    }
+    return !!data && data.length > 0;
+  }
+
+  /**
+   * The one handler behind both the realtime INSERT callback and catch-up's
+   * replay on reconnect — same claim, same routing, same coalescing either
+   * way, so a command run twice by accident is a no-op, not a double pull.
+   */
+  async function handleIncomingCommand(row: { id: number; days: unknown; scope: string | null }): Promise<void> {
+    const claimed = await claimCommand(row.id);
+    if (!claimed) return; // already ack'd by the other path — idempotent no-op
+
+    if (row.scope === "price_list") {
+      /* A scoped command is NOT merged into the full-refresh burst buffer —
+         see the comment above `queuePriceList`'s definition for why a
+         price-list pull is a different question with no date window. */
+      queuePriceList(row.id);
+      return;
+    }
+
+    // Add to the burst buffer BEFORE any await — Node runs this synchronous
+    // section to completion, so concurrent handlers can't race on `batch`.
+    if (!batch) {
+      batch = { ids: [row.id], widestDays: row.days, retries: 0 };
+    } else {
+      batch.ids.push(row.id);
+      if (rankDays(row.days) > rankDays(batch.widestDays)) batch.widestDays = row.days;
+    }
+    armTimer();
+    console.log(
+      `🌐 [WEB-SYNC] Queued refresh id=${row.id} (${fmtDays(row.days)}) — ` +
+        `coalescing burst, firing in ${COALESCE_MS / 1000}s`
+    );
+  }
+
+  /**
+   * Replays commands missed while the channel was down.
+   *
+   * Realtime does not redeliver INSERTs from before a subscription existed,
+   * and `sweepStaleCommands` only turns OLD (>STALE_MS) pending rows into
+   * "error" — it does not run them. Between those two, a command inserted
+   * while the channel was silently dead and still younger than STALE_MS was
+   * never processed at all: this is the gap behind the live evidence in
+   * `reconnectDelayMs`'s header comment (rows 2611-2615, pending forever).
+   *
+   * Runs on every SUBSCRIBED — the first subscribe and every reconnect —
+   * oldest first, through the SAME `handleIncomingCommand` the realtime path
+   * uses, so `claimCommand` makes it safe to race against a real INSERT that
+   * arrives in the same moment.
+   */
+  async function catchUpPending(): Promise<void> {
+    try {
+      const cutoff = new Date(Date.now() - STALE_MS).toISOString();
+      const { data, error } = await supabase
+        .from("tally_refresh_commands")
+        .select("id, days, scope, created_at")
+        .eq("company", company)
+        .eq("status", "pending")
+        .gte("created_at", cutoff)
+        .order("created_at", { ascending: true });
+      if (error) {
+        console.warn(`🌐 [WEB-SYNC] Catch-up query failed: ${error.message}`);
+        return;
+      }
+      const rows = data ?? [];
+      if (rows.length === 0) return;
+      console.log(
+        `🌐 [WEB-SYNC] Catch-up: ${rows.length} pending command(s) from before/during a channel drop — replaying`
+      );
+      for (const r of rows) {
+        await handleIncomingCommand({
+          id: Number((r as any).id),
+          days: (r as any).days,
+          scope: (r as any).scope ?? null,
+        });
+      }
+    } catch (err: any) {
+      console.warn(`🌐 [WEB-SYNC] Catch-up sweep failed: ${err.message}`);
     }
   }
 
@@ -353,7 +550,9 @@ function subscribeForCompany(
     .replace(/[^a-zA-Z0-9]/g, "_")
     .toLowerCase()}`;
 
-  return supabase
+  const handle: SubscriptionHandle = { channel: null as any, retired: false };
+
+  handle.channel = supabase
     .channel(channelName)
     .on(
       "postgres_changes",
@@ -366,38 +565,11 @@ function subscribeForCompany(
         filter: `company=eq.${company}`,
       },
       async (payload) => {
-        const id: number = (payload.new as any).id;
-        const days = (payload.new as any).days;
-        const scope: string | null = (payload.new as any).scope ?? null;
-
-        /* A scoped command is NOT merged into the burst buffer. The buffer
-           coalesces by taking the WIDEST date window, which is the right rule
-           for "pull the books" and a nonsense one here: a price-list pull has
-           no date window at all, and folding it in would silently turn a 0.18s
-           request into a minutes-long whole-plan sync — or, worse, let a
-           price-only click widen someone else's 7-day refresh. Different
-           question, different route. */
-        if (scope === "price_list") {
-          await setStatus([id], "ack");
-          void firePriceList(id);
-          return;
-        }
-
-        // Add to the burst buffer BEFORE any await — Node runs this synchronous
-        // section to completion, so concurrent handlers can't race on `batch`.
-        if (!batch) {
-          batch = { ids: [id], widestDays: days, retries: 0 };
-        } else {
-          batch.ids.push(id);
-          if (rankDays(days) > rankDays(batch.widestDays)) batch.widestDays = days;
-        }
-        armTimer();
-        console.log(
-          `🌐 [WEB-SYNC] Queued refresh id=${id} (${fmtDays(days)}) — ` +
-            `coalescing burst, firing in ${COALESCE_MS / 1000}s`
-        );
-        // Ack promptly so the web button leaves the "waiting" state.
-        await setStatus([id], "ack");
+        await handleIncomingCommand({
+          id: (payload.new as any).id,
+          days: (payload.new as any).days,
+          scope: (payload.new as any).scope ?? null,
+        });
       }
     )
     .subscribe((status, err) => {
@@ -405,10 +577,27 @@ function subscribeForCompany(
         console.log(
           `🌐 [WEB-SYNC] ✓ Listening for remote refresh (company="${company}")`
         );
-      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        attempt = 0; // a live connection clears the backoff streak
+        // Fires on the FIRST subscribe too, not just a reconnect — a command
+        // inserted in the gap between server startup and SUBSCRIBED is the
+        // same kind of miss as one inserted during a drop.
+        void catchUpPending();
+      } else if (shouldReconnect(status, handle.retired)) {
+        const delay = reconnectDelayMs(attempt);
         console.error(
-          `🌐 [WEB-SYNC] ✗ Channel error: ${status}${err ? " — " + err.message : ""}`
+          `🌐 [WEB-SYNC] ✗ Channel ${status}${err ? " — " + err.message : ""} ` +
+            `(company="${company}") — reconnecting in ${delay / 1000}s so refresh commands ` +
+            `keep being picked up`
         );
+        handle.retired = true; // this handle is done; supersede it below
+        supabase.removeChannel(handle.channel);
+        setTimeout(() => {
+          const next = subscribeForCompany(supabase, localPort, company, attempt + 1);
+          handle.channel = next.channel;
+          handle.retired = next.retired;
+        }, delay);
       }
     });
+
+  return handle;
 }
