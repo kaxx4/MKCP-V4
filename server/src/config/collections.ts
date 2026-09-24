@@ -127,6 +127,23 @@ export const TRANSACTION_COLLECTIONS: CollectionDef[] = [
          are a routed estimate and, below that, a rate card typed in July 2024
          that runs up to 67% wrong. */
       "EWayBillDetails",
+      /* Party GST identity and ship-to. convertVouchers has read PARTYGSTIN,
+         PLACEOFSUPPLY and the CONSIGNEE* / PARTYPINCODE header fields since the
+         e-way bill columns were added — and this list never named them, so on
+         24-Sep-2026 the mirror held party_gstin and place_of_supply on 0 of
+         1,243 FY26-27 outward/inward invoices (consignee_state came only from
+         the e-way bill block). G7 again: an unasked field reads as "Tally has
+         none". Caught by guardrails --g7 (TG-L14).
+
+         Each name is the one safePush's read-back (MkVerify) has asked for on
+         every live push since 23-Sep-2026 and that fidelity-vs-native
+         measured populated (PARTYGSTIN / PLACEOFSUPPLY 39/39 on Sales Order
+         Notes). These are COMPUTED fields: they come back only alongside the
+         entry lists below, which this request already names.
+         SHIPTOPLACE / DISPATCHFROMPLACE are read too but have never been
+         probed by name — left out until a sandbox probe confirms them. */
+      "PartyGSTIN", "PlaceOfSupply", "PartyPincode",
+      "ConsigneeMailingName", "ConsigneeStateName", "ConsigneePinCode",
       // Sub-lists WITHOUT .* wildcards — wildcards crash TallyPrime ("incorrect object type").
       // Requesting the parent key is enough: TallyPrime returns all standard sub-fields automatically.
       "AllLedgerEntries",

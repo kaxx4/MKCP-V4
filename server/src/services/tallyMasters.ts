@@ -10,6 +10,7 @@
  * here, or it does not get sent.
  */
 import { tallyPost } from "../tally.js";
+import { isSandbox } from "./tallyRole.js";
 
 /** One dated GST registration for a party. Tally keeps the whole history. */
 export interface LedgerRegistration {
@@ -349,6 +350,19 @@ export async function loadMasters(
 
 export function invalidateMasters(): void { cache = null; }
 
+/**
+ * TEST ONLY — seat a hand-built TallyMasters in the cache so `safePush` can be
+ * driven end-to-end against the mock transport (scripts/guardrails/simulate.ts)
+ * without a live Tally answering the four master collections. Refuses on a
+ * primary machine so production can never be fed invented masters.
+ */
+export function primeMastersForTest(m: TallyMasters): void {
+  if (!isSandbox()) {
+    throw new Error("primeMastersForTest refused: only on MKCP_TALLY_ROLE=sandbox");
+  }
+  cache = { ...m, loadedAt: Date.now() };
+}
+
 /** Thrown rather than returned — a bad master name must never reach Tally. */
 export class MasterResolutionError extends Error {
   constructor(public readonly kind: string, public readonly wanted: string, public readonly suggestion?: string) {
@@ -405,7 +419,15 @@ export function registrationOn(led: MasterLedger, isoDate: string): {
     .filter(r => !r.applicableFrom || r.applicableFrom <= stamp)
     .pop();
 
-  const gstin = inForce?.gstin || led.gstin;
+  /* A dated block that is in force and says UNREGISTERED means the party had no
+     GSTIN on that date — falling back to the flat (today's) GSTIN would stamp a
+     backdated invoice with a registration that did not exist yet, filing a B2C
+     supply as B2B. Caught by guardrail TG-P27 (--static, 24-Sep-2026: a party
+     registered 01-Jun-2025, invoice dated 01-May-2025, carried today's GSTIN).
+     A block with no GSTIN and no unregistered type (e.g. one recording only a
+     state change) still falls back, as before. */
+  const unregisteredThen = !!inForce && !inForce.gstin && /unregist|consumer/i.test(inForce.registrationType ?? "");
+  const gstin = unregisteredThen ? "" : (inForce?.gstin || led.gstin);
   return {
     gstin,
     registrationType: inForce?.registrationType || (gstin ? "Regular" : "Unregistered"),

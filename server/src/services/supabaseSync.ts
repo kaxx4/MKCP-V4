@@ -9,7 +9,14 @@ import {
   summarizeVoucherSync,
   SIGNAL_CEILING,
   type PriorVersions,
+  type EntryCounts,
 } from "./mirrorSignal.js";
+import { diffMasterRows, sumChanged } from "./masterDiff.js";
+
+/** Length of an entry array as stored or mapped; anything else is 0. */
+function entryCount(v: unknown): number {
+  return Array.isArray(v) ? v.length : 0;
+}
 
 // Polyfill WebSocket for Node.js 20 (Supabase needs it for realtime)
 if (typeof globalThis !== 'undefined' && !globalThis.WebSocket) {
@@ -127,7 +134,14 @@ export class SupabaseSync {
     return this.client;
   }
 
-  async syncMasters(messages: any[], company: string): Promise<void> {
+  /**
+   * @param related changes to tables the dataset reads that were written just
+   *   before this call as part of the same masters pass (the GST rates, see
+   *   syncMastersOnly). `{ changed: undefined }` means "could not tell" and
+   *   makes this row's `changed` unknown; omit `related` when nothing else was
+   *   written.
+   */
+  async syncMasters(messages: any[], company: string, related?: { changed?: number }): Promise<void> {
     if (!this.client) return;
     if (!messages || messages.length === 0) return;
 
@@ -164,15 +178,30 @@ export class SupabaseSync {
         .map((m) => this.mapCompany(m))
         .filter(Boolean);
 
-      // Batch large tables (stock items, ledgers) to avoid exceeding REST payload limits
+      /* Write only what differs from the mirror, and count it (see
+         masterDiff.ts). Each table reads its own pre-image; a table whose
+         read fails is written in full and makes `changed` unknown. The
+         company row is always written: its synced_at is what
+         resolveSyncCompany orders by, and it is not part of "what changed". */
+      const writeChanged = async (table: string, rows: any[]): Promise<number | undefined> => {
+        const prior = await this.priorMasterRows(table, company, rows);
+        const diff = diffMasterRows(rows, prior);
+        // Batch large tables (stock items, ledgers) to avoid exceeding REST payload limits
+        await this.batchAndUpsert(table, diff.toWrite);
+        return diff.changed;
+      };
       const results = await Promise.allSettled([
-        this.upsertBatch("tally_stock_groups", groups),
-        this.upsertBatch("tally_units", units),
-        this.upsertBatch("tally_godowns", godowns),
-        this.upsertBatch("tally_cost_centres", costCentres),
-        this.batchAndUpsert("tally_stock_items", items),
-        this.batchAndUpsert("tally_ledgers", ledgers),
-        this.upsertBatch("tally_companies", companies, "name"),
+        writeChanged("tally_stock_groups", groups),
+        writeChanged("tally_units", units),
+        writeChanged("tally_godowns", godowns),
+        writeChanged("tally_cost_centres", costCentres),
+        writeChanged("tally_stock_items", items),
+        writeChanged("tally_ledgers", ledgers),
+        this.upsertBatch("tally_companies", companies, "name").then(() => 0),
+      ]);
+      const changed = sumChanged([
+        ...results.map((r) => (r.status === "fulfilled" ? r.value : undefined)),
+        ...(related ? [related.changed] : []),
       ]);
 
       // Log any failures from Promise.allSettled
@@ -195,6 +224,10 @@ export class SupabaseSync {
         costCentres: costCentres.length,
         items: items.length,
         ledgers: ledgers.length,
+        /* Same contract as the voucher row: omitted when unknown, never a
+           guessed zero. A masters pass never deletes, so `deleted` is 0. */
+        ...(changed !== undefined ? { changed } : {}),
+        deleted: 0,
       }, errors.length === 0 ? null : errors);
     } catch (e: any) {
       const msg = `[Supabase] Masters sync error: ${e.message}`;
@@ -231,10 +264,11 @@ export class SupabaseSync {
          Skipped above the ceiling, where emitMirrorChanges stays silent anyway
          and this would only be a large read to feed a discarded answer. A null
          result means "could not tell" and every voucher is then announced. */
-      const priorAlterIds: PriorVersions | null =
+      const prior =
         vouchers.length > 0 && vouchers.length <= SIGNAL_CEILING
-          ? await this.priorVoucherAlterIds(company, vouchers.map((v: any) => String(v.guid)))
+          ? await this.priorVoucherState(company, vouchers.map((v: any) => String(v.guid)))
           : null;
+      const priorAlterIds: PriorVersions | null = prior?.alterIds ?? null;
 
       /* Same before/after AlterID comparison the mirror signal already needs,
          reused for two things: which GUIDs are safe to skip re-upserting
@@ -246,10 +280,23 @@ export class SupabaseSync {
         vouchers.map((v: any) => ({
           guid: String(v.guid),
           alterId: typeof v.alter_id === "number" ? v.alter_id : null,
+          ledgerCount: entryCount(v.ledger_entries),
+          inventoryCount: entryCount(v.inventory_entries),
         })),
         priorAlterIds,
         0,
+        prior?.entries ?? null,
       );
+      /* Same AlterID, fewer entries than the mirror holds: a partial Tally
+         response, not an edit (see summarizeVoucherSync). The stored row and
+         its child entries are kept as they are. */
+      const partialGuids = changeSummary.partialGuids;
+      if (partialGuids.size > 0) {
+        console.warn(
+          `[Supabase] ⚠ ${partialGuids.size} voucher(s) came back with fewer entries than the mirror holds at the same AlterID — ` +
+          `partial Tally response, keeping the stored entries`
+        );
+      }
 
       // Batch vouchers in chunks of 200 (smaller than stock items due to JSONB payload)
       // Rows whose AlterID provably did not move (changeSummary.unchangedGuids)
@@ -309,8 +356,15 @@ export class SupabaseSync {
       const inventoryEntries: any[] = [];
       const voucherGuids: Set<string> = new Set();
 
+      /* GUIDs whose child entries are rewritten this pass: every pulled
+         voucher except a partial one. `voucherGuids` (below) still holds EVERY
+         pulled GUID, because it is what the orphan prune treats as present. */
+      const rewriteGuids: Set<string> = new Set();
+
       for (const v of vouchers) {
         voucherGuids.add(v.guid);
+        if (partialGuids.has(String(v.guid))) continue;
+        rewriteGuids.add(v.guid);
 
         // Ledger entries
         if (v.ledger_entries && Array.isArray(v.ledger_entries)) {
@@ -358,8 +412,8 @@ export class SupabaseSync {
       }
 
       // Delete old entries for these vouchers, then insert new ones
-      if (voucherGuids.size > 0) {
-        const guidsArray = Array.from(voucherGuids);
+      if (rewriteGuids.size > 0) {
+        const guidsArray = Array.from(rewriteGuids);
 
         // Delete in chunks to avoid SQL length limits
         const DELETE_CHUNK = 100;
@@ -473,6 +527,7 @@ export class SupabaseSync {
           inventoryEntries: inventoryEntries.length,
           ...(changeSummary.changed !== undefined ? { changed: changeSummary.changed } : {}),
           deleted,
+          ...(partialGuids.size > 0 ? { partial: partialGuids.size } : {}),
           maxAlterId: changeSummary.maxAlterId,
         },
         errors.length === 0 ? null : errors,
@@ -512,15 +567,21 @@ export class SupabaseSync {
    * agent). `mirror_change_signal.version` is `tally_vouchers.alter_id` —
    * verified by join, 100 of 100 matched pairs. Read alter_id, never version.
    */
-  private async priorVoucherAlterIds(
+  private async priorVoucherState(
     company: string,
     guids: string[],
-  ): Promise<PriorVersions | null> {
+  ): Promise<{ alterIds: PriorVersions; entries: Map<string, EntryCounts> } | null> {
     if (!this.client) return null;
     const clean = (guids || []).filter((g): g is string => typeof g === "string" && g.length > 0);
-    if (clean.length === 0) return new Map();
+    if (clean.length === 0) return { alterIds: new Map(), entries: new Map() };
 
     const held = new Map<string, number | null>();
+    /* Entry counts of the stored row, so a partial pull (same AlterID, fewer
+       entries) can be told apart from an edit. The inline arrays are written
+       in the same pass as the child rows, so their lengths are the child
+       counts. Costs the two JSONB columns for at most SIGNAL_CEILING rows; a
+       normal "Today" pass is ~20. See summarizeVoucherSync. */
+    const entries = new Map<string, EntryCounts>();
     const CHUNK = 100;
     try {
       for (let i = 0; i < clean.length; i += CHUNK) {
@@ -528,7 +589,7 @@ export class SupabaseSync {
         const { data, error } = await this.withRetry("select prior alter_id", async () => {
           const res = await this.client!
             .from("tally_vouchers")
-            .select("guid, alter_id")
+            .select("guid, alter_id, ledger_entries, inventory_entries")
             .eq("company", company)
             .in("guid", chunk);
           if (res.error && this.isTransient(res.error)) throw res.error;
@@ -545,11 +606,94 @@ export class SupabaseSync {
              the log says which. */
           const a = (row as any).alter_id;
           held.set(String((row as any).guid), typeof a === "number" ? a : null);
+          entries.set(String((row as any).guid), {
+            ledger: entryCount((row as any).ledger_entries),
+            inventory: entryCount((row as any).inventory_entries),
+          });
         }
+      }
+      return { alterIds: held, entries };
+    } catch (e: any) {
+      console.warn(`[Supabase] mirror signals: pre-image read threw (${e?.message || e}) — announcing every voucher this pass`);
+      return null;
+    }
+  }
+
+  /**
+   * The mirror's current copy of these master rows, keyed by guid, for
+   * diffMasterRows. Reads exactly the columns the pass is about to write
+   * (minus synced_at), 100 GUIDs per request like priorVoucherState. Null
+   * when it cannot answer: the caller then writes every row and reports
+   * `changed` as unknown.
+   */
+  private async priorMasterRows(
+    table: string,
+    company: string,
+    rows: any[],
+  ): Promise<Map<string, Record<string, unknown>> | null> {
+    if (!this.client) return null;
+    if (rows.length === 0) return new Map();
+    const cols = new Set<string>(["guid"]);
+    for (const r of rows) for (const k of Object.keys(r)) if (k !== "synced_at") cols.add(k);
+    const guids = Array.from(new Set(rows.map((r) => String(r.guid)).filter(Boolean)));
+    const held = new Map<string, Record<string, unknown>>();
+    const CHUNK = 100;
+    try {
+      for (let i = 0; i < guids.length; i += CHUNK) {
+        const chunk = guids.slice(i, i + CHUNK);
+        const { data, error } = await this.withRetry(`select prior ${table}`, async () => {
+          const res = await this.client!
+            .from(table)
+            .select(Array.from(cols).join(","))
+            .eq("company", company)
+            .in("guid", chunk);
+          if (res.error && this.isTransient(res.error)) throw res.error;
+          return res;
+        });
+        if (error) {
+          console.warn(`[Supabase] masters pre-image for ${table} failed (${error.message}) — writing every row, changed unknown`);
+          return null;
+        }
+        for (const row of (data ?? []) as unknown as Record<string, unknown>[]) held.set(String(row.guid), row);
       }
       return held;
     } catch (e: any) {
-      console.warn(`[Supabase] mirror signals: pre-image read threw (${e?.message || e}) — announcing every voucher this pass`);
+      console.warn(`[Supabase] masters pre-image for ${table} threw (${e?.message || e}) — writing every row, changed unknown`);
+      return null;
+    }
+  }
+
+  /** A whole company's rows of a small table, keyed by `keyOf`. Null when unreadable. */
+  private async priorRowsByKey(
+    table: string,
+    company: string,
+    columns: string,
+    keyOf: (r: Record<string, unknown>) => string,
+    orderBy: string[],
+  ): Promise<Map<string, Record<string, unknown>> | null> {
+    if (!this.client) return null;
+    const held = new Map<string, Record<string, unknown>>();
+    const PAGE = 1000;
+    try {
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await this.withRetry(`select prior ${table}`, async () => {
+          let q = this.client!.from(table).select(columns).eq("company", company);
+          // A total order, or range paging can skip or repeat rows.
+          for (const c of orderBy) q = q.order(c);
+          const res = await q.range(from, from + PAGE - 1);
+          if (res.error && this.isTransient(res.error)) throw res.error;
+          return res;
+        });
+        if (error) {
+          console.warn(`[Supabase] pre-image for ${table} failed (${error.message}) — changed unknown`);
+          return null;
+        }
+        const page = (data ?? []) as unknown as Record<string, unknown>[];
+        for (const row of page) held.set(keyOf(row), row);
+        if (page.length < PAGE) return held;
+      }
+    } catch (e: any) {
+      console.warn(`[Supabase] pre-image for ${table} threw (${e?.message || e}) — changed unknown`);
       return null;
     }
   }
@@ -1416,8 +1560,9 @@ export class SupabaseSync {
       taxability: string; parent?: string;
     }>,
     company: string,
-  ): Promise<void> {
-    if (!this.client || !rows.length) return;
+  ): Promise<number | undefined> {
+    if (!this.client) return undefined;
+    if (!rows.length) return 0;
     const t0 = Date.now();
     const mapped = rows.map((r) => ({
       company,
@@ -1432,8 +1577,23 @@ export class SupabaseSync {
       parent: r.parent || null,
       synced_at: new Date().toISOString(),
     }));
+    /* Every row is still written — the web shows the newest synced_at as how
+       fresh Tally's rate answer is (engine/gstMaster.ts) — but the pass now
+       reports how many rows actually differ, so the masters history row can
+       carry an honest `changed` (the dataset reads this table). Undefined =
+       the pre-image could not be read. */
+    const keyOf = (r: Record<string, unknown>) => `${r.scope}|${r.name}|${r.effective_from}`;
+    const prior = await this.priorRowsByKey(
+      "tally_gst_rates",
+      company,
+      "scope,name,effective_from,gst_rate,cgst_rate,sgst_rate,igst_rate,taxability,parent",
+      keyOf,
+      ["scope", "name", "effective_from"],
+    );
+    const diff = diffMasterRows(mapped, prior, keyOf);
     await this.batchAndUpsertOn("tally_gst_rates", mapped, "company,scope,name,effective_from");
-    console.log(`[Supabase] ✓ Synced ${mapped.length} GST rate rows (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+    console.log(`[Supabase] ✓ Synced ${mapped.length} GST rate rows${diff.changed !== undefined ? `, ${diff.changed} changed` : ""} (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+    return diff.changed;
   }
 
   /** batchAndUpsert, but with an explicit conflict target rather than `guid`. */
