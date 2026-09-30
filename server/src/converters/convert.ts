@@ -130,6 +130,91 @@ export function extractVoucherTransport(v: any): VoucherTransport {
   };
 }
 
+export interface VoucherBuyer {
+  /** PARTYMAILINGNAME, else BASICBUYERNAME. Never the bare ledger "Cash". */
+  buyer_name: string | null;
+  /** Voucher-header ADDRESS.LIST (bill-to), else BASICBUYERADDRESS.LIST, lines joined ", ". */
+  buyer_address: string | null;
+  /** PARTYPINCODE, else a 6-digit PIN found in the address lines (see buyer_pincode_source). */
+  buyer_pincode: string | null;
+  /** Where buyer_pincode came from — a PIN parsed out of free text is weaker evidence. */
+  buyer_pincode_source: "tally" | "address" | null;
+  /** DERIVED: the last address line that is not a PAN/GSTIN note, PIN removed. For area grouping. */
+  buyer_place: string | null;
+  /** Voucher STATENAME. */
+  buyer_state: string | null;
+}
+
+/** First `KEY.LIST` block that actually carries a `KEY` line — never blindly the first. */
+function addressLines(v: any, key: string): string[] {
+  for (const block of listOf(v, key)) {
+    if (!block || typeof block !== "object") continue;
+    const lines = arr(block[key]).map((x) => txt(x)).filter(Boolean);
+    if (lines.length > 0) return lines;
+  }
+  return [];
+}
+
+/** A line that is a tax-identity note, not part of the place: "(PAN: AFRPD4294B)", "GSTIN ...". */
+const TAX_NOTE = /\b(PAN|GSTIN|GST\s*NO)\b/i;
+/** Indian PIN: six digits, first non-zero, optionally written "743 502". Not inside a longer number. */
+const PIN = /(?<!\d)([1-9]\d{2})\s?(\d{3})(?!\d)/;
+
+/**
+ * The real buyer on a voucher — who a counter sale was actually billed to (CASH-P1).
+ *
+ * A third of SALES are posted to the ledger "Cash". Tally still records the
+ * person: read off live Cash voucher 26-27/0654, PARTYMAILINGNAME carries the
+ * buyer and ADDRESS.LIST the town, while BASICBUYERNAME stays "Cash" (412 of 412
+ * Cash sales in the 23-Sep census) and BASICBUYERADDRESS is absent. So the
+ * mailing name wins, and a name that is just "Cash" is reported as NULL — "we
+ * do not know the buyer" — rather than as a buyer called Cash.
+ *
+ * ADDRESS.LIST is the bill-to; BASICBUYERADDRESS.LIST is the ship-to (see the
+ * guardrails runner). The buyer is the bill-to, so it is preferred and the
+ * ship-to is only a fallback.
+ *
+ * Every field is null when absent: a voucher fetched without these tags (an old
+ * cached payload, a Receipt) is not an error, and the tolerance is deliberate.
+ */
+export function extractVoucherBuyer(v: any): VoucherBuyer {
+  const s = (x: any): string | null => txt(x) || null;
+
+  let name = s(v?.PARTYMAILINGNAME) ?? s(v?.BASICBUYERNAME);
+  if (name && /^cash$/i.test(name.trim())) name = null;
+
+  let lines = addressLines(v, "ADDRESS");
+  if (lines.length === 0) lines = addressLines(v, "BASICBUYERADDRESS");
+
+  const tallyPin = (s(v?.PARTYPINCODE) ?? "").replace(/\s/g, "");
+  let pincode: string | null = /^[1-9]\d{5}$/.test(tallyPin) ? tallyPin : null;
+  let source: VoucherBuyer["buyer_pincode_source"] = pincode ? "tally" : null;
+  if (!pincode) {
+    for (const line of lines) {
+      if (TAX_NOTE.test(line)) continue;
+      const m = PIN.exec(line);
+      if (m) { pincode = m[1] + m[2]; source = "address"; break; }
+    }
+  }
+
+  const placeLine = [...lines].reverse().find((l) => !TAX_NOTE.test(l)) ?? "";
+  const place = placeLine
+    .replace(PIN, "")
+    .replace(/\b(PIN(\s*CODE)?|P\.?O\.?)\s*[:.-]?\s*$/i, "")
+    .replace(/[\s,.:;\-–()]+$/g, "")
+    .replace(/^[\s,.:;\-–()]+/g, "")
+    .trim();
+
+  return {
+    buyer_name: name,
+    buyer_address: lines.length ? lines.join(", ") : null,
+    buyer_pincode: pincode,
+    buyer_pincode_source: source,
+    buyer_place: place || null,
+    buyer_state: s(v?.STATENAME),
+  };
+}
+
 /** Walk multiple possible paths in the parsed XML to find the data */
 function dig(obj: any, ...paths: string[][]): any {
   for (const path of paths) {
@@ -497,6 +582,18 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
       if (t.transport_distance_km != null) withDistance++;
     }
     console.log(`[convert] Transport: ${withEwb} e-way bills, ${withVehicle} vehicles, ${withDistance} distances (of ${allVouchers.length} vouchers)`);
+
+    // Buyer coverage on counter sales, for the same reason: if the fetch list
+    // loses PartyMailingName, every Cash bill silently reverts to "Cash".
+    let cash = 0, cashNamed = 0, cashAddressed = 0;
+    for (const v of allVouchers) {
+      if (!/^cash$/i.test(txt(v.PARTYLEDGERNAME).trim())) continue;
+      cash++;
+      const b = extractVoucherBuyer(v);
+      if (b.buyer_name) cashNamed++;
+      if (b.buyer_address) cashAddressed++;
+    }
+    if (cash > 0) console.log(`[convert] Cash buyers: ${cashNamed} named, ${cashAddressed} addressed (of ${cash} Cash vouchers)`);
   }
 
   return {
@@ -668,6 +765,8 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
         // E-way bill / delivery block. Always present in the export, dropped by
         // this converter until 2026-08-27 — see extractVoucherTransport.
         transport: extractVoucherTransport(v),
+        // The real buyer behind a "Cash" (or any) party — CASH-P1.
+        buyer: extractVoucherBuyer(v),
         /* The IRP clock's only input. Empty is the normal, meaningful state:
            it means this invoice has not been registered yet, and the 30-day
            window is running. Read as "" rather than defaulted to anything. */
