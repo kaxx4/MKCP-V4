@@ -127,6 +127,31 @@ export const TRANSACTION_COLLECTIONS: CollectionDef[] = [
          are a routed estimate and, below that, a rate card typed in July 2024
          that runs up to 67% wrong. */
       "EWayBillDetails",
+      /* The real buyer on a counter sale (CASH-P1). A third of SALES are
+         billed to the ledger "Cash"; the person who bought is recorded only in
+         the voucher header's mailing name and address, and the mirror had none
+         of it — the web app saw one giant "Cash" dealer.
+
+         Evidence, all from LIVE Tally (not guessed):
+         - Every name below was sent in exactly this spelling by
+           scripts/probe-native-sales-shape.ts (PARTY_FIELDS) on 23-Sep-2026
+           and answered; captures in server/data/native-shape/*.xml
+           (gitignored — real party data).
+         - All six are STORED fields: they appear in the NATIVEMETHOD *
+           captures (*.wildcard.xml), so unlike PARTYGSTIN they do not need the
+           entry lists alongside them to come back populated.
+         - Cash voucher 26-27/0654: PARTYLEDGERNAME=Cash, BASICBUYERNAME=Cash,
+           PARTYMAILINGNAME=<buyer>, ADDRESS.LIST=<town>, PARTYPINCODE empty,
+           no BASICBUYERADDRESS. The census (native-sales-census.json, 412
+           Cash sales) agrees: BASICBUYERNAME is "Cash" on 412/412, the mailing
+           name carries a buyer on 401/412, PARTYPINCODE on 1/412.
+         Header scalars plus one short string list — a few hundred bytes per
+         voucher, nothing like the entry blocks (64x). convertVouchers →
+         extractVoucherBuyer reads them and tolerates any of them absent.
+         PartyPincode also feeds consignee_pincode's fallback, which read
+         v.PARTYPINCODE without anyone ever asking for it (G4). */
+      "PartyMailingName", "Address", "PartyPincode", "StateName",
+      "BasicBuyerName", "BasicBuyerAddress",
       // Sub-lists WITHOUT .* wildcards — wildcards crash TallyPrime ("incorrect object type").
       // Requesting the parent key is enough: TallyPrime returns all standard sub-fields automatically.
       "AllLedgerEntries",

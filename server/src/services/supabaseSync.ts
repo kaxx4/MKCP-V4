@@ -267,7 +267,7 @@ export class SupabaseSync {
           : vouchers;
       for (let i = 0; i < vouchersToUpsert.length; i += BATCH_SIZE) {
         const batch = vouchersToUpsert.slice(i, i + BATCH_SIZE);
-        await this.upsertBatch("tally_vouchers", batch);
+        await this.upsertVoucherBatch(batch);
       }
 
       /* ── Say WHICH vouchers moved (Phase 4.2) ────────────────────────────
@@ -799,6 +799,40 @@ export class SupabaseSync {
     throw lastErr;
   }
 
+  /** Set once PostgREST reports the buyer_* columns missing (migration 043 not applied). */
+  private buyerColumnsMissing = false;
+
+  /**
+   * Upsert a voucher batch, surviving a mirror that predates migration 043.
+   *
+   * The buyer_* columns (CASH-P1) are new. If this build reaches a machine
+   * before the migration reaches the database, PostgREST rejects EVERY batch
+   * naming them ("Could not find the 'buyer_name' column … in the schema
+   * cache", PGRST204) — which would stop the whole voucher mirror, not just
+   * lose the buyer. So on that one error the buyer keys are dropped for the
+   * rest of this process, loudly, and the batch is retried without them. Any
+   * other error propagates exactly as before.
+   */
+  private async upsertVoucherBatch(rows: any[]): Promise<void> {
+    const strip = (rs: any[]) => rs.map((r) => {
+      const o = { ...r };
+      for (const k of Object.keys(o)) if (k.startsWith("buyer_")) delete o[k];
+      return o;
+    });
+    if (this.buyerColumnsMissing) return this.upsertBatch("tally_vouchers", strip(rows));
+    try {
+      await this.upsertBatch("tally_vouchers", rows);
+    } catch (e: any) {
+      if (!/buyer_[a-z_]+'? column|column[^.]*buyer_/i.test(String(e?.message ?? ""))) throw e;
+      this.buyerColumnsMissing = true;
+      console.error(
+        "[Supabase] tally_vouchers has no buyer_* columns — apply migration 043_voucher_cash_buyer.sql. " +
+        "Mirroring vouchers WITHOUT the Cash buyer until then.",
+      );
+      await this.upsertBatch("tally_vouchers", strip(rows));
+    }
+  }
+
   private async upsertBatch(
     table: string,
     rows: any[],
@@ -1091,6 +1125,7 @@ export class SupabaseSync {
     // (an older cached payload, a hand-built row in a test). Default to an empty
     // object so every field below resolves to null instead of throwing.
     const t = (m.transport ?? {}) as Record<string, any>;
+    const b = (m.buyer ?? {}) as Record<string, any>;
 
     return {
       guid: this.safeGuid(m.guid, company, fallbackKey),
@@ -1144,6 +1179,18 @@ export class SupabaseSync {
       dispatch_from_place: t.dispatch_from_place ?? null,
       party_gstin: t.party_gstin ?? null,
       place_of_supply: t.place_of_supply ?? null,
+
+      // The real buyer on a counter sale (migration 043, CASH-P1). Same rule
+      // as above: every key emitted unconditionally. ⚠ Requires migration 043
+      // to be applied BEFORE this build runs anywhere — PostgREST rejects an
+      // upsert naming a column the table lacks, and that would fail every
+      // voucher batch, not just the Cash ones.
+      buyer_name: b.buyer_name ?? null,
+      buyer_address: b.buyer_address ?? null,
+      buyer_pincode: b.buyer_pincode ?? null,
+      buyer_pincode_source: b.buyer_pincode_source ?? null,
+      buyer_place: b.buyer_place ?? null,
+      buyer_state: b.buyer_state ?? null,
 
       synced_at: new Date().toISOString(),
     };
