@@ -27,7 +27,34 @@
  * the refusal in full. The refusal is the whole point — each one names the
  * thing to fix, and a count cannot.
  */
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseClient } from "./supabaseClient.js";
+
+/* ── Which keys the edit log lives under (SYNC-P5, 1-Oct-2026) ──────────────
+ *
+ * The mirror and the push queue are keyed on the name Tally reports, FY suffix
+ * and all ("M.K.CYCLES (P) LTD. - (from 1-Apr-26)"). CONFIGURATION is not:
+ * since SYNC-P1 (30-Sep-2026) the web app writes config — and config_edit_log —
+ * under the stable key with the suffix stripped ("M.K.CYCLES (P) LTD."), its
+ * CONFIG_COMPANY. Everything logged before that sits under the FY-suffixed
+ * name. Reading the edit log with `.eq("company", <Tally name>)` therefore
+ * showed only the pre-30-Sep history and nothing since.
+ *
+ * Same answer as the web Activity Log (web-dashboard/src/domain/company.ts,
+ * configLogPattern): one prefix match on the stable key covers the stable key
+ * and every FY-suffixed name, so last year's history does not drop out at the
+ * 1-April rollover either. The regex is the web's FY_SUFFIX, kept identical. */
+const FY_SUFFIX = /\s*-\s*\(from\s+\d{1,2}-[A-Za-z]{3}-\d{2,4}\s*\)\s*$/i;
+
+/** "M.K.CYCLES (P) LTD. - (from 1-Apr-26)" → "M.K.CYCLES (P) LTD." — the web's CONFIG_COMPANY. */
+export function configCompanyKey(name: string): string {
+  return name.replace(FY_SUFFIX, "").trim() || name.trim();
+}
+
+/** LIKE pattern matching every key config_edit_log was written under for `name`. */
+export function configLogPattern(name: string): string {
+  return `${configCompanyKey(name).replace(/[\\%_]/g, (c) => "\\" + c)}%`;
+}
 
 /** A sync wide enough to have re-read days that were already synced. */
 const FULL_SYNC_MIN_VOUCHERS = 500;
@@ -131,8 +158,12 @@ function partyAmount(payload: any): number {
   return Math.abs(Number(party?.amount ?? 0));
 }
 
-export async function buildMirrorPanel(company: string, limit = 25): Promise<MirrorPanel> {
-  const client = supabaseClient();
+export async function buildMirrorPanel(
+  company: string,
+  limit = 25,
+  /** Injectable for the offline test only; production passes nothing. */
+  client: SupabaseClient | null = supabaseClient(),
+): Promise<MirrorPanel> {
   if (!client) {
     return {
       company, offline: true, syncs: [], lastFullSyncAt: null,
@@ -251,7 +282,8 @@ export async function buildMirrorPanel(company: string, limit = 25): Promise<Mir
   const { data: editRows } = await client
     .from("config_edit_log")
     .select("id,created_at,actor,device_name,domain,table_name,action,entity_count")
-    .eq("company", company)
+    // The stable config key AND every FY-suffixed name — see configLogPattern.
+    .like("company", configLogPattern(company))
     .order("created_at", { ascending: false })
     .limit(limit);
 
