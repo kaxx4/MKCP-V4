@@ -31,15 +31,12 @@ export interface SafePushResult {
   pushResult?: PushResult;
 }
 
-const unesc = (s: string) => s
-  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
-  .replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
-  .replace(/&amp;/g, "&");
-const fld = (b: string, t: string) => {
-  const m = new RegExp(`<${t}[^>]*>([^<]*)</${t}>`).exec(b);
-  return m ? unesc(m[1].trim()) : "";
-};
-const lead = (s: string) => { const m = /^\s*(-?[\d.]+)/.exec(s.replace(/,/g, "")); return m ? parseFloat(m[1]) : NaN; };
+import { escapeXml as escXml, readTag, parseTallyAmount, tallyDateInt, decodeXmlEntities } from "./xml.js";
+
+/* One reader for every field (xml.ts): exact tag, entity-decoded, CDATA-aware. */
+const unesc = decodeXmlEntities;
+const fld = readTag;
+const lead = (s: string) => parseTallyAmount(s) ?? NaN;
 /**
  * Sub-lists of a voucher, EMPTY ONES DROPPED.
  *
@@ -54,7 +51,6 @@ const listOf = (b: string, t: string) =>
     .filter(x => /<[A-Z0-9_.]+>[^<\s]/.test(x));
 const r2 = (x: number) => Math.round(x * 100) / 100;
 const signed = (a: number, dr: boolean) => r2(dr ? -Math.abs(a) : Math.abs(a));
-const escXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /**
  * Read back the vouchers for one date.
@@ -67,7 +63,7 @@ const escXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").rep
  * step.
  */
 function vouchersOnDateXml(company: string, isoDate: string): string {
-  const stamp = parseInt(isoDate.replace(/-/g, ""), 10);
+  const stamp = tallyDateInt(isoDate);
   return `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkVerify</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${escXml(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
@@ -123,7 +119,15 @@ export function diffStored(p: VoucherPayload, v: string): string[] {
     const droppedOnAccountOnly = storedBills.length === 0 &&
       (e.billAllocations ?? []).every(b => b.billType === "On Account");
     for (const b of droppedOnAccountOnly ? [] : e.billAllocations ?? []) {
-      const bh = listOf(hit, "BILLALLOCATIONS\\.LIST").find(x => fld(x, "NAME") === b.name);
+      /* XML-P1: an On Account allocation has NO name in Tally — it is stored
+         `<NAME/>` + `<BILLTYPE>On Account</BILLTYPE>` whatever name was sent
+         (server/data/push-fidelity-S1/S2/S7). Matched by name it read "NOT
+         STORED" on bill-wise parties too (TOGO, MAKALI, NEW GHOSH — archived
+         push_queue failures the mirror later showed were booked). By type. */
+      const bh = /^on account$/i.test(b.billType)
+        ? listOf(hit, "BILLALLOCATIONS\\.LIST").find(x => /^on account$/i.test(fld(x, "BILLTYPE")) && eq(lead(fld(x, "AMOUNT")), signed(b.amount, e.isDeemedPositive)))
+          ?? listOf(hit, "BILLALLOCATIONS\\.LIST").find(x => /^on account$/i.test(fld(x, "BILLTYPE")))
+        : listOf(hit, "BILLALLOCATIONS\\.LIST").find(x => fld(x, "NAME") === b.name);
       if (!bh) { out.push(`bill ref "${b.name}" on "${e.ledgerName}": NOT STORED`); continue; }
       if (fld(bh, "BILLTYPE") !== b.billType) out.push(`bill "${b.name}": type sent ${b.billType}, stored ${fld(bh, "BILLTYPE")}`);
       if (!eq(lead(fld(bh, "AMOUNT")), signed(b.amount, e.isDeemedPositive))) out.push(`bill "${b.name}": amount mismatch`);

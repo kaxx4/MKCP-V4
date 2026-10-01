@@ -13,6 +13,7 @@
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { tallyPost } from "../tally.js";
+import { escapeXml as escXml } from "./xml.js";
 import { requireSupabase } from "./supabaseClient.js";
 
 export interface DayTypeCount { date: string; voucherType: string; tally: number; supabase: number; }
@@ -31,7 +32,7 @@ export interface ReconcileReport {
 }
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const escXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 const fld = (b: string, t: string) => {
   const m = new RegExp(`<${t}[^>]*>([^<]*)</${t}>`).exec(b);
   return m ? m[1].trim() : "";

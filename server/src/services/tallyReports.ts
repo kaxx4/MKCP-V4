@@ -49,9 +49,9 @@
  * different path is two things to disagree (G1).
  */
 import { tallyPost } from "../tally.js";
+import { escapeXml, tallyDate as toTallyYmd, parseTallyAmount } from "./xml.js";
 
-const esc = (s: string) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const esc = escapeXml;   // xml.ts (G1)
 
 export type FieldKind = "text" | "money" | "qty" | "date" | "int" | "rate";
 
@@ -305,10 +305,12 @@ export const reportByKey = (key: string): ReportDef | undefined =>
 export function money(raw: string): number | null {
   const s = String(raw ?? "").trim();
   if (!s) return null;
-  const m = /-?[\d,]*\.?\d+/.exec(s.replace(/\s/g, ""));
-  if (!m) return null;
-  const n = parseFloat(m[0].replace(/,/g, ""));
-  if (!Number.isFinite(n)) return null;
+  /* Magnitude and the "(-)" sign through the shared reader (xml.ts). The old
+     regex skipped the "(-)" Tally prints for a negative figure and returned it
+     POSITIVE. The Dr/Cr side keeps THIS function's convention (Cr negative,
+     stated above) so a column sums exactly as it did. */
+  const n = parseTallyAmount(s.replace(/\s*\b(?:Dr|Cr)\b\.?\s*$/i, "").replace(/\s*%\s*$/, ""));
+  if (n === null) return null;
   return /\bCr\b/i.test(s) ? -Math.abs(n) : n;
 }
 
@@ -418,7 +420,7 @@ export async function fetchReport(
 ): Promise<ReportResult> {
   const t0 = Date.now();
   const dates = def.period
-    ? `<SVFROMDATE>${period.from.replace(/-/g, "")}</SVFROMDATE><SVTODATE>${period.to.replace(/-/g, "")}</SVTODATE>`
+    ? `<SVFROMDATE>${toTallyYmd(period.from)}</SVFROMDATE><SVTODATE>${toTallyYmd(period.to)}</SVTODATE>`
     : "";
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>${esc(def.tallyName)}</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>

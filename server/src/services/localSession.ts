@@ -21,6 +21,7 @@
  * the one implementation, with that trap handled once.
  */
 import { tallyPost } from "../tally.js";
+import { escapeXml, readTag, parseTallyAmount, tallyDateInt } from "./xml.js";
 
 export interface VoucherSummary {
   guid: string;
@@ -38,17 +39,11 @@ export interface VoucherSummary {
   amount: number;
 }
 
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-const fld = (v: string, t: string): string => {
-  const m = new RegExp(`<${t}[^>]*>([\\s\\S]*?)</${t}>`, "i").exec(v);
-  return m ? m[1].trim() : "";
-};
-
-const num = (s: string): number => {
-  const m = /^\s*(-?[\d.]+)/.exec(String(s).replace(/,/g, ""));
-  return m ? parseFloat(m[1]) : NaN;
-};
+/* Shared helpers (xml.ts, G1). `fld` used to hand names back still escaped:
+   "SALARY &amp; BONUS" never equalled the ledger it named. */
+const esc = escapeXml;
+const fld = readTag;
+const num = (s: string): number => parseTallyAmount(s) ?? NaN;
 
 const yes = (s: string) => /^yes$/i.test(s.trim());
 
@@ -64,7 +59,7 @@ export async function vouchersOnDay(
   company: string,
   isoDate: string,
 ): Promise<VoucherSummary[]> {
-  const stamp = isoDate.replace(/-/g, "");
+  const stamp = tallyDateInt(isoDate);
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkLocal</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES>

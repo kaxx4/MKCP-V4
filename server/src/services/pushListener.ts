@@ -21,6 +21,7 @@
  * The web side cannot approve its own request — it has no UPDATE grant on the
  * table (see the migration), so the decision cannot be forged from a browser.
  */
+import { parseImportResult, importVerdict } from "./xml.js";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import ws from "ws";
 import { refuseSharedWrite } from "./tallyRole.js";
@@ -83,23 +84,18 @@ async function setStatus(
  * from the body, never from the transport.
  */
 function verdict(raw: string): { ok: boolean; message: string } {
-  const num = (tag: string) => {
-    const m = raw.match(new RegExp(`<${tag}>\\s*(-?\\d+)\\s*</${tag}>`, "i"));
-    return m ? parseInt(m[1], 10) : 0;
-  };
-  const created = num("CREATED");
-  const altered = num("ALTERED");
-  const errors = num("ERRORS");
-  const exceptions = num("EXCEPTIONS");
-  const le = raw.match(/<LINEERROR>([\s\S]*?)<\/LINEERROR>/i);
-  const lineError = le ? le[1].trim() : "";
-
-  if (errors === 0 && exceptions === 0 && created + altered > 0) {
-    const parts = [created ? `${created} created` : "", altered ? `${altered} altered` : ""].filter(Boolean);
+  // The shared reader and judge (xml.ts, G1). The local copy called a reply
+  // with created=1 AND a LINEERROR a success, and returned LINEERROR text still
+  // entity-escaped.
+  const r = parseImportResult(raw);
+  const v = importVerdict(r, "Create");
+  if (v.ok) {
+    const parts = [r.created ? `${r.created} created` : "", r.altered ? `${r.altered} altered` : ""].filter(Boolean);
     return { ok: true, message: `Tally accepted it — ${parts.join(", ")}` };
   }
-  if (lineError) return { ok: false, message: `Tally rejected it: ${lineError}` };
-  if (errors || exceptions) return { ok: false, message: `Tally reported ${errors} error(s), ${exceptions} exception(s)` };
+  if (r.lineErrors.length) return { ok: false, message: `Tally rejected it: ${r.lineErrors.join("; ")}` };
+  if (r.errors || r.exceptions) return { ok: false, message: `Tally reported ${r.errors} error(s), ${r.exceptions} exception(s)` };
+  if (!r.parsed) return { ok: false, message: "Tally's reply carried no import result — not a success." };
   // Nothing created, nothing wrong: Tally ignored it. Usually a voucher type or
   // company name it does not recognise. Not a success.
   return { ok: false, message: "Tally created nothing — check the voucher type and company name" };

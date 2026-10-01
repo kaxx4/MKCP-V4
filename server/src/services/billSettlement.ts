@@ -15,6 +15,7 @@
  * closing balance (they owe us), a creditor's a POSITIVE one (we owe them).
  */
 import { tallyPost } from "../tally.js";
+import { escapeXml as escXml, readTag, parseTallyAmount } from "./xml.js";
 
 export interface OpenBill {
   /** The bill reference — for our own sales this is the invoice number. */
@@ -40,15 +41,10 @@ export interface SettlementPlan {
   billsClosed: string[];
 }
 
-const escXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const unesc = (s: string) => s
-  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
-  .replace(/&apos;/g, "'").replace(/&amp;/g, "&");
-const fld = (b: string, t: string) => {
-  const m = new RegExp(`<${t}[^>]*>([^<]*)</${t}>`).exec(b);
-  return m ? unesc(m[1].trim()) : "";
-};
-const lead = (s: string) => { const m = /^\s*(-?[\d.]+)/.exec(s.replace(/,/g, "")); return m ? parseFloat(m[1]) : 0; };
+/* Shared readers (xml.ts, G1). `lead` now reads "(-)5,000.00" and "5,000.00 Dr"
+   as negative — the old regex read both as 0 or positive and dropped the bill. */
+const fld = readTag;
+const lead = (s: string) => parseTallyAmount(s) ?? 0;
 const r2 = (x: number) => Math.round(x * 100) / 100;
 
 /** Read every open bill reference from Tally. */

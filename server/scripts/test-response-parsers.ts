@@ -61,6 +61,8 @@ console.log("\n  A successful Alter (the case that used to read as failure)");
 {
   const body = importResult({ ALTERED: 1 });
   const p = parseImportResponse(body);
+  ok("an Alter judged as an Alter succeeds", parseImportResponse(body, "Alter").success);
+  ok("an Alter that CREATED is a failure (duplicate)", !parseImportResponse(importResult({ CREATED: 1 }), "Alter").success);
   ok("altered counted", p.altered === 1);
   ok("created is zero, correctly", p.created === 0);
   ok("reported SUCCESSFUL — it used to say false", p.success);
@@ -79,9 +81,12 @@ console.log("\n  A Cancel");
 console.log("\n  A successful Delete");
 {
   const body = importResult({ DELETED: 1 });
-  const p = parseImportResponse(body);
+  // XML-P1: success means the counter THIS action moves moved — so a Delete is
+  // judged as a Delete. Judged as a Create, deleted=1 is not a success.
+  const p = parseImportResponse(body, "Delete");
   ok("deleted counted", p.deleted === 1);
   ok("reported SUCCESSFUL — it used to say false", p.success);
+  ok("…and NOT a success when the caller asked to Create", !parseImportResponse(body, "Create").success);
   ok("agrees with safePush on DELETED", p.deleted === safePushCount(body, "DELETED"));
 }
 

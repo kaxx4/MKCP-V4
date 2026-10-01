@@ -3,6 +3,7 @@ import { URL } from "node:url";
 import { XMLParser } from "fast-xml-parser";
 import { recordTallyCall, classify, truncateForLog } from "./services/tallyLog.js";
 import { mockTransport } from "./services/tallyMock.js";
+import { decodeTallyBody, decodeXmlEntities } from "./services/xml.js";
 
 // ─────────────────────────────────────────────────────────────────────
 // XML Parser ───────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ function interpretResponse(
     : null;
 
   const lineError = body.includes("<LINEERROR>")
-    ? body.match(/<LINEERROR>([^<]*)/)?.[1] || "unknown"
+    ? decodeXmlEntities(body.match(/<LINEERROR>([^<]*)/)?.[1] ?? "").trim() || "unknown"
     : statusFailed
       ? `Tally returned STATUS=${statusEl}: ${statusDesc}`
       : null;
@@ -253,7 +254,9 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
 
         res.on("end", () => {
           const ms = Date.now() - t0;
-          const body = Buffer.concat(chunks).toString("utf-8");
+          // BOM-aware (xml.ts): a UTF-16 reply decoded as UTF-8 has a NUL between
+          // every character, fails the <DATA> check, and reads as a broken envelope.
+          const body = decodeTallyBody(Buffer.concat(chunks));
           try {
             const out = interpretResponse(xml, body, label, ms, totalBytes, timeoutMs, rawMode, "tally");
             settle(() => resolve(out));

@@ -17,9 +17,12 @@
  * idempotent: pushing the same voucher twice alters the first instead of
  * booking the money again.
  */
+import { xmlSafeText } from "./xml.js";
 
 /** Strip characters that would need escaping, so the id survives the attribute. */
-const clean = (s: string): string => String(s ?? "").replace(/["'<>&]/g, "").trim();
+/* XML-P1: also strip C0 controls, U+FFFE/FFFF and lone surrogates — XML cannot
+   carry them. Same rule as the web app's engine/push/remoteId.ts so ids agree. */
+const clean = (s: string): string => xmlSafeText(String(s ?? "")).replace(/[\x00-\x1F]/g, "").replace(/["'<>&]/g, "").trim();
 
 /** Indian financial year label for a date, e.g. "2026-27" for 1 April 2026 on. */
 export function financialYearOf(iso: string): string {
