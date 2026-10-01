@@ -98,6 +98,54 @@ const money = (n: number) => `₹${n.toFixed(2)}`;
  */
 export const FILED_THROUGH = (process.env.MKCP_FILED_THROUGH ?? "").trim();
 
+/**
+ * Refusals for a NEW purchase whose date its own facts cannot bear.
+ *
+ * Owner, 1-Oct-2026: a Ludhiana bill is now pushed on the date the operator
+ * confirms — often the supplier's bill date, days or weeks back (every one of
+ * the 33 purchases queued 17-29 Sep had a bill date 1-32 days before its push).
+ * A backdated purchase can be wrong in two ways nothing else here sees:
+ *
+ *  1. FILED PERIOD. The Alter rule above covers changing a filed return; a
+ *     backdated CREATE lands in one just as surely. `<= filedThrough` refuses,
+ *     unless `allowFiledPeriodEdit` says the return will be revised.
+ *  2. BEFORE THE SUPPLIER'S REGISTRATION. `registrationOn` falls back to the
+ *     ledger's CURRENT GSTIN when no dated block has started by the voucher's
+ *     date — so a bill dated before the party registered would be stamped with
+ *     a registration that did not exist yet, and its tax claimed against it.
+ *     Refused when the ledger holds dated registrations, the earliest carries a
+ *     GSTIN, and none is in force on the date.
+ *
+ * Purchase only, deliberately: that is the voucher the push-date prompt moves,
+ * and widening a refusal to every type would start refusing Sales the office
+ * pushes today without anyone having looked at them. Pure and exported so it is
+ * testable without a Tally (scripts/test-push-date-guard.ts).
+ */
+export function backdatedPurchaseRefusals(
+  p: Pick<VoucherPayload, "voucherType" | "action" | "date" | "partyLedgerName" | "allowFiledPeriodEdit">,
+  m: Pick<TallyMasters, "ledgers" | "ledgerLoose">,
+  filedThrough: string,
+): string[] {
+  if (p.voucherType.trim().toUpperCase() !== "PURCHASE" || (p.action ?? "Create") !== "Create") return [];
+  if (!DATE_RE.test(p.date)) return [];
+  const errors: string[] = [];
+  const filed = filedThrough.trim();
+  if (filed && p.date <= filed && !p.allowFiledPeriodEdit) {
+    errors.push(`Create refused: ${p.date} falls in a GST period already filed (through ${filed}). Book the bill on a date after that — its own date stays on REFERENCEDATE.`);
+  }
+  const party = findLedger(m as TallyMasters, p.partyLedgerName);
+  if (!isMiss(party) && party.registrations.length) {
+    const stamp = p.date.replace(/-/g, "");
+    const inForce = party.registrations.some(r => !r.applicableFrom || r.applicableFrom <= stamp);
+    const first = party.registrations[0];
+    if (!inForce && first.gstin.trim()) {
+      const from = `${first.applicableFrom.slice(0, 4)}-${first.applicableFrom.slice(4, 6)}-${first.applicableFrom.slice(6, 8)}`;
+      errors.push(`Date refused: "${party.name}"'s GST registration (${first.gstin}) starts ${from}, after this bill's date ${p.date}. Tally would stamp the bill with a registration not yet in force. Push it on ${from} or later, or fix the registration date on the ledger.`);
+    }
+  }
+  return errors;
+}
+
 export function guardVoucher(p: VoucherPayload, m: TallyMasters): GuardResult {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -118,6 +166,7 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters): GuardResult {
   if (CHANGES_EXISTING.has(action0) && !FILED_THROUGH) {
     warnings.push("MKCP_FILED_THROUGH is not set, so filed-period protection is off — an Alter could change an already-submitted return.");
   }
+  errors.push(...backdatedPurchaseRefusals(p, m, FILED_THROUGH));
 
   // ── Voucher type must exist in THIS company ───────────────────────────────
   // A case-only difference is tolerated — Tally itself matches case-insensitively,

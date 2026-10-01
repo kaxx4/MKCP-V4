@@ -105,3 +105,4 @@ server/data/native-sales-census.json
 server/data/push-fidelity-*
 # Throwaway probe scripts written during investigations.
 server/scripts/_scratch-*.ts
+server/data/push-p1/
