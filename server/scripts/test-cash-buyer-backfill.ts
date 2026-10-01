@@ -183,15 +183,29 @@ async function main(): Promise<void> {
   {
     const prev = process.env.MKCP_TALLY_ROLE;
     process.env.MKCP_TALLY_ROLE = "sandbox";
+    // The job is opt-in (1-Oct-2026); switch it on so the ROLE refusal is what is tested.
+    const prevOn = process.env.CASH_BUYER_BACKFILL_ENABLED;
+    process.env.CASH_BUYER_BACKFILL_ENABLED = "true";
     const warned: string[] = [];
     const w = console.warn;
     console.warn = (...a: unknown[]) => { warned.push(a.join(" ")); };
     const requests: string[] = [];
     mockTally({}, requests);
     try { startCashBuyerBackfill("http://mock.invalid", CO); } finally { console.warn = w; uninstallMock(); }
+    if (prevOn === undefined) delete process.env.CASH_BUYER_BACKFILL_ENABLED; else process.env.CASH_BUYER_BACKFILL_ENABLED = prevOn;
     if (prev === undefined) delete process.env.MKCP_TALLY_ROLE; else process.env.MKCP_TALLY_ROLE = prev;
     ok("refused out loud on MKCP_TALLY_ROLE=sandbox", warned.some((l) => /Cash-bill buyer backfill refused/.test(l)), warned.join(" | "));
     eq("and sent nothing to Tally", requests.length, 0);
+  }
+  {
+    const logged: string[] = [];
+    const l = console.log;
+    console.log = (...a: unknown[]) => { logged.push(a.join(" ")); };
+    const prevOn = process.env.CASH_BUYER_BACKFILL_ENABLED;
+    delete process.env.CASH_BUYER_BACKFILL_ENABLED;
+    try { startCashBuyerBackfill("http://mock.invalid", CO); } finally { console.log = l; }
+    if (prevOn !== undefined) process.env.CASH_BUYER_BACKFILL_ENABLED = prevOn;
+    ok("off unless CASH_BUYER_BACKFILL_ENABLED=true", logged.some((x) => /\[CASH-BUYER\] Off/.test(x)), logged.join(" | "));
   }
 
   console.log(`\n  ${passed} passed, ${failed} failed\n`);
