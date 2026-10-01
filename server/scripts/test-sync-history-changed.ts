@@ -16,7 +16,8 @@
  *
  *   npx tsx server/scripts/test-sync-history-changed.ts
  */
-import { summarizeVoucherSync, type PriorVersions } from "../src/services/mirrorSignal.js";
+import { summarizeVoucherSync, type PriorVersions, type EntryCounts } from "../src/services/mirrorSignal.js";
+import { diffMasterRows, sameMasterValue, sumChanged } from "../src/services/masterDiff.js";
 
 let pass = 0, fail = 0;
 
@@ -119,6 +120,131 @@ function main() {
       0,
     );
     eq("maxAlterId is the highest numeric AlterID, nulls ignored", r.maxAlterId, 4);
+  }
+
+  // ── partial pull: same AlterID, FEWER entries than stored ───────────────
+  // Live 23/24-Sep: the renderer's Today pull carried 83 ledger entries for 19
+  // vouchers, its retry 30 s later 100, no AlterID moved. The short pass must
+  // neither count as changed nor overwrite the stored entries.
+  {
+    const prior: PriorVersions = new Map([["p-1", 40], ["p-2", 41]]);
+    const held = new Map<string, EntryCounts>([["p-1", { ledger: 5, inventory: 3 }], ["p-2", { ledger: 4, inventory: 2 }]]);
+    const r = summarizeVoucherSync(
+      [
+        { guid: "p-1", alterId: 40, ledgerCount: 0, inventoryCount: 3 },
+        { guid: "p-2", alterId: 41, ledgerCount: 4, inventoryCount: 2 },
+      ],
+      prior, 0, held,
+    );
+    eq("partial pull: nothing counted as changed", r.changed, 0);
+    ok("partial voucher is in partialGuids (keep stored entries)", r.partialGuids.has("p-1"));
+    ok("partial voucher is also skippable for the row upsert", r.unchangedGuids.has("p-1"));
+    ok("complete unchanged voucher is NOT partial", !r.partialGuids.has("p-2") && r.unchangedGuids.has("p-2"));
+  }
+
+  // ── repair: same AlterID, MORE entries than stored ──────────────────────
+  {
+    const r = summarizeVoucherSync(
+      [{ guid: "r-1", alterId: 40, ledgerCount: 5, inventoryCount: 3 }],
+      new Map([["r-1", 40]]), 0,
+      new Map([["r-1", { ledger: 0, inventory: 3 }]]),
+    );
+    eq("repair of a partial mirror row counts as changed", r.changed, 1);
+    ok("repaired voucher is rewritten, not skipped", !r.unchangedGuids.has("r-1") && !r.partialGuids.has("r-1"));
+    const mixed = summarizeVoucherSync(
+      [{ guid: "r-2", alterId: 40, ledgerCount: 2, inventoryCount: 9 }],
+      new Map([["r-2", 40]]), 0,
+      new Map([["r-2", { ledger: 5, inventory: 3 }]]),
+    );
+    eq("one list grew, one shrank: rewrite (the safe side)", mixed.changed, 1);
+  }
+
+  // ── an edit that removes lines moves the AlterID, so it is never "partial" ──
+  {
+    const r = summarizeVoucherSync(
+      [{ guid: "e-1", alterId: 41, ledgerCount: 2, inventoryCount: 1 }],
+      new Map([["e-1", 40]]), 0,
+      new Map([["e-1", { ledger: 5, inventory: 3 }]]),
+    );
+    eq("fewer entries with a NEW AlterID is an edit: changed", r.changed, 1);
+    ok("an edit is never treated as partial", r.partialGuids.size === 0);
+  }
+
+  // ── no entry counts on file: AlterID alone decides, as before ───────────
+  {
+    const r = summarizeVoucherSync(
+      [{ guid: "n-1", alterId: 7, ledgerCount: 0, inventoryCount: 0 }],
+      new Map([["n-1", 7]]), 0, null,
+    );
+    eq("without stored counts an equal AlterID is unchanged", r.changed, 0);
+    ok("and never partial", r.partialGuids.size === 0);
+  }
+
+  console.log("\ndiffMasterRows — masters pre-image fixtures\n");
+
+  // ── masters: identical rows are not written and not counted ─────────────
+  {
+    const rows = [
+      { guid: "g-1", company: "C", name: "A", opening_balance: "10", is_batch_wise: false, gst_details: [{ rate: 18, from: "2024-04-01" }], synced_at: "now" },
+      { guid: "g-2", company: "C", name: "B", opening_balance: null, is_batch_wise: true, gst_details: null, synced_at: "now" },
+    ];
+    const prior = new Map<string, Record<string, unknown>>([
+      // jsonb comes back with its keys reordered; synced_at is older
+      ["g-1", { guid: "g-1", company: "C", name: "A", opening_balance: "10", is_batch_wise: false, gst_details: [{ from: "2024-04-01", rate: 18 }], synced_at: "then" }],
+      ["g-2", { guid: "g-2", company: "C", name: "B", opening_balance: null, is_batch_wise: true, gst_details: null }],
+    ]);
+    const d = diffMasterRows(rows, prior);
+    eq("identical master rows: changed 0", d.changed, 0);
+    eq("identical master rows: nothing to write", d.toWrite.length, 0);
+  }
+
+  // ── masters: an edited field, a new row ─────────────────────────────────
+  {
+    const rows = [
+      { guid: "g-1", name: "A", closing_balance: "12 PCS" },
+      { guid: "g-3", name: "C", closing_balance: "1 PCS" },
+    ];
+    const prior = new Map<string, Record<string, unknown>>([["g-1", { guid: "g-1", name: "A", closing_balance: "11 PCS" }]]);
+    const d = diffMasterRows(rows, prior);
+    eq("edited + new master rows both counted", d.changed, 2);
+    eq("and both written", d.toWrite.map((r) => r.guid), ["g-1", "g-3"]);
+  }
+
+  // ── masters: unknown pre-image fails open ───────────────────────────────
+  {
+    const rows = [{ guid: "g-1", name: "A" }];
+    const d = diffMasterRows(rows, null);
+    ok("unknown pre-image: changed omitted, not zero", d.changed === undefined);
+    eq("unknown pre-image: every row written", d.toWrite.length, 1);
+  }
+
+  // ── masters: value comparison is strict where it matters ────────────────
+  {
+    ok("number written into a text column matches its string", sameMasterValue(5, "5"));
+    ok("numeric column returned as a number matches", sameMasterValue(18, 18.0));
+    ok("empty string is not null", !sameMasterValue("", null));
+    ok("null is not the string 'null'", !sameMasterValue(null, "null"));
+    ok("undefined new value is not compared (upsert keeps the stored one)",
+      diffMasterRows([{ guid: "u", name: "A", gstapplicable: undefined }], new Map([["u", { guid: "u", name: "A", gstapplicable: "Applicable" }]])).changed === 0);
+    ok("a changed jsonb value is a change", !sameMasterValue({ rate: 18 }, { rate: 12 }));
+    ok("'007' and 7 are not collapsed unless one side is a number", !sameMasterValue("007", "7"));
+  }
+
+  // ── masters: keyed rows (GST rates use a composite key) ─────────────────
+  {
+    const keyOf = (r: Record<string, unknown>) => `${r.scope}|${r.name}|${r.effective_from}`;
+    const rows = [{ scope: "item", name: "X", effective_from: "2024-04-01", gst_rate: 18, synced_at: "now" }];
+    const same = diffMasterRows(rows, new Map([["item|X|2024-04-01", { scope: "item", name: "X", effective_from: "2024-04-01", gst_rate: 18 }]]), keyOf);
+    eq("GST rate unchanged under a composite key", same.changed, 0);
+    const moved = diffMasterRows(rows, new Map([["item|X|2024-04-01", { scope: "item", name: "X", effective_from: "2024-04-01", gst_rate: 12 }]]), keyOf);
+    eq("GST rate change counted", moved.changed, 1);
+  }
+
+  // ── sumChanged: one unknown table makes the whole row unknown ───────────
+  {
+    eq("sum of known parts", sumChanged([0, 2, 0, 1]), 3);
+    ok("any unknown part makes the total unknown", sumChanged([0, undefined, 3]) === undefined);
+    eq("no parts is a known zero", sumChanged([]), 0);
   }
 
   console.log(`\n${"─".repeat(56)}\n${pass} passed, ${fail} failed`);

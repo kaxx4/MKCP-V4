@@ -9,6 +9,9 @@
 import { CATALOGUE, byId } from "./catalogue.js";
 import type { TallyMasters } from "../../src/services/tallyMasters.js";
 import { gstRateFor, registrationOn, findLedger, isMiss } from "../../src/services/tallyMasters.js";
+import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
+import { join, dirname, resolve } from "node:path";
 
 // ── Result ledger ────────────────────────────────────────────────────────────
 
@@ -427,4 +430,17 @@ export function voucherFromMirror(row: any): Voucher {
     })),
     raw: "",
   };
+}
+
+/**
+ * Where the web app lives. MKCP_WEB_DIR wins; otherwise the sibling checkout
+ * under either name it has had ("MKCP MOB2" on the office PC, "MKCPWEB" in a
+ * cloud clone). Returns the first that exists, else the first candidate.
+ */
+export function webDir(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const root = join(here, "..", "..", "..", "..");
+  const cands = process.env.MKCP_WEB_DIR ? [resolve(process.env.MKCP_WEB_DIR)]
+    : [join(root, "MKCP MOB2", "web-dashboard"), join(root, "MKCPWEB", "web-dashboard")];
+  return cands.find((c) => existsSync(c)) ?? cands[0];
 }

@@ -10,6 +10,7 @@
  * rejected on its own rather than taking the batch with it.
  */
 import { loadMasters, resolveLedger } from "./tallyMasters.js";
+import { remoteIdFor } from "./remoteId.js";
 import { loadOpenBills, billsForParty, allocateFIFO, receivableBills, payableBills, type OpenBill } from "./billSettlement.js";
 import { safePush, type SafePushResult } from "./safePush.js";
 import { assertWritable } from "./tallyGate.js";
@@ -108,6 +109,9 @@ export function buildBulkVoucher(
       voucherType: kind === "receipt" ? "Receipt" : "Payment",
       date,
       voucherNumber: number,
+      /* G5: identity from creation. pushGuard refuses a Create without one
+         (24-Sep-2026); same derivation as bankToReceipts. */
+      remoteId: remoteIdFor({ voucherType: kind === "receipt" ? "Receipt" : "Payment", voucherNumber: number, date }),
       narration: row.narration ?? (kind === "receipt" ? "RTGS RECEIVED" : "AS PER BILL"),
       partyLedgerName: row.party,
       isInvoice: false,

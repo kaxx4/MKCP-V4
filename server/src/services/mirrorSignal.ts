@@ -169,6 +169,18 @@ export function selectMovedChanges(
 export interface VoucherAlterState {
   guid: string;
   alterId: number | null;
+  /** Entries this pull carries for the voucher (ALLLEDGERENTRIES / ALLINVENTORYENTRIES). Optional: absent means "not compared". */
+  ledgerCount?: number;
+  inventoryCount?: number;
+}
+
+/**
+ * How many entries the mirror row currently holds for a voucher, read with the
+ * AlterID pre-image. Used only to tell a PARTIAL pull apart from a real one.
+ */
+export interface EntryCounts {
+  ledger: number;
+  inventory: number;
 }
 
 /**
@@ -206,23 +218,49 @@ export interface VoucherAlterState {
  * Pure — no Supabase, no clock, no I/O. See
  * server/scripts/test-sync-history-changed.ts for the fixtures.
  */
+/*
+ * ── Partial pulls (24-Sep-2026) ───────────────────────────────────────────
+ *
+ * The AlterID alone is not enough to call a voucher unchanged. Live
+ * tally_sync_history, 23-Sep 19:00 to 24-Sep 04:00 UTC: every 15 minutes the
+ * renderer's "Today" quick sync pulled 19 vouchers carrying 83 ledger entries,
+ * found some of them short, and ~32 s later its incomplete-voucher retry
+ * (tallyPull.ts retryIncompleteVouchers, same /api/tally/sync-daybook route)
+ * pulled the SAME 19 vouchers with 100. No AlterID moved in either pass (no
+ * mirror_change_signal rows in that window). So the child tables flapped
+ * 100 -> 83 -> 100 twice an hour, and every pass looked like news.
+ *
+ * Tally bumps a voucher's AlterID on every edit, so the same AlterID with FEWER
+ * entries than the mirror holds is a partial response (the "empty placeholder
+ * .LIST" failure in CLAUDE.md), never an edit. Those GUIDs land in
+ * `partialGuids`: the caller keeps the stored row and its child entries, and
+ * they do not count as changed. The same AlterID with MORE entries than the
+ * mirror holds is the reverse — the mirror was written from a partial pull and
+ * this pass repairs it — so it counts as changed and is rewritten.
+ *
+ * `priorEntries` is optional. A GUID with no entry counts on either side is
+ * compared on AlterID alone, exactly as before.
+ */
 export interface VoucherSyncCounts {
   changed?: number;
   deleted: number;
   maxAlterId: number | null;
   unchangedGuids: ReadonlySet<string>;
+  /** Same AlterID, fewer entries than stored: keep the stored row AND its child entries. Subset of unchangedGuids. */
+  partialGuids: ReadonlySet<string>;
 }
 
 export function summarizeVoucherSync(
   vouchers: readonly VoucherAlterState[],
   prior: PriorVersions | null,
   deleted: number,
+  priorEntries?: ReadonlyMap<string, EntryCounts> | null,
 ): VoucherSyncCounts {
   // Nothing pulled: there is nothing to compare, so 0 is a known answer, not
   // an unknown one — do not fall through to the "prior is null" branch below,
   // which would wrongly omit `changed` for an ordinary empty-day prune pass.
   if (vouchers.length === 0) {
-    return { changed: 0, deleted, maxAlterId: null, unchangedGuids: new Set() };
+    return { changed: 0, deleted, maxAlterId: null, unchangedGuids: new Set(), partialGuids: new Set() };
   }
 
   let maxAlterId: number | null = null;
@@ -233,23 +271,50 @@ export function summarizeVoucherSync(
   }
 
   if (prior === null) {
-    return { deleted, maxAlterId, unchangedGuids: new Set() };
+    return { deleted, maxAlterId, unchangedGuids: new Set(), partialGuids: new Set() };
   }
 
   const unchangedGuids = new Set<string>();
+  const partialGuids = new Set<string>();
   let changed = 0;
   for (const v of vouchers) {
     const before = prior.get(v.guid);
     const hasPrior = prior.has(v.guid);
     const same =
       hasPrior && typeof before === "number" && typeof v.alterId === "number" && v.alterId === before;
-    if (same) {
-      unchangedGuids.add(v.guid);
-    } else {
+    if (!same) {
       changed++;
+      continue;
+    }
+    const held = priorEntries?.get(v.guid);
+    const cmp = held ? compareEntryCounts(v, held) : "equal";
+    if (cmp === "more") {
+      changed++; // the mirror holds a partial copy; this pull repairs it
+    } else {
+      unchangedGuids.add(v.guid);
+      if (cmp === "fewer") partialGuids.add(v.guid);
     }
   }
-  return { changed, deleted, maxAlterId, unchangedGuids };
+  return { changed, deleted, maxAlterId, unchangedGuids, partialGuids };
+}
+
+/**
+ * The pulled entry counts against the stored ones. "fewer" only when no list
+ * grew and at least one shrank; any growth is "more" (rewrite, the safe side).
+ * A count the caller did not supply is not compared.
+ */
+function compareEntryCounts(v: VoucherAlterState, held: EntryCounts): "equal" | "fewer" | "more" {
+  const pairs: [number | undefined, number][] = [
+    [v.ledgerCount, held.ledger],
+    [v.inventoryCount, held.inventory],
+  ];
+  let fewer = false;
+  for (const [now, stored] of pairs) {
+    if (typeof now !== "number") continue;
+    if (now > stored) return "more";
+    if (now < stored) fewer = true;
+  }
+  return fewer ? "fewer" : "equal";
 }
 
 /** One line saying which fact applied to how many changes. Empty when nothing was kept. */
