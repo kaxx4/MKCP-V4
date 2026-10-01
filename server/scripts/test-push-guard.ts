@@ -16,7 +16,7 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { loadMasters, type TallyMasters } from "../src/services/tallyMasters.js";
 import { guardVoucher } from "../src/services/pushGuard.js";
-import { safePush } from "../src/services/safePush.js";
+import { safePush, rejectionErrors } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
 import {
   fixtureMasters, fixtureOpenBills, sale, receipt, purchase, PARTY_LOCAL, PARTY_INTER, PARTY_UNREG,
@@ -151,6 +151,28 @@ function offlineCases() {
   expectRejected("an Agst Ref naming another party's open bill", receipt("PG/16", PARTY_LOCAL, 1000, "Agst Ref", "TI/26-27/34"), m, "not an open bill", bills);
   expectAccepted("an Agst Ref naming this party's open bill", receipt("PG/17", PARTY_LOCAL, 1000, "Agst Ref", "26-27/0460"), m, bills);
   expectAccepted("an inter-state purchase (place of supply is OURS)", purchase("PG/18", clip), m);
+
+  // PUSH-P2, 1-Oct-2026: a refused number is worded by WHO chose it. The
+  // mirror-race explanation is only true of a number the app assigned.
+  console.log("\nRefusal wording, typed vs app-assigned number (offline):");
+  {
+    const said = (name: string, errs: string[], must: RegExp[], mustNot: RegExp[]) => {
+      const all = errs.join(" | ");
+      const missing = must.filter(r => !r.test(all)), stray = mustNot.filter(r => r.test(all));
+      if (!missing.length && !stray.length) { console.log(`  ✓ ${name}`); console.log(`      → ${errs[0]}`); pass++; }
+      else { console.log(`  ✗ ${name} — missing ${missing.join(", ") || "-"}; should not say ${stray.join(", ") || "-"}`); console.log(`      got: ${all}`); fail++; }
+    };
+    const typed = { voucherNumber: "26-27/0733", voucherType: "Sales" as const, numberOverride: true };
+    const app = { voucherNumber: "1852/26-27", voucherType: "Payment" as const };
+    const bare = { lineErrors: [] as string[], created: 0, errors: 0 };
+    const worded = { lineErrors: ["Voucher Number '26-27/0733' already exists!"], created: 0, errors: 1 };
+    const typedMust = [/typed/i, /already used by another Sales in Tally/, /created=0/, /NOT (changed|substituted)/, /choose a different number/i, /clear the override/i];
+    const typedNot = [/taken from the mirror/i, /Re-sync/i, /claims it first/i];
+    said("typed number, Tally's bare exceptions=1", rejectionErrors(typed, bare, 1), typedMust, typedNot);
+    said("typed number, Tally's \"already exists\" LINEERROR", rejectionErrors(typed, worded, 0), typedMust, typedNot);
+    said("app-assigned number, bare exceptions=1 — keeps the mirror-race wording",
+      rejectionErrors(app, bare, 1), [/taken from the mirror/, /claims it first/, /Re-sync, then push again with the next free number/], [/typed/i, /clear the override/i]);
+  }
 }
 
 async function main() {

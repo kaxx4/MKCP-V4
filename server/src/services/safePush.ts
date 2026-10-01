@@ -465,14 +465,7 @@ export async function safePush(
       ok: false, stage: "push", voucherId: null,
       // Never auto-retry: an exception is structural, and a retry risks a
       // duplicate. pushAgent honours this now — it used to retry five times.
-      errors: payload.numberOverride && numberTakenError(result.lineErrors)
-        ? [`Voucher number "${payload.voucherNumber}" was typed by hand and is already used by another ${payload.voucherType} in Tally. It was NOT changed to the next free number — choose a different number or clear the override.`,
-           ...result.lineErrors]
-        : result.lineErrors.length ? result.lineErrors
-        : [(payload.numberOverride
-            ? `Overridden voucher number "${payload.voucherNumber}" was refused by Tally (created=0 exceptions=${exceptions}) and was NOT substituted — it was an explicit override, so a collision is reported rather than silently renumbered.`
-            : `Tally rejected the voucher — created=${result.created} errors=${result.errors} exceptions=${exceptions}, with no reason given.`)
-          + (payload.voucherNumber ? duplicateNumberHint(payload.voucherNumber) : "")],
+      errors: rejectionErrors(payload, result, exceptions),
       warnings: guard.warnings, differences: [], requestXml: xml, responseXml, pushResult: result,
     };
   }
@@ -632,4 +625,38 @@ function duplicateNumberHint(voucherNumber: string): string {
     ` — created=0 means nothing was written, so nothing is duplicated in the books.` +
     ` The number was taken from the mirror, and a voucher entered directly in Tally` +
     ` (especially a backdated one) claims it first. Re-sync, then push again with the next free number.`;
+}
+
+/**
+ * The same refusal for a number the OPERATOR typed (`numberOverride`). The
+ * mirror-race story above is wrong here — nobody took the number from the
+ * mirror; a person chose it — so it is not told. PUSH-P2, 1-Oct-2026.
+ */
+function typedNumberTakenHint(voucherNumber: string, voucherType: string): string {
+  return ` The typed number "${voucherNumber}" is already used by another ${voucherType} in Tally.` +
+    ` Nothing was written (created=0), and the number was NOT changed to a free one —` +
+    ` choose a different number, or clear the override to let the app number it.`;
+}
+
+/**
+ * What a refused push reports, worded by who chose the number. Pure, so the
+ * wording is pinned offline (scripts/test-push-guard.ts).
+ */
+export function rejectionErrors(
+  payload: Pick<VoucherPayload, "voucherNumber" | "voucherType" | "numberOverride">,
+  result: Pick<PushResult, "lineErrors" | "created" | "errors">,
+  exceptions: number,
+): string[] {
+  if (payload.numberOverride && payload.voucherNumber && numberTakenError(result.lineErrors)) {
+    return [`Voucher number "${payload.voucherNumber}" was typed by hand and is already used by another ${payload.voucherType} in Tally.` +
+      ` Nothing was written (created=0). It was NOT changed to the next free number — choose a different number or clear the override.`,
+      ...result.lineErrors];
+  }
+  if (result.lineErrors.length) return [...result.lineErrors];
+  if (payload.numberOverride) {
+    return [`Typed voucher number "${payload.voucherNumber ?? ""}" was refused by Tally (created=0 exceptions=${exceptions}) and was NOT substituted — an explicit override is reported, never silently renumbered.` +
+      (payload.voucherNumber ? typedNumberTakenHint(payload.voucherNumber, payload.voucherType) : "")];
+  }
+  return [`Tally rejected the voucher — created=${result.created} errors=${result.errors} exceptions=${exceptions}, with no reason given.` +
+    (payload.voucherNumber ? duplicateNumberHint(payload.voucherNumber) : "")];
 }
