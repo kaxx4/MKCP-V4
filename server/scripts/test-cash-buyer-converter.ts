@@ -184,6 +184,51 @@ async function main(): Promise<void> {
   try { await sync.upsertVoucherBatch([row]); } catch { threw = true; }
   ok("any OTHER upsert error still propagates", threw);
 
+  // ── SYNC-P4: party GST identity + consignee, fetch → converter → row ──────
+  // The 1-Oct merge named PartyGSTIN / PlaceOfSupply / Consignee* in the
+  // voucher fetch list. Each must reach a tally_vouchers column (migration
+  // 025); a field fetched and then dropped is the G4/G7 defect in reverse.
+  console.log("\n  party GST identity + consignee (SYNC-P4)");
+  for (const f of ["PartyGSTIN", "PlaceOfSupply", "ConsigneeMailingName", "ConsigneeStateName", "ConsigneePinCode", "PartyPincode"]) {
+    ok(`voucher fetch names ${f}`, fetch.includes(f));
+    ok(`request XML carries <NATIVEMETHOD>${f}</NATIVEMETHOD>`, req.includes(`<NATIVEMETHOD>${f}</NATIVEMETHOD>`));
+  }
+  const HB_GST_PARTY = `<VOUCHER REMOTEID="hb-6" VCHTYPE="SALES">
+ <DATE TYPE="Date">20260905</DATE><GUID>hb-guid-6</GUID>
+ <VOUCHERTYPENAME>SALES</VOUCHERTYPENAME>
+ <PARTYLEDGERNAME TYPE="String">FAKE TRADERS (MOCKNAGAR)</PARTYLEDGERNAME><VOUCHERNUMBER>HB/0006</VOUCHERNUMBER>
+ <PARTYGSTIN TYPE="String">21ABCDE1234F1Z5</PARTYGSTIN>
+ <PLACEOFSUPPLY TYPE="String">Odisha</PLACEOFSUPPLY>
+ <CONSIGNEEMAILINGNAME TYPE="String">FAKE TRADERS GODOWN</CONSIGNEEMAILINGNAME>
+ <CONSIGNEESTATENAME TYPE="String">Odisha</CONSIGNEESTATENAME>
+ <CONSIGNEEPINCODE TYPE="String">756001</CONSIGNEEPINCODE>
+ <PARTYPINCODE TYPE="String">756000</PARTYPINCODE>
+</VOUCHER>`;
+  /** No consignee pincode: the header's PARTYPINCODE is the fallback. */
+  const HB_GST_PIN_FALLBACK = `<VOUCHER REMOTEID="hb-7" VCHTYPE="SALES">
+ <DATE TYPE="Date">20260905</DATE><GUID>hb-guid-7</GUID>
+ <VOUCHERTYPENAME>SALES</VOUCHERTYPENAME>
+ <PARTYLEDGERNAME TYPE="String">FAKE TRADERS (MOCKNAGAR)</PARTYLEDGERNAME><VOUCHERNUMBER>HB/0007</VOUCHERNUMBER>
+ <PARTYGSTIN TYPE="String">21ABCDE1234F1Z5</PARTYGSTIN>
+ <PLACEOFSUPPLY TYPE="String">Odisha</PLACEOFSUPPLY>
+ <PARTYPINCODE TYPE="String">756000</PARTYPINCODE>
+</VOUCHER>`;
+  const gv = await convert(envelope(HB_GST_PARTY + HB_GST_PIN_FALLBACK + HB_NO_BUYER_TAGS));
+  const gt = (n: string) => gv.find((v) => v.vouchernumber === n)?.transport;
+  eq("converter: PARTYGSTIN → transport.party_gstin", gt("HB/0006")?.party_gstin, "21ABCDE1234F1Z5");
+  eq("converter: PLACEOFSUPPLY → transport.place_of_supply", gt("HB/0006")?.place_of_supply, "Odisha");
+  eq("converter: CONSIGNEEMAILINGNAME → consignee_place (no e-way bill)", gt("HB/0006")?.consignee_place, "FAKE TRADERS GODOWN");
+  eq("converter: CONSIGNEESTATENAME → consignee_state", gt("HB/0006")?.consignee_state, "Odisha");
+  eq("converter: CONSIGNEEPINCODE preferred over PARTYPINCODE", gt("HB/0006")?.consignee_pincode, "756001");
+  eq("converter: PARTYPINCODE is the consignee_pincode fallback", gt("HB/0007")?.consignee_pincode, "756000");
+  const grow = sync.mapVoucher(gv.find((v) => v.vouchernumber === "HB/0006"), "TEST CO");
+  eq("mirror row: party_gstin / place_of_supply / consignee_* columns",
+    [grow.party_gstin, grow.place_of_supply, grow.consignee_place, grow.consignee_state, grow.consignee_pincode],
+    ["21ABCDE1234F1Z5", "Odisha", "FAKE TRADERS GODOWN", "Odisha", "756001"]);
+  const gempty = sync.mapVoucher(gv.find((v) => v.vouchernumber === "HB/0005"), "TEST CO");
+  ok("every GST/consignee key present (null) on a voucher without them",
+    ["party_gstin", "place_of_supply", "consignee_place", "consignee_state", "consignee_pincode"].every((k) => k in gempty && gempty[k] === null));
+
   // ── CAPTURED real vouchers (gitignored; run where present) ────────────────
   const dir = join(here, "..", "data", "native-shape");
   const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".explicit.xml")) : [];
@@ -212,6 +257,11 @@ async function main(): Promise<void> {
     ok(`${tag}: buyer_state = raw STATENAME`, (b.buyer_state ?? "") === raw1(xml, "STATENAME"));
     const pin = raw1(xml, "PARTYPINCODE");
     if (pin) ok(`${tag}: buyer_pincode = raw PARTYPINCODE`, b.buyer_pincode === pin && b.buyer_pincode_source === "tally");
+    // SYNC-P4: the GST identity reaches the row exactly as Tally sent it.
+    const row = sync.mapVoucher(v, "TEST CO");
+    const gstin = raw1(xml, "PARTYGSTIN"), pos = raw1(xml, "PLACEOFSUPPLY");
+    if (gstin) ok(`${tag}: row.party_gstin = raw PARTYGSTIN`, row.party_gstin === gstin);
+    if (pos) ok(`${tag}: row.place_of_supply = raw PLACEOFSUPPLY`, row.place_of_supply === pos);
   }
 
   console.log(`\n  ${passed} passed, ${failed} failed\n`);
