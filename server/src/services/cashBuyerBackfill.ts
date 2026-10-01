@@ -247,8 +247,12 @@ let running = false;
 
 export function startCashBuyerBackfill(tallyUrl: string, fallbackCompany: string): void {
   if (started) return;
-  if ((process.env.CASH_BUYER_BACKFILL_ENABLED ?? "true").toLowerCase() === "false") {
-    console.log("🧾 [CASH-BUYER] Disabled (CASH_BUYER_BACKFILL_ENABLED=false)");
+  /* OPT-IN (1-Oct-2026): this job reads the OFFICE Tally on its own schedule,
+     and the owner has not yet said when that machine may be read. It ships
+     dormant; set CASH_BUYER_BACKFILL_ENABLED=true on the office machine once
+     he has. */
+  if ((process.env.CASH_BUYER_BACKFILL_ENABLED ?? "false").toLowerCase() !== "true") {
+    console.log("🧾 [CASH-BUYER] Off (set CASH_BUYER_BACKFILL_ENABLED=true to enable)");
     return;
   }
   if (refuseSharedWrite("Cash-bill buyer backfill") || tallyRole() !== "primary") return;
