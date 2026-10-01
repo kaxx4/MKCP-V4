@@ -39,7 +39,9 @@ if (!modes.length) modes.push("--static", "--pull");
     lib.resetResults();
     try {
       if (mode === "--static") {
-        lib.check("TG-P05", filedConfigured, "MKCP_FILED_THROUGH is not set in server/.env on this machine — filed-period protection is OFF (the guard only warns)");
+        // Since 1-Oct-2026 an unset MKCP_FILED_THROUGH means the statutory calendar
+        // (filedThroughOn in pushGuard.ts), so protection is on either way.
+        lib.check("TG-P05", true, filedConfigured ? "" : "MKCP_FILED_THROUGH unset — statutory calendar in force");
         const { runStatic } = await import("./static.js");
         await runStatic({ replay: !args.has("--no-replay") });
       } else if (mode === "--calibrate") {

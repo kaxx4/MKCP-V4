@@ -31,7 +31,7 @@ config({ path: join(here, "..", ".env") });
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { loadMasters, type TallyMasters } from "../src/services/tallyMasters.js";
-import { guardVoucher } from "../src/services/pushGuard.js";
+import { guardVoucher, filedThroughOn } from "../src/services/pushGuard.js";
 import type { VoucherPayload } from "../src/types.js";
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
@@ -85,26 +85,16 @@ async function main(): Promise<void> {
 
   const g = guardVoucher(payload, m);
   const refusedForPeriod = g.errors.some((e) => /filed|period|return/i.test(e));
-  const warnedAboutConfig = g.warnings.some((w) => /MKCP_FILED_THROUGH is not set/i.test(w));
 
   for (const e of g.errors.slice(0, 3)) console.log(`     ERROR  ${e.slice(0, 120)}`);
   for (const w of g.warnings.filter((x) => /FILED/i.test(x)).slice(0, 2)) console.log(`     warn   ${w.slice(0, 120)}`);
 
-  if (configured) {
-    /* Configured: the gate must REFUSE. This is the state the office should be
-       in before anything runs in anger. */
-    ok("an Alter inside the filed period is REFUSED", refusedForPeriod,
-      refusedForPeriod ? "" : "the gate did not fire even though the date is inside the filed period");
-    ok("no 'not configured' warning remains", !warnedAboutConfig);
-  } else {
-    /* Unset — today's state. The point is not to fail the build, it is to make
-       the exposure explicit and measurable instead of a line in a log. */
-    ok("the guard SAYS the protection is off", warnedAboutConfig,
-      "a warning on every write is a warning nobody reads — this makes it checkable");
-    console.log(`\n  UNPROTECTED RIGHT NOW: an Alter dated ${payload.date} is ` +
-      `${refusedForPeriod ? "refused anyway" : "NOT refused"} by the period gate.`);
-    console.log(`  Set MKCP_FILED_THROUGH to the last filed date (e.g. 2026-08-31) to close this.`);
-  }
+  /* Configured or not, the gate must REFUSE: since 1-Oct-2026 an unset
+     MKCP_FILED_THROUGH means the statutory calendar (GSTR-1 due the 11th),
+     not "protection off" (filedThroughOn in pushGuard.ts). */
+  console.log(`  boundary in force: ${filedThroughOn()}${configured ? "" : " (statutory calendar)"}`);
+  ok("an Alter inside the filed period is REFUSED", refusedForPeriod,
+    refusedForPeriod ? "" : "the gate did not fire even though the date is inside the filed period");
 
   /* Whatever the configuration, the gate must never be the ONLY thing standing
      between a bad payload and the books — so confirm the rest of the guard is
