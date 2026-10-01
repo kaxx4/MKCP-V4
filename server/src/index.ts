@@ -30,6 +30,7 @@ import { loadMasters } from "./services/tallyMasters.js";
 import { fetchPriceList } from "./services/tallyPriceList.js";
 import { fetchGstRates } from "./services/tallyGstRates.js";
 import { startPriceGstDailySync } from "./services/priceGstDailySync.js";
+import { startCashBuyerBackfill } from "./services/cashBuyerBackfill.js";
 
 import {
   startFileTransferSync, pushFileToWeb, listRecentTransfers,
@@ -755,6 +756,9 @@ const httpServer = app.listen(PORT, BIND_HOST, () => {
   startScheduledSyncs(PORT, company);
   // Daily price list + GST pull at 18:00 local (configurable via PRICE_GST_SYNC_*).
   startPriceGstDailySync(PORT, company);
+  // Cash-bill buyer backfill (CASH-P2): once a day, primary only, READ-ONLY toward
+  // Tally — one day per header-only request, stops at the first Tally error.
+  startCashBuyerBackfill(TALLY, company);
 
   // Two-way file handoff with the web dashboard (see server/src/services/fileTransferSync.ts).
   startFileTransferSync();

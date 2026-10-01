@@ -3,6 +3,11 @@
  * real buyer. WRITTEN 30-Sep-2026 AND NEVER RUN. Work through the checklist
  * below before the first run.
  *
+ * CASH-P2, 1-Oct-2026: the running agent now does this by itself, once a day on
+ * a primary machine (server/src/services/cashBuyerBackfill.ts, which this script
+ * imports — one copy of the logic). This script stays as the by-hand path: a
+ * single --day dry run is still the cheapest way to see what the agent will write.
+ *
  * ── VERIFICATION CHECKLIST (owner has Tally open) ─────────────────────────
  * 0. Migration 043 applied (SELECT buyer_name FROM tally_vouchers LIMIT 1 works).
  *    Tally open on the right company, no dialog showing, nothing else syncing.
@@ -73,9 +78,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 config({ path: join(here, "..", ".env") });
 
 import { tallyPost } from "../src/tally.js";
-import { buildCollection, onDate } from "../src/services/tallyRequest.js";
-import { convertVouchers } from "../src/converters/convert.js";
 import { requireSupabase } from "../src/services/supabaseClient.js";
+import { todayYmd } from "../src/services/scheduledSyncs.js";
+// CASH-P2: the logic lives in server/src so the running agent does the same
+// thing on its own (G1). This script is the by-hand path over the same code.
+import {
+  cashBuyerDayRequest, groupPendingByDay, selectDays, backfillDays,
+} from "../src/services/cashBuyerBackfill.js";
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";
@@ -88,16 +97,6 @@ const PAUSE_MS = 3_000;           // keep the single-threaded port free between 
 const TIMEOUT_MS = 60_000;        // one day of header scalars answers in well under a second
 const FY_START = "2026-04-01";
 const PROGRESS = join(here, "..", "data", "backfill-cash-buyers.progress.json");
-
-/** Header scalars only. Every name is live-verified (see collections.ts CASH-P1 note). */
-const FETCH = [
-  "Guid", "Date", "VoucherNumber", "VoucherTypeName", "PartyLedgerName", "AlterID",
-  "PartyMailingName", "Address", "PartyPincode", "StateName", "BasicBuyerName", "BasicBuyerAddress",
-];
-const BUYER_KEYS = ["buyer_name", "buyer_address", "buyer_pincode", "buyer_pincode_source", "buyer_place", "buyer_state"] as const;
-
-const isCash = (s: unknown) => /^cash$/i.test(String(s ?? "").trim());
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function main(): Promise<void> {
   if (!COMPANY) throw new Error("TALLY_COMPANY must be set explicitly — the mirror is keyed on it.");
@@ -114,58 +113,42 @@ async function main(): Promise<void> {
   // exactly the rows that need it.
   const { data: rows, error } = await sb.from("tally_vouchers")
     .select("guid, date")
-    .eq("company", COMPANY).eq("party_ledger_name", "Cash").ilike("voucher_type", "sales")
+    .eq("company", COMPANY).ilike("party_ledger_name", "cash").ilike("voucher_type", "sales")
     .gte("date", FY_START).is("buyer_name", null)
     .limit(5000);
   if (error) throw new Error(`mirror read failed: ${error.message}`);
-  const pending = new Map<string, Set<string>>();          // YYYYMMDD → mirror GUIDs
-  for (const r of rows ?? []) {
-    const d = String(r.date).replace(/-/g, "").slice(0, 8);
-    if (!pending.has(d)) pending.set(d, new Set());
-    pending.get(d)!.add(String(r.guid));
-  }
-  let days = [...pending.keys()].sort();
-  if (ONLY_DAY) days = days.includes(ONLY_DAY) ? [ONLY_DAY] : [];
-  else days = days.filter((d) => !done.includes(d)).slice(0, MAX_DAYS);
+  const pending = groupPendingByDay(rows ?? []);
+  const days = ONLY_DAY
+    ? (pending.has(ONLY_DAY) ? [ONLY_DAY] : [])
+    : selectDays(pending, { done, fyStart: FY_START.replace(/-/g, ""), today: todayYmd(), maxDays: MAX_DAYS });
 
   console.log(`\n  ${rows?.length ?? 0} Cash sales without a buyer over ${pending.size} days; ` +
     `this run: ${days.length} day(s), ${WRITE ? "WRITING" : "DRY RUN"}\n`);
 
-  let named = 0, written = 0, unmatched = 0;
-  for (const [i, day] of days.entries()) {
-    if (i > 0) await sleep(PAUSE_MS);
-    const xml = buildCollection({ id: "MkcpCashBuyer", type: "Voucher", company: COMPANY, fetch: FETCH, filter: onDate(day) });
-    let parsed: any;
-    try {
-      parsed = await tallyPost(TALLY, xml, TIMEOUT_MS);
-    } catch (e: any) {
-      console.error(`\n  STOP on ${day}: ${e?.message ?? e}`);
-      console.error("  Assume TallyPrime is now frozen. Have it RESTARTED before re-running; progress is saved.");
-      process.exit(3);
-    }
-    const cash = convertVouchers(parsed).tallymessage.filter((v: any) => isCash(v.partyledgername));
-    const want = pending.get(day)!;
-    let dayWritten = 0;
-    for (const v of cash) {
-      const guid = String(v.guid ?? "");
-      const b = v.buyer ?? {};
-      if (b.buyer_name) named++;
-      if (!want.has(guid)) { unmatched++; console.log(`    ?  ${v.vouchernumber}: not in the mirror as buyer-less — skipped`); continue; }
-      const patch = Object.fromEntries(BUYER_KEYS.map((k) => [k, b[k] ?? null]));
-      console.log(`    ${WRITE ? "→" : "·"}  ${v.vouchernumber}  ${b.buyer_name ?? "(no buyer)"} | ${b.buyer_place ?? "-"} | ${b.buyer_pincode ?? "-"}`);
-      if (!WRITE) continue;
+  const result = await backfillDays(days, pending, {
+    fetchDay: (day) => tallyPost(TALLY, cashBuyerDayRequest(COMPANY, day), TIMEOUT_MS),
+    writeBuyer: async (guid, patch, number) => {
+      console.log(`    ${WRITE ? "→" : "·"}  ${number}  ${patch.buyer_name ?? "(no buyer)"} | ${patch.buyer_place ?? "-"} | ${patch.buyer_pincode ?? "-"}`);
+      if (!WRITE) return null;
       const { error: ue, count } = await sb.from("tally_vouchers")
         .update(patch, { count: "exact" }).eq("company", COMPANY).eq("guid", guid);
-      if (ue) throw new Error(`update ${v.vouchernumber}: ${ue.message}`);
-      if (count !== 1) console.log(`    !  ${v.vouchernumber}: updated ${count} rows (expected 1)`);
-      dayWritten += count ?? 0;
-    }
-    written += dayWritten;
-    console.log(`  ${day}: ${cash.length} Cash vouchers from Tally, ${want.size} expected, ${dayWritten} written`);
-    if (WRITE && !ONLY_DAY) writeFileSync(PROGRESS, JSON.stringify({ done: [...done, day].sort() }, null, 1));
-    if (WRITE && !ONLY_DAY) done.push(day);
+      if (ue) throw new Error(`update ${number}: ${ue.message}`);
+      return count ?? 0;
+    },
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    busy: () => false,
+    log: (line) => console.log(`  ${line}`),
+  }, { pauseMs: PAUSE_MS });
+
+  if (WRITE && !ONLY_DAY && result.daysDone.length) {
+    writeFileSync(PROGRESS, JSON.stringify({ done: [...new Set([...done, ...result.daysDone])].sort() }, null, 1));
   }
-  console.log(`\n  done: ${named} named buyers read, ${written} rows written, ${unmatched} unmatched\n`);
+  console.log(`\n  done: ${result.named} named buyers read, ${result.written} rows written, ${result.unmatched} unmatched\n`);
+  if (result.stopped) {
+    console.error(`  STOP on ${result.stopped.day}: ${result.stopped.error}`);
+    console.error("  Assume TallyPrime is now frozen. Have it RESTARTED before re-running; progress is saved.");
+    process.exit(3);
+  }
 }
 
 main().catch((e) => { console.error("ERR:", e?.message ?? e); process.exit(1); });
