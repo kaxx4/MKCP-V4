@@ -84,14 +84,14 @@ async function main() {
       registrationOn(l, BILL_DATE).gstin && /TOGO CYCLES$/i.test(l.name),
     ) ?? [...m.ledgers.values()].find(l => /creditors/i.test(l.parent) && /punjab/i.test(l.state) && registrationOn(l, BILL_DATE).gstin);
     if (!supplier) throw new Error("no Punjab supplier with a registration in force on the bill date");
-    const item = [...m.items.values()].find(i => i.baseUnit && i.closingRate > 20 && (gstRateFor(m, i.name, BILL_DATE) ?? 0) > 0);
+    const item = [...m.items.values()].find(i => i.baseUnit && i.closingRate > 20 && (gstRateFor(m, i.name, BILL_DATE)?.rate ?? 0) > 0);
     if (!item) throw new Error("no item with a GST rate on the bill date");
     const fx = {
       company: name, billDate: BILL_DATE,
       supplier: supplier.name, supplierGstinOnDate: registrationOn(supplier, BILL_DATE).gstin,
       registrations: supplier.registrations,
       item: item.name, unit: item.baseUnit, rate: Math.round(item.closingRate * 100) / 100,
-      gstRateOnDate: gstRateFor(m, item.name, BILL_DATE),
+      gstRateOnDate: gstRateFor(m, item.name, BILL_DATE)?.rate ?? null,
       purchaseLedger: [...m.ledgers.keys()].find(k => /^PURCHASE \( GST CENTRAL \)$/i.test(k)) ?? null,
       igstLedger: [...m.ledgers.keys()].find(k => /^INPUT IGST$/i.test(k)) ?? null,
     };
