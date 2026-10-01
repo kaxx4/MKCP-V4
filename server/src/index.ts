@@ -18,6 +18,7 @@ import { startNightlySync } from "./services/nightlySync.js";
 import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
 import { startHousekeeping } from "./services/housekeeping.js";
 import { announceRole, tallyRole } from "./services/tallyRole.js";
+import { filedThroughOn } from "./services/pushGuard.js";
 import { isOffline, offlineReason } from "./services/supabaseClient.js";
 import { buildMirrorPanel } from "./services/mirrorPanel.js";
 import { vouchersOnDay } from "./services/localSession.js";
@@ -948,7 +949,7 @@ app.get("/api/local/status", async (_req, res) => {
       role: tallyRole(),
       offline: isOffline(),
       offlineReason: offlineReason(),
-      filedThrough: process.env.MKCP_FILED_THROUGH || null,
+      filedThrough: filedThroughOn(),
       company: companies[0]?.name ?? null,
       companies: companies.map((c) => c.name),
       tallyUrl: TALLY,

@@ -95,8 +95,41 @@ const money = (n: number) => `₹${n.toFixed(2)}`;
  *
  * An operator-declared boundary is honest and is how the question is actually
  * thought about ("August is filed"). Set MKCP_FILED_THROUGH to move it.
+ *
+ * 1-Oct-2026: it was never set on the office machine, so this protection was
+ * OFF in production and only warned. Owner, same day: "Monthly, by the 11th".
+ * Unset now means the statutory calendar — the same rule the web app's
+ * `gstReturnFiledThrough` (domain/editability.ts) applies before a job is
+ * queued, so the two sides cannot disagree about a date. The env var still
+ * overrides, for a return filed early or a revision being prepared.
  */
 export const FILED_THROUGH = (process.env.MKCP_FILED_THROUGH ?? "").trim();
+
+/** GSTR-1 for month M is due on the 11th of M+1: the last day of the newest
+ *  month whose due date has passed. Mirror of the web app's
+ *  `gstReturnFiledThrough` — change both or neither. */
+export function gstReturnFiledThrough(today: Date = new Date()): string {
+  const back = today.getDate() > 11 ? 1 : 2;
+  const end = new Date(today.getFullYear(), today.getMonth() - back + 1, 0);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${end.getFullYear()}-${p(end.getMonth() + 1)}-${p(end.getDate())}`;
+}
+
+/** The boundary in force now. A function, not a constant: the agent runs for
+ *  weeks, and the boundary moves on the 12th of every month. */
+export function filedThroughOn(today: Date = new Date()): string {
+  return FILED_THROUGH || gstReturnFiledThrough(today);
+}
+
+/** Money vouchers never reach a GST return, so no filed period binds them —
+ *  the web app's `NO_RETURN` (domain/editability.ts). Settlement edits on an
+ *  old payment are the commonest edit there is. */
+const NO_RETURN = new Set(["PAYMENT", "RECEIPT", "JOURNAL", "CONTRA"]);
+
+/** The filed boundary that binds THIS voucher type now — "" when none does. */
+export function filedBoundaryFor(voucherType: string, today: Date = new Date()): string {
+  return NO_RETURN.has(voucherType.trim().toUpperCase()) ? "" : filedThroughOn(today);
+}
 
 /**
  * Refusals for a NEW purchase whose date its own facts cannot bear.
@@ -156,17 +189,15 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters): GuardResult {
      return exactly as much as they do (a cancelled invoice leaves GSTR-1), and
      it needs a REMOTEID exactly as much, because Tally has no other handle. */
   const CHANGES_EXISTING = new Set(["Alter", "Cancel", "Delete"]);
-  if (CHANGES_EXISTING.has(action0) && FILED_THROUGH && p.date <= FILED_THROUGH) {
+  const filed = filedBoundaryFor(p.voucherType);
+  if (CHANGES_EXISTING.has(action0) && filed && p.date <= filed) {
     if (!p.allowFiledPeriodEdit) {
-      errors.push(`${action0} refused: ${p.date} falls in a GST period already filed (through ${FILED_THROUGH}). Changing it would alter a submitted return. Set allowFiledPeriodEdit if the return will be revised.`);
+      errors.push(`${action0} refused: ${p.date} falls in a GST period already filed (through ${filed}). Changing it would alter a submitted return. Set allowFiledPeriodEdit if the return will be revised.`);
     } else {
-      warnings.push(`${action0} on ${p.date} changes a voucher in a FILED period (through ${FILED_THROUGH}) — the return will need revising.`);
+      warnings.push(`${action0} on ${p.date} changes a voucher in a FILED period (through ${filed}) — the return will need revising.`);
     }
   }
-  if (CHANGES_EXISTING.has(action0) && !FILED_THROUGH) {
-    warnings.push("MKCP_FILED_THROUGH is not set, so filed-period protection is off — an Alter could change an already-submitted return.");
-  }
-  errors.push(...backdatedPurchaseRefusals(p, m, FILED_THROUGH));
+  errors.push(...backdatedPurchaseRefusals(p, m, filed));
 
   // ── Voucher type must exist in THIS company ───────────────────────────────
   // A case-only difference is tolerated — Tally itself matches case-insensitively,

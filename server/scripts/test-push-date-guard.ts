@@ -8,7 +8,7 @@
  *
  *   npx tsx scripts/test-push-date-guard.ts
  */
-import { backdatedPurchaseRefusals } from "../src/services/pushGuard.js";
+import { backdatedPurchaseRefusals, gstReturnFiledThrough, filedBoundaryFor } from "../src/services/pushGuard.js";
 import type { MasterLedger, TallyMasters } from "../src/services/tallyMasters.js";
 
 let pass = 0, fail = 0;
@@ -57,6 +57,20 @@ ok("the registration's own first day is accepted", backdatedPurchaseRefusals(p({
 ok("a supplier registered since 2017 is accepted", backdatedPurchaseRefusals(p({ date: "2026-04-02" }), m, "").length === 0);
 ok("a ledger with no dated registration is not refused here", backdatedPurchaseRefusals(p({ partyLedgerName: "UNREGISTERED" }), m, "").length === 0);
 ok("an unknown ledger is left to the name rule", backdatedPurchaseRefusals(p({ partyLedgerName: "NOBODY" }), m, "").length === 0);
+
+// ── The boundary when MKCP_FILED_THROUGH is unset (owner: "Monthly, by the 11th") ──
+const d = (y: number, mo: number, day: number) => new Date(y, mo - 1, day);
+ok("1-Oct: August is filed, September is not", gstReturnFiledThrough(d(2026, 10, 1)) === "2026-08-31", gstReturnFiledThrough(d(2026, 10, 1)));
+ok("11-Oct (due day): still August", gstReturnFiledThrough(d(2026, 10, 11)) === "2026-08-31");
+ok("12-Oct: September is filed", gstReturnFiledThrough(d(2026, 10, 12)) === "2026-09-30");
+ok("5-Jan: crosses the year to 30-Nov", gstReturnFiledThrough(d(2027, 1, 5)) === "2026-11-30", gstReturnFiledThrough(d(2027, 1, 5)));
+ok("15-Mar: February ends on the 28th", gstReturnFiledThrough(d(2027, 3, 15)) === "2027-02-28");
+if (!(process.env.MKCP_FILED_THROUGH ?? "").trim()) {
+  ok("a Payment is bound by no filed period", filedBoundaryFor("Payment", d(2026, 10, 1)) === "");
+  ok("a Receipt / Journal / Contra likewise", ["Receipt", "JOURNAL", " Contra "].every((t) => filedBoundaryFor(t, d(2026, 10, 1)) === ""));
+  ok("a SALES is bound by the calendar", filedBoundaryFor("SALES", d(2026, 10, 1)) === "2026-08-31");
+  ok("a Purchase is bound by the calendar", filedBoundaryFor("Purchase", d(2026, 10, 1)) === "2026-08-31");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
