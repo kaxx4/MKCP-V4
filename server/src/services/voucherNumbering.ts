@@ -41,6 +41,7 @@
  * answers the narrower "that number was taken, what is free", against Tally's
  * own list rather than a mirror that may be behind.
  */
+import { escapeXml as esc, tdlString, decodeXmlEntities } from "./xml.js";
 
 /** "26-27/0678" → ["26","-","27","/","0678"] */
 function tokenise(s: string): string[] {
@@ -143,20 +144,18 @@ export async function takenNumbers(
   voucherType: string,
   post: (url: string, xml: string, timeoutMs: number, raw: boolean) => Promise<unknown> = defaultPost,
 ): Promise<string[]> {
-  const esc = (v: string) =>
-    v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkNums</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
 <TDL><TDLMESSAGE><COLLECTION NAME="MkNums" ISMODIFY="No"><TYPE>Voucher</TYPE>
 <NATIVEMETHOD>VoucherNumber</NATIVEMETHOD><NATIVEMETHOD>VoucherTypeName</NATIVEMETHOD>
 <FILTER>MkNumsF</FILTER></COLLECTION>
-<SYSTEM TYPE="Formulae" NAME="MkNumsF">$VoucherTypeName = "${esc(voucherType)}"</SYSTEM>
+<SYSTEM TYPE="Formulae" NAME="MkNumsF">$VoucherTypeName = ${tdlString(voucherType)}</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
   try {
     const res = (await post(tallyUrl, xml, 180_000, true)) as string;
     return [...res.matchAll(/<VOUCHERNUMBER>([^<]*)<\/VOUCHERNUMBER>/gi)]
-      .map((m) => m[1].trim())
+      .map((m) => decodeXmlEntities(m[1]).trim())
       .filter(Boolean);
   } catch (e) {
     console.warn(`[numbering] could not list ${voucherType} numbers: ${(e as Error).message}`);

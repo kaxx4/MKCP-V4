@@ -1,13 +1,14 @@
 import type { CollectionDef } from "../types.js";
+import { escapeXml, tallyDate, tallyDateInt, tdlInt } from "./xml.js";
+import { assertKnownType } from "./tallyRequest.js";
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
+const esc = escapeXml;   // xml.ts (G1)
 
 /** YYYYMMDD → D-Mon-YYYY (e.g., "20250401" → "1-Apr-2025") */
 export function toTallyDate(yyyymmdd: string): string {
+  yyyymmdd = tallyDate(yyyymmdd);   // validated; "NaN-undefined-…" used to reach Tally
   const y = yyyymmdd.slice(0, 4);
   const m = parseInt(yyyymmdd.slice(4, 6), 10);
   const d = parseInt(yyyymmdd.slice(6, 8), 10);
@@ -25,6 +26,7 @@ export function buildCollectionXml(
   fromDate?: string,
   toDate?: string
 ): string {
+  assertKnownType(def.tallyCollection);   // an unknown TYPE raises a modal that kills the port
   const colId = `MKCP_${def.tallyCollection}`;
 
   const fetchLines = def.fetch?.map(f => `<NATIVEMETHOD>${esc(f)}</NATIVEMETHOD>`).join("\n") ?? "";
@@ -33,8 +35,9 @@ export function buildCollectionXml(
   let filterSystemBlock = "";
 
   if (def.category === "transaction" && fromDate && toDate) {
-    const fromInt = parseInt(fromDate, 10);
-    const toInt = parseInt(toDate, 10);
+    // Validated: parseInt("2026-04-01") is 2026, and "&gt;= NaN" returns zero rows with no error.
+    const fromInt = tallyDateInt(fromDate);
+    const toInt = tallyDateInt(toDate);
     filterBlock = `<FILTER>MKCPDateFilter</FILTER>`;
     filterSystemBlock = `<SYSTEM TYPE="Formulae" NAME="MKCPDateFilter">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) &gt;= ${fromInt} AND ($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) &lt;= ${toInt}</SYSTEM>`;
   }
@@ -80,9 +83,10 @@ export function buildChangedVoucherXml(
   company: string,
   sinceAlterId: number
 ): string {
+  assertKnownType(def.tallyCollection);
   const colId = `MKCP_Changed_${def.tallyCollection}`;
   const fetchLines = def.fetch?.map(f => `<NATIVEMETHOD>${esc(f)}</NATIVEMETHOD>`).join("\n") ?? "";
-  const since = Math.max(0, Math.floor(sinceAlterId || 0));
+  const since = tdlInt(sinceAlterId || 0);
   return `<ENVELOPE>
 <HEADER>
 <VERSION>1</VERSION>

@@ -49,8 +49,9 @@
  */
 
 import { tallyPost } from "../tally.js";
+import { escapeXml, decodeXmlEntities } from "./xml.js";
 
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const esc = escapeXml;   // xml.ts (G1)
 
 /** One dated rate for one item at one price level. */
 export interface PriceListEntry {
@@ -132,10 +133,10 @@ export function normalizeLevel(name: string): string {
   return unescapeXml(name).trim().toUpperCase();
 }
 
+/* xml.ts (G1). The local copy decoded `&amp;` FIRST, so `&amp;quot;` came out
+   as `"` — a double decode. One pass now. */
 function unescapeXml(s: string): string {
-  return s
-    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#39;/g, "'");
+  return decodeXmlEntities(s);
 }
 
 /**

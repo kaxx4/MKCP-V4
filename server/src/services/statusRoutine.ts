@@ -13,6 +13,7 @@
 import "dotenv/config";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { tallyPost, HEALTH_XML } from "../tally.js";
+import { escapeXml as escXml } from "./xml.js";
 import { convertCompanies } from "../converters/convert.js";
 import { reconcile, type ReconcileReport } from "./reconcile.js";
 import { supabaseClient } from "./supabaseClient.js";
@@ -46,7 +47,7 @@ export interface StatusReport {
   reconciliation?: ReconcileReport;
 }
 
-const escXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 const num = (s: string | undefined) => { const n = parseInt(String(s ?? "").replace(/[^\d-]/g, ""), 10); return Number.isFinite(n) ? n : null; };
 
 /* Null is fine here: the status check still reports everything it can read

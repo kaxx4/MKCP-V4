@@ -27,8 +27,8 @@
  */
 import { tallyPost } from "../tally.js";
 import type { AlterIdSnapshot } from "../types.js";
-
-const escXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+import { escapeXml as escXml, tdlInt } from "./xml.js";
+import { assertKnownType } from "./tallyRequest.js";
 
 /**
  * Comparison operators must be XML-ESCAPED. A raw `>` makes Tally return zero
@@ -36,13 +36,14 @@ const escXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").rep
  * would quietly disable change detection all over again.
  */
 function alterIdXml(company: string, type: string, since: number, extraFields: string[] = []): string {
+  assertKnownType(type);   // an unknown TYPE raises a modal that kills the port
   return `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkChanged</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${escXml(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
 <TDL><TDLMESSAGE><COLLECTION NAME="MkChanged" ISMODIFY="No"><TYPE>${type}</TYPE>
-<NATIVEMETHOD>AlterID</NATIVEMETHOD>${extraFields.map(f => `<NATIVEMETHOD>${f}</NATIVEMETHOD>`).join("")}
+<NATIVEMETHOD>AlterID</NATIVEMETHOD>${extraFields.map(f => `<NATIVEMETHOD>${escXml(f)}</NATIVEMETHOD>`).join("")}
 <FILTER>MkChangedF</FILTER></COLLECTION>
-<SYSTEM TYPE="Formulae" NAME="MkChangedF">$AlterID &gt; ${since}</SYSTEM>
+<SYSTEM TYPE="Formulae" NAME="MkChangedF">$AlterID &gt; ${tdlInt(since)}</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 }
 

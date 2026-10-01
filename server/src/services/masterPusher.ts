@@ -23,6 +23,7 @@
  * the state actually stuck — which `createLedger` does before reporting success.
  */
 import { tallyPost } from "../tally.js";
+import { escapeXml } from "./xml.js";
 import { invalidateMasters } from "./tallyMasters.js";
 import { blocksOf } from "./tallyRequest.js";
 
@@ -74,8 +75,7 @@ export interface MasterPushResult {
   responseXml: string;
 }
 
-const esc = (s: string): string =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const esc = escapeXml;   // xml.ts (G1)
 
 const num = (xml: string, tag: string): number => {
   const m = new RegExp(`<${tag}>\\s*(\\d+)\\s*</${tag}>`, "i").exec(xml);

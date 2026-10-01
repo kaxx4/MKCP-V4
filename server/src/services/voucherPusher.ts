@@ -2,9 +2,7 @@ import type { VoucherPayload, LedgerEntry, InventoryEntry, BillAllocation, PushR
 import { tallyPost } from "../tally.js";
 import { findLedger, gstRateFor, hsnFor, mailingOn, registrationOn, type TallyMasters } from "./tallyMasters.js";
 import { HOME_STATE_NAME, isInwardSupply, resolvePartyState } from "./pushGuard.js";
-import { XMLParser } from "fast-xml-parser";
-
-const parser = new XMLParser({ ignoreAttributes: false, parseTagValue: false, trimValues: true });
+import { escapeXml as esc, fmtAmount, fmtQty, fmtSigned, tallyDate, parseImportResult, importVerdict, type ImportAction } from "./xml.js";
 
 // Patterns for voucher types whose balance is on the inventory side, not ledger entries.
 // Match case-insensitively because companies can rename them (e.g. "DELIVERY NOTE").
@@ -13,19 +11,14 @@ function isInventoryVoucherType(vt: string): boolean {
   return u.includes("DELIVERY") || u.includes("RECEIPT NOTE");
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-/** YYYY-MM-DD → YYYYMMDD */
+/** YYYY-MM-DD → YYYYMMDD, validated (xml.ts). "2026-9-1" used to become "202691". */
 function toVoucherDate(date: string): string {
-  return date.replace(/-/g, "");
+  return tallyDate(date);
 }
 
-/** Format amount for Tally: Debit (isDeemedPositive=true) → negative, Credit → positive */
+/** Format amount for Tally: Debit (isDeemedPositive=true) → negative, Credit → positive. Throws on NaN. */
 function tallyAmount(amount: number, isDeemedPositive: boolean): string {
-  const signed = isDeemedPositive ? -Math.abs(amount) : Math.abs(amount);
-  return signed.toFixed(2);
+  return fmtSigned(amount, isDeemedPositive);
 }
 
 /**
@@ -80,7 +73,7 @@ export function isInvoiceShaped(p: VoucherPayload): boolean {
  * voucher that touches a bank ledger, which blocks unattended pushes.
  */
 function buildBankAllocation(b: NonNullable<LedgerEntry["bankAllocation"]>, amount: number, isDeemedPositive: boolean, voucherDate: string): string {
-  const d = (b.instrumentDate ?? voucherDate).replace(/-/g, "");
+  const d = toVoucherDate(b.instrumentDate ?? voucherDate);
   return `
     <BANKALLOCATIONS.LIST>
       <DATE>${d}</DATE>
@@ -242,7 +235,7 @@ function renderIdentity(id: PartyIdentity): string {
 function buildLedgerEntries(entries: LedgerEntry[], isInvoice: boolean, voucherDate: string): string {
   const tag = isInvoice ? "LEDGERENTRIES.LIST" : "ALLLEDGERENTRIES.LIST";
   return entries.map(e => {
-    const amt = e.signedAmount !== undefined ? e.signedAmount.toFixed(2) : tallyAmount(e.amount, e.isDeemedPositive);
+    const amt = e.signedAmount !== undefined ? fmtAmount(e.signedAmount) : tallyAmount(e.amount, e.isDeemedPositive);
     /**
      * The four tags that make a line reduce (or add to) assessable value rather
      * than sit beside it as an expense, copied from what Tally itself writes on
@@ -354,17 +347,17 @@ function buildInventoryEntries(entries: InventoryEntry[], masters?: TallyMasters
   <ALLINVENTORYENTRIES.LIST>
     <STOCKITEMNAME>${esc(e.stockItemName)}</STOCKITEMNAME>${gst.head}
     <ISDEEMEDPOSITIVE>${e.isDeemedPositive ? "Yes" : "No"}</ISDEEMEDPOSITIVE>
-    <ACTUALQTY>${e.quantity} ${esc(e.unit)}</ACTUALQTY>
-    <BILLEDQTY>${e.quantity} ${esc(e.unit)}</BILLEDQTY>
-    <RATE>${e.rate.toFixed(2)}/${esc(e.unit)}</RATE>
+    <ACTUALQTY>${fmtQty(e.quantity)} ${esc(e.unit)}</ACTUALQTY>
+    <BILLEDQTY>${fmtQty(e.quantity)} ${esc(e.unit)}</BILLEDQTY>
+    <RATE>${fmtAmount(e.rate)}/${esc(e.unit)}</RATE>
     <AMOUNT>${tallyAmount(e.amount, e.isDeemedPositive)}</AMOUNT>
     ${e.godownName ? `
     <BATCHALLOCATIONS.LIST>
       <GODOWNNAME>${esc(e.godownName)}</GODOWNNAME>
       <BATCHNAME>${esc(e.batchName || "Primary Batch")}</BATCHNAME>
       <AMOUNT>${tallyAmount(e.amount, e.isDeemedPositive)}</AMOUNT>
-      <ACTUALQTY>${e.quantity} ${esc(e.unit)}</ACTUALQTY>
-      <BILLEDQTY>${e.quantity} ${esc(e.unit)}</BILLEDQTY>
+      <ACTUALQTY>${fmtQty(e.quantity)} ${esc(e.unit)}</ACTUALQTY>
+      <BILLEDQTY>${fmtQty(e.quantity)} ${esc(e.unit)}</BILLEDQTY>
     </BATCHALLOCATIONS.LIST>` : ""}
     ${e.salesLedgerName ? `
     <ACCOUNTINGALLOCATIONS.LIST>
@@ -479,94 +472,34 @@ export function buildVoucherImportXml(company: string, payload: VoucherPayload, 
 
 /**
  * Parse Tally's Import Data response.
- * Tally returns: ENVELOPE.BODY.DATA.IMPORTRESULT.{CREATED, ERRORS, LASTVCHID}
- * Plus optional LINEERROR elements for field-level errors.
+ *
+ * Reads through the shared `parseImportResult` (xml.ts) — the bare
+ * `<RESPONSE>` every real push returns and the `<ENVELOPE><IMPORTRESULT>` form
+ * alike — and judges it by `importVerdict`: success means the counter THIS
+ * action should move moved, with no LINEERROR, ERRORS or EXCEPTIONS. LINEERROR
+ * text is entity-decoded; it used to reach push_queue as
+ * `Voucher Number &apos;1920/26-27&apos; already exists!` (2 archived pushes).
+ *
+ * `action` defaults to Create, whose verdict also accepts ALTERED (a Create on
+ * an existing REMOTEID updates it) — the behaviour callers had before. Pass
+ * Alter/Cancel/Delete to have an Alter that CREATED reported as the failure it is.
  */
-export function parseImportResponse(rawXml: string): PushResult {
-  const lineErrors: string[] = [];
-
-  // Always extract LINEERROR via regex — most reliable method
-  const lineErrMatches = [...rawXml.matchAll(/<LINEERROR>([^<]*)<\/LINEERROR>/g)];
-  for (const m of lineErrMatches) {
-    if (m[1]?.trim()) lineErrors.push(m[1].trim());
-  }
-
-  let created = 0;
-  let altered = 0;
-  let deleted = 0;
-  let exceptions = 0;
-  let errCount = lineErrors.length;
-  let lastVchId: string | null = null;
-
-  try {
-    const parsed = parser.parse(rawXml);
-
-    // TallyPrime ERP 9 puts results in IMPORTRESULT
-    const importResult =
-      parsed?.ENVELOPE?.BODY?.DATA?.IMPORTRESULT ??
-      parsed?.ENVELOPE?.BODY?.IMPORTRESULT ??
-      null;
-
-    if (importResult) {
-      created  = parseInt(String(importResult.CREATED  ?? "0"), 10) || 0;
-      // ALTERED covers both an Alter and a Cancel: Tally reports a cancel as an
-      // alteration, never under a count of its own.
-      altered  = parseInt(String(importResult.ALTERED  ?? "0"), 10) || 0;
-      deleted  = parseInt(String(importResult.DELETED  ?? "0"), 10) || 0;
-      // EXCEPTIONS is the signal that means "Tally accepted the request and
-      // refused the CONTENT, and will not say why". It was not read at all —
-      // so a voucher rejected this way reported success=true with errors=0.
-      exceptions = parseInt(String(importResult.EXCEPTIONS ?? "0"), 10) || 0;
-      errCount = parseInt(String(importResult.ERRORS   ?? "0"), 10);
-      lastVchId = importResult.LASTVCHID ? String(importResult.LASTVCHID) : null;
-    } else {
-      // Fallback: regex scan — handles any Tally version quirks
-      const createdMatch = rawXml.match(/<CREATED>(\d+)<\/CREATED>/);
-      if (createdMatch) created = parseInt(createdMatch[1], 10) || 0;
-      const alteredMatch = rawXml.match(/<ALTERED>(\d+)<\/ALTERED>/);
-      if (alteredMatch) altered = parseInt(alteredMatch[1], 10) || 0;
-      const deletedMatch = rawXml.match(/<DELETED>(\d+)<\/DELETED>/);
-      if (deletedMatch) deleted = parseInt(deletedMatch[1], 10) || 0;
-      const excMatch = rawXml.match(/<EXCEPTIONS>(\d+)<\/EXCEPTIONS>/);
-      if (excMatch) exceptions = parseInt(excMatch[1], 10) || 0;
-      const errorsMatch = rawXml.match(/<ERRORS>(\d+)<\/ERRORS>/);
-      if (errorsMatch) errCount = parseInt(errorsMatch[1], 10);
-      const lastVchMatch = rawXml.match(/<LASTVCHID>([^<]+)<\/LASTVCHID>/);
-      if (lastVchMatch) lastVchId = lastVchMatch[1].trim();
-    }
-
-    // Ensure errCount accounts for any LINEERROR messages
-    if (lineErrors.length > 0 && errCount === 0) errCount = lineErrors.length;
-
-    return {
-      // Tally DID something. An Alter reports ALTERED=1 CREATED=0 and a Delete
-      // reports DELETED=1 CREATED=0 — reading only CREATED called both failures.
-      // An EXCEPTION is a refusal even when Tally counted something. Omitting
-      // it from this test is how a silently-wrong voucher reported success.
-      success: (created > 0 || altered > 0 || deleted > 0)
-        && errCount === 0 && lineErrors.length === 0 && exceptions === 0,
-      created,
-      altered,
-      deleted,
-      exceptions,
-      errors: errCount,
-      lastVoucherId: lastVchId,
-      lineErrors,
-      rawResponse: rawXml.slice(0, 2000),
-    };
-  } catch {
-    return {
-      success: false,
-      created: 0,
-      altered: 0,
-      deleted: 0,
-      exceptions: 0,
-      errors: 1,
-      lastVoucherId: null,
-      lineErrors: lineErrors.length > 0 ? lineErrors : ["Failed to parse Tally response"],
-      rawResponse: rawXml.slice(0, 2000),
-    };
-  }
+export function parseImportResponse(rawXml: string, action: ImportAction = "Create"): PushResult {
+  const r = parseImportResult(rawXml);
+  const v = importVerdict(r, action);
+  const lineErrors = r.lineErrors.length ? r.lineErrors
+    : r.parsed ? [] : ["Failed to parse Tally response"];
+  return {
+    success: v.ok,
+    created: r.created,
+    altered: r.altered,
+    deleted: r.deleted,
+    exceptions: r.exceptions,
+    errors: r.parsed ? Math.max(r.errors, r.lineErrors.length) : 1,
+    lastVoucherId: r.lastVchId,
+    lineErrors,
+    rawResponse: String(rawXml ?? "").slice(0, 2000),
+  };
 }
 
 /**
@@ -601,5 +534,5 @@ export async function pushVoucherToTally(
   const xml = buildVoucherImportXml(company, payload, masters);
   const rawResponse = await tallyPost(tallyUrl, xml, 30_000, true);
   const responseText = typeof rawResponse === "string" ? rawResponse : JSON.stringify(rawResponse);
-  return parseImportResponse(responseText);
+  return parseImportResponse(responseText, (payload.action ?? "Create") as ImportAction);
 }

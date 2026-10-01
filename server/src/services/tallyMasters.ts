@@ -10,6 +10,8 @@
  * here, or it does not get sent.
  */
 import { tallyPost } from "../tally.js";
+import { escapeXml as escXml, readTag, decodeXmlEntities, parseTallyAmount } from "./xml.js";
+import { assertKnownType } from "./tallyRequest.js";
 
 /** One dated GST registration for a party. Tally keeps the whole history. */
 export interface LedgerRegistration {
@@ -140,30 +142,21 @@ export interface TallyMasters {
   itemLoose: Map<string, string>;
 }
 
-const unescapeXml = (s: string): string =>
-  s.replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-   .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-   .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
-   .replace(/&amp;/g, "&");            // last — else &amp;quot; double-decodes
-
-const field = (block: string, tag: string): string => {
-  const m = new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`).exec(block);
-  return m ? unescapeXml(m[1].trim()) : "";
-};
+/* Shared readers (xml.ts, G1): one-pass entity decode (hex references too),
+   exact tag match, and "(-)"/"Dr"-aware amounts. */
+const unescapeXml = decodeXmlEntities;
+const field = readTag;
 /** Tally returns quantities as "8 PC =  2.00 PKG" — take the leading number only. */
-const leadingNumber = (s: string): number => {
-  const m = /^\s*(-?[\d.]+)/.exec(s.replace(/,/g, ""));
-  return m ? parseFloat(m[1]) : 0;
-};
+const leadingNumber = (s: string): number => parseTallyAmount(s) ?? 0;
 const looseKey = (s: string) => s.replace(/\s+/g, " ").trim().toUpperCase();
-const escXml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 function collectionXml(id: string, type: string, fields: string[], company: string): string {
+  assertKnownType(type);   // an unknown TYPE raises a modal that kills the port
   return `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>${id}</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${escXml(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
 <TDL><TDLMESSAGE><COLLECTION NAME="${id}" ISMODIFY="No"><TYPE>${type}</TYPE>
-${fields.map(f => `<NATIVEMETHOD>${f}</NATIVEMETHOD>`).join("\n")}
+${fields.map(f => `<NATIVEMETHOD>${escXml(f)}</NATIVEMETHOD>`).join("\n")}
 </COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 }
 

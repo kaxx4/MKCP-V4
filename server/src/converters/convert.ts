@@ -30,7 +30,17 @@ function txt(v: any, fallback = ""): string {
 
 /** Strip &#4; / \x04 (EOT control char) that Tally uses as prefix for some values */
 function stripCtrl(s: string): string {
-  return s.replace(/&#\d+;\s*/g, "").replace(/[\x00-\x1f]\s*/g, "").trim();
+  /* XML-P1: only CONTROL-range references are Tally's reserved-value prefix.
+     fast-xml-parser leaves every numeric reference undecoded, and this used to
+     delete them all — a name written as `&#2453;…` (Bengali) or `&#8377;` (₹)
+     lost those characters in the mirror. Printable references now decode. */
+  return s
+    .replace(/&#(x[0-9a-fA-F]+|\d+);/g, (w, b: string) => {
+      const cp = b[0] === "x" || b[0] === "X" ? parseInt(b.slice(1), 16) : parseInt(b, 10);
+      if (!Number.isFinite(cp) || cp < 32) return "\x01";
+      return cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ? w : String.fromCodePoint(cp);
+    })
+    .replace(/[\x00-\x1f]\s*/g, "").trim();
 }
 
 /** Pick a node under either the bare key or Tally's `KEY.LIST` spelling. */

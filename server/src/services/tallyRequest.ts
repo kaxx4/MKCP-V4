@@ -46,13 +46,9 @@ export function assertKnownType(type: string): asserts type is TallyType {
   }
 }
 
-export function esc(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+/** Re-exported from xml.ts — the one escape (G1). Kept under this name for existing importers. */
+export { escapeXml as esc } from "./xml.js";
+import { escapeXml as esc, tdlString, readTag, readAllTags } from "./xml.js";
 
 // ── Filters ───────────────────────────────────────────────────────────────
 //
@@ -107,7 +103,9 @@ function renderFilter(f: Filter): string {
           `comparison operator inside TDL returns zero rows with no error.`,
         );
       }
-      const v = typeof f.value === "number" ? String(f.value) : `"${esc(f.value)}"`;
+      // A string literal goes through tdlString: XML escaping cannot protect a TDL
+      // literal (`&quot;` decodes to `"` before TDL sees it), so a quote is refused.
+      const v = typeof f.value === "number" ? esc(f.value) : tdlString(f.value);
       return `${f.expr} ${CMP_XML[f.cmp]} ${v}`;
     }
     case "and":
@@ -201,12 +199,16 @@ export function blocksOf(xml: string, tag: string): string[] {
     .filter((b) => !new RegExp(`^\\s*\\d*\\s*</${tag}>`, "i").test(b));
 }
 
+/** Decoded text of the first `<name>` (xml.ts readTag), or undefined when absent. It used to
+ *  return the text still escaped — "SALARY &amp; BONUS" — and match `NAME` inside `NAME.LIST`. */
 export function tagOf(xml: string, name: string): string | undefined {
-  return xml.match(new RegExp(`<${name}[^>]*>([^<]*)</${name}>`, "i"))?.[1];
+  const t = name.toUpperCase();
+  if (!new RegExp(`<${t.replace(/[.]/g, "\\.")}[\\s>/]`).test(xml)) return undefined;
+  return readTag(xml, t);
 }
 
 export function allTagsOf(xml: string, name: string): string[] {
-  return [...xml.matchAll(new RegExp(`<${name}[^>]*>([^<]*)</${name}>`, "gi"))].map((m) => m[1]);
+  return readAllTags(xml, name.toUpperCase());
 }
 
 /**
