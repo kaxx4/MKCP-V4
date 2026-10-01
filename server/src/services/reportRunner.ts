@@ -28,6 +28,60 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseClient, offlineReason } from "./supabaseClient.js";
 import { withTally } from "./tallyGate.js";
 import { fetchReport, reportByKey, REPORTS } from "./tallyReports.js";
+import { resolveSyncCompany } from "./scheduledSyncs.js";
+
+// ── The daily refresh ─────────────────────────────────────────────────────
+//
+// Owner, 24-Sep-2026: "each report you pull from Tally is data for seasonal
+// demand, cash flow, margins, dead stock." A report that only refreshes when
+// somebody presses a button is not data an algorithm can stand on: measured
+// that day, every snapshot in `tally_report_snapshots` was one or two days old
+// and `reorder-status` had never been fetched at all, because nothing but a
+// click had ever asked. The web pages now read these snapshots as ground truth
+// (web-dashboard/src/engine/tallyBooks.ts), so the agent asks for every report
+// once a day on its own, through the same queue a click uses.
+//
+// Once per report per day, never more: a report is due when its snapshot was
+// captured before today's hour AND no daily job for it has been created since
+// then. The second half is what stops a closed Tally from turning into a job a
+// minute all evening — a failed attempt is a job row, so it counts as "asked".
+
+/** `requested_by` on a job this agent queued for itself. */
+export const DAILY_REQUESTER = "agent-daily";
+
+/** Local hour after which the day's refresh is due. Evening, beside the 18:00
+ *  price/GST pull: the office has finished typing the day's vouchers. */
+export function dailyReportHour(): number {
+  const h = parseInt(process.env.REPORTS_DAILY_HOUR ?? "18", 10);
+  return Number.isFinite(h) ? Math.min(23, Math.max(0, h)) : 18;
+}
+
+/**
+ * Which reports to queue now. Pure: every input is a value, so the schedule is
+ * testable without a clock, Tally or Supabase (scripts/test-report-schedule.ts).
+ *
+ * @param snapshots  the company's latest snapshot per report
+ * @param jobs       the company's recent jobs (any status)
+ */
+export function reportsDueForDailyRefresh(
+  now: Date,
+  hour: number,
+  keys: readonly string[],
+  snapshots: readonly { report: string; captured_at: string | null }[],
+  jobs: readonly { report: string; status: string; created_at: string; requested_by?: string | null }[],
+): string[] {
+  if (now.getHours() < hour) return [];
+  const threshold = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, 0, 0).getTime();
+  const capturedAt = new Map(snapshots.map((s) => [s.report, s.captured_at ? Date.parse(s.captured_at) : NaN]));
+  return keys.filter((key) => {
+    const t = capturedAt.get(key);
+    if (t !== undefined && Number.isFinite(t) && t >= threshold) return false; // already fresh today
+    return !jobs.some((j) =>
+      j.report === key &&
+      (j.status === "pending" || j.status === "running" ||
+        (j.requested_by === DAILY_REQUESTER && Date.parse(j.created_at) >= threshold)));
+  });
+}
 
 export interface ReportJob {
   id: string;
@@ -174,11 +228,57 @@ export class ReportRunner {
     const timer = setInterval(() => { void this.drain(); }, pollMs);
     void this.drain();
 
+    /* The daily refresh checks once a minute, like the other schedules, so a
+       machine asleep at the hour catches up the moment it wakes. */
+    const daily = (process.env.REPORTS_DAILY_ENABLED ?? "true").toLowerCase() !== "false";
+    const dailyTimer = daily ? setInterval(() => { void this.queueDaily(); }, 60_000) : null;
+    if (daily) void this.queueDaily();
+    else console.log("📊 [REPORTS] daily refresh OFF (REPORTS_DAILY_ENABLED=false)");
+
     return () => {
       this.stopped = true;
       clearInterval(timer);
+      if (dailyTimer) clearInterval(dailyTimer);
       void this.client.removeChannel(channel);
     };
+  }
+
+  /** Queue today's refresh for every report that is due. See the note at the
+   *  top of this file. Errors are logged and the next minute tries again. */
+  private async queueDaily(): Promise<void> {
+    if (this.stopped) return;
+    const now = new Date();
+    const hour = dailyReportHour();
+    if (now.getHours() < hour) return;
+    try {
+      const company = await resolveSyncCompany("");
+      if (!company) return;
+      const since = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour).toISOString();
+      const [snaps, jobs] = await Promise.all([
+        this.client.from("tally_report_snapshots").select("report, captured_at").eq("company", company),
+        this.client.from("tally_report_jobs")
+          .select("report, status, created_at, requested_by")
+          .eq("company", company)
+          .or(`status.in.(pending,running),created_at.gte.${since}`),
+      ]);
+      if (snaps.error) throw new Error(snaps.error.message);
+      if (jobs.error) throw new Error(jobs.error.message);
+      const due = reportsDueForDailyRefresh(now, hour, REPORTS.map((r) => r.key), snaps.data ?? [], jobs.data ?? []);
+      if (!due.length) return;
+      const { error } = await this.client.from("tally_report_jobs").insert(
+        /* Born DISMISSED. The web's report dock lists every undismissed job,
+           and fifteen notices every evening for a refresh nobody asked for
+           would train the office to ignore the dock. The pages that read these
+           snapshots state each figure's capture time, which is where a failed
+           refresh shows: as an old date, not as a toast. */
+        due.map((report) => ({ company, report, requested_by: DAILY_REQUESTER, dismissed_at: new Date().toISOString() })),
+      );
+      if (error) throw new Error(error.message);
+      console.log(`📊 [REPORTS] daily refresh queued: ${due.join(", ")}`);
+      void this.drain();
+    } catch (e) {
+      console.error(`📊 [REPORTS] daily refresh could not queue: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 }
 

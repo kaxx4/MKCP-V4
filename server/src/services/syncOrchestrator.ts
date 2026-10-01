@@ -108,6 +108,10 @@ export class SyncOrchestrator {
 
        Failures are collected, never thrown: a price list that did not come back
        must not take a masters sync down with it. */
+    /* How many GST rate rows this pass changed. tally_gst_rates is part of the
+       web's dataset, so it rides on the masters history row's `changed`.
+       0 until a write starts; undefined once one starts and cannot report. */
+    let gstChanged: number | undefined = 0;
     if (!signal?.aborted) {
       emit("masters", 7, 8, "Fetching price list + GST rates...");
       try {
@@ -124,7 +128,8 @@ export class SyncOrchestrator {
          must not cost us the rates, or the other way round. */
       try {
         const gstRows = await fetchGstRates(this.tallyUrl, company);
-        await this.supabase.syncGstRates(gstRows, company);
+        gstChanged = undefined;
+        gstChanged = await this.supabase.syncGstRates(gstRows, company);
         console.log(`[MASTERS] ✓ GST rates: ${gstRows.length} declared rates`);
       } catch (e: any) {
         errors.push(`GST rates: ${e?.message ?? e}`);
@@ -164,7 +169,7 @@ export class SyncOrchestrator {
     // the whole masters sync unsuccessful so the caller doesn't report "done".
     let uploadOk = true;
     try {
-      await this.supabase.syncMasters(mastersList, company);
+      await this.supabase.syncMasters(mastersList, company, { changed: gstChanged });
     } catch (e: any) {
       uploadOk = false;
       errors.push(`Supabase masters upload failed: ${e.message}`);
