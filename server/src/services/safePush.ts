@@ -112,7 +112,17 @@ export function diffStored(p: VoucherPayload, v: string): string[] {
         : `ledger "${e.ledgerName}": NOT STORED — Tally discarded it`);
       continue;
     }
-    for (const b of e.billAllocations ?? []) {
+    /* PAY-P1, 1-Oct-2026: an `On Account` sent on a ledger that keeps no
+       bills (SALARY & BONUS, Indirect Expenses) is dropped by Tally while the
+       voucher and its money land intact. Reporting that as a difference failed
+       vouchers that were in the books (push_queue 25-Sep, 1922-1926/26-27:
+       "bill ref "On Account" … NOT STORED") and the operator archived them.
+       Skipped only when Tally stored NO allocation on the line at all and we
+       sent nothing but On Account — an Agst Ref is always checked. */
+    const storedBills = listOf(hit, "BILLALLOCATIONS\\.LIST").filter(x => fld(x, "NAME") || fld(x, "BILLTYPE"));
+    const droppedOnAccountOnly = storedBills.length === 0 &&
+      (e.billAllocations ?? []).every(b => b.billType === "On Account");
+    for (const b of droppedOnAccountOnly ? [] : e.billAllocations ?? []) {
       const bh = listOf(hit, "BILLALLOCATIONS\\.LIST").find(x => fld(x, "NAME") === b.name);
       if (!bh) { out.push(`bill ref "${b.name}" on "${e.ledgerName}": NOT STORED`); continue; }
       if (fld(bh, "BILLTYPE") !== b.billType) out.push(`bill "${b.name}": type sent ${b.billType}, stored ${fld(bh, "BILLTYPE")}`);
@@ -347,8 +357,12 @@ export async function safePush(
      MASTERID, VOUCHERKEY and GUID were each tried as a delete handle and every
      one answered deleted=0 with no error; a voucher whose REMOTEID is not
      recorded can never be altered or removed again. */
+  /* PAY-P1, 1-Oct-2026: Tally ALSO answers a taken number in words —
+     `<LINEERROR>Voucher Number '1920/26-27' already exists!</LINEERROR>` with
+     errors=1 exceptions=0 (push_queue 25-Sep, 1920 and 1921/26-27). That form
+     never reached this renumber, so those payments were dismissed. */
   const numberMayBeTaken =
-    !succeeded && exceptions > 0 && count("CREATED") === 0 &&
+    !succeeded && (exceptions > 0 || numberTakenError(result.lineErrors)) && count("CREATED") === 0 &&
     action === "Create" && !!payload.voucherNumber && !retriedWithoutNumber;
 
   if (numberMayBeTaken) {
@@ -495,6 +509,11 @@ function checkWellFormed(xml: string): string | null {
   return null;
 }
 
+
+/** Tally's own words for a taken voucher number, as LINEERROR text arrives (entities intact). */
+export function numberTakenError(lineErrors: readonly string[]): boolean {
+  return lineErrors.some(e => /Voucher Number .* already exists/i.test(e));
+}
 
 /**
  * What an unexplained `exceptions=1` almost always means, said usefully.
