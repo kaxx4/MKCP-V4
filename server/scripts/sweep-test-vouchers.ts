@@ -7,17 +7,33 @@
  * that only removes what the pusher reported as successful leaves the rest
  * behind. Sweep by what is actually in the books instead.
  *
- *   npx tsx scripts/sweep-test-vouchers.ts GSTV            # today
- *   npx tsx scripts/sweep-test-vouchers.ts GSTV 2026-09-11
- *   npx tsx scripts/sweep-test-vouchers.ts GSTV 2026-09-11 --delete
+ *   npx tsx scripts/sweep-test-vouchers.ts ZZTEST                 # dry run, today
+ *   npx tsx scripts/sweep-test-vouchers.ts GSTV 2026-09-11        # dry run
+ *   npx tsx scripts/sweep-test-vouchers.ts ZZTEST 2026-09-11 --yes  # deletes
+ *
+ * Dry run is the default. Deleting needs an explicit --yes. Only the harness
+ * marks in lib/testVoucherMatch.ts are accepted, and a voucher must carry the
+ * mark in both its number and its narration. A bare MKCP or MKCP- is refused:
+ * it is a real supplier bill series (MKCP-01..09, PARTY 154 ENTERPRISE).
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
+import { isSweepVoucher, sweepPrefixAllowed } from "./lib/testVoucherMatch.js";
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
-const PREFIX = process.argv[2] ?? "GSTV";
+const PREFIX = process.argv[2] ?? "ZZTEST";
 const DAY = (process.argv[3] && /^\d{4}-\d{2}-\d{2}$/.test(process.argv[3]) ? process.argv[3] : new Date().toISOString().slice(0, 10)).replace(/-/g, "");
-const DO = process.argv.includes("--delete");
+const DO = process.argv.includes("--yes");
+
+if (!sweepPrefixAllowed(PREFIX)) {
+  console.error(`REFUSED. "${PREFIX}" is not a harness mark. Allowed: ZZTEST, GSTV.`);
+  console.error(`MKCP and MKCP- are a real supplier bill series and are never swept.`);
+  process.exit(2);
+}
+if (process.argv.includes("--delete") && !DO) {
+  console.error(`REFUSED. --delete no longer deletes on its own. Pass --yes to delete.`);
+  process.exit(2);
+}
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const fld = (v: string, t: string) => {
@@ -38,13 +54,14 @@ const fld = (v: string, t: string) => {
 <TDL><TDLMESSAGE><COLLECTION NAME="MkSweep" ISMODIFY="No"><TYPE>Voucher</TYPE>
 <NATIVEMETHOD>Date</NATIVEMETHOD><NATIVEMETHOD>VoucherNumber</NATIVEMETHOD>
 <NATIVEMETHOD>VoucherTypeName</NATIVEMETHOD><NATIVEMETHOD>PartyLedgerName</NATIVEMETHOD>
+<NATIVEMETHOD>Narration</NATIVEMETHOD>
 <FILTER>MkSweepF</FILTER></COLLECTION>
 <SYSTEM TYPE="Formulae" NAME="MkSweepF">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${DAY}</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
     const raw: string = await tallyPost(U, xml, 180_000, true);
     return [...raw.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)]
       .map((x) => x[0])
-      .filter((v) => fld(v, "VOUCHERNUMBER").startsWith(PREFIX));
+      .filter((v) => isSweepVoucher({ number: fld(v, "VOUCHERNUMBER"), narration: fld(v, "NARRATION") }, PREFIX));
   };
 
   const found = await list();
@@ -53,7 +70,7 @@ const fld = (v: string, t: string) => {
   for (const v of found) {
     console.log(`  ${fld(v, "VOUCHERTYPENAME").padEnd(18)} ${fld(v, "VOUCHERNUMBER").padEnd(20)} ${fld(v, "PARTYLEDGERNAME")}`);
   }
-  if (!DO) { console.log(`\n${found.length} voucher(s). Pass --delete to remove them.\n`); return; }
+  if (!DO) { console.log(`\n${found.length} voucher(s). Dry run. Pass --yes to remove them.\n`); return; }
 
   let gone = 0;
   for (const v of found) {

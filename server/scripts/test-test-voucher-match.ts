@@ -9,7 +9,7 @@
  *
  *   npx tsx server/scripts/test-test-voucher-match.ts
  */
-import { isDrainTestNumber } from "./lib/testVoucherMatch.js";
+import { isDrainTestNumber, isSweepVoucher, sweepPrefixAllowed } from "./lib/testVoucherMatch.js";
 
 let pass = 0, fail = 0;
 
@@ -31,6 +31,32 @@ expect("MKCP-TEST-123 is NOT a test voucher (bare MKCP- series)", isDrainTestNum
 expect("26-27/0679 (company series) is NOT a test voucher", isDrainTestNumber("26-27/0679"), false);
 expect("empty number is NOT a test voucher", isDrainTestNumber(""), false);
 expect("undefined number is NOT a test voucher", isDrainTestNumber(undefined as unknown as string), false);
+
+console.log("\nsweep-test-vouchers: which prefixes may be swept");
+expect("ZZTEST is an allowed sweep prefix", sweepPrefixAllowed("ZZTEST"), true);
+expect("GSTV is an allowed sweep prefix", sweepPrefixAllowed("GSTV"), true);
+expect("bare MKCP is refused as a sweep prefix", sweepPrefixAllowed("MKCP"), false);
+expect("MKCP- is refused as a sweep prefix", sweepPrefixAllowed("MKCP-"), false);
+expect("empty prefix is refused", sweepPrefixAllowed(""), false);
+expect("lower-case zztest is refused (exact match only)", sweepPrefixAllowed("zztest"), false);
+expect("ZZTEST/ (with slash) is refused, the bare mark is the prefix", sweepPrefixAllowed("ZZTEST/"), false);
+
+const harness = { number: "ZZTEST/CN12345", narration: "ZZTEST cancel action 12345" };
+expect("ZZTEST number with ZZTEST narration is swept", isSweepVoucher(harness, "ZZTEST"), true);
+expect("ZZTEST number with no marker in narration is NOT swept",
+  isSweepVoucher({ number: "ZZTEST/CN1", narration: "real invoice" }, "ZZTEST"), false);
+expect("ZZTEST marker in narration but a real company number is NOT swept",
+  isSweepVoucher({ number: "26-27/0679", narration: "ZZTEST leftover" }, "ZZTEST"), false);
+expect("real MKCP-05 with a ZZTEST narration is NOT swept under ZZTEST",
+  isSweepVoucher({ number: "MKCP-05", narration: "ZZTEST" }, "ZZTEST"), false);
+expect("real MKCP-05 is NOT swept even when the prefix is MKCP",
+  isSweepVoucher({ number: "MKCP-05", narration: "MKCP-05 PARTY 154 ENTERPRISE" }, "MKCP"), false);
+expect("GSTV harness voucher with GSTV narration is swept",
+  isSweepVoucher({ number: "GSTV12/1", narration: "GSTV12345 six-voucher GST audit" }, "GSTV"), true);
+expect("ZZTEST number is NOT swept under the GSTV prefix",
+  isSweepVoucher({ number: "ZZTEST/CN1", narration: "ZZTEST x" }, "GSTV"), false);
+expect("number matching but narration empty is NOT swept",
+  isSweepVoucher({ number: "ZZTEST/CN1", narration: "" }, "ZZTEST"), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
