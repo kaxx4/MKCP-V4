@@ -30,6 +30,13 @@ async function main(): Promise<void> {
     check(`${name} routes through withTally`, /withTally\(url, "explore"/.test(src));
   }
 
+  console.log("\n  #102  the drain watcher treats only CLAUDE-TEST numbers as tests");
+  const drain = read("watch-agent-drain.ts");
+  const prefixes = /TEST_PREFIXES\s*=\s*\[([^\]]*)\]/.exec(drain)?.[1] ?? "";
+  check("test prefixes include CLAUDE-TEST", /"CLAUDE-TEST"/.test(prefixes));
+  check("test prefixes do not include MKCP-", !/"MKCP-"/.test(prefixes));
+
+
   console.log("\n  #123  an open gate refuses without calling the request");
   resetGate();
   const dead = "http://localhost:9099";           // nothing listens here

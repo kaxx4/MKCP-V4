@@ -34,7 +34,7 @@ import type { VoucherPayload } from "../src/types.js";
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";
-const TEST_PREFIXES = ["MKCP-", "RPLY-", "VERIFY-", "SMOKE-", "DEMO-"];
+const TEST_PREFIXES = ["CLAUDE-TEST", "RPLY-", "VERIFY-", "SMOKE-", "DEMO-"];
 const isTest = (n: string) => TEST_PREFIXES.some((p) => String(n ?? "").toUpperCase().startsWith(p));
 
 async function main(): Promise<void> {
