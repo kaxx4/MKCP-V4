@@ -72,6 +72,29 @@ const cases: Array<[string, () => Promise<void>]> = [
     const { orch } = makeOrchestrator([{ throws: "Aborted by caller" }]);
     await assert.rejects(() => orch._fetchVoucherChunk("CO", DAY, DAY, "d", 1000));
   }],
+  ["(e) real-shaped Day Book: DATE/GUID as #text objects and ALLLEDGERENTRIES.LIST; out-of-window dropped", async () => {
+    const realShape = {
+      ENVELOPE: { BODY: { DATA: { TALLYMESSAGE: [
+        { VOUCHER: { "@_GUID": "ignored", GUID: { "#text": "g3" }, DATE: { "#text": DAY }, VOUCHERTYPENAME: "Sales", "ALLLEDGERENTRIES.LIST": [{ LEDGERNAME: "X", AMOUNT: "-100.00" }] } },
+        { VOUCHER: { GUID: { "#text": "g2" }, DATE: { "#text": "20260915" }, VOUCHERTYPENAME: "Sales" } },
+      ] } } },
+    };
+    const { orch } = makeOrchestrator([{ reply: { ENVELOPE: { BODY: { DATA: { TALLYMESSAGE: [] } } } } }, { reply: realShape }]);
+    const r = await orch._fetchVoucherChunk("CO", DAY, DAY, "d", 1000);
+    assert.equal(r.source, "daybook");
+    assert.deepEqual(guidsOf(r), ["g3"]);
+    assert.equal(r.converted.tallymessage[0].date, DAY);
+  }],
+  ["(f) Collection COLLECTION.VOUCHER shape keeps source=collection and the day's rows", async () => {
+    const collectionShape = { ENVELOPE: { BODY: { DATA: { COLLECTION: { VOUCHER: [
+      { GUID: "g1", DATE: DAY, VOUCHERTYPENAME: "Receipt" },
+      { GUID: "g4", DATE: DAY, VOUCHERTYPENAME: "Payment" },
+    ] } } } } };
+    const { orch } = makeOrchestrator([{ reply: collectionShape }]);
+    const r = await orch._fetchVoucherChunk("CO", DAY, DAY, "d", 1000);
+    assert.equal(r.source, "collection");
+    assert.deepEqual(guidsOf(r), ["g1", "g4"]);
+  }],
 ];
 
 async function main() {
