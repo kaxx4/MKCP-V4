@@ -411,41 +411,15 @@ export class SupabaseSync {
         }
       }
 
-      // Delete old entries for these vouchers, then insert new ones
+      // Replace child rows for these vouchers atomically per chunk (#112): one RPC
+      // per 100 vouchers deletes and re-inserts in a single transaction, so a
+      // failure cannot leave a voucher with its children deleted and not re-inserted.
       if (rewriteGuids.size > 0) {
-        const guidsArray = Array.from(rewriteGuids);
-
-        // Delete in chunks to avoid SQL length limits
-        const DELETE_CHUNK = 100;
-        for (let i = 0; i < guidsArray.length; i += DELETE_CHUNK) {
-          const chunk = guidsArray.slice(i, i + DELETE_CHUNK);
-          // Retry-wrapped: a transient "fetch failed" here used to fail the whole
-          // voucher sync (leaving stale child entries). withRetry rides out the blip.
-          await this.withRetry("delete tally_voucher_ledger_entries", async () => {
-            const { error } = await this.client!
-              .from("tally_voucher_ledger_entries")
-              .delete()
-              .in("voucher_guid", chunk)
-              .eq("company", company);
-            if (error) throw new Error(`tally_voucher_ledger_entries: ${error.message}`);
-          });
-
-          await this.withRetry("delete tally_voucher_inventory_entries", async () => {
-            const { error } = await this.client!
-              .from("tally_voucher_inventory_entries")
-              .delete()
-              .in("voucher_guid", chunk)
-              .eq("company", company);
-            if (error) throw new Error(`tally_voucher_inventory_entries: ${error.message}`);
-          });
-        }
-
-        // Insert new entries in batches of 200
-        if (ledgerEntries.length > 0) {
-          await this.batchAndInsert("tally_voucher_ledger_entries", ledgerEntries);
-        }
-        if (inventoryEntries.length > 0) {
-          await this.batchAndInsert("tally_voucher_inventory_entries", inventoryEntries);
+        try {
+          await this.replaceVoucherChildren(company, Array.from(rewriteGuids), ledgerEntries, inventoryEntries);
+        } catch (e: any) {
+          console.error(`[Supabase] Voucher child replace failed (previous rows kept for the failed chunk): ${e?.message || e}`);
+          errors.push(`voucher children: ${e?.message || e}`);
         }
       }
 
@@ -889,6 +863,57 @@ export class SupabaseSync {
       console.warn(`[Supabase] Per-day voucher prune error: ${e?.message || e}`);
       return { deleted: 0, guardTripped: false };
     }
+  }
+
+  /**
+   * #112: replace ledger + inventory child rows for the given vouchers, one RPC
+   * per 100 vouchers (migration 045). Each RPC deletes and inserts in ONE
+   * transaction; a retry after a transient failure is safe because it re-applies
+   * the same chunk. Vouchers with no new entries still get their old rows deleted.
+   */
+  private async replaceVoucherChildren(
+    company: string,
+    guids: string[],
+    ledgerRows: any[],
+    inventoryRows: any[]
+  ): Promise<{ ledger: number; inventory: number }> {
+    if (!this.client || guids.length === 0) return { ledger: 0, inventory: 0 };
+    const group = (rows: any[]) => {
+      const m = new Map<string, any[]>();
+      for (const r of rows) {
+        const list = m.get(r.voucher_guid);
+        if (list) list.push(r);
+        else m.set(r.voucher_guid, [r]);
+      }
+      return m;
+    };
+    const ledgerByGuid = group(ledgerRows);
+    const inventoryByGuid = group(inventoryRows);
+    const CHUNK = 100;
+    let ledger = 0;
+    let inventory = 0;
+    for (let i = 0; i < guids.length; i += CHUNK) {
+      const chunk = guids.slice(i, i + CHUNK);
+      const pl: any[] = [];
+      const pi: any[] = [];
+      for (const g of chunk) {
+        for (const r of ledgerByGuid.get(g) ?? []) pl.push(r);
+        for (const r of inventoryByGuid.get(g) ?? []) pi.push(r);
+      }
+      const { data } = await this.withRetry("rpc replace_voucher_children", async () => {
+        const res = await this.client!.rpc("replace_voucher_children", {
+          p_company: company,
+          p_guids: chunk,
+          p_ledger: pl,
+          p_inventory: pi,
+        });
+        if (res.error) throw new Error(`replace_voucher_children: ${res.error.message}`);
+        return res;
+      });
+      ledger += Number((data as any)?.ledger ?? pl.length);
+      inventory += Number((data as any)?.inventory ?? pi.length);
+    }
+    return { ledger, inventory };
   }
 
   /** Remove ledger + inventory entries for vouchers no longer in tally_vouchers. */
