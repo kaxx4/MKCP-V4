@@ -1,10 +1,11 @@
 /**
- * #117: the per-day prune caller must treat the guard's -1 as "refused" and
- * must pass the explicit override flag through, default OFF.
+ * #117 CALLER-ONLY TEST. The Supabase RPC is a scripted fake, so this proves only
+ * what the TypeScript caller does: it passes p_force (default OFF), and it maps the
+ * guard's -1 to guardTripped. It does NOT prove the guard SQL. The SQL is proven only
+ * by migrations/selftests/047_prune_guard_selftest.sql, which the owner runs on a
+ * COPY before 047 is applied.
  *
- * Fixture-only: the Supabase RPC is a scripted fake assigned onto the private
- * client field. No network. Nothing here touches the live database.
- *
+ * Fixture-only. No network, nothing touches a database.
  * Run: npx tsx scripts/test-prune-guard.ts
  */
 import assert from "node:assert/strict";
