@@ -71,3 +71,28 @@ export function announceRole(): void {
     console.log("📒 [primary] MKCP_TALLY_ROLE=primary — this machine writes to the shared Supabase mirror.");
   }
 }
+
+/**
+ * #128 — on this laptop, only the practice company may receive a request.
+ *
+ * Enforced when the machine is a sandbox, or when MKCP_PRACTICE_COMPANY is
+ * set. The practice company is named by that env var. A request that names a
+ * different company is refused; so is a company-scoped request when no practice
+ * company is declared. A request naming no company is refused too, because
+ * Tally would run it against whatever company is open, except the company
+ * listing, which is how the practice company is discovered in the first place.
+ *
+ * Returns the refusal text, or null when the request may go. Pure: no I/O.
+ */
+export function companyRefusal(xml: string): string | null {
+  const practice = (process.env.MKCP_PRACTICE_COMPANY ?? "").trim();
+  if (!isSandbox() && practice === "") return null;
+  const m = /<SVCURRENTCOMPANY>([\s\S]*?)<\/SVCURRENTCOMPANY>/i.exec(xml);
+  if (!m) {
+    if (/<ID>\s*List of Companies\s*<\/ID>/i.test(xml)) return null;
+    return "refused: this request names no company, so Tally would use whichever company is open. This machine accepts only the practice company.";
+  }
+  const named = m[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
+  if (practice !== "" && named === practice) return null;
+  return `refused: company "${named}" is not the practice company${practice ? "" : " (MKCP_PRACTICE_COMPANY is not set)"}. Nothing was sent to Tally.`;
+}

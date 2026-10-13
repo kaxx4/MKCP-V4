@@ -4,6 +4,7 @@ import { XMLParser } from "fast-xml-parser";
 import { recordTallyCall, classify, truncateForLog } from "./services/tallyLog.js";
 import { mockTransport } from "./services/tallyMock.js";
 import { decodeTallyBody, decodeXmlEntities } from "./services/xml.js";
+import { companyRefusal } from "./services/tallyRole.js";
 
 // ─────────────────────────────────────────────────────────────────────
 // XML Parser ───────────────────────────────────────────────────────────
@@ -166,6 +167,11 @@ function interpretResponse(
  * @param signal    Optional AbortSignal to cancel the request externally
  */
 export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, rawMode = false, signal?: AbortSignal): Promise<any> {
+  /* #128 — this laptop talks only to the practice company. Checked before the
+     mock too, so a test proves the refusal without any XML leaving the process. */
+  const refusal = companyRefusal(xml);
+  if (refusal) return Promise.reject(new Error(refusal));
+
   /* ── The mock (Phase 1.2) ────────────────────────────────────────────────
      Intercepted here, at the one place every request shape passes through,
      so a test exercises the real builders, the real converters and the real

@@ -10,6 +10,8 @@
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { installMock, uninstallMock } from "../src/services/tallyMock.js";
 import { withTally, resetGate, gateState, TallyUnavailableError } from "../src/services/tallyGate.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -39,6 +41,29 @@ async function main(): Promise<void> {
   console.log("\n  #103  the sweep refuses a real MKCP- prefix");
   const sweep = read("sweep-test-vouchers.ts");
   check("sweep refuses any MKCP prefix before listing", /PREFIX[\s\S]{0,200}MKCP/i.test(sweep) && /process\.exit\(2\)/.test(sweep));
+
+  console.log("\n  #128  a non-practice company is refused before any XML is sent");
+  process.env.MKCP_TALLY_ROLE = "sandbox";
+  process.env.MKCP_PRACTICE_COMPANY = "PRACTICE CO";
+  let wire = 0;
+  installMock(async () => { wire++; return "<ENVELOPE><DATA></DATA></ENVELOPE>"; });
+  const body = (company: string) =>
+    `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkT</ID></HEADER>` +
+    `<BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${company}</SVCURRENTCOMPANY></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
+  const tryPost = async (xml: string): Promise<string> => {
+    try { await tallyPost("http://localhost:9099", xml, 5_000, true); return "sent"; }
+    catch (e) { return (e as Error).message; }
+  };
+  const realMsg = await tryPost(body("M.K.CYCLES (P) LTD. - (from 1-Apr-26)"));
+  check("non-practice company refused", /refused/i.test(realMsg), realMsg.slice(0, 80));
+  check("refused company sends no XML", wire === 0, `transport calls=${wire}`);
+  const practiceMsg = await tryPost(body("PRACTICE CO"));
+  check("practice company passes the check", wire === 1 && !/refused/i.test(practiceMsg));
+  const listMsg = await tryPost(HEALTH_XML);
+  check("company listing (no company named) still allowed", wire === 2 && !/refused/i.test(listMsg));
+  uninstallMock();
+  delete process.env.MKCP_TALLY_ROLE;
+  delete process.env.MKCP_PRACTICE_COMPANY;
 
   console.log("\n  #123  an open gate refuses without calling the request");
   resetGate();
