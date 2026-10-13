@@ -16,6 +16,12 @@ import { convertCompanies } from "../src/converters/convert.js";
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const PREFIX = process.argv[2] ?? "GSTV";
+/* Never sweep a real bill series. MKCP- numbers are real purchases (REDACTED NAME
+   ENTERPRISE), and an empty prefix would match every voucher of the day. */
+if (PREFIX.trim() === "" || /^MKCP/i.test(PREFIX)) {
+  console.error(`REFUSED: prefix "${PREFIX}" would match real MKCP- bills. Use a test prefix such as GSTV or CLAUDE-TEST.`);
+  process.exit(2);
+}
 const DAY = (process.argv[3] && /^\d{4}-\d{2}-\d{2}$/.test(process.argv[3]) ? process.argv[3] : new Date().toISOString().slice(0, 10)).replace(/-/g, "");
 const DO = process.argv.includes("--delete");
 

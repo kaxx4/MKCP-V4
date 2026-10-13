@@ -36,6 +36,9 @@ async function main(): Promise<void> {
   check("test prefixes include CLAUDE-TEST", /"CLAUDE-TEST"/.test(prefixes));
   check("test prefixes do not include MKCP-", !/"MKCP-"/.test(prefixes));
 
+  console.log("\n  #103  the sweep refuses a real MKCP- prefix");
+  const sweep = read("sweep-test-vouchers.ts");
+  check("sweep refuses any MKCP prefix before listing", /PREFIX[\s\S]{0,200}MKCP/i.test(sweep) && /process\.exit\(2\)/.test(sweep));
 
   console.log("\n  #123  an open gate refuses without calling the request");
   resetGate();
