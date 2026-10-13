@@ -45,7 +45,8 @@ BEGIN
     voucher_guid, company, ledger_name, is_debit, is_party_ledger, amount, bill_allocations, synced_at
   )
   SELECT voucher_guid, company, ledger_name, is_debit, is_party_ledger, amount, bill_allocations, synced_at
-  FROM jsonb_populate_recordset(null::tally_voucher_ledger_entries, COALESCE(p_ledger, '[]'::jsonb));
+  FROM jsonb_populate_recordset(null::tally_voucher_ledger_entries, COALESCE(p_ledger, '[]'::jsonb))
+  WHERE company = p_company AND voucher_guid = ANY(p_guids);
   GET DIAGNOSTICS l_n = ROW_COUNT;
 
   INSERT INTO tally_voucher_inventory_entries (
@@ -54,7 +55,8 @@ BEGIN
   )
   SELECT voucher_guid, company, stock_item_name, actual_qty, billed_qty, rate, amount, is_deemed_positive,
          godown_name, batch_name, destination_godown_name, batch_allocations, is_split_across_godowns, synced_at
-  FROM jsonb_populate_recordset(null::tally_voucher_inventory_entries, COALESCE(p_inventory, '[]'::jsonb));
+  FROM jsonb_populate_recordset(null::tally_voucher_inventory_entries, COALESCE(p_inventory, '[]'::jsonb))
+  WHERE company = p_company AND voucher_guid = ANY(p_guids);
   GET DIAGNOSTICS i_n = ROW_COUNT;
 
   RETURN jsonb_build_object('ledger', l_n, 'inventory', i_n);
