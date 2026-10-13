@@ -54,6 +54,17 @@ test('package.json has electron in devDependencies', () => {
   assert(pkg.devDependencies?.electron, 'electron not found in devDependencies');
 });
 
+test('electron-builder.json5 comment does not claim .env is bundled by default', () => {
+  const content = readFileSync('electron-builder.json5', 'utf8');
+  assert(!content.includes('".env" is bundled from the LOCAL'), 'stale comment still says .env is bundled');
+});
+
+test('electron-builder default server filter excludes .env', () => {
+  const content = readFileSync('electron-builder.json5', 'utf8');
+  const m = content.match(/filter:\s*\[([^\]]*)\]/);
+  assert(m && !/\.env/.test(m[1]), 'default filter must not list .env');
+});
+
 test('MirrorPanel user-visible text does not hard-code port 3100', () => {
   const lines = readFileSync('src/MirrorPanel.tsx', 'utf8').split('\n');
   const bad = lines.filter((l) => /port 3100/.test(l) && !/^\s*(\*|\/\/|\/\*)/.test(l));
