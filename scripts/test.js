@@ -218,6 +218,43 @@ test('read-back matches on number first, and money only as a last resort', () =>
   assert(/byMoney\.length === 1/.test(src), 'the money fallback must accept ONE candidate or none — never pick between duplicates');
 });
 
+// ── Local server address (#121) ────────────────────────────────────────────
+// The sync server's address is built in ONE place. Literal copies of
+// localhost:3100 drift apart, and a push then goes to a server that is not
+// the one the renderer is watching.
+const serverUrl = await import('../src/config/serverUrl.ts').catch(() => null);
+test('server address defaults to localhost:3100, as before', () => {
+  assert(serverUrl, 'src/config/serverUrl.ts missing or not loadable');
+  assert(serverUrl.resolveServerBase(undefined) === 'http://localhost:3100', 'default changed');
+  assert(serverUrl.resolveServerBase('') === 'http://localhost:3100', 'blank must fall back to the default');
+  assert(serverUrl.resolveServerBase('   ') === 'http://localhost:3100', 'whitespace must fall back to the default');
+});
+test('VITE_TALLY_PROXY overrides the server address', () => {
+  assert(serverUrl, 'src/config/serverUrl.ts missing');
+  assert(serverUrl.resolveServerBase('http://10.0.0.5:4100') === 'http://10.0.0.5:4100', 'override ignored');
+});
+test('no renderer file hard-codes localhost:3100 outside the constant', () => {
+  const offenders = [];
+  const walk = (dir) => {
+    for (const f of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, f.name);
+      if (f.isDirectory()) { walk(p); continue; }
+      if (!/\.(ts|tsx)$/.test(f.name)) continue;
+      if (p.split('\\').join('/') === 'src/config/serverUrl.ts') continue;
+      if (readFileSync(p, 'utf8').includes('localhost:3100')) offenders.push(p);
+    }
+  };
+  walk('src');
+  assert(offenders.length === 0, 'literal localhost:3100 still in: ' + offenders.join(', '));
+});
+test("electron.js has one port constant, read from PORT like the server", () => {
+  const src = readFileSync('public/electron.js', 'utf8');
+  assert(/const SERVER_PORT = parseInt\(process\.env\.PORT \|\| '3100', 10\)/.test(src), 'SERVER_PORT constant missing');
+  const literal = src.split('3100').length - 1;
+  assert(literal === 1, '3100 literal appears ' + literal + ' times, expected only the default in SERVER_PORT');
+});
+
+
 // ── Results ────────────────────────────────────────────────────────────────
 console.log(`\n${YELLOW}═══════════════════════════════════════${RESET}`);
 console.log(` Results: ${GREEN}${passed} passed${RESET}  ${RED}${failed} failed${RESET}`);

@@ -115,36 +115,6 @@ ${fetchLines}
 </ENVELOPE>`;
 }
 
-/** Lightweight: fetch AltMstId + AltVchId from Company object */
-export function buildAlterIdXml(company: string): string {
-  return `<ENVELOPE>
-<HEADER>
-<VERSION>1</VERSION>
-<TALLYREQUEST>Export</TALLYREQUEST>
-<TYPE>Collection</TYPE>
-<ID>MKCPAlterIds</ID>
-</HEADER>
-<BODY>
-<DESC>
-<STATICVARIABLES>
-<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
-</STATICVARIABLES>
-<TDL>
-<TDLMESSAGE>
-<COLLECTION NAME="MKCPAlterIds" ISMODIFY="No">
-<TYPE>Company</TYPE>
-<NATIVEMETHOD>Name</NATIVEMETHOD>
-<NATIVEMETHOD>AltMstId</NATIVEMETHOD>
-<NATIVEMETHOD>AltVchId</NATIVEMETHOD>
-</COLLECTION>
-</TDLMESSAGE>
-</TDL>
-</DESC>
-</BODY>
-</ENVELOPE>`;
-}
-
 /* REMOVED: buildVoucherCountXml + voucherBatcher's smart batching.
  *
  * It asked Tally for per-date voucher counts so day ranges could be packed into

@@ -1,3 +1,4 @@
+import { SERVER_BASE } from "./config/serverUrl";
 /**
  * Approval gate for vouchers pushed from the web dashboard.
  *
@@ -28,7 +29,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Check, Loader2, X } from "lucide-react";
 
-const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
+const BASE = SERVER_BASE;
 
 interface PendingPush {
   id: number;
