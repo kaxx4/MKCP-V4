@@ -14,6 +14,11 @@
  * Nothing here writes.
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { withTally } from "../src/services/tallyGate.js";
+
+/** Every request from this script goes through the circuit breaker. */
+const guardedPost = (url: string, xml: string, timeoutMs: number, raw = false) =>
+  withTally(url, "explore", () => tallyPost(url, xml, timeoutMs, raw));
 import { convertCompanies } from "../src/converters/convert.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
@@ -40,7 +45,7 @@ ${filter ? `<SYSTEM TYPE="Formulae" NAME="${filter.name}">${filter.expr}</SYSTEM
 }
 
 async function healthy(): Promise<boolean> {
-  try { return convertCompanies(await tallyPost(TALLY_URL, HEALTH_XML, 8_000)).length > 0; }
+  try { return convertCompanies(await guardedPost(TALLY_URL, HEALTH_XML, 8_000)).length > 0; }
   catch { return false; }
 }
 
@@ -58,7 +63,7 @@ const stamp = (from: number, to: number) => ({
 const kb = (n: number) => Math.round(n / 1024);
 
 async function main() {
-  const company = convertCompanies(await tallyPost(TALLY_URL, HEALTH_XML, 10_000))[0]?.name;
+  const company = convertCompanies(await guardedPost(TALLY_URL, HEALTH_XML, 10_000))[0]?.name;
   if (!company) throw new Error("No company loaded");
   console.log(`company "${company}"`);
 
@@ -82,7 +87,7 @@ async function main() {
     const t0 = Date.now();
     let raw: string;
     try {
-      raw = await tallyPost(TALLY_URL, collection(company, "Voucher", VOUCHER_FIELDS, stamp(from, to)), 120_000, true) as string;
+      raw = await guardedPost(TALLY_URL, collection(company, "Voucher", VOUCHER_FIELDS, stamp(from, to)), 120_000, true) as string;
     } catch (e) {
       console.log(`  x ${label.padEnd(24)} ${(e as Error).message.slice(0, 46)}`);
       break;
@@ -96,7 +101,7 @@ async function main() {
   // ── What a poll would actually issue ──────────────────────────────────────
   console.log(`\n── AlterID as the change cursor ──`);
   const t0 = Date.now();
-  const idsRaw = await tallyPost(TALLY_URL, collection(company, "Voucher", ["AlterID"]), 120_000, true) as string;
+  const idsRaw = await guardedPost(TALLY_URL, collection(company, "Voucher", ["AlterID"]), 120_000, true) as string;
   const ids = [...idsRaw.matchAll(/<ALTERID[^>]*>\s*(\d+)\s*<\/ALTERID>/g)]
     .map(m => parseInt(m[1], 10)).sort((a, b) => a - b);
   console.log(`  bare AlterID sweep: ${ids.length} vouchers, ${kb(idsRaw.length)}KB, ${Date.now() - t0}ms`);
@@ -106,7 +111,7 @@ async function main() {
   // A realistic catch-up: whatever changed past the 99th percentile.
   const cursor = ids[Math.floor(ids.length * 0.99)];
   const t1 = Date.now();
-  const since = await tallyPost(TALLY_URL, collection(company, "Voucher", VOUCHER_FIELDS,
+  const since = await guardedPost(TALLY_URL, collection(company, "Voucher", VOUCHER_FIELDS,
     { name: "IncAlter", expr: `$AlterID &gt; ${cursor}` }), 120_000, true) as string;
   const n = [...since.matchAll(/<VOUCHER\b/g)].length;
   console.log(`  catch-up past AlterID ${cursor}: ${n} vouchers, ${kb(since.length)}KB, ${Date.now() - t1}ms`);
@@ -115,7 +120,7 @@ async function main() {
   console.log(`\n── Masters carry AlterID too ──`);
   for (const type of ["Ledger", "StockItem"] as const) {
     const t2 = Date.now();
-    const raw = await tallyPost(TALLY_URL, collection(company, type, ["Name", "AlterID"]), 120_000, true) as string;
+    const raw = await guardedPost(TALLY_URL, collection(company, type, ["Name", "AlterID"]), 120_000, true) as string;
     const mids = [...raw.matchAll(/<ALTERID[^>]*>\s*(\d+)\s*<\/ALTERID>/g)].map(m => parseInt(m[1], 10));
     console.log(`  ${type.padEnd(11)} ${String(mids.length).padStart(4)} objects, max ${mids.length ? Math.max(...mids) : "-"}, ${kb(raw.length)}KB ${Date.now() - t2}ms`);
   }

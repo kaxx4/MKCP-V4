@@ -31,6 +31,11 @@
  *   npx tsx scripts/explore-adopt-voucher.ts --push
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { withTally } from "../src/services/tallyGate.js";
+
+/** Every request from this script goes through the circuit breaker. */
+const guardedPost = (url: string, xml: string, timeoutMs: number, raw = false) =>
+  withTally(url, "explore", () => tallyPost(url, xml, timeoutMs, raw));
 import { convertCompanies } from "../src/converters/convert.js";
 import { loadMasters, type TallyMasters } from "../src/services/tallyMasters.js";
 
@@ -50,7 +55,7 @@ const fld = (v: string, t: string) => {
 };
 
 const healthy = async () => {
-  try { return convertCompanies(await tallyPost(U, HEALTH_XML, 10_000)).length > 0; } catch { return false; }
+  try { return convertCompanies(await guardedPost(U, HEALTH_XML, 10_000)).length > 0; } catch { return false; }
 };
 
 async function vouchersNumbered(company: string, number: string): Promise<string[]> {
@@ -64,13 +69,13 @@ async function vouchersNumbered(company: string, number: string): Promise<string
 <FILTER>MkAdoptF</FILTER></COLLECTION>
 <SYSTEM TYPE="Formulae" NAME="MkAdoptF">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${STAMP}</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
-  const raw: string = await tallyPost(U, xml, 180_000, true);
+  const raw: string = await guardedPost(U, xml, 180_000, true);
   return [...raw.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)]
     .map((m) => m[0])
     .filter((v) => fld(v, "VOUCHERNUMBER") === number);
 }
 
-const post = (xml: string) => tallyPost(U, xml, 60_000, true) as Promise<string>;
+const post = (xml: string) => guardedPost(U, xml, 60_000, true) as Promise<string>;
 
 /** A minimal, balanced Payment. Small and self-contained on purpose. */
 function subjectXml(company: string, party: string, bank: string, remoteId?: string): string {
@@ -106,7 +111,7 @@ async function deleteBy(company: string, remoteId: string): Promise<number> {
 }
 
 (async () => {
-  const company = convertCompanies(await tallyPost(U, HEALTH_XML, 10_000))[0]!.name;
+  const company = convertCompanies(await guardedPost(U, HEALTH_XML, 10_000))[0]!.name;
   const m: TallyMasters = await loadMasters(U, company);
   const party = [...m.ledgers.values()].find((l) => /SUNDRY CREDITORS/i.test(l.parent))!;
 

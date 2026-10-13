@@ -8,6 +8,11 @@
  *   npx tsx scripts/explore-pricelist.ts
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { withTally } from "../src/services/tallyGate.js";
+
+/** Every request from this script goes through the circuit breaker. */
+const guardedPost = (url: string, xml: string, timeoutMs: number, raw = false) =>
+  withTally(url, "explore", () => tallyPost(url, xml, timeoutMs, raw));
 import { convertCompanies } from "../src/converters/convert.js";
 import { writeFileSync } from "node:fs";
 
@@ -23,11 +28,11 @@ ${fields.map((f) => `<NATIVEMETHOD>${f}</NATIVEMETHOD>`).join("")}
 </COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 
 (async () => {
-  const company = convertCompanies(await tallyPost(U, HEALTH_XML, 10_000))[0]!.name;
+  const company = convertCompanies(await guardedPost(U, HEALTH_XML, 10_000))[0]!.name;
   console.log(`\ncompany  "${company}"\n`);
 
   const t0 = Date.now();
-  const raw: string = await tallyPost(
+  const raw: string = await guardedPost(
     U, collectionXml(company, ["Name", "FullPriceList"]), 240_000, true,
   );
   const secs = ((Date.now() - t0) / 1000).toFixed(1);

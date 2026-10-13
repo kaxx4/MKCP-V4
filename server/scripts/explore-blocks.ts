@@ -15,6 +15,11 @@
  */
 import { writeFileSync } from "node:fs";
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { withTally } from "../src/services/tallyGate.js";
+
+/** Every request from this script goes through the circuit breaker. */
+const guardedPost = (url: string, xml: string, timeoutMs: number, raw = false) =>
+  withTally(url, "explore", () => tallyPost(url, xml, timeoutMs, raw));
 import { convertCompanies } from "../src/converters/convert.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
@@ -49,12 +54,12 @@ const clean = (s: string) => s.replace(/&#\d+;/g, "").trim();
 const EMPTY = /^(|no|0|0\.00|not applicable|\s*)$/i;
 
 async function healthy(): Promise<boolean> {
-  try { return convertCompanies(await tallyPost(TALLY_URL, HEALTH_XML, 8_000)).length > 0; }
+  try { return convertCompanies(await guardedPost(TALLY_URL, HEALTH_XML, 8_000)).length > 0; }
   catch { return false; }
 }
 
 async function main() {
-  const company = convertCompanies(await tallyPost(TALLY_URL, HEALTH_XML, 10_000))[0]?.name;
+  const company = convertCompanies(await guardedPost(TALLY_URL, HEALTH_XML, 10_000))[0]?.name;
   if (!company) throw new Error("No company loaded");
   console.log(`company "${company}"\n`);
   const out: Record<string, unknown> = {};
@@ -62,7 +67,7 @@ async function main() {
   for (const [type, node] of CLASSES) {
     let raw: string;
     try {
-      raw = await tallyPost(TALLY_URL, xmlFor(company, type), 240_000, true) as string;
+      raw = await guardedPost(TALLY_URL, xmlFor(company, type), 240_000, true) as string;
     } catch (e) {
       console.log(`✗ ${type} — ${(e as Error).message}`);
       if (!await healthy()) { console.log("\n⚠ Tally stopped answering. STOPPING."); return; }

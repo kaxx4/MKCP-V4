@@ -7,6 +7,11 @@
  *   npx tsx scripts/explore-pricelist-shape.ts [itemNameFragment]
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { withTally } from "../src/services/tallyGate.js";
+
+/** Every request from this script goes through the circuit breaker. */
+const guardedPost = (url: string, xml: string, timeoutMs: number, raw = false) =>
+  withTally(url, "explore", () => tallyPost(url, xml, timeoutMs, raw));
 import { convertCompanies } from "../src/converters/convert.js";
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
@@ -14,8 +19,8 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 const want = (process.argv[2] ?? "").toUpperCase();
 
 (async () => {
-  const company = convertCompanies(await tallyPost(U, HEALTH_XML, 10_000))[0]!.name;
-  const raw: string = await tallyPost(U,
+  const company = convertCompanies(await guardedPost(U, HEALTH_XML, 10_000))[0]!.name;
+  const raw: string = await guardedPost(U,
     `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkPrices</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES>

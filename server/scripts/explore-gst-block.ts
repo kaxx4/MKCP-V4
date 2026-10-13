@@ -22,6 +22,11 @@
  *   npx tsx scripts/explore-gst-block.ts
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { withTally } from "../src/services/tallyGate.js";
+
+/** Every request from this script goes through the circuit breaker. */
+const guardedPost = (url: string, xml: string, timeoutMs: number, raw = false) =>
+  withTally(url, "explore", () => tallyPost(url, xml, timeoutMs, raw));
 import { convertCompanies } from "../src/converters/convert.js";
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
@@ -54,12 +59,12 @@ ${fields.map((f) => `<NATIVEMETHOD>${f}</NATIVEMETHOD>`).join("")}
 const SINCE_FY = `($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) &gt;= 20260401`;
 
 (async () => {
-  const company = convertCompanies(await tallyPost(U, HEALTH_XML, 10_000))[0]!.name;
+  const company = convertCompanies(await guardedPost(U, HEALTH_XML, 10_000))[0]!.name;
   console.log(`\ncompany  "${company}"\n`);
 
   // ── Pass 1: identity fields only, no entry blocks ────────────────────────
   const t0 = Date.now();
-  const raw: string = await tallyPost(U, collection(company, [
+  const raw: string = await guardedPost(U, collection(company, [
     "Date", "VoucherNumber", "VoucherTypeName", "PartyLedgerName",
     "PartyGSTIN", "GSTRegistrationType", "PlaceOfSupply", "StateName",
     "CountryOfResidence", "PartyName", "Reference", "IsInvoice",
@@ -101,7 +106,7 @@ const SINCE_FY = `($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$Da
     const day = fld(pick, "DATE").replace(/-/g, "");
     if (!num || !/^\d{8}$/.test(day)) { console.log(`\n${type}: no usable date on ${num || "(no number)"}`); continue; }
 
-    const one: string = await tallyPost(U, collection(company, [
+    const one: string = await guardedPost(U, collection(company, [
       "Date", "VoucherNumber", "VoucherTypeName", "PartyLedgerName",
       "PartyGSTIN", "GSTRegistrationType", "PlaceOfSupply", "StateName",
       "AllLedgerEntries", "AllInventoryEntries",

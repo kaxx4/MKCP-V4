@@ -4,6 +4,7 @@ import { XMLParser } from "fast-xml-parser";
 import { recordTallyCall, classify, truncateForLog } from "./services/tallyLog.js";
 import { mockTransport } from "./services/tallyMock.js";
 import { decodeTallyBody, decodeXmlEntities } from "./services/xml.js";
+import { companyRefusal, companyNamed, companyGuidsFromListing, practiceGuid, guidCheckRequired } from "./services/tallyRole.js";
 
 // ─────────────────────────────────────────────────────────────────────
 // XML Parser ───────────────────────────────────────────────────────────
@@ -166,6 +167,47 @@ function interpretResponse(
  * @param signal    Optional AbortSignal to cancel the request externally
  */
 export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, rawMode = false, signal?: AbortSignal): Promise<any> {
+  /* #128 — this laptop talks only to the practice company, identified by GUID.
+     The name check and the GUID check both run before the mock and before the
+     socket, so a refused request sends no XML. The company listing names no
+     company, so the GUID check cannot recurse into itself. */
+  const refusal = companyRefusal(xml);
+  if (refusal) return Promise.reject(new Error(refusal));
+  const named = companyNamed(xml);
+  if (named === null || !guidCheckRequired()) return tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal);
+  return verifyPracticeGuid(tallyUrl, named).then((guidRefusal) =>
+    guidRefusal ? Promise.reject(new Error(guidRefusal)) : tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal));
+}
+
+/** Reads the company listing and checks the named company's GUID. Null = may go. */
+/* The listing is cached for 45 s, so a company check costs one listing per window
+   rather than one per request. A duplicate loaded inside the window is seen only
+   once the window closes. Only a successful listing is cached. */
+const LISTING_TTL_MS = 45_000;
+let listingCache: { url: string; at: number; xml: string } | null = null;
+
+export function resetListingCache(): void { listingCache = null; }
+
+async function companyListing(tallyUrl: string): Promise<string> {
+  const now = Date.now();
+  if (listingCache && listingCache.url === tallyUrl && now - listingCache.at < LISTING_TTL_MS) return listingCache.xml;
+  const xml: string = await tallyPostNow(tallyUrl, HEALTH_XML, 10_000, true);
+  listingCache = { url: tallyUrl, at: Date.now(), xml };
+  return xml;
+}
+
+async function verifyPracticeGuid(tallyUrl: string, named: string): Promise<string | null> {
+  const guids = companyGuidsFromListing(await companyListing(tallyUrl));
+  const key = [...guids.keys()].find((k) => k.toLowerCase() === named.toLowerCase());
+  const found = key === undefined ? [] : guids.get(key) ?? [];
+  if (found.length === 0) return `refused: company "${named}" is not loaded in Tally, so its GUID cannot be checked. Nothing was sent to Tally.`;
+  if (found.length > 1) return `refused: company "${named}" is loaded more than once with different GUIDs, so the practice company cannot be told apart. Nothing was sent to Tally.`;
+  if (found[0] !== practiceGuid()) return `refused: company "${named}" carries a GUID other than the practice company's. It is the real books or another copy. Nothing was sent to Tally.`;
+  return null;
+}
+
+function tallyPostNow(tallyUrl: string, xml: string, timeoutMs: number, rawMode: boolean, signal?: AbortSignal): Promise<any> {
+
   /* ── The mock (Phase 1.2) ────────────────────────────────────────────────
      Intercepted here, at the one place every request shape passes through,
      so a test exercises the real builders, the real converters and the real
@@ -345,6 +387,7 @@ export const HEALTH_XML = `<ENVELOPE>
 <TDL>
 <TDLMESSAGE>
 <COLLECTION NAME="List of Companies" ISMODIFY="Yes">
+<NATIVEMETHOD>Guid</NATIVEMETHOD>
 <NATIVEMETHOD>Name</NATIVEMETHOD>
 </COLLECTION>
 </TDLMESSAGE>

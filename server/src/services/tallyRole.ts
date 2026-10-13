@@ -71,3 +71,79 @@ export function announceRole(): void {
     console.log("📒 [primary] MKCP_TALLY_ROLE=primary — this machine writes to the shared Supabase mirror.");
   }
 }
+
+/**
+ * #128 — on this laptop, only the practice company may receive a request.
+ *
+ * Enforced when the machine is a sandbox, or when MKCP_PRACTICE_COMPANY is
+ * set. The practice company is named by that env var. A request that names a
+ * different company is refused; so is a company-scoped request when no practice
+ * company is declared. A request naming no company is refused too, because
+ * Tally would run it against whatever company is open, except the company
+ * listing, which is how the practice company is discovered in the first place.
+ *
+ * Returns the refusal text, or null when the request may go. Pure: no I/O.
+ */
+export function companyRefusal(xml: string): string | null {
+  const practice = (process.env.MKCP_PRACTICE_COMPANY ?? "").trim();
+  if (!isSandbox() && practice === "") return null;
+  if ((xml.match(/<SVCURRENTCOMPANY[s>]/gi) ?? []).length > 1) return "refused: request names more than one company. Nothing was sent to Tally.";
+  const m = /<SVCURRENTCOMPANY>([\s\S]*?)<\/SVCURRENTCOMPANY>/i.exec(xml);
+  if (!m) {
+    if (/<ID>\s*List of Companies\s*<\/ID>/i.test(xml)) return null;
+    return "refused: this request names no company, so Tally would use whichever company is open. This machine accepts only the practice company.";
+  }
+  const named = decodeEntities(m[1]).trim();
+  if (practiceGuid() === "") return "refused: MKCP_PRACTICE_COMPANY_GUID is not set, so this machine cannot prove which company it holds. Nothing was sent to Tally.";
+  if (practice !== "" && named.toLowerCase() === practice.toLowerCase()) return null;
+  return `refused: company "${named}" is not the practice company${practice ? "" : " (MKCP_PRACTICE_COMPANY is not set)"}. Nothing was sent to Tally.`;
+}
+
+/** The company a request names, or null when it names none (listing, health). */
+export function companyNamed(xml: string): string | null {
+  const m = /<SVCURRENTCOMPANY>([\s\S]*?)<\/SVCURRENTCOMPANY>/i.exec(xml);
+  return m ? decodeEntities(m[1]).trim() : null;
+}
+
+/** The GUID the practice company must carry. Env, never code: a GUID is an identity. */
+export function practiceGuid(): string {
+  return (process.env.MKCP_PRACTICE_COMPANY_GUID ?? "").trim();
+}
+
+/**
+ * #128 — a name is shared by the practice copy and the real books, so the GUID
+ * decides. Pure: reads the company listing Tally returns and maps each company
+ * name to the GUID loaded under it. A company with no GUID is left out.
+ */
+export function companyGuidsFromListing(xml: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const m of xml.matchAll(/<COMPANY\b([^>]*)>([\s\S]*?)<\/COMPANY>/gi)) {
+    const attr = /NAME="([^"]*)"/i.exec(m[1])?.[1];
+    const el = /<NAME[^>]*>([\s\S]*?)<\/NAME>/i.exec(m[2])?.[1];
+    const guid = /<GUID[^>]*>([\s\S]*?)<\/GUID>/i.exec(m[2])?.[1]?.trim();
+    const name = decodeEntities(attr ?? el ?? "").trim();
+    if (name && guid) {
+      const list = out.get(name) ?? [];
+      if (!list.includes(guid)) list.push(guid);
+      out.set(name, list);
+    }
+  }
+  return out;
+}
+
+/** Named, decimal and hex entities, decoded in one pass so "&amp;quot;" stays "&quot;". */
+export function decodeEntities(s: string): string {
+  const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+  return s.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (whole, e: string) => {
+    if (e[0] === "#") {
+      const cp = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return cp <= 0x10ffff ? String.fromCodePoint(cp) : whole;
+    }
+    return named[e.toLowerCase()] ?? whole;
+  });
+}
+
+/** True when the GUID check applies: the same condition that enables companyRefusal. */
+export function guidCheckRequired(): boolean {
+  return isSandbox() || (process.env.MKCP_PRACTICE_COMPANY ?? "").trim() !== "";
+}
