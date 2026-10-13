@@ -46,6 +46,35 @@ export function assertKnownType(type: string): asserts type is TallyType {
   }
 }
 
+/**
+ * Refuse a raw Tally request before it is sent.
+ *
+ * Every script that talks to port 9000 passes its XML through here and then
+ * through tallyPost(). A request that is not an ENVELOPE with a TALLYREQUEST and
+ * an ID is refused (a header without an ID raises a modal). Each Collection
+ * export must name its object TYPE, and that TYPE must pass assertKnownType.
+ * Returns the XML unchanged so a call site reads `tallyPost(url, checkedRequest(xml))`.
+ */
+export function checkedRequest(xml: string): string {
+  if (!/<ENVELOPE>[\s\S]*<\/ENVELOPE>\s*$/.test(xml.trim())) {
+    throw new Error("Refusing to send a request that is not an ENVELOPE. Build it with the request builder.");
+  }
+  if (!/<TALLYREQUEST>[^<]+<\/TALLYREQUEST>/.test(xml)) {
+    throw new Error("Refusing to send a request with no TALLYREQUEST. A header without one is a modal dialog on Tally.");
+  }
+  if (/<TALLYREQUEST>Export<\/TALLYREQUEST>/.test(xml) && !/<ID>[^<]+<\/ID>/.test(xml)) {
+    throw new Error("Refusing to send an Export with no <ID>. A header without an ID raises a modal dialog on Tally.");
+  }
+  if (/<TYPE>Collection<\/TYPE>/.test(xml)) {
+    const collections = [...xml.matchAll(/<COLLECTION\b[^>]*>\s*<TYPE>([^<]+)<\/TYPE>/g)].map((m) => m[1]!);
+    if (collections.length === 0) {
+      throw new Error("Refusing to send a Collection export with no COLLECTION object TYPE. Its type cannot be checked.");
+    }
+    for (const t of collections) assertKnownType(t);
+  }
+  return xml;
+}
+
 /** Re-exported from xml.ts — the one escape (G1). Kept under this name for existing importers. */
 export { escapeXml as esc } from "./xml.js";
 import { escapeXml as esc, tdlString, readTag, readAllTags } from "./xml.js";

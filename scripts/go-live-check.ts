@@ -25,6 +25,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { offlineReason } from "../server/src/services/supabaseClient.js";
 import { isSandbox } from "../server/src/services/tallyRole.js";
+import { tallyPost } from "../server/src/tally.js";
+import { checkedRequest } from "../server/src/services/tallyRequest.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
@@ -167,11 +169,7 @@ async function checkTally(): Promise<void> {
     `</COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 
   try {
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 10_000);
-    const res = await fetch(url, { method: "POST", body, signal: ctl.signal });
-    clearTimeout(t);
-    const text = await res.text();
+    const text = await tallyPost(url, checkedRequest(body), 10_000, true) as string;
 
     const names = [...text.matchAll(/<NAME[^>]*>([^<]+)<\/NAME>/gi)].map((m) => m[1].trim());
     if (names.length === 0) {

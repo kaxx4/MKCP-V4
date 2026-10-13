@@ -26,6 +26,8 @@ import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
 
 import { buildVoucherImportXml, parseImportResponse } from "../server/src/services/voucherPusher.js";
+import { tallyPost } from "../server/src/tally.js";
+import { checkedRequest } from "../server/src/services/tallyRequest.js";
 import type { VoucherPayload } from "../server/src/types.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -40,19 +42,12 @@ const esc = (s: string) =>
 
 /** Tally's port is single-threaded; every request goes through here, in turn. */
 async function ask(xml: string, label: string, timeoutMs = 120_000): Promise<string> {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), timeoutMs);
   const started = Date.now();
-  try {
-    const res = await fetch(TALLY, { method: "POST", body: xml, signal: ctl.signal });
-    const text = await res.text();
-    const ms = Date.now() - started;
-    const kb = Math.round(text.length / 1024);
-    console.log(`    ${label} · ${kb} KB · ${ms} ms`);
-    return text;
-  } finally {
-    clearTimeout(t);
-  }
+  const text = await tallyPost(TALLY, checkedRequest(xml), timeoutMs, true) as string;
+  const ms = Date.now() - started;
+  const kb = Math.round(text.length / 1024);
+  console.log(`    ${label} · ${kb} KB · ${ms} ms`);
+  return text;
 }
 
 const tag = (xml: string, name: string): string | undefined =>
