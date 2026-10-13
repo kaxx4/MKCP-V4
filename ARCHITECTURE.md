@@ -172,6 +172,19 @@ Vite splits the bundle into 22 chunks. Key isolations:
 
 ## 3. System Architecture
 
+Data moves in two directions through Supabase, and TallyPrime is reached only
+from the agent's machine:
+
+- **Tally → Supabase (the mirror).** The server pulls from Tally on port 9000 and
+  writes the result to Supabase through `SupabaseSync` (`server/src/services/supabaseSync.ts`,
+  called from `syncOrchestrator.ts`). The web app (MKCP MOB2) reads Supabase.
+- **Web → Tally (writes).** The web app inserts a job into `push_queue`. The push
+  agent (`server/src/services/pushAgent.ts`) claims rows and pushes each one into
+  Tally through `safePush`. The migration is `migrations/011_push_queue.sql`.
+
+The renderer's IndexedDB (section 10) is a local cache for this app's own pages.
+It is not the mirror.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ELECTRON PROCESS SPACE                                             │
@@ -209,45 +222,39 @@ This is the complete end-to-end path from TallyPrime to a rendered page.
 
 ### 4.1 Trigger
 
-The user clicks **Sync** on the Import page, which calls:
+The user clicks a sync button in the agent UI (`src/AgentStatus.tsx`, `triggerSync`),
+which calls the server on the agent's own machine:
 
-```typescript
-// src/api/tallyApi.ts
-const result = await fullSync(companyName, fromDate, toDate);
-// POST http://localhost:3100/api/tally/sync
-// Timeout: 90 minutes (AbortController)
+```
+POST http://localhost:3100/api/tally/sync            (server/src/index.ts:199)
+POST http://localhost:3100/api/tally/sync-masters    (index.ts:220)
+POST http://localhost:3100/api/tally/sync-daybook    (index.ts:309)
 ```
 
 ### 4.2 Server Orchestration
 
 ```
 POST /api/tally/sync
-  └─ SyncOrchestrator.syncAll(plan, onProgress)
+  └─ SyncOrchestrator.syncAll(plan, onProgress)        (syncOrchestrator.ts)
        │
-       ├─ [optional] ChangeDetector.fetchCurrentAlterIds()
-       │    Queries ALTMSTID + ALTVCHID from Tally Company node
-       │    If unchanged since last sync → skip (incremental mode)
+       ├─ Incremental check: ChangeDetector (changeDetector.ts)
+       │    Asks Tally for the vouchers and masters whose AlterID is above the
+       │    stored cursor. Nothing above it means nothing changed.
+       │    Read the header of changeDetector.ts before changing this: the older
+       │    ALTMSTID/ALTVCHID probe always returned 0 and never fired.
        │
        ├─ syncMastersOnly(company)
-       │    Wave 1 (4 parallel requests):
-       │      stockGroupsXml()    → /STOCKGROUP
-       │      unitsXml()          → /UNIT
-       │      godownsXml()        → /GODOWN
-       │      costCentresXml()    → /COSTCENTRE
-       │    Wave 2 (2 parallel requests):
-       │      stockItemsXml()     → /STOCKITEM (includes price lists)
-       │      ledgersXml()        → /LEDGER
-       │    ⚠ Max 6 concurrent — TallyPrime is single-threaded
+       │    PARALLEL_MASTERS run together; SEQUENTIAL_MASTERS run one at a time
+       │    (server/src/config/collections.ts).
+       │    Price list and GST rates are fetched too (tallyPriceList.ts, tallyGstRates.ts).
+       │    Masters are uploaded to Supabase only if the whole pass completed.
+       │    An aborted pass is not uploaded (syncOrchestrator.ts:153).
        │
        └─ syncVouchersOnly(company, fromDate, toDate, strategy)
-            Chunking (default: monthly):
-              Apr 2024 → Apr chunk → vouchersCollectionXml()
-              May 2024 → May chunk → vouchersCollectionXml()
-              ...
-            Concurrency: 3 chunks at a time
-            Deduplication: GUID-based Map, skip already-seen vouchers
-            Early exit: 2 consecutive empty waves → remaining chunks skipped
-            Auto-fallback: If month chunk times out → split into weeks, retry
+            Chunking by month, week or day (getMonthlyChunks / getWeeklyChunks / getDailyChunks in tally.ts).
+            Chunks run in waves of 3 (syncOrchestrator.ts:247).
+            Deduplication by GUID.
+            Vouchers are upserted to the Supabase mirror (syncOrchestrator.ts:413).
 ```
 
 ### 4.3 XML → JSON (Server)
@@ -444,6 +451,13 @@ GUID deduplication:
 ```
 
 ### 5.4 Pushing Vouchers to Tally
+
+Web-originated vouchers reach Tally from the Supabase `push_queue`.
+`pushAgent.ts` claims rows (`claim_push_jobs`) and calls `safePush` (`pushAgent.ts:282`),
+which builds the XML through `voucherPusher.ts` and reads the voucher back to confirm.
+This machine's own UI can also push directly, without the queue: `POST /api/local/push`
+(`server/src/index.ts:1015`) and `POST /api/bank/push` (`index.ts:912`).
+The XML builder and response parser are below.
 
 ```typescript
 // server/src/services/voucherPusher.ts
@@ -866,7 +880,8 @@ function AppRoutes() {
 
 ## 10. Persistence: IndexedDB
 
-Managed by `src/db/idb.ts` using the `idb` library (v8).
+Managed by `src/db/idb.ts` using the `idb` library (v8). This is a renderer-side
+cache of the app's own state. The shared store is Supabase (section 3).
 
 ### Database Schema
 
@@ -1064,4 +1079,4 @@ The Express server is loaded via `require()` into the Electron main process, not
 
 ---
 
-*Last updated: May 2026 — covers branch `TALLY-V2`, commit `8745d07`*
+*Last updated: May 2026 (branch `TALLY-V2`, commit `8745d07`). Sections 3, 4.1, 4.2, 5.4 and 10 re-checked against the code on 13-Oct-2026. Other sections, including the file list in section 1 and the parser and engine sections, were not re-checked.*

@@ -235,7 +235,7 @@ actually in the books (`scripts/sweep-test-vouchers.ts`), never by a success lis
 
 ## Migrations: TWO ledgers, one database
 
-`mkcycles-dashboard/migrations/` (this repo, 39 files, highest `042`) and
+`mkcycles-dashboard/migrations/` (this repo, 41 files, highest `044`) and
 `MKCP MOB2/web-dashboard/supabase/migrations/` both target the **same** Supabase
 project with independent, colliding numbering. Neither is a complete history, and
 live carries objects with no migration file at all.
