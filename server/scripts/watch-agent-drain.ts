@@ -31,11 +31,11 @@ config({ path: join(here, "..", ".env") });
 import { createClient } from "@supabase/supabase-js";
 import { startPushAgent, getPushAgentStatus } from "../src/services/pushAgent.js";
 import type { VoucherPayload } from "../src/types.js";
+import { isDrainTestNumber } from "./lib/testVoucherMatch.js";
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";
-const TEST_PREFIXES = ["MKCP-", "RPLY-", "VERIFY-", "SMOKE-", "DEMO-"];
-const isTest = (n: string) => TEST_PREFIXES.some((p) => String(n ?? "").toUpperCase().startsWith(p));
+const isTest = (n: string) => isDrainTestNumber(String(n ?? ""));
 
 async function main(): Promise<void> {
   const seconds = Number(process.argv[2] || 90);
