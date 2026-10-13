@@ -63,6 +63,39 @@ export function refuseSharedWrite(what: string): boolean {
   return true;
 }
 
+/**
+ * The one company a sandbox machine may write to: the practice (dummy) company,
+ * named by MKCP_PRACTICE_COMPANY. Null when unset or blank.
+ */
+export function practiceCompany(): string | null {
+  const v = (process.env.MKCP_PRACTICE_COMPANY ?? "").trim();
+  return v === "" ? null : v;
+}
+
+/**
+ * On a sandbox machine, refuse any company that is not the practice company.
+ *
+ * Returns the refusal text when the write must STOP, or null when it may go on.
+ * It is only ever consulted by the push path, before any XML is built or sent.
+ * A primary machine is never refused here. A sandbox with no practice company
+ * set refuses everything (fail closed), and says which setting is missing.
+ *
+ * Names are compared exactly after trimming, because Tally's names are exact:
+ * a near-miss is a different company, not a typo to forgive.
+ */
+export function refuseCompanyWrite(company: string): string | null {
+  if (!isSandbox()) return null;
+  const practice = practiceCompany();
+  if (practice === null) {
+    return "refused: MKCP_TALLY_ROLE=sandbox but MKCP_PRACTICE_COMPANY is not set, " +
+      "so no company may be written to on this machine. Set it to the practice company's name.";
+  }
+  if (String(company ?? "").trim() === practice) return null;
+  return `refused: company "${String(company ?? "")}" is not the practice company ` +
+    `("${practice}", from MKCP_PRACTICE_COMPANY). On a sandbox machine only the practice ` +
+    `company may be written to.`;
+}
+
 /** One line at startup, so which machine this is never has to be guessed. */
 export function announceRole(): void {
   if (isSandbox()) {

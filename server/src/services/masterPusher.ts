@@ -26,6 +26,7 @@ import { tallyPost } from "../tally.js";
 import { escapeXml } from "./xml.js";
 import { invalidateMasters } from "./tallyMasters.js";
 import { blocksOf } from "./tallyRequest.js";
+import { refuseCompanyWrite } from "./tallyRole.js";
 
 export interface NewLedger {
   name: string;
@@ -243,6 +244,14 @@ export async function createLedger(
 ): Promise<MasterPushResult> {
   const notes: string[] = [];
 
+  const companyRefusal = refuseCompanyWrite(company);
+  if (companyRefusal) {
+    return {
+      ok: false, created: 0, altered: 0, errors: 0, exceptions: 0, lineErrors: [],
+      notes: [companyRefusal], requestXml: "", responseXml: "",
+    };
+  }
+
   if (!ledger.state?.trim()) {
     return {
       ok: false, created: 0, altered: 0, errors: 0, exceptions: 0, lineErrors: [],
@@ -314,7 +323,14 @@ export async function createLedger(
 export async function deleteLedger(
   tallyUrl: string, company: string, name: string,
 ): Promise<MasterPushResult> {
-  const body = `<LEDGER NAME="${esc(name)}" ACTION="Delete"><NAME>${esc(name)}</NAME></LEDGER>`;
+  const companyRefusal = refuseCompanyWrite(company);
+  if (companyRefusal) {
+    return {
+      ok: false, created: 0, altered: 0, errors: 0, exceptions: 0, lineErrors: [],
+      notes: [companyRefusal], requestXml: "", responseXml: "",
+    };
+  }
+  const body =`<LEDGER NAME="${esc(name)}" ACTION="Delete"><NAME>${esc(name)}</NAME></LEDGER>`;
   const requestXml = envelope(company, body);
   const responseXml: string = await tallyPost(tallyUrl, requestXml, 60_000, true);
   const deleted = num(responseXml, "DELETED");
