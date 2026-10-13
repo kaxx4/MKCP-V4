@@ -13,6 +13,11 @@
  *   npx tsx scripts/explore-voucher-types.ts --push
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { withTally } from "../src/services/tallyGate.js";
+
+/** Every request from this script goes through the circuit breaker. */
+const guardedPost = (url: string, xml: string, timeoutMs: number, raw = false) =>
+  withTally(url, "explore", () => tallyPost(url, xml, timeoutMs, raw));
 import { convertCompanies } from "../src/converters/convert.js";
 import { loadMasters } from "../src/services/tallyMasters.js";
 import { safePush } from "../src/services/safePush.js";
@@ -27,12 +32,12 @@ let pass = 0, fail = 0;
 const results: Array<{ type: string; ok: boolean; detail: string }> = [];
 
 async function healthy() {
-  try { return convertCompanies(await tallyPost(TALLY_URL, HEALTH_XML, 8_000)).length > 0; }
+  try { return convertCompanies(await guardedPost(TALLY_URL, HEALTH_XML, 8_000)).length > 0; }
   catch { return false; }
 }
 
 async function main() {
-  const company = convertCompanies(await tallyPost(TALLY_URL, HEALTH_XML, 10_000))[0]?.name;
+  const company = convertCompanies(await guardedPost(TALLY_URL, HEALTH_XML, 10_000))[0]?.name;
   if (!company) throw new Error("No company loaded");
   const m = await loadMasters(TALLY_URL, company, { force: true });
 

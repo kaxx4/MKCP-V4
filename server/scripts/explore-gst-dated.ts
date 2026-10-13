@@ -13,6 +13,11 @@
  *   npx tsx scripts/explore-gst-dated.ts [nameFragment]
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { withTally } from "../src/services/tallyGate.js";
+
+/** Every request from this script goes through the circuit breaker. */
+const guardedPost = (url: string, xml: string, timeoutMs: number, raw = false) =>
+  withTally(url, "explore", () => tallyPost(url, xml, timeoutMs, raw));
 import { convertCompanies } from "../src/converters/convert.js";
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
@@ -27,10 +32,10 @@ const head = (block: string, name: string): number => {
 };
 
 (async () => {
-  const company = convertCompanies(await tallyPost(U, HEALTH_XML, 10_000))[0]!.name;
+  const company = convertCompanies(await guardedPost(U, HEALTH_XML, 10_000))[0]!.name;
 
   const ask = (type: string) =>
-    tallyPost(U, `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkGstD</ID></HEADER>
+    guardedPost(U, `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkGstD</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
 <TDL><TDLMESSAGE><COLLECTION NAME="MkGstD" ISMODIFY="No"><TYPE>${type}</TYPE>

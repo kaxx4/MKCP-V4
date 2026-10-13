@@ -26,7 +26,7 @@ const check = (name: string, ok: boolean, detail = "") => {
 
 async function main(): Promise<void> {
   console.log("\n  #123  exploration scripts send only through the gate");
-  for (const name of ["explore-adopt-voucher.ts", "explore-incremental.ts"]) {
+  for (const name of ["explore-adopt-voucher.ts", "explore-incremental.ts", "explore-blocks.ts", "explore-gst-block.ts", "explore-gst-dated.ts", "explore-gst-heads.ts", "explore-population.ts", "explore-pricelist-shape.ts", "explore-pricelist.ts", "explore-reports.ts", "explore-voucher-types.ts"]) {
     const src = read(name);
     const raw = src.split("\n").filter((l) => /\btallyPost\(/.test(l) && !/guardedPost|withTally/.test(l));
     check(`${name} has no raw tallyPost call`, raw.length === 0, raw.length ? raw[0].trim() : "");
