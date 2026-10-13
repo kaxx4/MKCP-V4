@@ -92,7 +92,45 @@ export function companyRefusal(xml: string): string | null {
     if (/<ID>\s*List of Companies\s*<\/ID>/i.test(xml)) return null;
     return "refused: this request names no company, so Tally would use whichever company is open. This machine accepts only the practice company.";
   }
-  const named = m[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
+  const named = decodeEntities(m[1]).trim();
+  if (practiceGuid() === "") return "refused: MKCP_PRACTICE_COMPANY_GUID is not set, so this machine cannot prove which company it holds. Nothing was sent to Tally.";
   if (practice !== "" && named === practice) return null;
   return `refused: company "${named}" is not the practice company${practice ? "" : " (MKCP_PRACTICE_COMPANY is not set)"}. Nothing was sent to Tally.`;
+}
+
+/** The company a request names, or null when it names none (listing, health). */
+export function companyNamed(xml: string): string | null {
+  const m = /<SVCURRENTCOMPANY>([\s\S]*?)<\/SVCURRENTCOMPANY>/i.exec(xml);
+  return m ? decodeEntities(m[1]).trim() : null;
+}
+
+/** The GUID the practice company must carry. Env, never code: a GUID is an identity. */
+export function practiceGuid(): string {
+  return (process.env.MKCP_PRACTICE_COMPANY_GUID ?? "").trim();
+}
+
+/**
+ * #128 — a name is shared by the practice copy and the real books, so the GUID
+ * decides. Pure: reads the company listing Tally returns and maps each company
+ * name to the GUID loaded under it. A company with no GUID is left out.
+ */
+export function companyGuidsFromListing(xml: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of xml.matchAll(/<COMPANY\b([^>]*)>([\s\S]*?)<\/COMPANY>/gi)) {
+    const attr = /NAME="([^"]*)"/i.exec(m[1])?.[1];
+    const el = /<NAME[^>]*>([\s\S]*?)<\/NAME>/i.exec(m[2])?.[1];
+    const guid = /<GUID[^>]*>([\s\S]*?)<\/GUID>/i.exec(m[2])?.[1]?.trim();
+    const name = decodeEntities(attr ?? el ?? "").trim();
+    if (name && guid) out.set(name, guid);
+  }
+  return out;
+}
+
+function decodeEntities(s: string): string {
+  return s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+/** True when the GUID check applies: the same condition that enables companyRefusal. */
+export function guidCheckRequired(): boolean {
+  return isSandbox() || (process.env.MKCP_PRACTICE_COMPANY ?? "").trim() !== "";
 }

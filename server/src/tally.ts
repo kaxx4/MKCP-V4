@@ -4,7 +4,7 @@ import { XMLParser } from "fast-xml-parser";
 import { recordTallyCall, classify, truncateForLog } from "./services/tallyLog.js";
 import { mockTransport } from "./services/tallyMock.js";
 import { decodeTallyBody, decodeXmlEntities } from "./services/xml.js";
-import { companyRefusal } from "./services/tallyRole.js";
+import { companyRefusal, companyNamed, companyGuidsFromListing, practiceGuid, guidCheckRequired } from "./services/tallyRole.js";
 
 // ─────────────────────────────────────────────────────────────────────
 // XML Parser ───────────────────────────────────────────────────────────
@@ -167,10 +167,28 @@ function interpretResponse(
  * @param signal    Optional AbortSignal to cancel the request externally
  */
 export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, rawMode = false, signal?: AbortSignal): Promise<any> {
-  /* #128 — this laptop talks only to the practice company. Checked before the
-     mock too, so a test proves the refusal without any XML leaving the process. */
+  /* #128 — this laptop talks only to the practice company, identified by GUID.
+     The name check and the GUID check both run before the mock and before the
+     socket, so a refused request sends no XML. The company listing names no
+     company, so the GUID check cannot recurse into itself. */
   const refusal = companyRefusal(xml);
   if (refusal) return Promise.reject(new Error(refusal));
+  const named = companyNamed(xml);
+  if (named === null || !guidCheckRequired()) return tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal);
+  return verifyPracticeGuid(tallyUrl, named).then((guidRefusal) =>
+    guidRefusal ? Promise.reject(new Error(guidRefusal)) : tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal));
+}
+
+/** Reads the company listing and checks the named company's GUID. Null = may go. */
+async function verifyPracticeGuid(tallyUrl: string, named: string): Promise<string | null> {
+  const listing: string = await tallyPostNow(tallyUrl, HEALTH_XML, 10_000, true);
+  const got = companyGuidsFromListing(listing).get(named);
+  if (!got) return `refused: company "${named}" is not loaded in Tally, so its GUID cannot be checked. Nothing was sent to Tally.`;
+  if (got !== practiceGuid()) return `refused: company "${named}" carries a GUID other than the practice company's. It is the real books or another copy. Nothing was sent to Tally.`;
+  return null;
+}
+
+function tallyPostNow(tallyUrl: string, xml: string, timeoutMs: number, rawMode: boolean, signal?: AbortSignal): Promise<any> {
 
   /* ── The mock (Phase 1.2) ────────────────────────────────────────────────
      Intercepted here, at the one place every request shape passes through,
@@ -351,6 +369,7 @@ export const HEALTH_XML = `<ENVELOPE>
 <TDL>
 <TDLMESSAGE>
 <COLLECTION NAME="List of Companies" ISMODIFY="Yes">
+<NATIVEMETHOD>Guid</NATIVEMETHOD>
 <NATIVEMETHOD>Name</NATIVEMETHOD>
 </COLLECTION>
 </TDLMESSAGE>

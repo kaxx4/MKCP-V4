@@ -42,11 +42,21 @@ async function main(): Promise<void> {
   const sweep = read("sweep-test-vouchers.ts");
   check("sweep refuses any MKCP prefix before listing", /PREFIX[\s\S]{0,200}MKCP/i.test(sweep) && /process\.exit\(2\)/.test(sweep));
 
-  console.log("\n  #128  a non-practice company is refused before any XML is sent");
+  console.log("\n  #128  only the practice company, identified by GUID, receives XML");
   process.env.MKCP_TALLY_ROLE = "sandbox";
   process.env.MKCP_PRACTICE_COMPANY = "PRACTICE CO";
+  process.env.MKCP_PRACTICE_COMPANY_GUID = "GUID-PRACTICE";
   let wire = 0;
-  installMock(async () => { wire++; return "<ENVELOPE><DATA></DATA></ENVELOPE>"; });
+  let listedGuid = "GUID-PRACTICE";
+  let listed = true;
+  installMock(async (_u, x) => {
+    if (/List of Companies/.test(x)) {
+      const co = listed ? `<COMPANY NAME="PRACTICE CO"><GUID>${listedGuid}</GUID></COMPANY>` : "";
+      return `<ENVELOPE><BODY><DATA><COLLECTION>${co}</COLLECTION></DATA></BODY></ENVELOPE>`;
+    }
+    wire++;
+    return "<ENVELOPE><DATA></DATA></ENVELOPE>";
+  });
   const body = (company: string) =>
     `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkT</ID></HEADER>` +
     `<BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${company}</SVCURRENTCOMPANY></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
@@ -55,15 +65,28 @@ async function main(): Promise<void> {
     catch (e) { return (e as Error).message; }
   };
   const realMsg = await tryPost(body("M.K.CYCLES (P) LTD. - (from 1-Apr-26)"));
-  check("non-practice company refused", /refused/i.test(realMsg), realMsg.slice(0, 80));
-  check("refused company sends no XML", wire === 0, `transport calls=${wire}`);
-  const practiceMsg = await tryPost(body("PRACTICE CO"));
-  check("practice company passes the check", wire === 1 && !/refused/i.test(practiceMsg));
+  check("non-practice name refused", /refused/i.test(realMsg), realMsg.slice(0, 80));
+  check("refused name sends no XML", wire === 0, `transport calls=${wire}`);
+  const okMsg = await tryPost(body("PRACTICE CO"));
+  check("practice name with matching GUID passes", wire === 1 && okMsg === "sent", okMsg.slice(0, 80));
+  listedGuid = "GUID-DUPLICATE";
+  const dupMsg = await tryPost(body("PRACTICE CO"));
+  check("same name, other GUID refused", /GUID other/i.test(dupMsg) && wire === 1, dupMsg.slice(0, 80));
+  listedGuid = "GUID-PRACTICE";
+  listed = false;
+  const absentMsg = await tryPost(body("PRACTICE CO"));
+  check("company not loaded refused", /not loaded/i.test(absentMsg) && wire === 1, absentMsg.slice(0, 80));
+  listed = true;
+  delete process.env.MKCP_PRACTICE_COMPANY_GUID;
+  const noGuidMsg = await tryPost(body("PRACTICE CO"));
+  check("unset practice GUID refused", /GUID is not set/i.test(noGuidMsg) && wire === 1, noGuidMsg.slice(0, 80));
+  process.env.MKCP_PRACTICE_COMPANY_GUID = "GUID-PRACTICE";
   const listMsg = await tryPost(HEALTH_XML);
-  check("company listing (no company named) still allowed", wire === 2 && !/refused/i.test(listMsg));
+  check("company listing (no company named) still allowed", !/refused/i.test(listMsg));
   uninstallMock();
   delete process.env.MKCP_TALLY_ROLE;
   delete process.env.MKCP_PRACTICE_COMPANY;
+  delete process.env.MKCP_PRACTICE_COMPANY_GUID;
 
   console.log("\n  #123  an open gate refuses without calling the request");
   resetGate();
