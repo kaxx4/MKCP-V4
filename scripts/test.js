@@ -54,6 +54,12 @@ test('package.json has electron in devDependencies', () => {
   assert(pkg.devDependencies?.electron, 'electron not found in devDependencies');
 });
 
+test('MirrorPanel user-visible text does not hard-code port 3100', () => {
+  const lines = readFileSync('src/MirrorPanel.tsx', 'utf8').split('\n');
+  const bad = lines.filter((l) => /port 3100/.test(l) && !/^\s*(\*|\/\/|\/\*)/.test(l));
+  assert(bad.length === 0, `port 3100 in visible text: ${bad.map((l) => l.trim()).join(' | ')}`);
+});
+
 test('package.json has build:server script', () => {
   const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
   assert(pkg.scripts?.['build:server'], 'build:server script missing');
