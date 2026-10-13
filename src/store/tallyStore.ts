@@ -11,17 +11,6 @@ interface TallyConnectionState {
   autoSyncMinutes: number;
   /** Auto pull-sync interval (Tally → app/Supabase), minutes. 0 = disabled. */
   tallyAutoSyncMinutes: number;
-  /** Auto push interval (app → Supabase), minutes. 0 = disabled. */
-  supabasePushMinutes: number;
-  /** How many days back the auto pull-sync covers (date window). 1 = today only. */
-  tallySyncWindowDays: number;
-  /** Chunking granularity for syncs. "daily" keeps each Tally request tiny. */
-  tallySyncStrategy: "daily" | "weekly" | "monthly";
-  /** Deep re-sync interval (minutes) — wider window that catches edits/conversions
-   *  to OLDER vouchers (e.g. a Purchase corrected weeks later). 0 = disabled. */
-  tallyDeepSyncMinutes: number;
-  /** Deep re-sync window (days back). Larger than the quick window. */
-  tallyDeepSyncWindowDays: number;
   // ── Scheduled quick syncs (each = pull from Tally daily, then push to Supabase).
   //    These are the ONLY automatic syncs. Minutes; 0 = disabled.
   /** "Today" quick sync interval. */
@@ -45,11 +34,6 @@ interface TallyConnectionState {
   setSyncing: (v: boolean) => void;
   setAutoSync: (minutes: number) => void;
   setTallyAutoSyncMinutes: (minutes: number) => void;
-  setSupabasePushMinutes: (minutes: number) => void;
-  setTallySyncWindowDays: (days: number) => void;
-  setTallySyncStrategy: (s: "daily" | "weekly" | "monthly") => void;
-  setTallyDeepSyncMinutes: (minutes: number) => void;
-  setTallyDeepSyncWindowDays: (days: number) => void;
   setSyncTodayMinutes: (minutes: number) => void;
   setSyncWeekMinutes: (minutes: number) => void;
   setSyncFyMinutes: (minutes: number) => void;
@@ -74,11 +58,6 @@ export const useTallyStore = create<TallyConnectionState>()(
       isSyncing: false,
       autoSyncMinutes: 0,
       tallyAutoSyncMinutes: 30,
-      supabasePushMinutes: 15,
-      tallySyncWindowDays: 7,
-      tallySyncStrategy: "daily",
-      tallyDeepSyncMinutes: 360,
-      tallyDeepSyncWindowDays: 30,
       syncTodayMinutes: 30,
       syncWeekMinutes: 0, // OFF by default — user enables it in Settings if wanted
       syncFyMinutes: 0,   // FY is heavy — OFF by default; run it manually
@@ -97,11 +76,6 @@ export const useTallyStore = create<TallyConnectionState>()(
       setSyncing: (isSyncing) => set({ isSyncing }),
       setAutoSync: (autoSyncMinutes) => set({ autoSyncMinutes }),
       setTallyAutoSyncMinutes: (tallyAutoSyncMinutes) => set({ tallyAutoSyncMinutes }),
-      setSupabasePushMinutes: (supabasePushMinutes) => set({ supabasePushMinutes }),
-      setTallySyncWindowDays: (tallySyncWindowDays) => set({ tallySyncWindowDays }),
-      setTallySyncStrategy: (tallySyncStrategy) => set({ tallySyncStrategy }),
-      setTallyDeepSyncMinutes: (tallyDeepSyncMinutes) => set({ tallyDeepSyncMinutes }),
-      setTallyDeepSyncWindowDays: (tallyDeepSyncWindowDays) => set({ tallyDeepSyncWindowDays }),
       setSyncTodayMinutes: (syncTodayMinutes) => set({ syncTodayMinutes }),
       setSyncWeekMinutes: (syncWeekMinutes) => set({ syncWeekMinutes }),
       setSyncFyMinutes: (syncFyMinutes) => set({ syncFyMinutes }),
@@ -144,15 +118,6 @@ export const useTallyStore = create<TallyConnectionState>()(
         }
         if (version < 4) {
           persisted.tallyAutoSyncMinutes = 30;
-          persisted.supabasePushMinutes = 15;
-        }
-        if (version < 5) {
-          persisted.tallySyncWindowDays = 7;
-          persisted.tallySyncStrategy = "daily";
-        }
-        if (version < 6) {
-          persisted.tallyDeepSyncMinutes = 360;
-          persisted.tallyDeepSyncWindowDays = 30;
         }
         if (version < 7) {
           persisted.syncTodayMinutes = 30;
