@@ -2,6 +2,12 @@
 
 **Company:** M.K. Cycles (P) Ltd. | **Version:** 1.0 | **Last Updated:** May 2026
 
+> **Status note (13-Oct-2026).** This is a planning document. Sections 2.2, 2.3,
+> 6.2 and 7 describe a design that reads from the on-machine proxy on port 3100.
+> The current data path is Tally → sync agent → Supabase mirror, and the web app
+> reads Supabase (see `ARCHITECTURE.md` section 3). Those sections are not the
+> current flow. Only section 7.1 has been checked against the routes.
+
 ---
 
 ## EXECUTIVE SUMMARY
@@ -824,39 +830,26 @@ interface CallLogState {
 
 ### 7.1 Sync Endpoints
 
-```typescript
-// All calls via HTTP to proxy (default: localhost:3100)
+The sync agent serves these routes on `localhost:3100` (`server/src/index.ts`). This
+is the on-machine proxy to Tally. A mobile client reads Supabase, not this proxy,
+and writes go through `push_queue` (see `ARCHITECTURE.md` section 3). Request and
+response shapes were not re-checked for this revision.
 
-// Full sync (initial load or manual)
-POST /api/tally/sync
-{
-  companyName: string
-  fromDate: "20250101"
-  toDate: "20251231"
-  strategy: "monthly" | "daily"
-}
-→ { success: boolean; masters: {...}; transactions: {...} }
-
-// Day book sync (today's vouchers only)
-POST /api/tally/daybook
-{
-  companyName: string
-  date: "20250512"
-}
-→ { success: boolean; data: {...} }
-
-// Push new order to Tally
-POST /api/tally/import
-{
-  company: string
-  vouchers: VoucherPayload[]
-}
-→ { success: boolean; createdGuids: string[] }
-
-// Check connection
-GET /
-→ { ok: true, version: "3.0.0" }
 ```
+GET  /                              (index.ts:144)
+GET  /api/tally/health              (index.ts:173)
+GET  /api/tally/company
+POST /api/tally/sync                full sync (index.ts:199)
+POST /api/tally/sync-masters        (index.ts:220)
+POST /api/tally/sync-price-list     (index.ts:268)
+POST /api/tally/sync-daybook        (index.ts:309)
+POST /api/tally/changed-vouchers    vouchers above an AlterID cursor (index.ts:343)
+GET  /api/tally/pending-pushes      (index.ts:625)
+```
+
+Writes from this machine's own UI go directly to Tally: `POST /api/local/push`
+(index.ts:1015) and `POST /api/bank/push` (index.ts:912). Writes from the web app go
+through `push_queue`. `POST /api/tally/import` returns 410 "Endpoint retired" (index.ts:616).
 
 ### 7.2 Sync Flow (React Native)
 

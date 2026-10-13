@@ -140,9 +140,19 @@ reason is carried through.
 ## Why it does not restart itself
 
 This process holds Tally's single-threaded XML port and drains the push queue.
-`autoInstallOnAppQuit` is on and `quitAndInstall` is never called: quitting
-mid-push would abandon a voucher the queue believes is in flight, and the
-read-back that proves a voucher landed would never run.
+Nothing restarts the app on its own. Two paths install an update:
+
+1. **Ordinary quit.** `autoInstallOnAppQuit` is on, so a normal quit installs a
+   downloaded update.
+2. **Install now.** The operator clicks it in the chip or the Updates panel. It
+   calls `installNow` (`public/autoUpdate.js`), which calls `quitAndInstall(false, true)`
+   after 400 ms. It refuses with `busy` while a push is in flight (`isBusy`, fed
+   from the push agent's `claimedCount` in `public/electron.js`), unless the
+   operator passes `force`.
+
+Quitting mid-push would abandon a voucher the queue believes is in flight, and
+the read-back that proves a voucher landed would never run. That is why install
+now checks `isBusy` first.
 
 ## Migrating the machines you already have
 

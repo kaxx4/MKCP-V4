@@ -168,9 +168,9 @@ npm run dev
 # Server starts on http://localhost:3100
 
 # In another terminal:
-curl -X POST http://localhost:3100/api/sync \
+curl -X POST http://localhost:3100/api/tally/sync-masters \
   -H "Content-Type: application/json" \
-  -d '{"tallyUrl":"http://localhost:9000","company":"M.K.CYCLES (P) LTD."}'
+  -d '{"company":"M.K.CYCLES (P) LTD."}'
 ```
 
 ---

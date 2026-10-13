@@ -230,7 +230,7 @@ src/
 
 2. **All Features Work**: Orders, Invoices, Reports, Alerts, Predictions — everything works identically whether data comes from live Tally or uploaded JSON.
 
-3. **Data Privacy**: All data stays **local**. The proxy runs on `localhost:3100`, frontend on `localhost:5173`. Nothing is sent to external servers.
+3. **Data Privacy**: The proxy listens only on `localhost:3100`. Synced data is not kept only on this machine: the sync agent writes it to the Supabase project (see `ARCHITECTURE.md` section 3).
 
 4. **Backup Recommendation**: Before first live sync, create a backup of your existing data using **Settings → Backups → Download Backup**.
 
