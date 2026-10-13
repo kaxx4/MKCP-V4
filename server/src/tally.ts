@@ -182,7 +182,9 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
 /** Reads the company listing and checks the named company's GUID. Null = may go. */
 async function verifyPracticeGuid(tallyUrl: string, named: string): Promise<string | null> {
   const listing: string = await tallyPostNow(tallyUrl, HEALTH_XML, 10_000, true);
-  const got = companyGuidsFromListing(listing).get(named);
+  const guids = companyGuidsFromListing(listing);
+  const key = [...guids.keys()].find((k) => k.toLowerCase() === named.toLowerCase());
+  const got = key === undefined ? undefined : guids.get(key);
   if (!got) return `refused: company "${named}" is not loaded in Tally, so its GUID cannot be checked. Nothing was sent to Tally.`;
   if (got !== practiceGuid()) return `refused: company "${named}" carries a GUID other than the practice company's. It is the real books or another copy. Nothing was sent to Tally.`;
   return null;

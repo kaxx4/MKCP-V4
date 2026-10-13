@@ -94,7 +94,7 @@ export function companyRefusal(xml: string): string | null {
   }
   const named = decodeEntities(m[1]).trim();
   if (practiceGuid() === "") return "refused: MKCP_PRACTICE_COMPANY_GUID is not set, so this machine cannot prove which company it holds. Nothing was sent to Tally.";
-  if (practice !== "" && named === practice) return null;
+  if (practice !== "" && named.toLowerCase() === practice.toLowerCase()) return null;
   return `refused: company "${named}" is not the practice company${practice ? "" : " (MKCP_PRACTICE_COMPANY is not set)"}. Nothing was sent to Tally.`;
 }
 
@@ -126,8 +126,16 @@ export function companyGuidsFromListing(xml: string): Map<string, string> {
   return out;
 }
 
-function decodeEntities(s: string): string {
-  return s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+/** Named, decimal and hex entities, decoded in one pass so "&amp;quot;" stays "&quot;". */
+export function decodeEntities(s: string): string {
+  const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+  return s.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (whole, e: string) => {
+    if (e[0] === "#") {
+      const cp = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return cp <= 0x10ffff ? String.fromCodePoint(cp) : whole;
+    }
+    return named[e.toLowerCase()] ?? whole;
+  });
 }
 
 /** True when the GUID check applies: the same condition that enables companyRefusal. */

@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { companyRefusal } from "../src/services/tallyRole.js";
 import { installMock, uninstallMock } from "../src/services/tallyMock.js";
 import { withTally, resetGate, gateState, TallyUnavailableError } from "../src/services/tallyGate.js";
 
@@ -83,6 +84,40 @@ async function main(): Promise<void> {
   process.env.MKCP_PRACTICE_COMPANY_GUID = "GUID-PRACTICE";
   const listMsg = await tryPost(HEALTH_XML);
   check("company listing (no company named) still allowed", !/refused/i.test(listMsg));
+  uninstallMock();
+  delete process.env.MKCP_TALLY_ROLE;
+  delete process.env.MKCP_PRACTICE_COMPANY;
+  delete process.env.MKCP_PRACTICE_COMPANY_GUID;
+
+  console.log("\n  #128 review  entities decode fully and company names compare case-insensitively");
+  process.env.MKCP_TALLY_ROLE = "sandbox";
+  process.env.MKCP_PRACTICE_COMPANY = "PRACTICE'CO \"X\"";
+  process.env.MKCP_PRACTICE_COMPANY_GUID = "GUID-PRACTICE";
+  const named = (c: string) =>
+    `<ENVELOPE><BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${c}</SVCURRENTCOMPANY></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
+  for (const [label, c] of [
+    ["&apos;", "PRACTICE&apos;CO &quot;X&quot;"],
+    ["&#39; and &#34;", "PRACTICE&#39;CO &#34;X&#34;"],
+    ["&#x27; and &#x22;", "PRACTICE&#x27;CO &#x22;X&#x22;"],
+  ] as const) {
+    check(`decodes ${label} to the practice name`, companyRefusal(named(c)) === null, companyRefusal(named(c)) ?? "");
+  }
+  check("case-insensitive name match", companyRefusal(named("practice'co \"x\"")) === null);
+  check("case-insensitive still refuses other names", companyRefusal(named("PRACTICE'CO X")) !== null);
+  process.env.MKCP_PRACTICE_COMPANY = "PRACTICE CO";
+  delete process.env.MKCP_TALLY_ROLE;
+  process.env.MKCP_TALLY_ROLE = "sandbox";
+  process.env.MKCP_PRACTICE_COMPANY_GUID = "GUID-PRACTICE";
+  let wire2 = 0;
+  let listed2 = "PRACTICE CO";
+  installMock(async (_u, x) => {
+    if (/List of Companies/.test(x)) return `<ENVELOPE><BODY><DATA><COLLECTION><COMPANY NAME="${listed2}"><GUID>GUID-PRACTICE</GUID></COMPANY></COLLECTION></DATA></BODY></ENVELOPE>`;
+    wire2++; return "<ENVELOPE><DATA></DATA></ENVELOPE>";
+  });
+  let caseMsg = "sent";
+  try { await tallyPost("http://localhost:9099", named("practice co"), 5_000, true); }
+  catch (e) { caseMsg = (e as Error).message; }
+  check("GUID lookup is case-insensitive", caseMsg === "sent" && wire2 === 1, caseMsg.slice(0, 80));
   uninstallMock();
   delete process.env.MKCP_TALLY_ROLE;
   delete process.env.MKCP_PRACTICE_COMPANY;
