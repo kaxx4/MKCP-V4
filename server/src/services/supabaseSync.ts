@@ -870,6 +870,9 @@ export class SupabaseSync {
           p_company: company,
           p_days: cleanDays,
           p_valid_guids: cleanGuids,
+          // #117: explicit operator override, default OFF. Only an operator who has
+          // checked the books sets MKCP_ALLOW_BIG_PRUNE=1 to let a big real cleanup through.
+          p_force: process.env.MKCP_ALLOW_BIG_PRUNE === "1",
         });
         if (res.error && this.isTransient(res.error)) throw res.error; // postgrest returns fetch errors as {error}
         return res;
