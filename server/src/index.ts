@@ -19,6 +19,7 @@ import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.
 import { startHousekeeping } from "./services/housekeeping.js";
 import { announceRole, tallyRole } from "./services/tallyRole.js";
 import { filedThroughOn } from "./services/pushGuard.js";
+import { checkDebugXml } from "./services/debugGuard.js";
 import { isOffline, offlineReason } from "./services/supabaseClient.js";
 import { buildMirrorPanel } from "./services/mirrorPanel.js";
 import { vouchersOnDay } from "./services/localSession.js";
@@ -596,12 +597,6 @@ app.post("/api/supabase/sync-config", async (req: express.Request, res: express.
   }
 });
 
-/**
- * Detect a write envelope. Only `Import Data` changes the books; `Export` is a
- * read. Checked with a loose regex because the header may be formatted freely.
- */
-const isImportEnvelope = (xml: string) => /<TALLYREQUEST>\s*Import\s*Data\s*<\/TALLYREQUEST>/i.test(xml);
-
 const WRITE_PATH_MESSAGE =
   "Raw XML writes are disabled. Every voucher must go through the push_queue → safePush path, " +
   "which resolves master names, runs the preflight guard, serialises access to Tally's " +
@@ -645,11 +640,17 @@ app.post("/api/tally/pending-pushes/:id/reject", async (req, res) => {
 app.post("/api/tally/debug", async (req, res) => {
   const { company, xml: customXml } = req.body;
   if (!company && !customXml) return res.status(400).json({ error: "company or xml required" });
+  if (customXml !== undefined && typeof customXml !== "string") {
+    return res.status(400).json({ error: "xml must be a string" });
+  }
   // A debug endpoint that accepts arbitrary XML will execute an Import envelope
-  // as readily as an Export one. Reads only.
-  if (typeof customXml === "string" && isImportEnvelope(customXml)) {
-    console.warn(`[security] refused an Import envelope on /api/tally/debug from ${req.ip}`);
-    return res.status(403).json({ error: "This endpoint is read-only.", detail: WRITE_PATH_MESSAGE });
+  // as readily as an Export one. Reads only: allowlist, applied after decoding.
+  if (typeof customXml === "string") {
+    const verdict = checkDebugXml(customXml);
+    if (!verdict.allowed) {
+      console.warn(`[security] refused a non-read envelope on /api/tally/debug from ${req.ip}: ${verdict.reason}`);
+      return res.status(403).json({ error: "This endpoint is read-only.", detail: WRITE_PATH_MESSAGE });
+    }
   }
   try {
     const xml = customXml ?? HEALTH_XML;
