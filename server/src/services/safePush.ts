@@ -19,6 +19,7 @@ import { withTally } from "./tallyGate.js";
 import { supabaseClient } from "./supabaseClient.js";
 import { financialYearOf } from "./remoteId.js";
 import type { VoucherPayload, PushResult } from "../types.js";
+import { refuseCompanyWrite } from "./tallyRole.js";
 
 /**
  * Every voucher number the mirror already holds for one type, in the same
@@ -292,6 +293,14 @@ export async function safePush(
   retriedWithoutNumber = false,
 ): Promise<SafePushResult> {
   const verify = opts.verify !== false;
+
+  // ── 0. Company. On a sandbox machine only the practice company may be written
+  //      to. Refused before Tally is contacted or any XML is built. ─────────────
+  const companyRefusal = refuseCompanyWrite(company);
+  if (companyRefusal) {
+    console.error(`🛑 [safePush] ${companyRefusal}`);
+    return { ok: false, stage: "guard", voucherId: null, errors: [companyRefusal], warnings: [], differences: [] };
+  }
 
   // ── 1. Guard ──────────────────────────────────────────────────────────────
   let masters = await loadMasters(tallyUrl, company);
