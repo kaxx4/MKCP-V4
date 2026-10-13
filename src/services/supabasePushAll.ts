@@ -1,8 +1,9 @@
+import { SERVER_BASE } from "../config/serverUrl";
 import { useDataStore } from "../store/dataStore";
 import { syncConfigToSupabase } from "../hooks/useSupabaseConfigSync";
 import { useSupabaseSyncStatusStore } from "../store/supabaseSyncStatusStore";
 
-const BASE = "http://localhost:3100";
+const BASE = SERVER_BASE;
 const SERVER_URL = `${BASE}/api/supabase/sync`;
 
 // Module-level in-flight guard — prevents concurrent full-payload pushes.

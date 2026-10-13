@@ -1,3 +1,4 @@
+import { SERVER_BASE } from "./config/serverUrl";
 /**
  * Quick View — the always-on-top window, at `#/pip`.
  *
@@ -47,7 +48,7 @@ import {
   type AgentFact, type HealthLike, type PushStatusLike,
 } from "./status/agentFacts";
 
-const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
+const BASE = SERVER_BASE;
 const BASE_LABEL = BASE.replace(/^https?:\/\//, "");
 
 /** Same 10s cadence as the main window — the two should not disagree about how

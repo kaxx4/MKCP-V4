@@ -1,3 +1,4 @@
+import { SERVER_BASE } from "./config/serverUrl";
 /**
  * Sync history, mirror snapshot and the push log — on the agent itself.
  *
@@ -28,7 +29,7 @@ const ACTION_TONE: Record<string, string> = {
   import: "bg-neutral-100 text-neutral-700",
 };
 
-const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
+const BASE = SERVER_BASE;
 
 interface SyncRun {
   startedAt: string; completedAt: string | null; syncType: string | null;

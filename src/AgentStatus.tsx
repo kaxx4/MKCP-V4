@@ -1,3 +1,4 @@
+import { SERVER_BASE } from "./config/serverUrl";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { PendingPushes } from "./PendingPushes";
 import { createClient, RealtimeChannel } from "@supabase/supabase-js";
@@ -36,8 +37,8 @@ const sbRead = SUPA_URL && SUPA_ANON
   ? createClient(SUPA_URL, SUPA_ANON, { auth: { persistSession: false } })
   : null;
 
-const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
-/** `localhost:3100` — the same host:port string in the KPI strip, the push
+const BASE = SERVER_BASE;
+/** The server address (SERVER_BASE) — the same host:port string in the KPI strip, the push
  *  queue panel and the Tally panel, derived once. */
 const BASE_LABEL = BASE.replace(/^https?:\/\//, "");
 

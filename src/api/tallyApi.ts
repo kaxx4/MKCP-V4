@@ -1,5 +1,6 @@
+import { SERVER_BASE } from "../config/serverUrl";
 // ALWAYS use direct connection to bypass Vite proxy timeout issues
-const BASE = (import.meta as any).env?.VITE_TALLY_PROXY || "http://localhost:3100";
+const BASE = SERVER_BASE;
 
 export interface MastersSyncResult {
   success: boolean;

@@ -1,3 +1,4 @@
+import { SERVER_BASE } from "../config/serverUrl";
 // NOTE: kept at this path because pushAll imports syncConfigToSupabase from here.
 // The old useSupabaseConfigSync hook (2s-debounce auto-push on config edits) was
 // removed — the scheduled quick syncs push config via pushAll, so it was redundant.
@@ -15,7 +16,7 @@ import { useOrderStore } from '../store/orderStore';
 import { useSupabaseSyncStatusStore } from '../store/supabaseSyncStatusStore';
 
 const DEFAULT_COMPANY = 'M.K.CYCLES (P) LTD.';
-const SERVER_URL = 'http://localhost:3100/api/supabase/sync-config';
+const SERVER_URL = `${SERVER_BASE}/api/supabase/sync-config`;
 
 export interface SyncResult {
   success: boolean;

@@ -1,3 +1,4 @@
+import { SERVER_BASE } from "../config/serverUrl";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
@@ -50,7 +51,7 @@ interface TallyConnectionState {
 export const useTallyStore = create<TallyConnectionState>()(
   persist(
     (set) => ({
-      proxyUrl: "http://localhost:3100",
+      proxyUrl: SERVER_BASE,
       companyName: "M.K.CYCLES (P) LTD.",
       isConnected: false,
       lastSyncAt: null,

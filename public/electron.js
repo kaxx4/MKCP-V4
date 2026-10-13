@@ -46,6 +46,10 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 const { pathToFileURL } = require('url');
+// The sync server port, read the same way the server reads it (the PORT env var, with a default).
+// Every address the shell uses is built from this one constant.
+const SERVER_PORT = parseInt(process.env.PORT || '3100', 10);
+
 
 // ── GPU crash fix (Windows STATUS_ACCESS_VIOLATION / c000005) ────────────────
 app.commandLine.appendSwitch('disable-gpu');
@@ -377,27 +381,27 @@ async function startExpressServer() {
 
   // If port is already occupied, check whether it's our own server responding.
   // This happens when a previous instance crashed and left a dangling node process.
-  const portFree = await isPortFree(3100);
+  const portFree = await isPortFree(SERVER_PORT);
   if (!portFree) {
-    console.warn('[server] Port 3100 occupied — checking if existing server is responsive...');
+    console.warn(`[server] Port ${SERVER_PORT} occupied — checking if existing server is responsive...`);
     try {
-      await waitForServer(3100, 3000);
-      console.log('[server] Existing server on :3100 is up — skipping start');
+      await waitForServer(SERVER_PORT, 3000);
+      console.log(`[server] Existing server on :${SERVER_PORT} is up — skipping start`);
       return; // already running, nothing to do
     } catch {
       // Stale process — kill it and continue with normal startup
-      console.warn('[server] Port 3100 occupied by non-responsive process — killing it...');
-      await killPortProcess(3100);
+      console.warn(`[server] Port ${SERVER_PORT} occupied by non-responsive process — killing it...`);
+      await killPortProcess(SERVER_PORT);
       // Give OS a moment to release the port
       await new Promise(r => setTimeout(r, 800));
-      const nowFree = await isPortFree(3100);
+      const nowFree = await isPortFree(SERVER_PORT);
       if (!nowFree) {
         throw new Error(
-          'Port 3100 is occupied by another process and could not be released.\n' +
+          `Port ${SERVER_PORT} is occupied by another process and could not be released.\n` +
           'Please restart your computer and try again.'
         );
       }
-      console.log('[server] Port 3100 freed — starting server...');
+      console.log(`[server] Port ${SERVER_PORT} freed — starting server...`);
     }
   }
 
@@ -405,7 +409,7 @@ async function startExpressServer() {
   require(serverDist);
 
   // app.listen() is called by the server module — poll until it's up
-  return waitForServer(3100, 20000);
+  return waitForServer(SERVER_PORT, 20000);
 }
 
 // ── Window ────────────────────────────────────────────────────────────────────
@@ -441,7 +445,7 @@ function createWindow() {
   mainWindow.loadURL(startUrl).catch((err) => console.error('loadURL failed:', err));
 
   // Show on ready-to-show, but force-show after 8s as a fallback so a renderer
-  // that white-screens (JS error, blocked on the not-yet-ready :3100 server)
+  // that white-screens (JS error, blocked on the not-yet-ready sync server)
   // can never leave an invisible, unreachable window behind.
   let shown = false;
   const showOnce = () => {
@@ -567,7 +571,7 @@ function createTray() {
       click: async () => {
         const company = readConfig().companyName || 'M.K.CYCLES (P) LTD.';
         try {
-          const resp = await fetch('http://localhost:3100/api/tally/sync', {
+          const resp = await fetch(`http://localhost:${SERVER_PORT}/api/tally/sync`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ company, mode: 'smart' }),
@@ -585,7 +589,7 @@ function createTray() {
       label: 'Drain Queue',
       click: async () => {
         try {
-          const resp = await fetch('http://localhost:3100/api/push-agent/drain', { method: 'POST' });
+          const resp = await fetch(`http://localhost:${SERVER_PORT}/api/push-agent/drain`, { method: 'POST' });
           if (!resp.ok) {
             const body = await resp.text().catch(() => '');
             dialog.showErrorBox('Drain queue failed', `Push agent returned HTTP ${resp.status}.\n${body.slice(0, 500)}`);
@@ -735,7 +739,7 @@ ipcMain.handle('pick-watch-folder', async () => {
   // chokidar has already bound to the old path, so the server needs to rebuild
   // the watcher rather than just re-read the env var.
   try {
-    await fetch('http://127.0.0.1:3100/api/file-transfer/watch/restart', {
+    await fetch(`http://127.0.0.1:${SERVER_PORT}/api/file-transfer/watch/restart`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
@@ -775,11 +779,11 @@ app.whenReady().then(() => {
     console.error('[electron] Tray creation failed (continuing without tray):', err);
   }
 
-  // Start the local server in the BACKGROUND. The renderer polls :3100 and shows
+  // Start the local server in the BACKGROUND. The renderer polls the sync server and shows
   // a "Disconnected" state until it's up, so a slow (~20s) or failed start no
   // longer blocks the window from appearing.
   startExpressServer()
-    .then(() => console.log('Server ready on :3100'))
+    .then(() => console.log(`Server ready on :${SERVER_PORT}`))
     .catch((err) => {
       console.error('Server failed:', err.message);
       dialog.showErrorBox('API Server Error',
@@ -810,7 +814,7 @@ app.whenReady().then(() => {
        freeze the click. */
     setInterval(async () => {
       try {
-        const r = await fetch('http://localhost:3100/api/push-agent/status');
+        const r = await fetch(`http://localhost:${SERVER_PORT}/api/push-agent/status`);
         const j = await r.json();
         lastPushBusy = (j?.claimedCount ?? 0) > 0;
       } catch {
