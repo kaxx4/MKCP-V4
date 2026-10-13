@@ -50,6 +50,16 @@ BEGIN
     IF (to_jsonb(NEW) - 'status' - 'hidden_at') IS DISTINCT FROM (to_jsonb(OLD) - 'status' - 'hidden_at') THEN
       RAISE EXCEPTION 'push_queue: browser may change only status and hidden_at';
     END IF;
+    -- A browser status change is one of the two steps the app makes today, and no other:
+    --   pending -> cancelled   (cancel your own pending push; owner decision, kept)
+    --   failed  -> dismissed   (set aside a failed row)
+    -- Any other move (e.g. a finished row flipped to another finished status, or a row
+    -- moved back to pending) is refused.
+    IF NEW.status IS DISTINCT FROM OLD.status
+       AND NOT ((OLD.status = 'pending' AND NEW.status = 'cancelled')
+                OR (OLD.status = 'failed' AND NEW.status = 'dismissed')) THEN
+      RAISE EXCEPTION 'push_queue: browser may not move a row from % to %', OLD.status, NEW.status;
+    END IF;
   END IF;
   RETURN NEW;
 END;
