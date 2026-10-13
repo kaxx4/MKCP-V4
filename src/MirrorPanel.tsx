@@ -106,7 +106,7 @@ function StaleServerBanner({ who, reachable }: { who: WhoAmI | null; reachable: 
         <AlertTriangle size={14} className="mt-0.5 shrink-0" />
         <div>
           <p className="font-semibold">
-            Another MK Cycles server is holding port 3100 — this window is talking to it, not to its own.
+            Another MK Cycles server is holding the local server port — this window is talking to it, not to its own.
           </p>
           <p className="mt-1">
             {who?.version
@@ -166,8 +166,8 @@ export function MirrorPanel() {
         <div className="bg-white rounded-xl border border-neutral-200 px-4 py-3 text-xs text-neutral-500">
           {busy ? "Reading the mirror…"
             : reachable
-              ? "The server on port 3100 answered, but not with this panel — see above."
-              : "Could not reach the local server on port 3100."}
+              ? "The local server answered, but not with this panel — see above."
+              : "Could not reach the local server."}
         </div>
       </div>
     );
