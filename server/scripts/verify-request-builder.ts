@@ -17,15 +17,15 @@ config({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".env") });
 
 import {
   buildCollection, buildReport, dateBetween, onDate, alterIdAbove,
-  readCollection, tagOf, type ReadOutcome,
+  readCollection, tagOf, checkedRequest, type ReadOutcome,
 } from "../src/services/tallyRequest.js";
+import { tallyPost } from "../src/tally.js";
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";
 
 async function ask(xml: string): Promise<string> {
-  const res = await fetch(TALLY, { method: "POST", body: xml });
-  return res.text();
+  return tallyPost(TALLY, checkedRequest(xml), 120_000, true) as Promise<string>;
 }
 
 let failures = 0;
