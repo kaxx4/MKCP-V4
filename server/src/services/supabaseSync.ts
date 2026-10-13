@@ -411,41 +411,18 @@ export class SupabaseSync {
         }
       }
 
-      // Delete old entries for these vouchers, then insert new ones
+      // Replace child rows for these vouchers atomically per chunk (#112): one RPC
+      // per 100 vouchers deletes and re-inserts in a single transaction, so a
+      // failure cannot leave a voucher with its children deleted and not re-inserted.
       if (rewriteGuids.size > 0) {
-        const guidsArray = Array.from(rewriteGuids);
-
-        // Delete in chunks to avoid SQL length limits
-        const DELETE_CHUNK = 100;
-        for (let i = 0; i < guidsArray.length; i += DELETE_CHUNK) {
-          const chunk = guidsArray.slice(i, i + DELETE_CHUNK);
-          // Retry-wrapped: a transient "fetch failed" here used to fail the whole
-          // voucher sync (leaving stale child entries). withRetry rides out the blip.
-          await this.withRetry("delete tally_voucher_ledger_entries", async () => {
-            const { error } = await this.client!
-              .from("tally_voucher_ledger_entries")
-              .delete()
-              .in("voucher_guid", chunk)
-              .eq("company", company);
-            if (error) throw new Error(`tally_voucher_ledger_entries: ${error.message}`);
-          });
-
-          await this.withRetry("delete tally_voucher_inventory_entries", async () => {
-            const { error } = await this.client!
-              .from("tally_voucher_inventory_entries")
-              .delete()
-              .in("voucher_guid", chunk)
-              .eq("company", company);
-            if (error) throw new Error(`tally_voucher_inventory_entries: ${error.message}`);
-          });
-        }
-
-        // Insert new entries in batches of 200
-        if (ledgerEntries.length > 0) {
-          await this.batchAndInsert("tally_voucher_ledger_entries", ledgerEntries);
-        }
-        if (inventoryEntries.length > 0) {
-          await this.batchAndInsert("tally_voucher_inventory_entries", inventoryEntries);
+        const childRes = await this.replaceVoucherChildren(company, Array.from(rewriteGuids), ledgerEntries, inventoryEntries);
+        if (childRes.failedGuids.length > 0) {
+          // The header was upserted above with its new alter_id. Its children did not land,
+          // so un-stamp it: the next incremental pass must re-pull it instead of treating it as synced.
+          await this.clearHeaderAlterIds(company, childRes.failedGuids);
+          const msg = `Voucher children not replaced for ${childRes.failedGuids.length} voucher(s); they will be re-pulled. ${childRes.lastError ?? ""}`.trim();
+          console.error(`[Supabase] ${msg}`);
+          errors.push(msg);
         }
       }
 
@@ -464,6 +441,7 @@ export class SupabaseSync {
       // how a stale, already-deleted voucher got silently re-inserted every
       // cycle — do not resurrect an unmeta'd voucher push without pruning.
       let deleted = 0;
+      let guardRefusals = 0; // #117: prunes the mass-deletion guard refused this run; surfaced in the summary
       if (meta?.pruneDays?.length) {
         // Per-day prune: each successfully-pulled day is authoritative for itself,
         // so deletions (incl. old Delivery Notes) clear even if other days failed.
@@ -473,6 +451,7 @@ export class SupabaseSync {
         const r = await this.deleteVoucherOrphansForDays(company, meta.pruneDays, Array.from(voucherGuids));
         deleted = r.deleted;
         if (r.guardTripped) {
+          guardRefusals++;
           const msg = `Mass-deletion guard refused per-day prune across ${meta.pruneDays.length} day(s) — ` +
             `too much of the existing data would have been removed for too little fresh data pulled back. ` +
             `Nothing was deleted; existing vouchers on these days were left untouched.`;
@@ -488,6 +467,7 @@ export class SupabaseSync {
         );
         deleted = r.deleted;
         if (r.guardTripped) {
+          guardRefusals++;
           const msg = `Mass-deletion guard refused range prune for ${meta.pruneRange.from}–${meta.pruneRange.to} — ` +
             `too much of the existing data would have been removed for too little fresh data pulled back. ` +
             `Nothing was deleted; existing vouchers in this range were left untouched.`;
@@ -527,6 +507,7 @@ export class SupabaseSync {
           inventoryEntries: inventoryEntries.length,
           ...(changeSummary.changed !== undefined ? { changed: changeSummary.changed } : {}),
           deleted,
+          ...(guardRefusals > 0 ? { guard_refused: guardRefusals } : {}),
           ...(partialGuids.size > 0 ? { partial: partialGuids.size } : {}),
           maxAlterId: changeSummary.maxAlterId,
         },
@@ -870,6 +851,9 @@ export class SupabaseSync {
           p_company: company,
           p_days: cleanDays,
           p_valid_guids: cleanGuids,
+          // #117: explicit operator override, default OFF. Only an operator who has
+          // checked the books sets MKCP_ALLOW_BIG_PRUNE=1 to let a big real cleanup through.
+          p_force: process.env.MKCP_ALLOW_BIG_PRUNE === "1",
         });
         if (res.error && this.isTransient(res.error)) throw res.error; // postgrest returns fetch errors as {error}
         return res;
@@ -885,6 +869,112 @@ export class SupabaseSync {
     } catch (e: any) {
       console.warn(`[Supabase] Per-day voucher prune error: ${e?.message || e}`);
       return { deleted: 0, guardTripped: false };
+    }
+  }
+
+  /**
+   * #112: replace ledger + inventory child rows for the given vouchers, one RPC
+   * per 100 vouchers (migration 045). Each RPC deletes and inserts in ONE
+   * transaction. A failed chunk does not stop later chunks; its vouchers are
+   * returned in failedGuids so the caller can un-stamp their headers.
+   * If the RPC is not installed (PGRST202 / function not found, i.e. 045 not yet
+   * applied) the chunk falls back to the legacy non-atomic delete + insert.
+   */
+  private async replaceVoucherChildren(
+    company: string,
+    guids: string[],
+    ledgerRows: any[],
+    inventoryRows: any[]
+  ): Promise<{ ledger: number; inventory: number; failedGuids: string[]; lastError?: string }> {
+    if (!this.client || guids.length === 0) return { ledger: 0, inventory: 0, failedGuids: [] };
+    const group = (rows: any[]) => {
+      const m = new Map<string, any[]>();
+      for (const r of rows) {
+        const list = m.get(r.voucher_guid);
+        if (list) list.push(r);
+        else m.set(r.voucher_guid, [r]);
+      }
+      return m;
+    };
+    const ledgerByGuid = group(ledgerRows);
+    const inventoryByGuid = group(inventoryRows);
+    const CHUNK = 100;
+    let ledger = 0;
+    let inventory = 0;
+    const failedGuids: string[] = [];
+    let lastError: string | undefined;
+    for (let i = 0; i < guids.length; i += CHUNK) {
+      const chunk = guids.slice(i, i + CHUNK);
+      const pl: any[] = [];
+      const pi: any[] = [];
+      for (const g of chunk) {
+        for (const r of ledgerByGuid.get(g) ?? []) pl.push(r);
+        for (const r of inventoryByGuid.get(g) ?? []) pi.push(r);
+      }
+      try {
+        const { data, error } = await this.withRetry("rpc replace_voucher_children", async () => {
+          const res = await this.client!.rpc("replace_voucher_children", {
+            p_company: company,
+            p_guids: chunk,
+            p_ledger: pl,
+            p_inventory: pi,
+          });
+          if (res.error) throw res.error;
+          return res;
+        });
+        if (error) throw error;
+        ledger += Number((data as any)?.ledger ?? pl.length);
+        inventory += Number((data as any)?.inventory ?? pi.length);
+      } catch (e: any) {
+        const msg = String(e?.message ?? e);
+        const missing = e?.code === "PGRST202" || /PGRST202|could not find the function/i.test(msg);
+        if (missing) {
+          // 045 not applied yet: legacy path, same as before #112 (not atomic).
+          console.warn("[Supabase] replace_voucher_children missing (045 not applied): using legacy delete + insert for this chunk");
+          try {
+            await this.legacyReplaceChildren(company, chunk, pl, pi);
+            ledger += pl.length;
+            inventory += pi.length;
+            continue;
+          } catch (le: any) {
+            lastError = String(le?.message ?? le);
+          }
+        } else {
+          lastError = msg;
+        }
+        failedGuids.push(...chunk);
+      }
+    }
+    return { ledger, inventory, failedGuids, lastError };
+  }
+
+  /** Pre-045 behaviour for one chunk: delete the old rows, then insert the new ones. */
+  private async legacyReplaceChildren(company: string, chunk: string[], pl: any[], pi: any[]): Promise<void> {
+    await this.withRetry("delete tally_voucher_ledger_entries", async () => {
+      const { error } = await this.client!.from("tally_voucher_ledger_entries").delete().in("voucher_guid", chunk).eq("company", company);
+      if (error) throw new Error(`tally_voucher_ledger_entries: ${error.message}`);
+    });
+    await this.withRetry("delete tally_voucher_inventory_entries", async () => {
+      const { error } = await this.client!.from("tally_voucher_inventory_entries").delete().in("voucher_guid", chunk).eq("company", company);
+      if (error) throw new Error(`tally_voucher_inventory_entries: ${error.message}`);
+    });
+    if (pl.length > 0) await this.batchAndInsert("tally_voucher_ledger_entries", pl);
+    if (pi.length > 0) await this.batchAndInsert("tally_voucher_inventory_entries", pi);
+  }
+
+  /** Un-stamp headers whose children did not land (alter_id null forces a re-pull). */
+  private async clearHeaderAlterIds(company: string, guids: string[]): Promise<void> {
+    if (!this.client) return;
+    for (let i = 0; i < guids.length; i += 100) {
+      const chunk = guids.slice(i, i + 100);
+      try {
+        await this.withRetry("clear alter_id after failed child replace", async () => {
+          const { error } = await this.client!.from("tally_vouchers").update({ alter_id: null }).eq("company", company).in("guid", chunk);
+          if (error) throw new Error(`tally_vouchers: ${error.message}`);
+        });
+      } catch (e: any) {
+        console.error(`[Supabase] could not un-stamp ${chunk.length} voucher header(s): ${e?.message || e}`);
+      }
     }
   }
 

@@ -15,8 +15,30 @@ import { SupabaseSync } from "./supabaseSync.js";
 import { fetchPriceList } from "./tallyPriceList.js";
 import { fetchGstRates } from "./tallyGstRates.js";
 
+/**
+ * #111: keep only the vouchers whose DATE (Tally YYYYMMDD) lies in [from, to].
+ * Day Book ignores the requested range, so its answer is filtered here before
+ * anything downstream can treat it as the day's contents.
+ */
+export function keepVouchersInWindow(
+  converted: { tallymessage: any[] },
+  from: string,
+  to: string
+): { tallymessage: any[] } {
+  // Converted vouchers carry a normalised lower-case `date` (YYYYMMDD) from convertVouchers.
+  const kept = converted.tallymessage.filter((v) => {
+    const raw = v?.date ?? v?.DATE;
+    const text = typeof raw === "string" ? raw : typeof raw?.["#text"] === "string" ? raw["#text"] : "";
+    const d = text.replace(/\D/g, "");
+    return d.length === 8 && d >= from && d <= to;
+  });
+  return { tallymessage: kept };
+}
+
 export class SyncOrchestrator {
   private supabase = new SupabaseSync();
+  // Test seam (#111): the Tally post. Defaults to the real function; behaviour-neutral.
+  private post: typeof tallyPostWithRetry = tallyPostWithRetry;
 
   constructor(
     private tallyUrl: string,
@@ -260,14 +282,16 @@ export class SyncOrchestrator {
 
       try {
         console.log(`[DAYBOOK] Chunk ${i + 1}/${chunks.length}: ${chunk.label} (${chunk.from} → ${chunk.to})...`);
-        const vouchers = await this._fetchVoucherChunk(company, chunk.from, chunk.to, chunk.label, voucherTimeoutMs, signal);
+        const { converted: vouchers, source } = await this._fetchVoucherChunk(company, chunk.from, chunk.to, chunk.label, voucherTimeoutMs, signal);
         const added = this._collectVouchers(vouchers, chunk.label, allVouchers, seenGuids);
         const ms = Date.now() - chunkT0;
         chunkDetails.push({ label: chunk.label, count: added, ms });
         chunksSucceeded++;
         // Daily chunk = one day (from === to). Record it so the cloud can prune
-        // that day's deletions even if other days in this run failed.
-        if (chunk.from === chunk.to) succeededDays.push(chunk.from);
+        // that day's deletions even if other days in this run failed. A day answered
+        // by the Day Book fallback is NOT authoritative (#111): upsert only, never prune.
+        if (chunk.from === chunk.to && source === "collection") succeededDays.push(chunk.from);
+        else if (chunk.from === chunk.to) console.log(`[DAYBOOK] day ${chunk.label} answered by Day Book fallback: not pruned`);
         console.log(`[DAYBOOK] ✓ ${chunk.label}: ${added} vouchers (${ms}ms)`);
       } catch (e: any) {
         const isTimeout = e.message?.includes("timeout") || e.message?.includes("TIMEOUT");
@@ -280,7 +304,7 @@ export class SyncOrchestrator {
           for (const sub of subChunks) {
             if (signal?.aborted) break;
             try {
-              const subVouchers = await this._fetchVoucherChunk(company, sub.from, sub.to, sub.label, voucherTimeoutMs, signal);
+              const { converted: subVouchers } = await this._fetchVoucherChunk(company, sub.from, sub.to, sub.label, voucherTimeoutMs, signal);
               subTotal += this._collectVouchers(subVouchers, sub.label, allVouchers, seenGuids);
             } catch (subErr: any) {
               errors.push(`${sub.label}: ${subErr.message}`);
@@ -340,11 +364,11 @@ export class SyncOrchestrator {
       for (const chunk of toRetry) {
         if (signal?.aborted) { failedChunks.push(chunk); continue; }
         try {
-          const vouchers = await this._fetchVoucherChunk(company, chunk.from, chunk.to, chunk.label, voucherTimeoutMs * 2, signal);
+          const { converted: vouchers, source } = await this._fetchVoucherChunk(company, chunk.from, chunk.to, chunk.label, voucherTimeoutMs * 2, signal);
           const added = this._collectVouchers(vouchers, chunk.label, allVouchers, seenGuids);
           chunksSucceeded++;
           chunksFailed--;
-          if (chunk.from === chunk.to) succeededDays.push(chunk.from);
+          if (chunk.from === chunk.to && source === "collection") succeededDays.push(chunk.from);
           console.log(`[DAYBOOK] ✓ (retry) ${chunk.label}: ${added} vouchers`);
         } catch (e: any) {
           failedChunks.push(chunk);
@@ -569,7 +593,7 @@ export class SyncOrchestrator {
     label: string,
     timeoutMs: number,
     signal?: AbortSignal
-  ): Promise<ReturnType<typeof convertVouchers>> {
+  ): Promise<{ converted: ReturnType<typeof convertVouchers>; source: "collection" | "daybook" }> {
     // PRIMARY: Collection with TDL date formula filter — the only method that actually
     // respects the date range. Day Book uses Tally's display period, not SVFROMDATE/SVTODATE,
     // so it returns the same single day's data for every chunk request.
@@ -578,11 +602,11 @@ export class SyncOrchestrator {
     const voucherDef = TRANSACTION_COLLECTIONS[0];
     try {
       const collectionXml = buildCollectionXml(voucherDef, company, from, to);
-      const result = await tallyPostWithRetry(this.tallyUrl, collectionXml, timeoutMs, false, 1, signal);
+      const result = await this.post(this.tallyUrl, collectionXml, timeoutMs, false, 1, signal);
       const converted = convertVouchers(result);
       if (converted.tallymessage.length > 0) {
         console.log(`[DAYBOOK] Collection: ${converted.tallymessage.length} vouchers for ${label}`);
-        return converted;
+        return { converted, source: "collection" };
       }
       // Collection returned 0 — could be genuinely empty or unsupported. Fall through to Day Book.
       console.log(`[DAYBOOK] Collection returned 0 for ${label} — trying Day Book fallback`);
@@ -591,10 +615,14 @@ export class SyncOrchestrator {
       console.log(`[DAYBOOK] Collection failed for ${label} (${e.message}) — trying Day Book fallback`);
     }
 
-    // FALLBACK: Day Book — ignores date range but may return something if Collection fails.
-    // Results will be deduplicated by GUID across chunks so duplicates are safe.
-    const xml = await tallyPostWithRetry(this.tallyUrl, buildDayBookXml(company, from, to), timeoutMs, false, 1, signal);
-    return convertVouchers(xml);
+    // FALLBACK: Day Book — ignores the date range (it returns Tally's display period), so
+    // keep only vouchers dated inside [from, to]. The caller must NOT treat this chunk as
+    // authoritative for pruning: an empty or partial Day Book says nothing about the day.
+    const xml = await this.post(this.tallyUrl, buildDayBookXml(company, from, to), timeoutMs, false, 1, signal);
+    const converted = convertVouchers(xml);
+    const kept = keepVouchersInWindow(converted, from, to);
+    console.log(`[DAYBOOK] Day Book fallback for ${label}: ${kept.tallymessage.length} in window of ${converted.tallymessage.length} returned`);
+    return { converted: kept, source: "daybook" };
   }
 
   private _collectVouchers(
