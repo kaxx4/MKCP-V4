@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tallyPost, HEALTH_XML } from "../src/tally.js";
+import { tallyPost, HEALTH_XML, resetListingCache } from "../src/tally.js";
 import { companyRefusal } from "../src/services/tallyRole.js";
 import { installMock, uninstallMock } from "../src/services/tallyMock.js";
 import { withTally, resetGate, gateState, TallyUnavailableError } from "../src/services/tallyGate.js";
@@ -70,10 +70,12 @@ async function main(): Promise<void> {
   check("refused name sends no XML", wire === 0, `transport calls=${wire}`);
   const okMsg = await tryPost(body("PRACTICE CO"));
   check("practice name with matching GUID passes", wire === 1 && okMsg === "sent", okMsg.slice(0, 80));
+  resetListingCache();
   listedGuid = "GUID-DUPLICATE";
   const dupMsg = await tryPost(body("PRACTICE CO"));
   check("same name, other GUID refused", /GUID other/i.test(dupMsg) && wire === 1, dupMsg.slice(0, 80));
   listedGuid = "GUID-PRACTICE";
+  resetListingCache();
   listed = false;
   const absentMsg = await tryPost(body("PRACTICE CO"));
   check("company not loaded refused", /not loaded/i.test(absentMsg) && wire === 1, absentMsg.slice(0, 80));
@@ -114,6 +116,7 @@ async function main(): Promise<void> {
     if (/List of Companies/.test(x)) return `<ENVELOPE><BODY><DATA><COLLECTION><COMPANY NAME="${listed2}"><GUID>GUID-PRACTICE</GUID></COMPANY></COLLECTION></DATA></BODY></ENVELOPE>`;
     wire2++; return "<ENVELOPE><DATA></DATA></ENVELOPE>";
   });
+  resetListingCache();
   let caseMsg = "sent";
   try { await tallyPost("http://localhost:9099", named("practice co"), 5_000, true); }
   catch (e) { caseMsg = (e as Error).message; }
@@ -122,6 +125,45 @@ async function main(): Promise<void> {
   delete process.env.MKCP_TALLY_ROLE;
   delete process.env.MKCP_PRACTICE_COMPANY;
   delete process.env.MKCP_PRACTICE_COMPANY_GUID;
+
+  console.log("\n  #128 r2  duplicate names, repeated company tag, listing cache, primary pass-through");
+  resetListingCache();
+  process.env.MKCP_TALLY_ROLE = "sandbox";
+  process.env.MKCP_PRACTICE_COMPANY = "PRACTICE CO";
+  process.env.MKCP_PRACTICE_COMPANY_GUID = "GUID-PRACTICE";
+  let w4 = 0, lists4 = 0;
+  let listing4 = `<COMPANY NAME="PRACTICE CO"><GUID>GUID-PRACTICE</GUID></COMPANY>`;
+  installMock(async (_u, x) => {
+    if (/List of Companies/.test(x)) { lists4++; return `<ENVELOPE><BODY><DATA><COLLECTION>${listing4}</COLLECTION></DATA></BODY></ENVELOPE>`; }
+    w4++; return "<ENVELOPE><DATA></DATA></ENVELOPE>";
+  });
+  const xmlFor = (...cos: string[]) =>
+    `<ENVELOPE><BODY><DESC><STATICVARIABLES>${cos.map((c) => `<SVCURRENTCOMPANY>${c}</SVCURRENTCOMPANY>`).join("")}</STATICVARIABLES></DESC></BODY></ENVELOPE>`;
+  const send4 = async (xml: string): Promise<string> => {
+    try { await tallyPost("http://localhost:9099", xml, 5_000, true); return "sent"; }
+    catch (e) { return (e as Error).message; }
+  };
+  listing4 = `<COMPANY NAME="PRACTICE CO"><GUID>GUID-PRACTICE</GUID></COMPANY><COMPANY NAME="PRACTICE CO"><GUID>GUID-REAL</GUID></COMPANY>`;
+  resetListingCache();
+  const dup = await send4(xmlFor("PRACTICE CO"));
+  check("same name with two GUIDs refused", /more than once/i.test(dup) && w4 === 0, dup.slice(0, 90));
+  listing4 = `<COMPANY NAME="PRACTICE CO"><GUID>GUID-PRACTICE</GUID></COMPANY>`;
+  resetListingCache();
+  const twoTags = await send4(xmlFor("PRACTICE CO", "REAL CO"));
+  check("two SVCURRENTCOMPANY tags refused, no XML", /more than one company/i.test(twoTags) && w4 === 0, twoTags.slice(0, 90));
+  resetListingCache(); lists4 = 0; w4 = 0;
+  await send4(xmlFor("PRACTICE CO"));
+  await send4(xmlFor("PRACTICE CO"));
+  check("listing cached across two company requests", lists4 === 1 && w4 === 2, `listings=${lists4} sends=${w4}`);
+  delete process.env.MKCP_PRACTICE_COMPANY;
+  delete process.env.MKCP_PRACTICE_COMPANY_GUID;
+  process.env.MKCP_TALLY_ROLE = "primary";
+  resetListingCache(); lists4 = 0; w4 = 0;
+  const prim = await send4(xmlFor("ANY CO"));
+  check("primary role, no practice company: guard inactive", prim === "sent" && lists4 === 0 && w4 === 1, `${prim.slice(0, 60)} listings=${lists4}`);
+  uninstallMock();
+  delete process.env.MKCP_TALLY_ROLE;
+  resetListingCache();
 
   console.log("\n  #123  an open gate refuses without calling the request");
   resetGate();

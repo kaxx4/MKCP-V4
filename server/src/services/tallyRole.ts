@@ -87,6 +87,7 @@ export function announceRole(): void {
 export function companyRefusal(xml: string): string | null {
   const practice = (process.env.MKCP_PRACTICE_COMPANY ?? "").trim();
   if (!isSandbox() && practice === "") return null;
+  if ((xml.match(/<SVCURRENTCOMPANY[s>]/gi) ?? []).length > 1) return "refused: request names more than one company. Nothing was sent to Tally.";
   const m = /<SVCURRENTCOMPANY>([\s\S]*?)<\/SVCURRENTCOMPANY>/i.exec(xml);
   if (!m) {
     if (/<ID>\s*List of Companies\s*<\/ID>/i.test(xml)) return null;
@@ -114,14 +115,18 @@ export function practiceGuid(): string {
  * decides. Pure: reads the company listing Tally returns and maps each company
  * name to the GUID loaded under it. A company with no GUID is left out.
  */
-export function companyGuidsFromListing(xml: string): Map<string, string> {
-  const out = new Map<string, string>();
+export function companyGuidsFromListing(xml: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
   for (const m of xml.matchAll(/<COMPANY\b([^>]*)>([\s\S]*?)<\/COMPANY>/gi)) {
     const attr = /NAME="([^"]*)"/i.exec(m[1])?.[1];
     const el = /<NAME[^>]*>([\s\S]*?)<\/NAME>/i.exec(m[2])?.[1];
     const guid = /<GUID[^>]*>([\s\S]*?)<\/GUID>/i.exec(m[2])?.[1]?.trim();
     const name = decodeEntities(attr ?? el ?? "").trim();
-    if (name && guid) out.set(name, guid);
+    if (name && guid) {
+      const list = out.get(name) ?? [];
+      if (!list.includes(guid)) list.push(guid);
+      out.set(name, list);
+    }
   }
   return out;
 }
