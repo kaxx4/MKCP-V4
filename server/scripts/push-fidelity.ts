@@ -132,6 +132,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("push-fidelity"); // #104: writes only on a sandbox role against a local Tally
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIDELITY = join(HERE, "fidelity");

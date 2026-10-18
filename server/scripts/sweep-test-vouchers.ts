@@ -19,6 +19,8 @@
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { isSweepVoucher, sweepPrefixAllowed } from "./lib/testVoucherMatch.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("sweep-test-vouchers"); // #104: writes only on a sandbox role against a local Tally
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const PREFIX = process.argv[2] ?? "ZZTEST";

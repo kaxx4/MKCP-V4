@@ -41,6 +41,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { priceListSignalRow } from "../src/services/supabaseSync.js";
+import { DEFAULT_TALLY_COMPANY } from "../src/config/company.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -53,7 +54,7 @@ const unchecked = (what: string, why: string): void => {
   skipped++; console.log(`  ????  ${what}  — NOT CHECKED: ${why}`);
 };
 
-const COMPANY = "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
+const COMPANY = DEFAULT_TALLY_COMPANY;
 
 console.log("\n  PRICE-LIST CHANGE SIGNAL — the write shape");
 console.log("  " + "─".repeat(66));

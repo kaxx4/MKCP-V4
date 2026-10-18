@@ -10,6 +10,14 @@
  *   npx tsx server/scripts/guardrails/run.ts --pull      READ-ONLY mirror audit vs Tally's own reports
  *                                              [--refresh-reports]  ask the office agent for fresh snapshots first
  *
+ *   npx tsx server/scripts/guardrails/run.ts --stress    every web builder's write pushed ONE AT A TIME into the
+ *                                                        SANDBOX Tally (STRESS/<mmdd>/<id>), read back, shape-checked,
+ *                                                        then DELETED and the day's count compared to its baseline
+ *   npx tsx server/scripts/guardrails/run.ts --stress-dry the same matrix through the web builders + guard only
+ *                                                        (reads masters and bills; pushes nothing)
+ *   npx tsx server/scripts/guardrails/run.ts --stress-clean delete every CLAUDE-TEST STRESS voucher still on the test
+ *                                                        dates (after a stopped run), by REMOTEID, and re-count
+ *
  *   npx tsx server/scripts/guardrails/run.ts --simulate  the WEB app's payloads through guard → builder → safePush into
  *                                                        a simulated Tally (tallyMock), silent failures included
  *   npx tsx server/scripts/guardrails/run.ts --g7        pull-side fetch lists name every field their parsers read;
@@ -50,7 +58,11 @@ if (args.has("--live")) {
   }
   [...OFFLINE_SET, "--sandbox", "--calibrate", "--pull", "--live-suites"].forEach((f) => args.add(f));
 }
-const modes = ["--static", "--simulate", "--g7", "--suites", "--sandbox", "--calibrate", "--pull", "--live-suites"].filter((f) => args.has(f));
+if ((args.has("--stress") || args.has("--stress-dry") || args.has("--stress-clean")) && (process.env.MKCP_TALLY_ROLE ?? "").trim().toLowerCase() !== "sandbox") {
+  console.error("\n  REFUSED — --stress pushes and deletes test vouchers; run it only against the sandbox Tally with MKCP_TALLY_ROLE=sandbox.\n");
+  process.exit(2);
+}
+const modes = ["--static", "--simulate", "--g7", "--suites", "--sandbox", "--calibrate", "--pull", "--live-suites", "--stress", "--stress-dry", "--stress-clean"].filter((f) => args.has(f));
 if (!modes.length) modes.push("--static", "--pull");
 
 (async () => {
@@ -82,6 +94,9 @@ if (!modes.length) modes.push("--static", "--pull");
       } else if (mode === "--calibrate") {
         const { runCalibrate } = await import("./calibrate.js");
         await runCalibrate();
+      } else if (mode === "--stress" || mode === "--stress-dry" || mode === "--stress-clean") {
+        const { runStress } = await import("./stress.js");
+        await runStress({ dry: mode === "--stress-dry", clean: mode === "--stress-clean" });
       } else if (mode === "--sandbox") {
         const { runSandbox } = await import("./sandbox.js");
         await runSandbox();

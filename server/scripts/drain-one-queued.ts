@@ -44,6 +44,8 @@ type Db = ReturnType<typeof makeDb>;
 import { safePush } from "../src/services/safePush.js";
 import { tallyPost } from "../src/tally.js";
 import type { VoucherPayload } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("drain-one-queued"); // #104: writes only on a sandbox role against a local Tally
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";

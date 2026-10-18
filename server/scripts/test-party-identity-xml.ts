@@ -135,7 +135,7 @@ console.log("dated mailing and registration");
   ok("'\\x04 Unknown' registration is never sent verbatim", tag(h, "GSTREGISTRATIONTYPE") === "Unregistered/Consumer" && !h.includes("\x04"));
   ok("normaliseRegistrationType", normaliseRegistrationType("Unregistered", false) === "Unregistered/Consumer"
     && normaliseRegistrationType("", true) === "Regular" && normaliseRegistrationType("Composition", true) === "Composition");
-  ok("pincodeIn", pincodeIn(["HABRA - 743263"]) === "743263" && pincodeIn(["PH 9800015300"]) === "" && pincodeIn(["NO PIN"]) === "");
+  ok("pincodeIn", pincodeIn(["HABRA - 743263"]) === "743263" && pincodeIn(["PH 9800000002"]) === "" && pincodeIn(["NO PIN"]) === "");
 }
 
 console.log("line GST — rate details and HSN, the shape a typed line stores");

@@ -38,6 +38,8 @@ const guardedPost = (url: string, xml: string, timeoutMs: number, raw = false) =
   withTally(url, "explore", () => tallyPost(url, xml, timeoutMs, raw));
 import { convertCompanies } from "../src/converters/convert.js";
 import { loadMasters, type TallyMasters } from "../src/services/tallyMasters.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("explore-adopt-voucher"); // #104: writes only on a sandbox role against a local Tally
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");

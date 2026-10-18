@@ -29,6 +29,8 @@ import { convertCompanies } from "../src/converters/convert.js";
 import { loadMasters, type TallyMasters } from "../src/services/tallyMasters.js";
 import { safePush } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("test-voucher-edit"); // #104: writes only on a sandbox role against a local Tally
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const KEEP = process.argv.includes("--keep");

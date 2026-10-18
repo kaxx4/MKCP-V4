@@ -21,6 +21,8 @@ import type { VoucherPayload } from "../src/types.js";
 import {
   fixtureMasters, fixtureOpenBills, sale, receipt, purchase, PARTY_LOCAL, PARTY_INTER, PARTY_UNREG,
 } from "./guardrails/fixtures.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+if (process.argv.includes("--push")) guardScriptWrites("test-push-guard"); // #104, offline cases need no Tally: writes only on a sandbox role against a local Tally
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");

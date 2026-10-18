@@ -17,6 +17,8 @@ import {
   U, MARK, company, vouchersOnDayXml, allFieldsXml, objects, fld, block,
   check, checkNum, report, remember, push, esc, importSummary,
 } from "./harness.js";
+import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+guardScriptWrites("case-notes"); // #104: writes only on a sandbox role against a local Tally
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const t = Date.now().toString().slice(-5);

@@ -15,6 +15,8 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { loadMasters } from "../src/services/tallyMasters.js";
 import { withTally } from "../src/services/tallyGate.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("explore-master-create"); // #104: writes only on a sandbox role against a local Tally
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");

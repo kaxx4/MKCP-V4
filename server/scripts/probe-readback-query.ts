@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   console.log(`\n  READ-BACK QUERY\n  ` + "─".repeat(66));
 
   const res = await createLedger(TALLY, company, {
-    name: NAME, parent: "SUNDRY DEBTORS", state: "West Bengal", gstin: "19ZZZSY0789N1ZU",
+    name: NAME, parent: "SUNDRY DEBTORS", state: "West Bengal", gstin: "19ZZZPZ0001Z1Z6",
   });
   console.log(`  created=${res.created} ok=${res.ok}`);
   console.log(`  readBack: ${JSON.stringify(res.readBack)}\n`);

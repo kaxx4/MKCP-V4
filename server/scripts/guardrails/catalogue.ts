@@ -62,6 +62,8 @@ export const CATALOGUE: Guardrail[] = [
   { id: "TG-P30", area: "push", severity: "critical", title: "Sandbox never writes shared state; round-trip writes only to a sandbox Tally on localhost" },
   { id: "TG-P31", area: "push", severity: "critical", title: "SVCURRENTCOMPANY is the exact company key" },
   { id: "TG-P32", area: "push", severity: "critical", title: "Tally is the only source of rates/GST/HSN — no hand-kept copy decides a pushed rate" },
+  { id: "TG-P33", area: "push", severity: "critical", title: "Stress: every web-builder write lands, or is refused, exactly as predicted — one voucher per REMOTEID, never a duplicate" },
+  { id: "TG-P34", area: "push", severity: "high", title: "Stress cleanup: every STRESS voucher deleted by REMOTEID and the day's voucher count back to its baseline" },
   // ── Pull ─────────────────────────────────────────────────────────────────
   { id: "TG-L01", area: "pull", severity: "high", title: "Mirror is complete vs Tally, including backdated days (a full re-read within 48h)" },
   { id: "TG-L02", area: "pull", severity: "medium", title: "Incremental sync is AlterID-driven and its cursor is recorded" },

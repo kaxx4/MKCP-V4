@@ -16,6 +16,8 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { safePush } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+if (process.argv.includes("--delete")) guardScriptWrites("clean-test-pollution"); // #104: classify-only reads; deleting needs a sandbox role on a local Tally
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const DELETE = process.argv.includes("--delete");

@@ -165,7 +165,7 @@ function addressLines(v: any, key: string): string[] {
   return [];
 }
 
-/** A line that is a tax-identity note, not part of the place: "(PAN: ZZZDH7695T)", "GSTIN ...". */
+/** A line that is a tax-identity note, not part of the place: "(PAN: ZZZPZ0048Z)", "GSTIN ...". */
 const TAX_NOTE = /\b(PAN|GSTIN|GST\s*NO)\b/i;
 /** Indian PIN: six digits, first non-zero, optionally written "743 502". Not inside a longer number. */
 const PIN = /(?<!\d)([1-9]\d{2})\s?(\d{3})(?!\d)/;

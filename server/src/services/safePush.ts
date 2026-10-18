@@ -455,14 +455,32 @@ export async function safePush(
       console.warn(`[safePush] "${payload.voucherNumber}" was refused and no free number could be worked out for ${payload.voucherType} — reporting the original rejection.`);
     } else {
       console.warn(`[safePush] "${payload.voucherNumber}" was refused with nothing created — retrying once as "${free}".`);
-      const again = await safePush(tallyUrl, company, { ...payload, voucherNumber: free }, opts, true);
+      /* The bill follows the number. An invoice's `New Ref` is named for its
+         own number (salesOrderToPayload, purchaseToPayload); renumbering the
+         voucher and leaving the bill on the taken number merged this
+         receivable into the OTHER invoice's bill — --stress 18-Oct-2026:
+         STRESS/1018/S39 booked its ₹58 into bill "STRESS/1018/S01" (₹885 →
+         ₹943), and the read-back then failed the push as "nothing created". */
+      const bounced = payload.voucherNumber!;
+      const rebill = (e: VoucherPayload["ledgerEntries"][number]) => e.billAllocations?.length
+        ? { ...e, billAllocations: e.billAllocations.map(b => b.billType === "New Ref" && b.name === bounced ? { ...b, name: free } : b) }
+        : e;
+      const again = await safePush(tallyUrl, company, {
+        ...payload, voucherNumber: free, ledgerEntries: (payload.ledgerEntries ?? []).map(rebill),
+        ...(payload.reference === bounced ? { reference: free } : {}),
+      }, opts, true);
+      const renumbered = `"${bounced}" was already taken in Tally, so this voucher was numbered "${free}" instead. Re-sync to see it.`;
       if (again.ok) {
+        return { ...again, warnings: [...again.warnings, renumbered] };
+      }
+      /* The retry REACHED Tally (stage verify): a voucher numbered `free` may
+         now be in the books. Reporting the original "created=0, nothing was
+         written" here was false — say what actually happened. */
+      if (again.stage === "verify") {
         return {
           ...again,
-          warnings: [
-            ...again.warnings,
-            `"${payload.voucherNumber}" was already taken in Tally, so this voucher was numbered "${free}" instead. Re-sync to see it.`,
-          ],
+          errors: [`"${bounced}" was taken, so this was retried as "${free}" — Tally ACCEPTED the retry but its read-back did not match. A voucher numbered "${free}" may be in the books; check it before pushing again.`, ...again.errors],
+          warnings: [...again.warnings, renumbered],
         };
       }
       // The number was not the problem. Report the ORIGINAL rejection.

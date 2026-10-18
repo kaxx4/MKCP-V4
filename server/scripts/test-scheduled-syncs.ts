@@ -24,6 +24,8 @@
  */
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { DEFAULT_TALLY_COMPANY } from "../src/config/company.js";
+import { configCompanyKey } from "../src/services/mirrorPanel.js";
 import {
   runScheduledWindow, scheduledWindows, noteDaybookSync,
   minutesSinceDaybookSync, todayYmd, daysAgoYmd, fyStartYmd,
@@ -63,7 +65,7 @@ function fakeServer(reply: () => { status: number; json: unknown }) {
   };
 }
 
-const COMPANY = "M.K.CYCLES (P) LTD.";
+const COMPANY = configCompanyKey(DEFAULT_TALLY_COMPANY);
 const todayWindow = () => ({ ...scheduledWindows()[0], everyMinutes: 30 });
 
 (async () => {

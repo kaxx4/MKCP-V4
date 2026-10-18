@@ -262,6 +262,47 @@ existing; confirm the live object, never the file.
   provisioning build exists (`MKCP_EMBED_ENV=1`) for first-run setup on the
   office machine and is **never** published.
 
+## Turning agent auth on (#98)
+
+The agent's HTTP routes (voucher push, bank push, file upload, raw Tally import)
+used to be gated by CORS alone, which a request with no Origin header ignores.
+`server/src/services/agentAuth.ts` adds two switches, both read at startup from
+the environment of the agent process (`server/.env`, or `<userData>/.env` on an
+installed machine):
+
+```
+AGENT_API_TOKEN=<long random string>            # route auth
+AGENT_ALLOWED_ORIGINS=https://your-dashboard.example   # comma list; optional
+```
+
+- **Unset (today's behaviour).** Every route stays open and the agent logs one
+  warning at startup naming `AGENT_API_TOKEN`. Nothing breaks the day this ships.
+- **Set.** Every route except `GET /api/tally/health` (and the static `GET /`
+  page shell) needs `Authorization: Bearer <token>`; anything else is a 401.
+  The compare is constant-time. Generate a token with
+  `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+- **CORS.** Default is loopback + any `https://*.vercel.app` + the legacy
+  `ALLOWED_ORIGINS`. Setting `AGENT_ALLOWED_ORIGINS` replaces the `*.vercel.app`
+  wildcard and the legacy list with exactly the origins you name (loopback stays,
+  for the Electron renderer and dev tabs).
+- **Before you set the token:** every caller must send it. The Electron renderer
+  (`src/AgentStatus.tsx`, `MirrorPanel.tsx`, `PendingPushes.tsx`, `api/tallyApi.ts`,
+  and the other `fetch(${BASE}/api/...)` sites) does not yet, so turning it on
+  today would 401 the agent's own UI. Add the header there first.
+- Proof: `npx tsx server/scripts/test-agent-auth.ts` (offline).
+
+## Operator scripts that write to Tally (#104)
+
+Any script under `server/scripts/` that posts an Import, Alter, Delete or Cancel
+must call `guardScriptWrites("name")` from `src/services/scriptWriteGuard.ts`
+(or be exempt with a reason). It refuses unless `MKCP_TALLY_ROLE=sandbox` and
+`TALLY_URL` is loopback, or a mock transport is installed. The role default is
+unchanged (`primary`). `scripts/test-script-write-guard.ts` scans the source and
+fails on a new ungated writer. Real GSTINs and PANs must never be committed:
+`scripts/test-no-real-gstin.ts` fails on any tracked GSTIN-shaped string that is
+not a placeholder (`...0000...`, `...1234...`, or the `ZZZ` series), and fixture
+captures go to the ignored `server/fixtures/captured/`.
+
 ## Secrets
 
 `server/.env` holds a live Supabase **service-role** key in plaintext. It has

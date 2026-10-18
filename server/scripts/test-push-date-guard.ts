@@ -21,7 +21,7 @@ const ledger = (name: string, regs: MasterLedger["registrations"]): MasterLedger
   mailingName: name, address: ["G T ROAD, LUDHIANA"], registrations: regs,
 });
 const TOGO = ledger("PARTY 299 CYCLES", [
-  { applicableFrom: "20170701", gstin: "03ZZZRU6176R1Z4", registrationType: "Regular", placeOfSupply: "Punjab", state: "Punjab" },
+  { applicableFrom: "20170701", gstin: "03ZZZPZ0216Z1ZA", registrationType: "Regular", placeOfSupply: "Punjab", state: "Punjab" },
 ]);
 const NEWCO = ledger("NEW SUPPLIER", [
   { applicableFrom: "20260915", gstin: "03AAAAA0000A1Z5", registrationType: "Regular", placeOfSupply: "Punjab", state: "Punjab" },

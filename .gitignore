@@ -106,3 +106,11 @@ server/data/push-fidelity-*
 # Throwaway probe scripts written during investigations.
 server/scripts/_scratch-*.ts
 server/data/push-p1/
+
+# #108: fixtures captured from a live Tally hold real party names, GSTINs, phones
+# and addresses. Capture scripts write to server/fixtures/captured/ (ignored); only
+# hand-scrubbed fixtures live directly in server/fixtures/.
+server/fixtures/captured/
+server/fixtures/**/*.raw.json
+server/fixtures/**/*.real.json
+server/fixtures/**/real-*

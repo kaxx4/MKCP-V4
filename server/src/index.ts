@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import "dotenv/config";
 import express from "express";
-import cors from "cors";
+import { loadAgentAuthConfig, authStartupNotice, installAgentSecurity } from "./services/agentAuth.js";
 import { tallyPost, HEALTH_XML } from "./tally.js";
 import { convertCompanies } from "./converters/convert.js";
 import { SyncOrchestrator } from "./services/syncOrchestrator.js";
@@ -21,7 +21,8 @@ import { announceRole, tallyRole } from "./services/tallyRole.js";
 import { filedThroughOn } from "./services/pushGuard.js";
 import { checkDebugXml } from "./services/debugGuard.js";
 import { isOffline, offlineReason } from "./services/supabaseClient.js";
-import { buildMirrorPanel } from "./services/mirrorPanel.js";
+import { buildMirrorPanel, configCompanyKey } from "./services/mirrorPanel.js";
+import { DEFAULT_TALLY_COMPANY, tallyCompany } from "./config/company.js";
 import { vouchersOnDay } from "./services/localSession.js";
 import { safePush } from "./services/safePush.js";
 import type { VoucherPayload } from "./types.js";
@@ -55,25 +56,15 @@ const activeSyncs = new Map<string, Promise<any>>();
 /**
  * This process can write to the books, so it does not accept requests from any
  * origin a browser happens to be on. Allowed: the Electron renderer (no Origin
- * header at all), anything on localhost, and the deployed dashboard. Extra
- * origins can be added via ALLOWED_ORIGINS as a comma-separated list.
+ * header at all), anything on localhost, and the deployed dashboard. The origin
+ * allowlist (AGENT_ALLOWED_ORIGINS, legacy ALLOWED_ORIGINS) and the bearer-token
+ * route auth (AGENT_API_TOKEN) live in services/agentAuth.ts (#98).
  */
-const EXTRA_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
-  .split(",").map(s => s.trim()).filter(Boolean);
-const originAllowed = (origin: string) =>
-  /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin) ||
-  /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin) ||
-  EXTRA_ORIGINS.includes(origin);
+const authCfg = loadAgentAuthConfig();
+const authNotice = authStartupNotice(authCfg);
+(authNotice.level === "warn" ? console.warn : console.log)(authNotice.text);
 
-app.use(cors({
-  origin(origin, cb) {
-    // No Origin header: same-origin, curl, or the Electron renderer.
-    if (!origin || originAllowed(origin)) return cb(null, true);
-    console.warn(`[security] blocked cross-origin request from ${origin}`);
-    cb(new Error(`Origin ${origin} is not allowed`));
-  },
-  credentials: true,
-}));
+installAgentSecurity(app, authCfg);
 app.use(express.json({ limit: "100mb" }));
 
 // ── Request logging ───────────────────────────────────────────────────────────
@@ -479,7 +470,7 @@ app.post("/api/supabase/sync", async (req: express.Request, res: express.Respons
 // ── Supabase config sync (all dashboard-edited data) ────────────────────────────
 app.post("/api/supabase/sync-config", async (req: express.Request, res: express.Response) => {
   const {
-    company = "M.K.CYCLES (P) LTD.",
+    company = configCompanyKey(DEFAULT_TALLY_COMPANY),
     discountRules = [],
     orderGroups = [],
     unitOverrides = {},
@@ -734,7 +725,7 @@ const httpServer = app.listen(PORT, BIND_HOST, () => {
   // Remote refresh: web dashboard can trigger a Tally sync via Supabase Realtime.
   // Reads company name from env so it matches whatever the web inserted.
   const company =
-    process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
+    tallyCompany();
   startRefreshListener(PORT, company);
 
   // Voucher pushes FROM the web dashboard. Separate listener, separate table,
@@ -855,7 +846,7 @@ app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()))
  * worse than one that says it could not look. */
 app.get("/api/mirror/panel", async (req, res) => {
   const company =
-    String(req.query?.company || process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)");
+    tallyCompany(String(req.query?.company || ""));
   const limit = Math.min(100, Math.max(5, Number(req.query?.limit ?? 25) || 25));
   try {
     res.json(await buildMirrorPanel(company, limit));
@@ -1112,7 +1103,7 @@ app.get("/api/file-transfer/watch", (_req, res) => {
  *  to the old path and has to be rebuilt. */
 app.post("/api/file-transfer/watch/restart", (req: express.Request, res: express.Response) => {
   const company =
-    String(req.body?.company || process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)");
+    tallyCompany(String(req.body?.company || ""));
   const result = startWatchFolder(company);
   res.status(result.ok ? 200 : 400).json(result);
 });

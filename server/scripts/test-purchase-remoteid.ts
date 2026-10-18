@@ -23,6 +23,8 @@
 import { readFileSync } from "node:fs";
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("test-purchase-remoteid"); // #104: writes only on a sandbox role against a local Tally
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const [, , V1_PATH, V2_PATH] = process.argv;

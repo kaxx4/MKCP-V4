@@ -56,6 +56,8 @@ import { guardVoucher } from "../src/services/pushGuard.js";
 import { safePush } from "../src/services/safePush.js";
 import { esc, blocksOf, tagOf } from "../src/services/tallyRequest.js";
 import type { VoucherPayload } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("verify-quote-price-roundtrip"); // #104: writes only on a sandbox role against a local Tally
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");

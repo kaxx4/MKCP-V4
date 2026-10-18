@@ -21,6 +21,8 @@ config({ path: join(here, "..", ".env") });
 import { tallyPost } from "../src/tally.js";
 import { configureTallyLog, summarise } from "../src/services/tallyLog.js";
 import { buildCollection, buildReport, onDate } from "../src/services/tallyRequest.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("verify-exception-log"); // #104: writes only on a sandbox role against a local Tally
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";

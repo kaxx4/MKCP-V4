@@ -1,6 +1,7 @@
 /** Print the exact import XML our builder produces, for diffing against a
  *  real Tally-exported voucher. Read-only — sends nothing. */
 import { buildVoucherImportXml } from "../src/services/voucherPusher.js";
+import { DEFAULT_TALLY_COMPANY } from "../src/config/company.js";
 import type { VoucherPayload } from "../src/types.js";
 
 const payload: VoucherPayload = {
@@ -26,4 +27,4 @@ const payload: VoucherPayload = {
   ],
 };
 
-console.log(buildVoucherImportXml("M.K.CYCLES (P) LTD. - (from 1-Apr-26)", payload));
+console.log(buildVoucherImportXml(DEFAULT_TALLY_COMPANY, payload));

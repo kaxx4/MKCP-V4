@@ -20,6 +20,10 @@
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
+import { DEFAULT_TALLY_COMPANY } from "../src/config/company.js";
+import { configCompanyKey } from "../src/services/mirrorPanel.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("roundtrip-verify"); // #104: writes only on a sandbox role against a local Tally
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
@@ -46,10 +50,10 @@ const YMD = `${D.getFullYear()}${String(D.getMonth() + 1).padStart(2, "0")}${Str
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 const OUR_STATE = "West Bengal";
-const OUR_GSTIN = "19ZZZUI1505T1ZE";
-const OUR_NAME = "M.K.CYCLES (P) LTD.";
+const OUR_GSTIN = "19ZZZCZ0272Z1ZG";
+const OUR_NAME = configCompanyKey(DEFAULT_TALLY_COMPANY);
 const OUR_PIN = "700001";
-const OUR_ADDR = ["9/12, Lal Bazaar Street, Kolkata : 700001", "PAN: ZZZUI1505T   PHONE : 9800065427, 9800015300"];
+const OUR_ADDR = ["9/12, Lal Bazaar Street, Kolkata : 700001", "PAN: ZZZCZ0272Z   PHONE : 9800000001, 9800000002"];
 const GODOWN = "Main Location", BATCH = "Primary Batch";
 
 // ── XML helpers ─────────────────────────────────────────────────────────────

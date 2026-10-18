@@ -26,9 +26,10 @@ import { dirname, join } from "node:path";
 loadEnv({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".env") });
 import { SyncOrchestrator } from "../src/services/syncOrchestrator.js";
 import { ChangeDetector } from "../src/services/changeDetector.js";
+import { DEFAULT_TALLY_COMPANY } from "../src/config/company.js";
 
 const [, , from, to] = process.argv;
-const COMPANY = process.env.SYNC_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
+const COMPANY = process.env.SYNC_COMPANY || DEFAULT_TALLY_COMPANY;
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 
 if (!from || !to || !/^\d{8}$/.test(from) || !/^\d{8}$/.test(to)) {

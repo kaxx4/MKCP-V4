@@ -25,6 +25,8 @@ import {
   U, MARK, company, allFieldsXml, objects, fld, flds, block,
   check, report, push, esc, importSummary,
 } from "./harness.js";
+import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+guardScriptWrites("case-party"); // #104: writes only on a sandbox role against a local Tally
 
 /** A collection asking for named fields only — the shape the sync itself uses. */
 function targetedXml(co: string, fields: string[]): string {
@@ -49,7 +51,7 @@ const INTENT: NewLedger = {
   // Two lines ON PURPOSE. Real parties have them; PARTY 299 CYCLES has exactly this
   // shape, and a builder that takes one string cannot express it.
   address: "PLOT NO. 13 1ST FLOOR, GRAIN MARKET\nGILL ROAD, LUDHIANA-141003",
-  gstin: "03ZZZRU6176R1Z4",
+  gstin: "03ZZZPZ0216Z1ZA",
   gstRegistrationType: "Regular",
   phone: "9876543210",
   email: "zztest@example.invalid",

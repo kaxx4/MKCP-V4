@@ -19,6 +19,8 @@ import { guardVoucher } from "../src/services/pushGuard.js";
 import { safePush } from "../src/services/safePush.js";
 import { loadOpenBills, receivableBills, billsForParty, type OpenBill } from "../src/services/billSettlement.js";
 import type { VoucherPayload, LedgerEntry, InventoryEntry } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+if (process.argv.includes("--push")) guardScriptWrites("test-edge-cases"); // #104, without --push it only reads: writes only on a sandbox role against a local Tally
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
