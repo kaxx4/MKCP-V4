@@ -50,7 +50,7 @@ async function main(): Promise<void> {
 
   const res = await createLedger(TALLY, company, {
     name: NAME, parent: "SUNDRY DEBTORS", state: "West Bengal",
-    gstin: "19ZZZSY0789N1ZU", pincode: "700001", address: "Probe Street",
+    gstin: "19ZZZPZ0001Z1Z6", pincode: "700001", address: "Probe Street",
   });
   console.log(`  create: created=${res.created} errors=${res.errors} exceptions=${res.exceptions}`);
   for (const n of res.notes) console.log(`    ${n}`);

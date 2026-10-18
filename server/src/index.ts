@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import "dotenv/config";
 import express from "express";
-import cors from "cors";
+import { loadAgentAuthConfig, authStartupNotice, installAgentSecurity } from "./services/agentAuth.js";
 import { tallyPost, HEALTH_XML } from "./tally.js";
 import { convertCompanies } from "./converters/convert.js";
 import { SyncOrchestrator } from "./services/syncOrchestrator.js";
@@ -55,25 +55,15 @@ const activeSyncs = new Map<string, Promise<any>>();
 /**
  * This process can write to the books, so it does not accept requests from any
  * origin a browser happens to be on. Allowed: the Electron renderer (no Origin
- * header at all), anything on localhost, and the deployed dashboard. Extra
- * origins can be added via ALLOWED_ORIGINS as a comma-separated list.
+ * header at all), anything on localhost, and the deployed dashboard. The origin
+ * allowlist (AGENT_ALLOWED_ORIGINS, legacy ALLOWED_ORIGINS) and the bearer-token
+ * route auth (AGENT_API_TOKEN) live in services/agentAuth.ts (#98).
  */
-const EXTRA_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
-  .split(",").map(s => s.trim()).filter(Boolean);
-const originAllowed = (origin: string) =>
-  /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin) ||
-  /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin) ||
-  EXTRA_ORIGINS.includes(origin);
+const authCfg = loadAgentAuthConfig();
+const authNotice = authStartupNotice(authCfg);
+(authNotice.level === "warn" ? console.warn : console.log)(authNotice.text);
 
-app.use(cors({
-  origin(origin, cb) {
-    // No Origin header: same-origin, curl, or the Electron renderer.
-    if (!origin || originAllowed(origin)) return cb(null, true);
-    console.warn(`[security] blocked cross-origin request from ${origin}`);
-    cb(new Error(`Origin ${origin} is not allowed`));
-  },
-  credentials: true,
-}));
+installAgentSecurity(app, authCfg);
 app.use(express.json({ limit: "100mb" }));
 
 // ── Request logging ───────────────────────────────────────────────────────────

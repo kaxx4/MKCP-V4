@@ -28,6 +28,8 @@ import {
   U, MARK, company, vouchersOnDayXml, objects, fld, flds, block,
   check, checkNum, report, esc, importSummary,
 } from "./harness.js";
+import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+guardScriptWrites("case-purchase"); // #104: writes only on a sandbox role against a local Tally
 
 const KEEP = process.argv.includes("--keep");
 

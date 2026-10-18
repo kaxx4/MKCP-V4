@@ -147,7 +147,7 @@ async function main(): Promise<void> {
   });
   eq("undefined voucher does not throw", extractVoucherBuyer(undefined).buyer_name, null);
   eq("GSTIN digits are not mistaken for a PIN",
-    extractVoucherBuyer({ "ADDRESS.LIST": { ADDRESS: ["GSTIN 19ZZZUI1505T1ZE", "TOWNPUR"] } }).buyer_pincode, null);
+    extractVoucherBuyer({ "ADDRESS.LIST": { ADDRESS: ["GSTIN 19ZZZCZ0272Z1ZG", "TOWNPUR"] } }).buyer_pincode, null);
   eq("spaced PIN \"743 502\" is read", extractVoucherBuyer({ "ADDRESS.LIST": { ADDRESS: "TOWNPUR 743 502" } }).buyer_pincode, "743502");
 
   console.log("\n  mirror row (SupabaseSync.mapVoucher, no client)");

@@ -26,6 +26,8 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { safePush } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("test-purchase-converter"); // #104: writes only on a sandbox role against a local Tally
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const KEEP = process.argv.includes("--keep");

@@ -80,8 +80,12 @@ const EMBED_FILTER_TO = `filter: ["dist/**/*", "package.json", "node_modules/**/
 const EMBED_OUTPUT_FROM = `output: "release2"`;
 
 /**
- * Write a one-off electron-builder config that bundles server/.env and builds
- * into its own directory. Returns the config filename.
+ * Write a one-off electron-builder config for a PROVISIONING build and return its
+ * filename. server/.env is NOT bundled by any ordinary build (the extraResources
+ * filter in electron-builder.json5 lists only dist, package.json and node_modules).
+ * This is the single exception: it takes that filter and adds ".env", and points
+ * the output at its own directory, which must never be published. The result is
+ * a secret installer, not a release artifact.
  */
 function writeProvisioningConfig() {
   const raw = readFileSync(join(ROOT, CONFIG_FILE), 'utf8');

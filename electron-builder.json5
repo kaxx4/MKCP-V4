@@ -68,16 +68,17 @@
       // Server runs in the main process via require(process.resourcesPath/server/dist/index.js)
       // — it lives OUTSIDE the asar so it can resolve its own node_modules at runtime.
       //
-      // ".env" is bundled from the LOCAL, gitignored server/.env on the build
-      // machine (never committed) — public/electron.js's loadPackagedEnv()
-      // reads it from resourcesPath/server/.env at startup. This replaces a
-      // hardcoded Supabase service-role key that used to live directly in
-      // electron.js as the "packaged builds can't read server/.env" fallback;
-      // that literal got committed to git and must be treated as dead
-      // regardless of rotation status. Make sure the build machine's
-      // server/.env has real values before running build:prod — a missing
-      // file just means Supabase-dependent features self-disable (see
-      // loadPackagedEnv()'s warning), it won't fail the build or crash the app.
+      // ".env" is NOT bundled by default. The filter below lists only
+      // dist, package.json and node_modules. The one exception is a
+      // provisioning build: MKCP_EMBED_ENV=1 makes scripts/build-prod.js
+      // rewrite this filter to add ".env" and write to its own output
+      // directory, which must never be published. Normal installers read
+      // their .env from <userData>/.env, which public/electron.js's
+      // loadPackagedEnv() checks first. A hardcoded Supabase service-role key
+      // once lived in electron.js as a fallback; that literal was committed
+      // to git and must be treated as dead regardless of rotation status. A
+      // missing .env just means Supabase-dependent features self-disable
+      // (see loadPackagedEnv()'s warning). The build does not fail.
       from: "server",
       to: "server",
       // ".env" is NOT in this list any more, and that is the change that makes

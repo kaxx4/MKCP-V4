@@ -32,6 +32,8 @@ import { convertCompanies } from "../src/converters/convert.js";
 import { createLedger, deleteLedger, buildLedgerXml } from "../src/services/masterPusher.js";
 import { loadMasters } from "../src/services/tallyMasters.js";
 import { blocksOf } from "../src/services/tallyRequest.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("verify-master-create"); // #104: writes only on a sandbox role against a local Tally
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");

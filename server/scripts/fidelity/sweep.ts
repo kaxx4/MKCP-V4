@@ -17,6 +17,8 @@ import { pushVoucherToTally } from "../../src/services/voucherPusher.js";
 import { loadMasters } from "../../src/services/tallyMasters.js";
 import type { VoucherPayload } from "../../src/types.js";
 import { U, MARK, company, vouchersOnDayXml, objects, fld, esc, importSummary, allFieldsXml, journal } from "./harness.js";
+import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+guardScriptWrites("sweep"); // #104: writes only on a sandbox role against a local Tally
 
 const DO = process.argv.includes("--delete");
 const DAYS = 40;

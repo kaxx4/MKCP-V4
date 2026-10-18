@@ -27,7 +27,11 @@ import { FixtureStore, type Fixture } from "../src/services/tallyMock.js";
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";
-const DIR = join(here, "..", "fixtures");
+/* #108: captures hold REAL party names, GSTINs, phones and addresses and this
+   repo is PUBLIC, so they land in an ignored folder. The sanitised, committed
+   fixtures stay in server/fixtures/; to refresh one, capture here, scrub it by
+   hand, then copy it up. */
+const DIR = join(here, "..", "fixtures", "captured");
 
 /**
  * Masters are captured whole; vouchers are captured for ONE DAY.

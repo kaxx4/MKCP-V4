@@ -26,6 +26,8 @@ config({ path: join(here, "..", ".env") });
 
 import { safePush } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("delete-by-remoteid"); // #104: writes only on a sandbox role against a local Tally
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";

@@ -9,6 +9,8 @@ import { safePush } from "../../src/services/safePush.js";
 import { tallyPost } from "../../src/tally.js";
 import { U, MARK, company, vouchersOnDayXml, objects, fld, check, report, remember } from "./harness.js";
 import type { VoucherPayload } from "../../src/types.js";
+import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+guardScriptWrites("case-collision"); // #104: writes only on a sandbox role against a local Tally
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const N = `${MARK}/X${Date.now().toString().slice(-5)}`;

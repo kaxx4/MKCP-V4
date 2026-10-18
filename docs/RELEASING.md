@@ -10,7 +10,11 @@ The installer used to bundle `server/.env` — the live Supabase service-role ke
 which bypasses RLS on every table. **`kaxx4/MKCP-V4` is a public repository**, so
 publishing that artifact would have put the key on the open internet.
 
-It is no longer bundled (`electron-builder.json5` → `extraResources` → `filter`).
+It is no longer bundled (`electron-builder.json5` → `extraResources` → `filter`):
+an ordinary installer carries no `.env`, and that is the only reason it can be
+published. The one exception is a *provisioning* build (`MKCP_EMBED_ENV=1`, below),
+which rewrites that filter to add `.env` and writes to its own directory. That
+installer is a secret and is never published.
 `loadPackagedEnv()` in `public/electron.js` already preferred
 `<userData>/.env`, so nothing changed for a machine that has one.
 

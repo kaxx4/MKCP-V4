@@ -22,6 +22,8 @@ import { loadOpenBills, billsForParty, allocateFIFO, receivableBills, payableBil
 import { planFromBankRows } from "../src/services/bankToReceipts.js";
 import { guardVoucher } from "../src/services/pushGuard.js";
 import type { VoucherPayload, LedgerEntry } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("mock-run-all"); // #104: writes only on a sandbox role against a local Tally
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");

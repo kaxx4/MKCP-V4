@@ -11,6 +11,8 @@ import { loadMasters } from "../src/services/tallyMasters.js";
 import { safePush } from "../src/services/safePush.js";
 import { ChangeDetector } from "../src/services/changeDetector.js";
 import type { VoucherPayload } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+guardScriptWrites("check-alterid"); // #104: writes only on a sandbox role against a local Tally
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");

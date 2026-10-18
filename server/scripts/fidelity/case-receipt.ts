@@ -27,6 +27,8 @@ import {
   U, MARK, company, allFieldsXml, vouchersOnDayXml, objects, fld, block, blocks,
   check, checkNum, report, remember,
 } from "./harness.js";
+import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+guardScriptWrites("case-receipt"); // #104: writes only on a sandbox role against a local Tally
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const stamp = Date.now().toString().slice(-5);

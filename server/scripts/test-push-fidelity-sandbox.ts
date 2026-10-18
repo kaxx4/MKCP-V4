@@ -203,7 +203,7 @@ function expectFor(p: VoucherPayload, m: TallyMasters): Expect {
         STATENAME: HOME, PLACEOFSUPPLY: HOME, CONSIGNEESTATENAME: HOME,
         COUNTRYOFRESIDENCE: "India", CONSIGNEECOUNTRYNAME: "India",
         GSTREGISTRATIONTYPE: "Unregistered/Consumer", PARTYGSTIN: null, CONSIGNEEGSTIN: null,
-        PARTYPINCODE: pin, CONSIGNEEPINCODE: pin, CMPGSTIN: "19ZZZUI1505T1ZE",
+        PARTYPINCODE: pin, CONSIGNEEPINCODE: pin, CMPGSTIN: "19ZZZCZ0272Z1ZG",
       },
     };
   }
@@ -221,7 +221,7 @@ function expectFor(p: VoucherPayload, m: TallyMasters): Expect {
       COUNTRYOFRESIDENCE: "India", CONSIGNEECOUNTRYNAME: "India",
       GSTREGISTRATIONTYPE: regType === "Unregistered" ? "Unregistered/Consumer" : regType,
       PARTYGSTIN: reg.gstin || null, CONSIGNEEGSTIN: reg.gstin || null,
-      PARTYPINCODE: mail.pincode || null, CONSIGNEEPINCODE: mail.pincode || null, CMPGSTIN: "19ZZZUI1505T1ZE",
+      PARTYPINCODE: mail.pincode || null, CONSIGNEEPINCODE: mail.pincode || null, CMPGSTIN: "19ZZZCZ0272Z1ZG",
     },
   };
 }

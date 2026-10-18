@@ -27,6 +27,7 @@
  * collision note in the vault).
  */
 import { tallyPost, HEALTH_XML } from "../../src/tally.js";
+import { assertScriptWriteAllowed } from "../../src/services/scriptWriteGuard.js";
 import { convertCompanies } from "../../src/converters/convert.js";
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -272,6 +273,7 @@ export function importSummary(xml: string): string {
 
 /** Post an import envelope and return the raw response. */
 export async function push(co: string, inner: string, label: string): Promise<string> {
+  assertScriptWriteAllowed("fidelity harness push"); // #104: the one Import in the harness
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Import</TALLYREQUEST><TYPE>Data</TYPE><ID>All Masters</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${esc(co)}</SVCURRENTCOMPANY></STATICVARIABLES></DESC>
 <DATA><TALLYMESSAGE xmlns:UDF="TallyUDF">${inner}</TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
