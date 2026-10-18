@@ -1,3 +1,4 @@
+-- APPLIED 18-Oct-2026 (owner: "Yes, fix, apply, release"); applied as agent_045_replace_voucher_children, verified read-only after.
 -- Migration 045: replace a chunk of vouchers' child rows in ONE transaction (#112).
 --
 -- Why: the sync used to DELETE ledger + inventory entries for a chunk and only

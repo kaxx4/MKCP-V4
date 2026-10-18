@@ -1,4 +1,4 @@
--- NOT APPLIED
+-- APPLIED 18-Oct-2026 (owner: "Yes, fix, apply, release"); applied as agent_047_* through the Supabase transaction wrapper, verified read-only after.
 -- Migration 047: tighten the per-day voucher prune guard (follows 026).
 --
 -- Why: 026 only guarded batches of MORE than 3 days. A single day (or 2-3

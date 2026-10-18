@@ -1,4 +1,4 @@
--- NOT APPLIED
+-- APPLIED 18-Oct-2026 (owner: "Yes, fix, apply, release"); applied as agent_048_* through the Supabase transaction wrapper, verified read-only after.
 -- Migration 048: the browser may no longer DELETE finished push_queue rows (#119).
 --
 -- Why: a finished row (succeeded / failed / cancelled / dismissed) is the
