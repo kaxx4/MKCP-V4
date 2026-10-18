@@ -20,6 +20,8 @@
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
+import { DEFAULT_TALLY_COMPANY } from "../src/config/company.js";
+import { configCompanyKey } from "../src/services/mirrorPanel.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
@@ -47,7 +49,7 @@ const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
 
 const OUR_STATE = "West Bengal";
 const OUR_GSTIN = "19ZZZUI1505T1ZE";
-const OUR_NAME = "M.K.CYCLES (P) LTD.";
+const OUR_NAME = configCompanyKey(DEFAULT_TALLY_COMPANY);
 const OUR_PIN = "700001";
 const OUR_ADDR = ["9/12, Lal Bazaar Street, Kolkata : 700001", "PAN: ZZZUI1505T   PHONE : 9800065427, 9800015300"];
 const GODOWN = "Main Location", BATCH = "Primary Batch";

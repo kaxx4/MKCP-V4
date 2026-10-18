@@ -20,7 +20,8 @@ import { startHousekeeping } from "./services/housekeeping.js";
 import { announceRole, tallyRole } from "./services/tallyRole.js";
 import { filedThroughOn } from "./services/pushGuard.js";
 import { isOffline, offlineReason } from "./services/supabaseClient.js";
-import { buildMirrorPanel } from "./services/mirrorPanel.js";
+import { buildMirrorPanel, configCompanyKey } from "./services/mirrorPanel.js";
+import { DEFAULT_TALLY_COMPANY, tallyCompany } from "./config/company.js";
 import { vouchersOnDay } from "./services/localSession.js";
 import { safePush } from "./services/safePush.js";
 import type { VoucherPayload } from "./types.js";
@@ -478,7 +479,7 @@ app.post("/api/supabase/sync", async (req: express.Request, res: express.Respons
 // ── Supabase config sync (all dashboard-edited data) ────────────────────────────
 app.post("/api/supabase/sync-config", async (req: express.Request, res: express.Response) => {
   const {
-    company = "M.K.CYCLES (P) LTD.",
+    company = configCompanyKey(DEFAULT_TALLY_COMPANY),
     discountRules = [],
     orderGroups = [],
     unitOverrides = {},
@@ -733,7 +734,7 @@ const httpServer = app.listen(PORT, BIND_HOST, () => {
   // Remote refresh: web dashboard can trigger a Tally sync via Supabase Realtime.
   // Reads company name from env so it matches whatever the web inserted.
   const company =
-    process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
+    tallyCompany();
   startRefreshListener(PORT, company);
 
   // Voucher pushes FROM the web dashboard. Separate listener, separate table,
@@ -854,7 +855,7 @@ app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()))
  * worse than one that says it could not look. */
 app.get("/api/mirror/panel", async (req, res) => {
   const company =
-    String(req.query?.company || process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)");
+    tallyCompany(String(req.query?.company || ""));
   const limit = Math.min(100, Math.max(5, Number(req.query?.limit ?? 25) || 25));
   try {
     res.json(await buildMirrorPanel(company, limit));
@@ -1111,7 +1112,7 @@ app.get("/api/file-transfer/watch", (_req, res) => {
  *  to the old path and has to be rebuilt. */
 app.post("/api/file-transfer/watch/restart", (req: express.Request, res: express.Response) => {
   const company =
-    String(req.body?.company || process.env.TALLY_COMPANY || "M.K.CYCLES (P) LTD. - (from 1-Apr-26)");
+    tallyCompany(String(req.body?.company || ""));
   const result = startWatchFolder(company);
   res.status(result.ok ? 200 : 400).json(result);
 });

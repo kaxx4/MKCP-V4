@@ -9,8 +9,9 @@
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { TallyMasters, MasterItem, MasterStockGroup, MasterLedger, GstRevision } from "../../src/services/tallyMasters.js";
+import { DEFAULT_TALLY_COMPANY } from "../../src/config/company.js";
 
-export const COMPANY_KEY = "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
+export const COMPANY_KEY = DEFAULT_TALLY_COMPANY;
 
 export function mirrorClient(): SupabaseClient | null {
   const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;

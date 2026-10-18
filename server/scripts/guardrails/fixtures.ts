@@ -14,8 +14,9 @@
 import type { TallyMasters, MasterItem, MasterStockGroup, MasterLedger, GstRevision, LedgerRegistration } from "../../src/services/tallyMasters.js";
 import type { VoucherPayload, LedgerEntry, InventoryEntry } from "../../src/types.js";
 import type { OpenBill } from "../../src/services/billSettlement.js";
+import { DEFAULT_TALLY_COMPANY } from "../../src/config/company.js";
 
-export const COMPANY = "M.K.CYCLES (P) LTD. - (from 1-Apr-26)";
+export const COMPANY = DEFAULT_TALLY_COMPANY;
 
 const rev = (from: string, igst: number): GstRevision => ({ from, rate: igst, cgst: igst / 2, sgst: igst / 2, igst, taxability: "Taxable" });
 const BIKE_REVS = [rev("2017-07-01", 12), rev("2022-04-01", 12), rev("2025-09-22", 5)];
