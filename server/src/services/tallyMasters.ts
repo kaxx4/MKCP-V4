@@ -177,8 +177,18 @@ export async function loadMasters(
     return cache;
   }
 
-  const [ledXml, itemXml] = await Promise.all([
-    tallyPost(tallyUrl, collectionXml("MkLedgers", "Ledger",
+  /* ONE request at a time (18-Oct-2026, --stress). These six used to go out as
+     Promise.all pairs — up to four collections in flight on Tally's
+     single-threaded XML port at once, outside the tallyGate that serialises
+     every push ("two concurrent requests on a single-threaded port is how a
+     hang starts", safePush). Sequential costs ~0.2 s on this book. */
+  const seq = async <T,>(thunks: (() => Promise<T>)[]): Promise<T[]> => {
+    const out: T[] = [];
+    for (const t of thunks) out.push(await t());
+    return out;
+  };
+  const [ledXml, itemXml] = await seq<string>([
+    () => tallyPost(tallyUrl, collectionXml("MkLedgers", "Ledger",
       /* `LedMailingDetails` is why the party address reaches Tally at all.
          "Address" alone returns NOTHING on a Ledger — the postal address is
          nested inside LEDMAILINGDETAILS.LIST -> ADDRESS.LIST -> ADDRESS, dated
@@ -190,15 +200,15 @@ export async function loadMasters(
       ["Name", "Parent", "PartyGSTIN", "GSTIN", "LedStateName", "PinCode", "MailingName",
        "Address", "LedMailingDetails", "LedGSTRegDetails"],
       company), 180_000, true) as Promise<string>,
-    tallyPost(tallyUrl, collectionXml("MkItems", "StockItem",
+    () => tallyPost(tallyUrl, collectionXml("MkItems", "StockItem",
       ["Name", "Parent", "BaseUnits", "Denominator", "ClosingBalance", "ClosingRate", "GSTDetails", "SrcOfGSTDetails", "HSNDetails"],
       company), 180_000, true) as Promise<string>,
   ]);
-  const [godownXml, unitXml, vtXml, sgXml] = await Promise.all([
-    tallyPost(tallyUrl, collectionXml("MkGodowns", "Godown", ["Name"], company), 60_000, true) as Promise<string>,
-    tallyPost(tallyUrl, collectionXml("MkUnits", "Unit", ["Name"], company), 60_000, true) as Promise<string>,
-    tallyPost(tallyUrl, collectionXml("MkVchTypes", "VoucherType", ["Name", "Parent"], company), 60_000, true) as Promise<string>,
-    tallyPost(tallyUrl, collectionXml("MkStkGroups", "StockGroup", ["Name", "Parent", "GSTDetails", "HSNDetails"], company), 60_000, true) as Promise<string>,
+  const [godownXml, unitXml, vtXml, sgXml] = await seq<string>([
+    () => tallyPost(tallyUrl, collectionXml("MkGodowns", "Godown", ["Name"], company), 60_000, true) as Promise<string>,
+    () => tallyPost(tallyUrl, collectionXml("MkUnits", "Unit", ["Name"], company), 60_000, true) as Promise<string>,
+    () => tallyPost(tallyUrl, collectionXml("MkVchTypes", "VoucherType", ["Name", "Parent"], company), 60_000, true) as Promise<string>,
+    () => tallyPost(tallyUrl, collectionXml("MkStkGroups", "StockGroup", ["Name", "Parent", "GSTDetails", "HSNDetails"], company), 60_000, true) as Promise<string>,
   ]);
 
   const ledgers = new Map<string, MasterLedger>();
