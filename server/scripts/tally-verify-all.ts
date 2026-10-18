@@ -49,8 +49,7 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { esc, blocksOf, tagOf } from "../src/services/tallyRequest.js";
 /* One definition of "is this voucher ours" — the file that owns the patterns,
-   never a copy. A second copy of that predicate once listed nine real REDACTED NAME
-   ENTERPRISE purchases as disposable (G1). */
+   never a copy. A second copy of that predicate once listed nine real PARTY 154 ENTERPRISE purchases as disposable (G1). */
 import { census } from "./find-stranded-test-vouchers.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));

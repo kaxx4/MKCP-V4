@@ -302,6 +302,13 @@ fails on a new ungated writer. Real GSTINs and PANs must never be committed:
 `scripts/test-no-real-gstin.ts` fails on any tracked GSTIN-shaped string that is
 not a placeholder (`...0000...`, `...1234...`, or the `ZZZ` series), and fixture
 captures go to the ignored `server/fixtures/captured/`.
+Real party, person and supplier names are kept out the same way: fixtures and
+script literals use stable fakes (`PARTY 042 CYCLE STORES`, `PERSON 003`), and
+`scripts/test-no-real-names.ts` refuses names listed in a deny-list that is NOT in
+the repo (`MKCP_NAME_DENYLIST=<file>` or the ignored `server/data/name-denylist.txt`;
+skips with a notice when absent). Sandbox-only scripts that must find a real
+ledger take it from `MKCP_SANDBOX_*` env vars (`LOCAL_PARTY`, `ORDERS_PARTY`,
+`COLLISION_PARTY`, `SUPPLIER_RX`).
 
 ## Secrets
 

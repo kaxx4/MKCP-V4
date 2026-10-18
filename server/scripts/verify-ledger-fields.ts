@@ -71,7 +71,7 @@ async function main(): Promise<void> {
      decision rests on two facts that disagree. 19 is West Bengal.
 
      Four parties in the live books disagree, and all four are TRANSPORTERS:
-     PARTY 093 LOGISTICS (09, UP), REDACTED NAME (09, UP), REDACTED NAME
+     PARTY 093 LOGISTICS (09, UP), PARTY 911 TRANSPORT (09, UP), PARTY 912 ROADWAYS
      (27, Maharashtra) and PARTY 223 ROADWAYS (03, Punjab) are all recorded as
      West Bengal.
 

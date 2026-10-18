@@ -18,6 +18,8 @@ import {
   check, checkNum, report, remember, push, esc, importSummary,
 } from "./harness.js";
 import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+// Supplier ledger in the sandbox company; override with MKCP_SANDBOX_SUPPLIER_RX (regex).
+const SUPPLIER_RX = new RegExp(process.env.MKCP_SANDBOX_SUPPLIER_RX ?? "PARTY 114 CYCLES", "i");
 guardScriptWrites("case-notes"); // #104: writes only on a sandbox role against a local Tally
 
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -36,7 +38,7 @@ async function main(): Promise<void> {
   const L = [...masters.ledgers.values()];
   const items = [...masters.items.values()];
   const customer = L.find((l) => /Sundry Debtors/i.test(l.parent) && /west bengal/i.test(l.state))!;
-  const supplier = L.find((l) => /PARTY 299 CYCLES/i.test(l.name))!;
+  const supplier = L.find((l) => SUPPLIER_RX.test(l.name))!;
   const item = items.find((i) => /BICYCLE/i.test(i.name)) ?? items[0];
   const results: { title: string; checks: ReturnType<typeof check>[] }[] = [];
 

@@ -240,7 +240,7 @@ export function resolveInvoice(
 /**
  * Do these words appear together, in order, somewhere in the narration?
  *
- * Other words may sit between them — a bank writes "M S REDACTED NAME CYCLE
+ * Other words may sit between them — a bank writes "M S PARTY 170 CYCLE
  * STORES" and "PARTY 269 CYCLE LTD" — but they must run forward without
  * restarting, which is what tells a printed name from words that happen to be
  * scattered through the routing noise.
@@ -308,7 +308,7 @@ export function resolvePayerFromNarration(
     );
     const words = norm(name).split(" ").filter(w => w.length > 2);
     /* A COMPANY SUFFIX IS NEVER WHAT DISTINGUISHES A PARTY.
-       "ASIAN BIKES (P) LTD" on the statement is "PARTY 017 BIKES PRIVATE LIMITED"
+       "PARTY 017 BIKES (P) LTD" on the statement is "PARTY 017 BIKES PRIVATE LIMITED"
        in Tally; requiring "private" and "limited" meant no match at all. Two
        parties that differ ONLY by suffix would now tie — and tie means ask,
        which is the right outcome for that. */
@@ -357,8 +357,8 @@ export function resolvePayerFromNarration(
       if (squashedHay.includes(squashed)) { matches.push({ name, score: squashed.length }); continue; }
 
       /* THE BANK TRUNCATED IT. Cheque narrations cut the name mid-word:
-             CHQ PAID-TRANSFER IN-WASAN ENGINEERING C
-         against "PARTY 307". Accepting a PREFIX handles that,
+             CHQ PAID-TRANSFER IN-PARTY 307 C
+         against "Party 307". Accepting a PREFIX handles that,
          and 12 characters of an exact prefix is a great deal of agreement —
          but it is still looser than the rest of this function, so it only runs
          when nothing else matched at all, and a tie still asks. */

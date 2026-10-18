@@ -44,6 +44,8 @@ import { guardVoucher } from "../src/services/pushGuard.js";
 import { safePush } from "../src/services/safePush.js";
 import { isSandbox } from "../src/services/tallyRole.js";
 import type { VoucherPayload } from "../src/types.js";
+// Supplier ledger in the sandbox company; override with MKCP_SANDBOX_SUPPLIER_RX (regex, end-anchored).
+const SUPPLIER_RX = new RegExp(process.env.MKCP_SANDBOX_SUPPLIER_RX ?? "PARTY 114 CYCLES$", "i");
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 if (!isSandbox()) { console.error("REFUSED — MKCP_TALLY_ROLE is not 'sandbox'."); process.exit(2); }
@@ -81,7 +83,7 @@ async function main() {
     const m = await loadMasters(U, name);
     const supplier = [...m.ledgers.values()].find(l =>
       /creditors/i.test(l.parent) && /punjab/i.test(l.state) && l.registrations.some(r => r.gstin) &&
-      registrationOn(l, BILL_DATE).gstin && /PARTY 299 CYCLES$/i.test(l.name),
+      registrationOn(l, BILL_DATE).gstin && SUPPLIER_RX.test(l.name),
     ) ?? [...m.ledgers.values()].find(l => /creditors/i.test(l.parent) && /punjab/i.test(l.state) && registrationOn(l, BILL_DATE).gstin);
     if (!supplier) throw new Error("no Punjab supplier with a registration in force on the bill date");
     const item = [...m.items.values()].find(i => i.baseUnit && i.closingRate > 20 && (gstRateFor(m, i.name, BILL_DATE)?.rate ?? 0) > 0);

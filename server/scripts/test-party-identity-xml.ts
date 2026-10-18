@@ -40,11 +40,11 @@ const DIBYA = led({
 });
 // A party that MOVED: the old address must stay on old vouchers.
 const MOVER = led({
-  name: "REDACTED NAME", state: "West Bengal", pincode: "700002", address: ["NEW ROAD"],
+  name: "PARTY 906 CYCLES", state: "West Bengal", pincode: "700002", address: ["NEW ROAD"],
   registrations: [{ applicableFrom: "20240401", gstin: "", registrationType: "\x04 Unknown", placeOfSupply: "West Bengal", state: "West Bengal" }],
   mailing: [
-    { applicableFrom: "20240401", mailingName: "REDACTED NAME", address: ["OLD ROAD"], pincode: "700001", state: "West Bengal", country: "India" },
-    { applicableFrom: "20260901", mailingName: "REDACTED NAME", address: ["NEW ROAD"], pincode: "700002", state: "West Bengal", country: "India" },
+    { applicableFrom: "20240401", mailingName: "PARTY 906 CYCLES", address: ["OLD ROAD"], pincode: "700001", state: "West Bengal", country: "India" },
+    { applicableFrom: "20260901", mailingName: "PARTY 906 CYCLES", address: ["NEW ROAD"], pincode: "700002", state: "West Bengal", country: "India" },
   ],
 });
 const CASH = led({ name: "Cash", parent: "Cash-in-Hand", mailingName: "Cash" });
@@ -110,11 +110,11 @@ console.log("inter-state party");
 
 console.log("cash walk-in — the typed buyer is bill-to AND ship-to");
 {
-  const p = sale("Cash", { placeOfSupply: "West Bengal", buyerName: "REDACTED NAME", buyerAddress: ["12 TEST LANE", "BARASAT 700124"] });
+  const p = sale("Cash", { placeOfSupply: "West Bengal", buyerName: "PARTY 903 CYCLE", buyerAddress: ["12 TEST LANE", "BARASAT 700124"] });
   const h = header(buildVoucherImportXml("TEST", p, masters));
   ok("bill-to = typed lines", JSON.stringify(lines(h, "ADDRESS")[0]) === JSON.stringify(["12 TEST LANE", "BARASAT 700124"]));
   ok("ship-to = typed lines", JSON.stringify(lines(h, "BASICBUYERADDRESS")[0]) === JSON.stringify(["12 TEST LANE", "BARASAT 700124"]));
-  ok("PARTYMAILINGNAME and CONSIGNEEMAILINGNAME = walk-in", tag(h, "PARTYMAILINGNAME") === "REDACTED NAME" && tag(h, "CONSIGNEEMAILINGNAME") === "REDACTED NAME");
+  ok("PARTYMAILINGNAME and CONSIGNEEMAILINGNAME = walk-in", tag(h, "PARTYMAILINGNAME") === "PARTY 903 CYCLE" && tag(h, "CONSIGNEEMAILINGNAME") === "PARTY 903 CYCLE");
   ok("BASICBUYERNAME stays the Cash ledger (native shape)", tag(h, "BASICBUYERNAME") === "Cash");
   ok("Unregistered/Consumer — Tally's word, not 'Unregistered'", tag(h, "GSTREGISTRATIONTYPE") === "Unregistered/Consumer");
   ok("VATDEALERTYPE Unregistered", tag(h, "VATDEALERTYPE") === "Unregistered");

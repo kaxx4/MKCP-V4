@@ -170,7 +170,7 @@ export function diffStored(p: VoucherPayload, v: string): string[] {
       /* XML-P1: an On Account allocation has NO name in Tally — it is stored
          `<NAME/>` + `<BILLTYPE>On Account</BILLTYPE>` whatever name was sent
          (server/data/push-fidelity-S1/S2/S7). Matched by name it read "NOT
-         STORED" on bill-wise parties too (TOGO, REDACTED NAME, REDACTED NAME — archived
+         STORED" on bill-wise parties too (TOGO, PARTY 909, PARTY 910 — archived
          push_queue failures the mirror later showed were booked). By type. */
       const bh = /^on account$/i.test(b.billType)
         ? listOf(hit, "BILLALLOCATIONS\\.LIST").find(x => /^on account$/i.test(fld(x, "BILLTYPE")) && eq(lead(fld(x, "AMOUNT")), signed(b.amount, e.isDeemedPositive)))

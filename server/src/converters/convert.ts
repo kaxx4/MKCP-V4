@@ -510,7 +510,7 @@ export function convertLedgers(parsed: any): { tallymessage: any[] } {
 /**
  * The GSTIN from the newest dated registration block that has one.
  *
- * Registrations are DATED and a party can carry several: REDACTED NAME
+ * Registrations are DATED and a party can carry several: PERSON 901
  * INDUSTRIES holds one from 2024-04-01 with no GSTIN and another from
  * 2025-11-07 with one. Taking the first block would report "no GSTIN" for a
  * party that has been registered for a year, so the newest wins — the same

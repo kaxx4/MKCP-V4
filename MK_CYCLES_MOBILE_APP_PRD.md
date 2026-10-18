@@ -463,8 +463,8 @@ Manual Sync (user tap):
 {
   "ledgers": [
     {
-      "ledgerId": "REDACTED NAME CYCLE MART",
-      "name": "Rajesh Dhal Cycle Mart",
+      "ledgerId": "PARTY 902 CYCLE MART",
+      "name": "Party 902 Cycle Mart",
       "group": "Customer",
       "address": "123 Park Road, Delhi",
       "gstIn": "07AABCT9876F1Z0",
@@ -472,8 +472,8 @@ Manual Sync (user tap):
       "balance": 45000.00
     },
     {
-      "ledgerId": "REDACTED NAME",
-      "name": "Sharma Cycles",
+      "ledgerId": "PARTY 907 CYCLES",
+      "name": "Party 907 Cycles",
       "group": "Customer",
       "address": "456 Main Market, Bangalore",
       "gstIn": "29AABCS1234F1Z5",
@@ -546,8 +546,8 @@ Manual Sync (user tap):
       "voucherNumber": "SO-00001",
       "voucherType": "Sales",
       "date": "2025-05-12",
-      "partyLedgerId": "REDACTED NAME CYCLE MART",
-      "partyName": "Rajesh Dhal Cycle Mart",
+      "partyLedgerId": "PARTY 902 CYCLE MART",
+      "partyName": "Party 902 Cycle Mart",
       "totalAmount": 12500.00,
       "narration": "Sale of bicycle parts",
       "isCancelled": false,
@@ -574,8 +574,8 @@ Manual Sync (user tap):
       "voucherNumber": "SO-00002",
       "voucherType": "Sales",
       "date": "2025-05-11",
-      "partyLedgerId": "REDACTED NAME",
-      "partyName": "Sharma Cycles",
+      "partyLedgerId": "PARTY 907 CYCLES",
+      "partyName": "Party 907 Cycles",
       "totalAmount": 18500.00,
       "narration": "Bicycle sale",
       "isCancelled": false,

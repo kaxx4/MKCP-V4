@@ -123,8 +123,8 @@ function buildScenarios(m: TallyMasters) {
   const L = (l: Line, pkgs: number, rateAdj = 0): Line => ({ ...l, pkgs, rate: Math.round((l.rate + rateAdj) * 100) / 100 });
 
   // Parties: a local registered dealer, an unregistered one, an inter-state one.
-  const local = need("PARTY 224 CYCLE STORES ( BHANGAR )");
-  const localOrders = need("PARTY 110 CYCLE STORES (LAKHIKANTOPUR)");
+  const local = need(process.env.MKCP_SANDBOX_LOCAL_PARTY ?? "PARTY 224 CYCLE STORES ( BHANGAR )");
+  const localOrders = need(process.env.MKCP_SANDBOX_ORDERS_PARTY ?? "PARTY 110 CYCLE STORES (LAKHIKANTOPUR)");
   const unreg = [...m.ledgers.values()].find((l) => /DEBTOR/i.test(l.parent) && !registrationOn(l, DATE).gstin
     && l.state && l.pincode && l.address.length >= 2)!;
   const inter = [...m.ledgers.values()].find((l) => /DEBTOR/i.test(l.parent) && l.state && !/bengal/i.test(l.state)

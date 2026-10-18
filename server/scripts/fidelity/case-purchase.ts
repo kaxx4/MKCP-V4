@@ -29,6 +29,8 @@ import {
   check, checkNum, report, esc, importSummary,
 } from "./harness.js";
 import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+// Supplier ledger in the sandbox company; override with MKCP_SANDBOX_SUPPLIER_RX (regex).
+const SUPPLIER_RX = new RegExp(process.env.MKCP_SANDBOX_SUPPLIER_RX ?? "PARTY 114 CYCLES", "i");
 guardScriptWrites("case-purchase"); // #104: writes only on a sandbox role against a local Tally
 
 const KEEP = process.argv.includes("--keep");
@@ -46,7 +48,7 @@ async function main(): Promise<void> {
      "does not exist" and teaches nothing about dates. */
   const ledgers = [...masters.ledgers.values()];
   const items = [...masters.items.values()];
-  const supplier = ledgers.find((l) => /PARTY 299 CYCLES/i.test(l.name))
+  const supplier = ledgers.find((l) => SUPPLIER_RX.test(l.name))
     ?? ledgers.find((l) => /Sundry Creditors/i.test(l.parent));
   /* A real purchase ACCOUNT, not a discount ledger: "PURCHASE DISCOUNTS ( @ 5% )"
      also starts with PURCHASE and picking it would test nothing useful. */

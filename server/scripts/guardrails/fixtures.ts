@@ -45,9 +45,9 @@ export const DISCOUNT = "TRADE DISCOUNTS / H.C.";
 
 export const PARTY_LOCAL = "PARTY 224 CYCLE STORES ( BHANGAR )";
 export const PARTY_INTER = "PARTY 060 CYCLE STORE (JALESWAR)";
-export const PARTY_UNREG = "REDACTED NAME (RANAGHAT)";
+export const PARTY_UNREG = "PARTY 903 CYCLE (RANAGHAT)";
 export const PARTY_LATE_REG = "LATE REG CYCLE (BARASAT)";
-export const SUPPLIER = "REDACTED NAME PARTS";
+export const SUPPLIER = "PARTY 901 PARTS";
 /** Several cash orders billed together for packing convenience, a different
  *  buyer every time (owner, 24-Sep-2026). Live, 24-Sep-2026: its ledger carries
  *  a state (unlike Cash) but no address and no pincode. */
@@ -62,12 +62,12 @@ export function fixtureMasters(): TallyMasters {
     ledger(PARTY_INTER, "Sundry Debtors", { gstin: "21AAAAD0000D1Z5", state: "Odisha", pincode: "756032", mailingName: "PARTY 060 CYCLE STORE",
       address: ["JALESWAR", "BALASORE"], registrations: [reg("20170701", "21AAAAD0000D1Z5", "Regular", "Odisha")] }),
     // An unregistered party ledger, as TallyPrime 7 stores it.
-    ledger(PARTY_UNREG, "Sundry Debtors", { state: "West Bengal", pincode: "741201", mailingName: "REDACTED NAME", address: ["RANAGHAT"],
+    ledger(PARTY_UNREG, "Sundry Debtors", { state: "West Bengal", pincode: "741201", mailingName: "PARTY 903 CYCLE", address: ["RANAGHAT"],
       registrations: [reg("20170701", "", "Unregistered/Consumer", "West Bengal")] }),
     // Registered mid-way: a 2024 block with no GSTIN, a 2025 block with one (vault §2.3).
     ledger(PARTY_LATE_REG, "Sundry Debtors", { gstin: "19AAAAL1234A1ZA", state: "West Bengal", pincode: "700124", mailingName: "LATE REG CYCLE",
       address: ["BARASAT"], registrations: [reg("20240401", "", "Unregistered/Consumer", "West Bengal"), reg("20250601", "19AAAAL1234A1ZA", "Regular", "West Bengal")] }),
-    ledger(SUPPLIER, "Sundry Creditors", { gstin: "03AAAFA1234B1ZM", state: "Punjab", pincode: "141003", mailingName: "REDACTED NAME PARTS",
+    ledger(SUPPLIER, "Sundry Creditors", { gstin: "03AAAFA1234B1ZM", state: "Punjab", pincode: "141003", mailingName: "PARTY 901 PARTS",
       address: ["GILL ROAD", "LUDHIANA-141003"], registrations: [reg("20170701", "03AAAFA1234B1ZM", "Regular", "Punjab")] }),
     ledger(SALES_WB, "Sales Accounts"), ledger(SALES_CENTRAL, "Sales Accounts"),
     ledger("PURCHASE ( GST W.B. )", "Purchase Accounts"), ledger(PURCHASE_CENTRAL, "Purchase Accounts"),

@@ -114,3 +114,6 @@ server/fixtures/captured/
 server/fixtures/**/*.raw.json
 server/fixtures/**/*.real.json
 server/fixtures/**/real-*
+
+# Real-name deny-list for scripts/test-no-real-names.ts: the names are sensitive, keep local.
+server/data/name-denylist.txt

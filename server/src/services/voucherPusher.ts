@@ -108,8 +108,8 @@ function buildBankAllocation(b: NonNullable<LedgerEntry["bankAllocation"]>, amou
  * CONSIGNEECOUNTRYNAME were all EMPTY. The comment on `VoucherPayload.
  * partyAddress` claimed Tally fills BASICBUYERNAME from the ledger on import; it
  * does not. Every hand-typed invoice carries all three, with the ship-to
- * address identical to the bill-to (PARTY 224 CYCLE STORES 26-27/0658, REDACTED NAME
- * 26-27/0551, REDACTED NAME order 360/QUOTE-26-27). So they are emitted here,
+ * address identical to the bill-to (PARTY 224 CYCLE STORES 26-27/0658, PARTY 060
+ * 26-27/0551, PARTY 908 order 360/QUOTE-26-27). So they are emitted here,
  * always, from the same values as the bill-to block.
  *
  * ── Where each value comes from ──────────────────────────────────────────

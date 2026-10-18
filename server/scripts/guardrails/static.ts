@@ -50,8 +50,8 @@ export async function runStatic(opts: { replay: boolean }): Promise<void> {
 
   // ── Good vouchers: build and check the shape ──────────────────────────────
   const scenarios: { label: string; p: VoucherPayload; expectMailing?: string }[] = [
-    { label: "cash walk-in (0719's lines)", expectMailing: "REDACTED NAME", p: sale({
-      number: "GUARD/S1", party: "Cash", placeOfSupply: "West Bengal", buyerName: "REDACTED NAME", buyerAddress: ["JHALDAH", "PURULIA"],
+    { label: "cash walk-in (0719's lines)", expectMailing: "PARTY 905 CYCLE", p: sale({
+      number: "GUARD/S1", party: "Cash", placeOfSupply: "West Bengal", buyerName: "PARTY 905 CYCLE", buyerAddress: ["JHALDAH", "PURULIA"],
       lines: [{ item: "BICYCLE BASKET EHD", amount: 21638.4, rate: 5 }, { item: "BRAKE SHOE  ( POWER )", amount: 7257.12, rate: 5 },
               { item: "CARRIER CLIP", amount: 4985.7, rate: 5 }, { item: "BABY TRICYCLE MUGHAL DLX RACER BB MSC AMPHA", amount: 10057.12, rate: 5 }] }) },
     { label: "registered local, 5% + own 18%, trade discount", expectMailing: "PARTY 224 CYCLE STORES", p: sale({
@@ -59,7 +59,7 @@ export async function runStatic(opts: { replay: boolean }): Promise<void> {
       lines: [{ item: "CARRIER CLIP", amount: 5949, rate: 5 }, { item: "HORN X", amount: 1200, rate: 18 }] }) },
     { label: "registered interstate (Odisha) IGST", expectMailing: "PARTY 060 CYCLE STORE", p: sale({
       number: "GUARD/S3", party: PARTY_INTER, inter: true, lines: [{ item: "BICYCLE BASKET EHD", amount: 10000, rate: 5 }] }) },
-    { label: "unregistered party ledger", expectMailing: "REDACTED NAME", p: sale({
+    { label: "unregistered party ledger", expectMailing: "PARTY 903 CYCLE", p: sale({
       number: "GUARD/S4", party: PARTY_UNREG, lines: [{ item: "CARRIER CLIP", amount: 999, rate: 5 }] }) },
     { label: "backdated across 22-Sep-2025 (12% then) to a party registered 01-Jun-2025", p: filedOk(sale({
       number: "GUARD/S5", date: "2025-09-01", party: PARTY_LATE_REG, lines: [{ item: "CARRIER CLIP", amount: 1000, rate: 12 }] })) },

@@ -79,8 +79,7 @@ export const MASTER_COLLECTIONS: CollectionDef[] = [
 
          LedGSTRegDetails is the DATED registration block, and it is here
          because `PartyGSTIN` is computed and comes back EMPTY when the block
-         carries no STATE: 53 parties (Amrit Cycle Industries, B. D. Malik &
-         Sons, Asian Bikes…) hold a GSTIN that the flat field will not report.
+         carries no STATE: 53 parties (Party 005 Cycle Industries, Party 019, Party 017 Bikes…) hold a GSTIN that the flat field will not report.
          A GSTIN-less purchase files into a GSTR-2 exception silently, so the
          block is the fallback — see convertLedgers. */
       "Name", "Parent", "OpeningBalance", "PartyGSTIN", "LedGSTRegDetails",

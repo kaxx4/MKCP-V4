@@ -20,7 +20,7 @@ import {
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const N = `${MARK}/CASH${Date.now().toString().slice(-5)}`;
-const BUYER = "REDACTED NAME";
+const BUYER = "PARTY 904 CYCLE MART";
 const ADDR = ["12 GRAIN MARKET", "BURDWAN-713101"];
 
 (async () => {

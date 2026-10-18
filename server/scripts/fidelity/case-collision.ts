@@ -14,7 +14,8 @@ guardScriptWrites("case-collision"); // #104: writes only on a sandbox role agai
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const N = `${MARK}/X${Date.now().toString().slice(-5)}`;
-const PARTY = "PARTY 005 CYCLE INDUSTRIES";
+// A real party in the sandbox company; set MKCP_SANDBOX_COLLISION_PARTY to its ledger name.
+const PARTY = process.env.MKCP_SANDBOX_COLLISION_PARTY ?? "PARTY 005 CYCLE INDUSTRIES";
 const STAMP = Date.now().toString().slice(-6);
 
 /* The REMOTEID is minted ONCE per tag and written down.

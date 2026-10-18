@@ -73,20 +73,20 @@ function offlineCases() {
   expectRejected("party sale whose ledger has NO address",
     sale({ number: "PG/5", party: PARTY_LOCAL, lines: clip }), withLedger(PARTY_LOCAL, { address: [] }), "address");
   expectAccepted("cash walk-in with typed name + address",
-    sale({ number: "PG/6", party: "Cash", placeOfSupply: "West Bengal", buyerName: "REDACTED NAME", buyerAddress: ["JHALDAH", "PURULIA 723202"], lines: clip }), m);
+    sale({ number: "PG/6", party: "Cash", placeOfSupply: "West Bengal", buyerName: "PARTY 905 CYCLE", buyerAddress: ["JHALDAH", "PURULIA 723202"], lines: clip }), m);
   // Owner, 24-Sep-2026: a buyer address is now ALWAYS required on a cash
   // sale (not only above the e-way bill limit), and a cash sale above
   // ₹50,000 of goods is refused outright.
   expectRejected("cash walk-in, name only, no address (owner, 24-Sep-2026: address is always required now)",
-    sale({ number: "PG/7", party: "Cash", placeOfSupply: "West Bengal", buyerName: "REDACTED NAME", lines: clip }), m, "needs the buyer's address");
+    sale({ number: "PG/7", party: "Cash", placeOfSupply: "West Bengal", buyerName: "PARTY 905 CYCLE", lines: clip }), m, "needs the buyer's address");
   expectAccepted("cash walk-in with name + address, well under the ceiling",
-    sale({ number: "PG/7a", party: "Cash", placeOfSupply: "West Bengal", buyerName: "REDACTED NAME", buyerAddress: ["JHALDAH"], lines: clip }), m);
+    sale({ number: "PG/7a", party: "Cash", placeOfSupply: "West Bengal", buyerName: "PARTY 905 CYCLE", buyerAddress: ["JHALDAH"], lines: clip }), m);
   expectRejected("cash walk-in with no buyer name (ship-to name would read \"Cash\")",
     sale({ number: "PG/7b", party: "Cash", placeOfSupply: "West Bengal", buyerAddress: ["JHALDAH"], lines: clip }), m, "buyer's name");
   expectRejected("cash walk-in over ₹50,000 of goods is refused outright, not merely needing an e-way bill",
-    sale({ number: "PG/8", party: "Cash", placeOfSupply: "West Bengal", buyerName: "REDACTED NAME", buyerAddress: ["JHALDAH", "PURULIA 723202"], lines: [{ item: "CARRIER CLIP", amount: 60000, rate: 5 }] }), m, "over the ₹50000 limit for a cash sale");
+    sale({ number: "PG/8", party: "Cash", placeOfSupply: "West Bengal", buyerName: "PARTY 905 CYCLE", buyerAddress: ["JHALDAH", "PURULIA 723202"], lines: [{ item: "CARRIER CLIP", amount: 60000, rate: 5 }] }), m, "over the ₹50000 limit for a cash sale");
   expectAccepted("cash walk-in AT the ₹50,000 ceiling (goods value, not over it) still passes",
-    sale({ number: "PG/8c", party: "Cash", placeOfSupply: "West Bengal", buyerName: "REDACTED NAME", buyerAddress: ["JHALDAH", "PURULIA 723202"], lines: [{ item: "CARRIER CLIP", amount: 50000, rate: 5 }] }), m);
+    sale({ number: "PG/8c", party: "Cash", placeOfSupply: "West Bengal", buyerName: "PARTY 905 CYCLE", buyerAddress: ["JHALDAH", "PURULIA 723202"], lines: [{ item: "CARRIER CLIP", amount: 50000, rate: 5 }] }), m);
   expectRejected("cash walk-in declaring an out-of-state place of supply",
     sale({ number: "PG/8d", party: "Cash", placeOfSupply: "Odisha", buyerName: "X", buyerAddress: ["Y"], lines: clip }), m, "place of supply is West Bengal");
   // MIXED ORDER: several cash orders billed together for packing convenience,
