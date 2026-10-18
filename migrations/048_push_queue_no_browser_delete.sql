@@ -1,3 +1,4 @@
+-- NOT APPLIED
 -- Migration 048: the browser may no longer DELETE finished push_queue rows (#119).
 --
 -- Why: a finished row (succeeded / failed / cancelled / dismissed) is the
@@ -15,6 +16,11 @@
 --   4. a trigger stops browser roles changing anything except status and
 --      hidden_at. The status change is still bounded by the existing 038 and
 --      queueClient rules (failed -> dismissed; pending -> cancelled).
+--
+-- The table-level REVOKE of DELETE/TRUNCATE from anon/authenticated is NOT in this file:
+-- it was applied live as web migration 0083.
+-- The hide policy is split in two, following web 0079: anon only while auth is not
+-- enforced; authenticated while not enforced, or once enforced only with the push verb.
 --
 -- Re-adding the delete is a one-line policy if the owner ever wants it back.
 --
@@ -34,9 +40,18 @@ DROP POLICY IF EXISTS "web clear finished" ON public.push_queue;
 ALTER TABLE public.push_queue ADD COLUMN IF NOT EXISTS hidden_at timestamptz;
 
 DROP POLICY IF EXISTS "web hide finished" ON public.push_queue;
-CREATE POLICY "web hide finished" ON public.push_queue
-  FOR UPDATE TO anon, authenticated
-  USING (status IN ('succeeded', 'failed', 'cancelled', 'dismissed') AND hidden_at IS NULL)
+DROP POLICY IF EXISTS "web hide finished anon until enforced" ON public.push_queue;
+CREATE POLICY "web hide finished anon until enforced" ON public.push_queue
+  FOR UPDATE TO anon
+  USING (status IN ('succeeded', 'failed', 'cancelled', 'dismissed') AND hidden_at IS NULL
+         AND NOT (SELECT public.auth_enforced()))
+  WITH CHECK (status IN ('succeeded', 'failed', 'cancelled', 'dismissed') AND hidden_at IS NOT NULL);
+
+DROP POLICY IF EXISTS "web hide finished signed in" ON public.push_queue;
+CREATE POLICY "web hide finished signed in" ON public.push_queue
+  FOR UPDATE TO authenticated
+  USING (status IN ('succeeded', 'failed', 'cancelled', 'dismissed') AND hidden_at IS NULL
+         AND (NOT (SELECT public.auth_enforced()) OR (SELECT public.app_verb_allowed('push'))))
   WITH CHECK (status IN ('succeeded', 'failed', 'cancelled', 'dismissed') AND hidden_at IS NOT NULL);
 
 CREATE OR REPLACE FUNCTION public.push_queue_browser_guard()

@@ -1,3 +1,4 @@
+-- NOT APPLIED
 -- Migration 047: tighten the per-day voucher prune guard (follows 026).
 --
 -- Why: 026 only guarded batches of MORE than 3 days. A single day (or 2-3
@@ -22,10 +23,9 @@
 -- tally_vouchers (count and export). The owner applies this; it is NOT applied.
 --
 -- Self-test: migrations/selftests/047_prune_guard_selftest.sql (owner, on a COPY, before apply).
--- The transaction below is one BEGIN ... COMMIT so the drop and the create land together.
+-- No BEGIN/COMMIT in this file: apply it through a transaction wrapper (apply_migration
+-- or one BEGIN ... COMMIT around the whole file) so the drop and the create land together.
 
-
-BEGIN;
 
 DROP FUNCTION IF EXISTS delete_voucher_orphans_for_days(text, text[], text[]);
 
@@ -104,7 +104,5 @@ $$;
 REVOKE ALL ON FUNCTION delete_voucher_orphans_for_days(text, text[], text[], boolean) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION delete_voucher_orphans_for_days(text, text[], text[], boolean) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION delete_voucher_orphans_for_days(text, text[], text[], boolean) TO service_role;
-
-COMMIT;
 
 NOTIFY pgrst, 'reload schema';
