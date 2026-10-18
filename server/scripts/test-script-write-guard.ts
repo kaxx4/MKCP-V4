@@ -43,6 +43,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXEMPT: Record<string, string> = {
   "scripts/test-xml-hardening.ts": "posts only to a throwaway local fake socket server to test the wire decoding",
   "scripts/test-script-write-guard.ts": "this file",
+  "scripts/test-practice-company.ts": "calls safePush against a dead address to prove the practice-company refusal fires before any byte is sent",
 };
 const POSTS = /\b(tallyPost|tallyPostWithRetry|safePush)\s*\(/;
 const WRITE = /TALLYREQUEST>\s*Import|ACTION=\?["']?(Delete|Alter|Create|Cancel)|<ACTION>|\bsafePush\s*\(/;
