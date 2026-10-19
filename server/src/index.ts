@@ -12,7 +12,6 @@ import { RealtimeSync } from "./services/realtimeSync.js";
 import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import { startRefreshListener } from "./services/refreshListener.js";
-import { startPushListener, listPendingPushes, approvePush, rejectPush } from "./services/pushListener.js";
 import { startReportRunner } from "./services/reportRunner.js";
 import { startNightlySync } from "./services/nightlySync.js";
 import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
@@ -605,28 +604,6 @@ app.post("/api/tally/import", express.text({ type: "application/xml" }), async (
   return res.status(410).json({ error: "Endpoint retired.", detail: WRITE_PATH_MESSAGE });
 });
 
-// ── Web voucher pushes (awaiting approval on THIS machine) ──────────────────────
-// The web dashboard queues a voucher; nothing reaches Tally until it is
-// approved here. The renderer polls this the same way it polls /progress.
-app.get("/api/tally/pending-pushes", (_req, res) => {
-  res.json(listPendingPushes());
-});
-
-app.post("/api/tally/pending-pushes/:id/approve", async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: "bad id" });
-  const result = await approvePush(id);
-  // 200 with ok:false — Tally rejecting a voucher is an ANSWER, not a
-  // transport failure, and the UI needs the message either way.
-  res.status(200).json(result);
-});
-
-app.post("/api/tally/pending-pushes/:id/reject", async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: "bad id" });
-  res.status(200).json(await rejectPush(id));
-});
-
 // ── Debug endpoints ─────────────────────────────────────────────────────────────
 app.post("/api/tally/debug", async (req, res) => {
   const { company, xml: customXml } = req.body;
@@ -695,9 +672,6 @@ app.get("/api/distance", async (req, res) => {
  *   · POST /api/local/push          create, alter, cancel or delete a voucher
  *                                   in the live books
  *   · POST /api/bank/push           book receipts and payments against bills
- *   · POST …/pending-pushes/:id/approve
- *                                   approve a queued push, bypassing the human
- *                                   gate the Supabase policy carefully enforces
  *   · POST /api/file-transfer/push  read ANY file on this machine and upload it
  *                                   — including server/.env and the
  *                                   service-role key in it
@@ -728,10 +702,6 @@ const httpServer = app.listen(PORT, BIND_HOST, () => {
     tallyCompany();
   startRefreshListener(PORT, company);
 
-  // Voucher pushes FROM the web dashboard. Separate listener, separate table,
-  // separate endpoints — the refresh path above is untouched by it on purpose.
-  startPushListener(company, TALLY);
-
   /* On-demand Tally REPORTS. Reads only, and behind the same single-threaded
      gate as everything else — the first call to Stock Summary in a Tally
      session takes over a minute, which is why it is a tracked job the operator
@@ -752,7 +722,7 @@ const httpServer = app.listen(PORT, BIND_HOST, () => {
   // Tally — one day per header-only request, stops at the first Tally error.
   startCashBuyerBackfill(TALLY, company);
 
-  // Two-way file handoff with the web dashboard (see server/src/services/fileTransferSync.ts).
+  // Outbound file hand-off to the web dashboard (fileTransferSync.ts). The inbound XML half was removed (TALLY-26).
   startFileTransferSync();
   startHousekeeping();
   // Outbound half: anything dropped in the watch folder is sent up automatically.

@@ -136,7 +136,7 @@ function interpretResponse(
 
      Safe to reject here because this branch is reads only. Measured
      13-Sep-2026: all 8 captured response shapes carry a DATA node, and every
-     push path (safePush, pushListener, billSettlement, reconcile,
+     push path (safePush, billSettlement, reconcile,
      statusRoutine, localSession, changeDetector) passes rawMode=true and so
      never reaches this line. */
   if (!/<DATA>/i.test(body)) {

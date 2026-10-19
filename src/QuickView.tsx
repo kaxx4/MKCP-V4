@@ -20,12 +20,11 @@ import { SERVER_BASE } from "./config/serverUrl";
  *
  * It is small and on top of everything else, so it is read from across the room
  * while the operator is doing something else. That buys room for exactly one
- * question: **is the pipeline alive, and is anything waiting on me?**
+ * question: **is the pipeline alive?**
  *
- *   1. Vouchers waiting for approval — the only thing here that BLOCKS work.
- *      A web-pushed voucher sits until someone presses Import in the main
- *      window, and a pending approval nobody sees is a voucher never booked.
- *   2. Tally · Push drain · Queue — the three facts the local server knows.
+ *   1. Tally · Push drain · Queue — the three facts the local server knows.
+ *      (A "vouchers waiting for approval" tile used to sit above these; the
+ *      approval listener it read was removed 19-Oct-2026, TALLY-27.)
  *
  * NOT the Supabase channel state, even though the main window's KPI strip
  * carries it. `supabaseSyncStatusStore` is plain in-memory zustand, and every
@@ -96,7 +95,6 @@ function FactRow({ fact }: { fact: AgentFact }) {
 export default function QuickView() {
   const [health, setHealth] = useState<HealthLike | null>(null);
   const [pushStatus, setPushStatus] = useState<PushStatusLike | null>(null);
-  const [pendingCount, setPendingCount] = useState<number | null>(null);
   /* When the server last actually answered. Null until it has once. */
   const [confirmedAt, setConfirmedAt] = useState<string | null>(null);
   const [reachable, setReachable] = useState<boolean | null>(null);
@@ -105,18 +103,13 @@ export default function QuickView() {
   const poll = useCallback(async () => {
     setPolling(true);
     try {
-      const [h, p, pend] = await Promise.all([
+      const [h, p] = await Promise.all([
         fetch(`${BASE}/api/tally/health`).then((r) => r.json()).catch(() => null),
         fetch(`${BASE}/api/push-agent/status`).then((r) => r.json()).catch(() => null),
-        fetch(`${BASE}/api/tally/pending-pushes`).then((r) => r.json()).catch(() => null),
       ]);
       setHealth(h);
       setPushStatus(p);
-      /* A failed fetch must not collapse to 0 — "nothing is waiting for you" is
-         the single most reassuring thing this window can say, and it is exactly
-         the claim an unanswered request cannot support. */
-      setPendingCount(Array.isArray(pend) ? pend.length : null);
-      const answered = h != null || p != null || Array.isArray(pend);
+      const answered = h != null || p != null;
       setReachable(answered);
       if (answered) setConfirmedAt(new Date().toISOString());
     } finally {
@@ -136,8 +129,6 @@ export default function QuickView() {
     queueFact(pushStatus),
   ];
 
-  const waiting = pendingCount ?? 0;
-
   return (
     /* `min-h-screen` and nothing wider than the window: at 280px this is a
        single column with a 12px gutter, which is the narrowest the Electron
@@ -156,42 +147,12 @@ export default function QuickView() {
         </button>
       </header>
 
-      {/* 1 — the only thing here that blocks work, and it is allowed to shout. */}
-      {pendingCount == null ? (
-        <div className="mb-2.5 flex items-start gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[11.5px] text-warn-800">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-          <span>
-            Cannot tell whether anything is waiting for approval — the local server did not answer.
-          </span>
-        </div>
-      ) : waiting > 0 ? (
-        <div className="mb-2.5 rounded-xl bg-warn-soft px-3 py-3">
-          <div className="flex items-baseline gap-2">
-            <span className="font-mono text-[28px] font-black leading-none tabular-nums text-warn-800">
-              {waiting}
-            </span>
-            <span className="text-[12px] font-semibold text-warn-800">
-              voucher{waiting === 1 ? "" : "s"} waiting for you
-            </span>
-          </div>
-          <p className="mt-1 text-[10.5px] leading-snug text-warn-800">
-            Pushed from the web dashboard. Nothing reaches Tally until you import {waiting === 1 ? "it" : "them"} in
-            the main window.
-          </p>
-        </div>
-      ) : (
-        <p className="mb-2.5 flex items-center gap-1.5 rounded-xl bg-white px-3 py-2.5 text-[11.5px] text-neutral-600 ring-1 ring-black/[0.06]">
-          <Inbox size={13} className="shrink-0 text-neutral-400" />
-          Nothing waiting for your approval.
-        </p>
-      )}
-
-      {/* 2 — is the pipeline alive */}
+      {/* 1 — is the pipeline alive */}
       <ul className="flex flex-col gap-2">
         {facts.map((f) => <FactRow key={f.label} fact={f} />)}
       </ul>
 
-      {/* 3 — how old everything above is. A small always-on-top window is the
+      {/* 2 — how old everything above is. A small always-on-top window is the
              easiest place in the product to leave a stale number sitting in
              front of someone for an hour. */}
       <p className="mt-2.5 text-[10px] leading-snug text-neutral-500">

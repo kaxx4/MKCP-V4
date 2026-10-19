@@ -3,10 +3,10 @@
  *
  * PURE — no Tally, no Supabase.
  *
- * There are three independent readers of a Tally import response:
+ * There were three independent readers of a Tally import response:
  *   voucherPusher.parseImportResponse   the general one
  *   safePush's inline count()           the one production actually trusts
- *   pushListener.verdict                the raw-XML relay path
+ *   (pushListener.verdict, the raw-XML relay path, was removed 19-Oct-2026: TALLY-27)
  *
  * They read different field sets, and until now they could not agree:
  * `parseImportResponse` did not read ALTERED, DELETED or EXCEPTIONS at all. So a

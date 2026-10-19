@@ -5,6 +5,9 @@
  *   npx tsx scripts/test-agent-auth.ts
  */
 import express from "express";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import {
   loadAgentAuthConfig, installAgentSecurity, originAllowed, safeEqual, bearerOf, authStartupNotice, isOpenPath,
@@ -99,6 +102,14 @@ async function main() {
     if (prev === undefined) delete process.env.AGENT_API_TOKEN; else process.env.AGENT_API_TOKEN = prev;
     selfSrv.close();
   }
+
+  // ── retired unguarded hand-offs stay gone (TALLY-26, TALLY-27) ──────────
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const indexSrc = fs.readFileSync(path.join(here, "../src/index.ts"), "utf8");
+  ok("old approval listener file is gone", !fs.existsSync(path.join(here, "../src/services/pushListener.ts")));
+  ok("no pending-pushes routes and no listener start in index.ts", !/pending-pushes|startPushListener|pushListener/.test(indexSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")));
+  const ftSrc = fs.readFileSync(path.join(here, "../src/services/fileTransferSync.ts"), "utf8");
+  ok("inbound web->desktop file download is gone", !/downloadOne|web_to_desktop|\.channel\(/.test(ftSrc));
 
   // ── helpers + startup notice ────────────────────────────────────────────
   ok("safeEqual: equal / unequal / different length", safeEqual("abc", "abc") && !safeEqual("abc", "abd") && !safeEqual("abc", "abcd"));
