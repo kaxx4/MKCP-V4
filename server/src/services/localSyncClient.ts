@@ -27,6 +27,19 @@ export interface LocalSyncResponse {
  * quick sync has always used. They take DIFFERENT date formats — see
  * scheduledSyncs.ts — so the route and the dates have to be chosen together.
  */
+/**
+ * Headers for a call this process makes to its OWN routes. When AGENT_API_TOKEN
+ * is set every route needs it, including these self-calls: without it the
+ * nightly, scheduled and web-refresh syncs would all answer 401 and the mirror
+ * would stop with only a console line to say why (TALLY-3, 19-Oct-2026).
+ * Read per call, not at import, so a token loaded from <userData>/.env after
+ * module load is still picked up.
+ */
+export function selfCallHeaders(env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const token = (env.AGENT_API_TOKEN ?? "").trim();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export function postTallySync(port: number, body: object, path = "/api/tally/sync"): Promise<LocalSyncResponse> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
@@ -39,6 +52,7 @@ export function postTallySync(port: number, body: object, path = "/api/tally/syn
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(payload),
+          ...selfCallHeaders(),
         },
       },
       (res) => {

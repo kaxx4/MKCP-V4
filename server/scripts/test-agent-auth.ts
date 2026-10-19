@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import {
   loadAgentAuthConfig, installAgentSecurity, originAllowed, safeEqual, bearerOf, authStartupNotice, isOpenPath,
 } from "../src/services/agentAuth.js";
+import { selfCallHeaders, postTallySync } from "../src/services/localSyncClient.js";
 
 let failures = 0;
 function ok(name: string, pass: boolean, detail = ""): void {
@@ -58,23 +59,46 @@ async function main() {
   // ── CORS ────────────────────────────────────────────────────────────────
   const dflt = loadAgentAuthConfig({});
   ok("default: loopback allowed", originAllowed("http://localhost:5173", dflt) && originAllowed("http://127.0.0.1:3100", dflt));
-  ok("default: *.vercel.app still allowed (today's list)", originAllowed("https://mkcp-web.vercel.app", dflt));
+  ok("default: *.vercel.app is NOT allowed any more (TALLY-2)", !originAllowed("https://mkcp-web.vercel.app", dflt));
   ok("default: arbitrary origin refused", !originAllowed("https://evil.example", dflt));
   ok("default: lookalike vercel host refused", !originAllowed("https://mkcp.vercel.app.evil.example", dflt));
   ok("default: legacy ALLOWED_ORIGINS still honoured", originAllowed("https://x.example", loadAgentAuthConfig({ ALLOWED_ORIGINS: "https://x.example" })));
   const narrow = loadAgentAuthConfig({ AGENT_ALLOWED_ORIGINS: "https://dash.example.com/, https://b.example.com", ALLOWED_ORIGINS: "https://legacy.example" });
   ok("narrowed: listed origin allowed (trailing slash tolerated)", originAllowed("https://dash.example.com", narrow) && originAllowed("https://b.example.com", narrow));
-  ok("narrowed: *.vercel.app is now refused", !originAllowed("https://mkcp-web.vercel.app", narrow));
-  ok("narrowed: legacy list is superseded", !originAllowed("https://legacy.example", narrow));
+  ok("narrowed: an unlisted *.vercel.app is refused", !originAllowed("https://mkcp-web.vercel.app", narrow));
+  ok("narrowed: legacy list still adds its exact origin", originAllowed("https://legacy.example", narrow));
   ok("narrowed: loopback still allowed (Electron renderer, dev tab)", originAllowed("http://localhost:5173", narrow));
 
   await withServer({ AGENT_ALLOWED_ORIGINS: "https://dash.example.com" }, async (b) => {
     const good = await fetch(`${b}/api/tally/health`, { headers: { Origin: "https://dash.example.com" } });
     ok("HTTP: allowed origin gets the ACAO header", good.headers.get("access-control-allow-origin") === "https://dash.example.com");
     const bad = await fetch(`${b}/api/tally/health`, { headers: { Origin: "https://mkcp-web.vercel.app" } });
-    ok("HTTP: a vercel.app origin is blocked once narrowed", bad.status !== 200 && !bad.headers.get("access-control-allow-origin"), `status ${bad.status}`);
+    ok("HTTP: an unlisted vercel.app origin is blocked", bad.status !== 200 && !bad.headers.get("access-control-allow-origin"), `status ${bad.status}`);
     ok("HTTP: no Origin header is still passed by CORS", (await status(`${b}/api/tally/health`)) === 200);
   });
+
+  // ── the agent's own calls carry the token (TALLY-3) ─────────────────────
+  ok("selfCallHeaders: token set -> Bearer header", selfCallHeaders({ AGENT_API_TOKEN: TOKEN }).Authorization === `Bearer ${TOKEN}`);
+  ok("selfCallHeaders: token unset/blank -> no header", Object.keys(selfCallHeaders({})).length === 0 && Object.keys(selfCallHeaders({ AGENT_API_TOKEN: "  " })).length === 0);
+  // End to end: a token-protected server, the REAL postTallySync, token from the environment.
+  const selfApp = express();
+  installAgentSecurity(selfApp, loadAgentAuthConfig({ AGENT_API_TOKEN: TOKEN }), () => {});
+  selfApp.use(express.json());
+  selfApp.post("/api/tally/sync", (_q, r) => r.json({ success: true }));
+  const selfSrv = selfApp.listen(0, "127.0.0.1");
+  await new Promise((r) => selfSrv.once("listening", r));
+  const selfPort = (selfSrv.address() as AddressInfo).port;
+  const prev = process.env.AGENT_API_TOKEN;
+  try {
+    delete process.env.AGENT_API_TOKEN;
+    ok("self sync WITHOUT the token is refused (the failure TALLY-3 describes)", (await postTallySync(selfPort, {})).status === 401);
+    process.env.AGENT_API_TOKEN = TOKEN;
+    const withTok = await postTallySync(selfPort, {});
+    ok("self sync WITH the token gets through", withTok.status === 200 && withTok.json?.success === true, `status ${withTok.status}`);
+  } finally {
+    if (prev === undefined) delete process.env.AGENT_API_TOKEN; else process.env.AGENT_API_TOKEN = prev;
+    selfSrv.close();
+  }
 
   // ── helpers + startup notice ────────────────────────────────────────────
   ok("safeEqual: equal / unequal / different length", safeEqual("abc", "abc") && !safeEqual("abc", "abd") && !safeEqual("abc", "abcd"));

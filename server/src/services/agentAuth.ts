@@ -13,18 +13,22 @@
  * and answers 401 otherwise. The compare is constant-time. When UNSET the
  * server behaves exactly as before and logs ONE startup warning, so nothing
  * breaks at the office the day this ships; the owner turns it on by setting the
- * variable (see CLAUDE.md, "Turning agent auth on").
+ * variable (see CLAUDE.md, "Turning agent auth on"). "Unset" is the documented
+ * way to run locally; there is no other switch. The agent's OWN calls to itself
+ * (localSyncClient.ts) and the Electron renderer (public/electron.js header
+ * injection) send the token, so turning it on does not stop the nightly sync
+ * (TALLY-3).
  *
  * Open routes: GET /api/tally/health (a liveness probe carries no data worth
  * guarding) and GET / (a static page shell; the logs it polls are behind the
  * token like everything else).
  *
  * ── CORS ──────────────────────────────────────────────────────────────────
- * Default (AGENT_ALLOWED_ORIGINS unset): today's list, which is loopback, any
- * https://*.vercel.app, and the legacy ALLOWED_ORIGINS additions.
- * AGENT_ALLOWED_ORIGINS=https://a.example,https://b.example narrows it to
- * EXACTLY those origins plus loopback (the Electron renderer and dev tabs);
- * the *.vercel.app wildcard is then off. Requests with no Origin header are
+ * Allowed: loopback (the Electron renderer and dev tabs) plus EXACTLY the
+ * origins named in AGENT_ALLOWED_ORIGINS=https://a.example,https://b.example
+ * (and the legacy ALLOWED_ORIGINS list). There is NO *.vercel.app wildcard any
+ * more (TALLY-2): a deployed dashboard that must reach this agent from a
+ * browser has to be listed by its exact origin. Requests with no Origin header are
  * still passed by CORS (that is what it does); the bearer token is what stops
  * them.
  */
@@ -33,7 +37,6 @@ import cors from "cors";
 import type { Express, Request, Response, NextFunction } from "express";
 
 const LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
-const VERCEL_ORIGIN = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i;
 
 /** Paths that need no token. Exact match, no prefixes. */
 export const OPEN_PATHS: readonly string[] = ["/api/tally/health", "/"];
@@ -44,8 +47,8 @@ const list = (v: string | undefined): string[] =>
 export interface AgentAuthConfig {
   /** null = auth off (the pre-#98 behaviour). */
   token: string | null;
-  /** null = the default policy (loopback + *.vercel.app + legacy ALLOWED_ORIGINS). */
-  explicitOrigins: string[] | null;
+  /** Exact web origins (AGENT_ALLOWED_ORIGINS). Empty = loopback only. */
+  explicitOrigins: string[];
   legacyOrigins: string[];
 }
 
@@ -54,7 +57,7 @@ export function loadAgentAuthConfig(env: Record<string, string | undefined> = pr
   const explicit = list(env.AGENT_ALLOWED_ORIGINS);
   return {
     token: token || null,
-    explicitOrigins: explicit.length ? explicit : null,
+    explicitOrigins: explicit,
     legacyOrigins: list(env.ALLOWED_ORIGINS),
   };
 }
@@ -69,8 +72,11 @@ export function safeEqual(a: string, b: string): boolean {
 export function originAllowed(origin: string, cfg: AgentAuthConfig): boolean {
   const o = origin.replace(/\/+$/, "");
   if (LOOPBACK_ORIGIN.test(o)) return true;
-  if (cfg.explicitOrigins) return cfg.explicitOrigins.includes(o);
-  return VERCEL_ORIGIN.test(o) || cfg.legacyOrigins.includes(o);
+  // TALLY-2 (19-Oct-2026): the old rule also accepted ANY https://*.vercel.app,
+  // and anyone can host a page there; with credentials:true such a page, opened
+  // in the operator's browser, could drive 127.0.0.1:3100 (push, file upload).
+  // Only exact, listed origins are allowed now.
+  return cfg.explicitOrigins.includes(o) || cfg.legacyOrigins.includes(o);
 }
 
 /** The token carried by an Authorization header, or null when it is not a Bearer one. */
@@ -104,8 +110,9 @@ export function authStartupNotice(cfg: AgentAuthConfig): { level: "warn" | "info
   return {
     level: "warn",
     text:
-      `⚠ [security] AGENT_API_TOKEN is not set — the agent's routes (including voucher push and file upload) accept ANY ` +
-      `caller that can reach this port. Set AGENT_API_TOKEN to turn route auth on (see CLAUDE.md, "Turning agent auth on").`,
+      `⚠⚠⚠ [SECURITY WARNING] AGENT_API_TOKEN is NOT SET — the agent's routes (voucher push, bank push, raw Tally import, ` +
+      `file upload) accept ANY caller that can reach this port. Set AGENT_API_TOKEN in server/.env (or <userData>/.env) to ` +
+      `require a token on every route (see CLAUDE.md, "Turning agent auth on").`,
   };
 }
 

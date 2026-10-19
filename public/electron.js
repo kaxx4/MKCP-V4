@@ -770,6 +770,26 @@ app.on('second-instance', () => {
 app.whenReady().then(() => {
   console.log('MK Cycles Dashboard starting...');
 
+  // TALLY-3: when AGENT_API_TOKEN is set the agent's routes need it, and the
+  // renderer's own fetches (AgentStatus, MirrorPanel, PendingPushes, tallyApi...)
+  // send none. Add the header here, in the main process, so the token never
+  // enters the renderer bundle. Read per request: the .env that holds it is
+  // loaded after the window opens. Only this machine's agent port is touched.
+  try {
+    const { session } = require('electron');
+    session.defaultSession.webRequest.onBeforeSendHeaders(
+      { urls: [`http://127.0.0.1:${SERVER_PORT}/*`, `http://localhost:${SERVER_PORT}/*`] },
+      (details, callback) => {
+        const token = (process.env.AGENT_API_TOKEN || '').trim();
+        const headers = details.requestHeaders;
+        if (token && !headers['Authorization']) headers['Authorization'] = `Bearer ${token}`;
+        callback({ requestHeaders: headers });
+      }
+    );
+  } catch (err) {
+    console.error('[electron] Could not install the agent-token header hook:', err);
+  }
+
   // Open the window and tray FIRST so the UI appears immediately and the user
   // always has a quit affordance — even if the server is slow or fails to start.
   createWindow();

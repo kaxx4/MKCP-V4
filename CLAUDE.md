@@ -281,14 +281,20 @@ AGENT_ALLOWED_ORIGINS=https://your-dashboard.example   # comma list; optional
   page shell) needs `Authorization: Bearer <token>`; anything else is a 401.
   The compare is constant-time. Generate a token with
   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-- **CORS.** Default is loopback + any `https://*.vercel.app` + the legacy
-  `ALLOWED_ORIGINS`. Setting `AGENT_ALLOWED_ORIGINS` replaces the `*.vercel.app`
-  wildcard and the legacy list with exactly the origins you name (loopback stays,
-  for the Electron renderer and dev tabs).
-- **Before you set the token:** every caller must send it. The Electron renderer
-  (`src/AgentStatus.tsx`, `MirrorPanel.tsx`, `PendingPushes.tsx`, `api/tallyApi.ts`,
-  and the other `fetch(${BASE}/api/...)` sites) does not yet, so turning it on
-  today would 401 the agent's own UI. Add the header there first.
+- **CORS.** Allowed origins are loopback (Electron renderer, dev tabs) plus
+  EXACTLY the origins listed in `AGENT_ALLOWED_ORIGINS` (and the legacy
+  `ALLOWED_ORIGINS`). The old `https://*.vercel.app` wildcard is gone (TALLY-2,
+  19-Oct-2026): a deployed dashboard that must call this agent from a browser has
+  to be listed by exact origin.
+- **The agent's own calls send the token (TALLY-3).** `postTallySync`
+  (nightly, scheduled, price/GST, web-refresh) adds `Authorization` from
+  `AGENT_API_TOKEN` per call, and `public/electron.js` injects the same header on
+  the renderer's requests to the local agent port, so the token never enters the
+  renderer bundle. Nothing else needs changing before the token is set. The web
+  dashboard's own calls to the agent (Settings.tsx) are a web-repo concern.
+- **Running locally:** leave `AGENT_API_TOKEN` unset (loud startup warning, routes
+  open on loopback only) or set it in `server/.env` and use the same value in any
+  script that calls the agent.
 - Proof: `npx tsx server/scripts/test-agent-auth.ts` (offline).
 
 ## Operator scripts that write to Tally (#104)
