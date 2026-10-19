@@ -18,6 +18,7 @@
  *     health probe actually succeeds — never on a timer, never optimistically.
  */
 import { tallyPost, HEALTH_XML } from "../tally.js";
+import { isTallyBusy } from "./tallyBusy.js";
 
 export type GateState = "closed" | "open" | "probing";
 
@@ -50,6 +51,21 @@ export class TallyUnavailableError extends Error {
   constructor(reason: string) {
     super(`Tally is not accepting writes: ${reason}. It is most likely showing a dialog — check the Tally window; it may need restarting.`);
     this.name = "TallyUnavailableError";
+  }
+}
+
+/**
+ * A request failed while a PULL held the port. Not evidence that Tally is behind
+ * a dialog: pulls and pushes use two different locks (syncGuard/tallyBusy vs this
+ * gate), so a sync that starts mid-batch can hold Tally's one-at-a-time port for
+ * minutes, the push times out, and two such timeouts used to open the breaker
+ * with "check for a dialog" although Tally was healthy (TALLY-6, 19-Oct-2026).
+ * The caller should wait and try again WITHOUT spending a retry.
+ */
+export class TallyBusyError extends Error {
+  constructor(reason: string) {
+    super(`Tally was busy with a sync when this request ran (${reason}). Nothing was lost; it will be tried again when the sync ends.`);
+    this.name = "TallyBusyError";
   }
 }
 
@@ -125,6 +141,12 @@ export async function withTally<T>(tallyUrl: string, label: string, fn: () => Pr
       consecutiveFailures = 0;
       return out;
     } catch (e) {
+      // TALLY-6: a failure while a pull is running is "busy", not breaker evidence.
+      // The pull marks tallyBusy for exactly as long as it holds the port, so this
+      // is checked at the moment of failure, not at the start of the push.
+      if (isTallyBusy() && !(e instanceof TallyUnavailableError)) {
+        throw e instanceof TallyBusyError ? e : new TallyBusyError((e as Error).message);
+      }
       consecutiveFailures++;
       lastFailure = { at: Date.now(), reason: (e as Error).message };
       if (consecutiveFailures >= BREAK_AFTER) {

@@ -15,7 +15,8 @@
  *   npx tsx scripts/test-gate-recovery.ts
  */
 import { createServer, type Server } from "node:http";
-import { withTally, gateState, resetGate, TallyUnavailableError } from "../src/services/tallyGate.js";
+import { withTally, gateState, resetGate, TallyUnavailableError, TallyBusyError } from "../src/services/tallyGate.js";
+import { beginTallyWork, endTallyWork } from "../src/services/tallyBusy.js";
 
 const PORT = 19_123;
 const URL = `http://127.0.0.1:${PORT}`;
@@ -106,6 +107,19 @@ const fail = async () => { throw new Error("simulated transport failure"); };
   check("a further write succeeds", after.ok);
 
   await stop(fake);
+  resetGate();
+
+  // ── 6. TALLY-6: a timeout while a PULL holds the port is not breaker evidence ──
+  console.log("\na pull is running");
+  beginTallyWork();
+  let busyErr: unknown = null;
+  for (let i = 0; i < 3; i++) { try { await withTally(URL, "push during pull", fail); } catch (e) { busyErr = e; } }
+  endTallyWork();
+  check("failures during a pull are reported as BUSY, not as a dead port", busyErr instanceof TallyBusyError, (busyErr as Error)?.message?.slice(0, 60));
+  check("three of them do NOT open the circuit", gateState().state === "closed", `state=${gateState().state}`);
+  check("and do not count toward it", gateState().consecutiveFailures === 0, `consecutiveFailures=${gateState().consecutiveFailures}`);
+  await attempt(fail); await attempt(fail);
+  check("the same failures with NO pull running still open it", gateState().state === "open", `state=${gateState().state}`);
   resetGate();
 
   console.log(`\n${failures === 0 ? "PASS" : `FAIL — ${failures} check(s) failed`}\n`);

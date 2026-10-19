@@ -24,6 +24,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { tallyPost, HEALTH_XML } from "../tally.js";
 import { safePush } from "./safePush.js";
 import { isTallyBusy } from "./tallyBusy.js";
+import { TallyBusyError } from "./tallyGate.js";
 import type { VoucherPayload, PushResult } from "../types.js";
 import { refuseSharedWrite } from "./tallyRole.js";
 import { supabaseClient } from "./supabaseClient.js";
@@ -218,8 +219,11 @@ async function tick(): Promise<void> {
     }
 
     // SEQUENTIAL — never parallel to one company (Tally is single-threaded per company).
-    for (const job of claimed) {
-      await processJob(job);
+    for (let i = 0; i < claimed.length; i++) {
+      // TALLY-6: busy was only checked once, above. A pull that starts mid-batch
+      // would otherwise make every remaining voucher wait out its own timeout.
+      if (i > 0 && isTallyBusy()) { await releaseClaims(claimed.slice(i)); break; }
+      await processJob(claimed[i]);
     }
     await refreshQueueStats();
   } finally {
@@ -341,6 +345,17 @@ async function processJob(job: PushJob): Promise<void> {
       await fail(job, job.max_attempts, why, res.differences.length ? withReadBackMismatch(result, res.differences) : result);
     }
   } catch (e: any) {
+    if (e instanceof TallyBusyError) {
+      /* TALLY-6: a pull took the port mid-batch. This was not a failed attempt, so
+         hand the row back with the attempt it had before, and try again shortly. */
+      await client.from("push_queue").update({
+        status: "pending", attempts: job.attempts, claimed_by: null, claimed_at: null, lease_until: null,
+        last_error: "Tally was busy with a sync; will retry",
+        not_before: new Date(Date.now() + 15_000).toISOString(),
+      }).eq("id", job.id);
+      record(job.id, job.idempotency_key, "retry", "Tally busy with a sync");
+      return;
+    }
     await fail(job, newAttempts, e?.message ?? String(e), null);
   }
 }
