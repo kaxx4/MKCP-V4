@@ -33,14 +33,14 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { check, unverified, parseVoucher, checkVoucherShape, checkTaxParity, webDir, headerOf, tag } from "./lib.js";
-import { fixtureMasters, fixtureOpenBills, COMPANY, PARTY_LOCAL, PARTY_INTER, PARTY_UNREG, SUPPLIER, receipt } from "./fixtures.js";
+import { fixtureMasters, fixtureOpenBills, OPEN_DATE, COMPANY, PARTY_LOCAL, PARTY_INTER, PARTY_UNREG, SUPPLIER, receipt } from "./fixtures.js";
 import type { VoucherPayload } from "../../src/types.js";
 import type { TallyMasters } from "../../src/services/tallyMasters.js";
 import type { OpenBill } from "../../src/services/billSettlement.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const URL_ = "http://localhost:9000";
-const DATE = "2026-09-23";
+const DATE = OPEN_DATE; // never a hard-coded day: see openPeriodDate (TALLY-38)
 
 // ── The simulated Tally ─────────────────────────────────────────────────────
 

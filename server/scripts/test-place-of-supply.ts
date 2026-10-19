@@ -17,6 +17,7 @@
 import { guardVoucher, resolvePartyState, isInwardSupply, HOME_STATE_NAME } from "../src/services/pushGuard.js";
 import type { TallyMasters, MasterLedger } from "../src/services/tallyMasters.js";
 import type { VoucherPayload } from "../src/types.js";
+import { OPEN_DATE } from "./guardrails/fixtures.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -61,7 +62,7 @@ const M = masters();
 function sale(over: Partial<VoucherPayload> = {}): VoucherPayload {
   const party = over.partyLedgerName ?? "Cash";
   return {
-    voucherType: "Sales", date: "2026-09-12", voucherNumber: "T/1",
+    voucherType: "Sales", date: OPEN_DATE, voucherNumber: "T/1",
     remoteId: "T/1", partyLedgerName: party, isInvoice: true,
     ledgerEntries: [
       { ledgerName: party, amount: 118, isDeemedPositive: true, isPartyLedger: true },
@@ -124,7 +125,7 @@ const warns = (p: VoucherPayload) => guardVoucher(p, M).warnings.join(" | ");
     /interstate/i.test(errs(agreeing)), errs(agreeing).slice(0, 90));
 
   const purchase: VoucherPayload = {
-    voucherType: "Purchase", date: "2026-09-12", voucherNumber: "T/2", remoteId: "T/2",
+    voucherType: "Purchase", date: OPEN_DATE, voucherNumber: "T/2", remoteId: "T/2",
     partyLedgerName: "Cash", isInvoice: true, placeOfSupply: "Punjab",
     ledgerEntries: [
       { ledgerName: "Cash", amount: 100, isDeemedPositive: false, isPartyLedger: true },

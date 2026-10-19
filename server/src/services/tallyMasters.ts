@@ -136,6 +136,13 @@ export interface TallyMasters {
   stockGroups: Map<string, MasterStockGroup>;
   godowns: Set<string>;
   units: Set<string>;
+  /**
+   * Decimal places each unit holds, when known. NOT populated today: units are
+   * fetched by Name only and the Tally field name for decimals has not been
+   * verified (guardrail G7). While absent, the push guard refuses any fractional
+   * quantity (TALLY-13) rather than guessing that a unit allows decimals.
+   */
+  unitDecimals?: Map<string, number>;
   /** Voucher types configured in THIS company. `Delivery Note` is not among them. */
   voucherTypes: Set<string>;
   /** Lowercased, whitespace-collapsed key → real name, for near-miss diagnostics. */

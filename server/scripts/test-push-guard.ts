@@ -5,11 +5,15 @@
  * Every negative case here is a real bug that reached Tally at some point today
  * and returned CREATED=1 while corrupting or dropping data.
  *
- *   npx tsx scripts/test-push-guard.ts           # guard only, writes nothing
- *   npx tsx scripts/test-push-guard.ts --push    # also does one verified push
- *   npx tsx scripts/test-push-guard.ts --offline # fixture masters only, no Tally
+ *   npx tsx scripts/test-push-guard.ts                # fixture masters only: never contacts Tally
+ *   npx tsx scripts/test-push-guard.ts --live         # ALSO reads masters from the Tally on TALLY_URL
+ *   npx tsx scripts/test-push-guard.ts --live --push  # ... and does one verified push (sandbox only)
+ *   npx tsx scripts/test-push-guard.ts --offline      # same as the default, kept for old command lines
  *
- * The offline section always runs first; it needs no Tally, so the ship-to /
+ * OFFLINE IS THE DEFAULT (TALLY-37, 19-Oct-2026). It used to read masters from
+ * whatever answered on localhost:9000 unless you remembered --offline; a check
+ * that is safe only if you remember a flag is the pattern G8 warns about. The
+ * offline section always runs first; it needs no Tally, so the ship-to /
  * identity / tax rules are asserted on every machine, cloud included.
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
@@ -22,11 +26,12 @@ import {
   fixtureMasters, fixtureOpenBills, sale, receipt, purchase, PARTY_LOCAL, PARTY_INTER, PARTY_UNREG,
 } from "./guardrails/fixtures.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
-if (process.argv.includes("--push")) guardScriptWrites("test-push-guard"); // #104, offline cases need no Tally: writes only on a sandbox role against a local Tally
+if (process.argv.includes("--live") && process.argv.includes("--push")) guardScriptWrites("test-push-guard"); // #104, offline cases need no Tally: writes only on a sandbox role against a local Tally
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
-const OFFLINE = process.argv.includes("--offline");
+const LIVE = process.argv.includes("--live") && !process.argv.includes("--offline");
+const OFFLINE = !LIVE;
 const TAG = `G${Date.now().toString().slice(-6)}`;
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -154,6 +159,30 @@ function offlineCases() {
   expectAccepted("an Agst Ref naming this party's open bill", receipt("PG/17", PARTY_LOCAL, 1000, "Agst Ref", "26-27/0460"), m, bills);
   expectAccepted("an inter-state purchase (place of supply is OURS)", purchase("PG/18", clip), m);
 
+  // TALLY-13: a fractional quantity is refused unless the unit's decimals are known to allow it.
+  console.log("\nQuantity, amount and purchase tax (offline, 19-Oct-2026):");
+  const withQty = (v: VoucherPayload, qty: number, rate: number, amount?: number): VoucherPayload => ({
+    ...v, inventoryEntries: v.inventoryEntries!.map(i => ({ ...i, quantity: qty, rate, amount: amount ?? i.amount })),
+  });
+  const base = sale({ number: "PG/19", party: PARTY_LOCAL, lines: clip });
+  expectAccepted("whole quantity with amount = quantity x rate (4 x 250 = 1000)", withQty(base, 4, 250), m);
+  expectRejected("fractional quantity 2.5 with the unit's decimals unknown", withQty(base, 2.5, 400), m, "is a fraction");
+  expectRejected("fractional quantity on a unit holding 0 decimals", withQty(base, 2.5, 400), { ...m, unitDecimals: new Map([["PC", 0]]) } as TallyMasters, "holds only 0 decimal");
+  expectAccepted("fractional quantity 2.5 on a unit known to hold 2 decimals", withQty(base, 2.5, 400), { ...m, unitDecimals: new Map([["PC", 2]]) } as TallyMasters);
+  expectRejected("three decimals on a unit holding 2", withQty(base, 2.125, 470.588, 1000), { ...m, unitDecimals: new Map([["PC", 2]]) } as TallyMasters, "holds only 2 decimal");
+  // TALLY-12
+  expectRejected("amount 1000 against quantity 1 x rate 900", withQty(base, 1, 900), m, "does not equal quantity");
+  expectAccepted("rate held to paise (3 x 333.33 = 999.99 vs amount 1000)", withQty(base, 3, 333.33), m);
+  // TALLY-11: a purchase whose tax is not rate x taxable value
+  const goodBuy = purchase("PG/20", clip);
+  expectAccepted("purchase with the right input tax (5% of 1000)", goodBuy, m);
+  {
+    const bad = purchase("PG/21", clip);
+    const tax = bad.ledgerEntries.find(e => e.ledgerName === "INPUT IGST")!; tax.amount = 120;
+    const sup = bad.ledgerEntries.find(e => e.isPartyLedger)!; sup.amount += 70;
+    expectRejected("purchase with input tax 120 where 5% of 1000 is 50", bad, m, "Tax booked");
+  }
+
   // PUSH-P2, 1-Oct-2026: a refused number is worded by WHO chose it. The
   // mirror-race explanation is only true of a number the app assigned.
   console.log("\nRefusal wording, typed vs app-assigned number (offline):");
@@ -178,6 +207,10 @@ function offlineCases() {
 }
 
 async function main() {
+  if (PUSH && !LIVE) {
+    console.error("✗ --push needs --live: a push talks to Tally, and this script does not touch Tally unless you say --live.");
+    process.exit(2);
+  }
   // pushGuard reads MKCP_FILED_THROUGH at import; the fixtures are dated in
   // the open period, so nothing here depends on it.
   offlineCases();

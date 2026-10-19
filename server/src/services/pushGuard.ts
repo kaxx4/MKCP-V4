@@ -436,9 +436,31 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     // Tally rounds a fractional quantity to whatever decimal precision the unit
     // is configured for, WITHOUT reporting it — 1.5 PC was stored as 2 PC in
     // testing. The voucher still balances on value, so nothing looks wrong; only
-    // the stock figure is off.
-    if (Number.isFinite(ie.quantity) && !Number.isInteger(ie.quantity)) {
-      warnings.push(`Quantity ${ie.quantity} for "${ie.stockItemName}" is fractional — if "${isMiss(item) ? ie.unit : item.baseUnit}" carries no decimal places Tally will round it silently. Verify the stored quantity.`);
+    // the stock figure is off, and a re-send reproduces it (TALLY-13, 19-Oct-2026:
+    // this was a warning, and the read-back caught it only after the voucher was
+    // already in the books). Refused now. The unit's decimal places are not loaded
+    // from Tally yet (masters fetch Units by Name only), so unless a caller supplies
+    // them in `m.unitDecimals` ANY fractional quantity is refused. Loose goods
+    // (half a metre, 0.5 kg) are a separate loose item sold in whole base units
+    // (owner decision L1), never a fraction of the packed item.
+    if (Number.isFinite(ie.quantity) && ie.quantity > 0 && Math.abs(ie.quantity - Math.round(ie.quantity)) > 1e-9) {
+      const unitName = isMiss(item) ? ie.unit : item.baseUnit;
+      const allowed = m.unitDecimals?.get(unitName);
+      const decimals = (String(ie.quantity).split(".")[1] ?? "").length;
+      if (allowed === undefined || decimals > allowed) {
+        errors.push(`Quantity ${ie.quantity} for "${ie.stockItemName}" is a fraction, and ${allowed === undefined ? `this agent cannot tell whether "${unitName}" holds decimals` : `"${unitName}" holds only ${allowed} decimal place${allowed === 1 ? "" : "s"}`} — Tally would round it silently and the stock would be wrong while the money looks right. Use a whole number of ${unitName}, or sell the loose part as its own loose item.`);
+      }
+    }
+    // Amount must agree with quantity × rate (TALLY-12). The read-back compares
+    // quantity, rate and amount separately, so a line where the three disagree is
+    // stored exactly as sent. A rate held to paise can drift the product by up to
+    // half a paisa per unit, so the tolerance scales with the quantity.
+    if (Number.isFinite(ie.quantity) && Number.isFinite(ie.rate) && Number.isFinite(ie.amount) && ie.quantity > 0 && ie.amount > 0) {
+      const expected = ie.quantity * ie.rate;
+      const tol = 0.01 + 0.005 * ie.quantity;
+      if (Math.abs(Math.abs(ie.amount) - expected) > tol) {
+        errors.push(`Line "${ie.stockItemName}": amount ${money(Math.abs(ie.amount))} does not equal quantity ${ie.quantity} × rate ${money(ie.rate)} = ${money(expected)}. Tally stores the three as sent, so the invoice would not agree with itself and the e-invoice could be refused. Fix the rate or the amount.`);
+      }
     }
     // Zero is rejected, not just negative. A zero-value line books stock out of
     // nothing and is almost always a rate that failed to read; the house
@@ -682,10 +704,19 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
 
     // Tax booked must equal the dated rate × the taxable value (TG-P15). The
     // voucher can balance and read back byte-identical with the wrong tax.
-    if (outwardTaxed && !unrated.length) {
+    // TALLY-11 (19-Oct-2026): the same check now runs on a PURCHASE, where it
+    // used to be skipped — a tax mis-read from a bill photo imported, verified
+    // and was claimed as input credit. A purchase differs in two ways: its tax
+    // sits on the debit side (taxCheck flips the sign for inward supplies), and
+    // the supplier's own rounding is wider than ours, so the tolerance is
+    // wider. It runs only when the bill carries a tax line at all: a registered
+    // supplier charging no tax (composition dealer) is a real case, and the
+    // "no tax line" warning below already covers it.
+    const purchaseTaxed = isPurchase && (p.ledgerEntries ?? []).some(e => TAX_HEAD.test(e.ledgerName));
+    if ((outwardTaxed || purchaseTaxed) && !unrated.length) {
       const t = taxCheck(p, m);
       if (t.booked < t.lo - t.tol || t.booked > t.hi + t.tol) {
-        errors.push(`Tax booked ₹${t.booked.toFixed(2)} but the dated rates × taxable value give ₹${t.lo.toFixed(2)}${t.hi - t.lo > 0.005 ? `–₹${t.hi.toFixed(2)}` : ""} (taxable ₹${t.taxable.toFixed(2)}). The voucher balances and would file wrong.`);
+        errors.push(`Tax booked ₹${t.booked.toFixed(2)} but the dated rates × taxable value give ₹${t.lo.toFixed(2)}${t.hi - t.lo > 0.005 ? `–₹${t.hi.toFixed(2)}` : ""} (taxable ₹${t.taxable.toFixed(2)}). The voucher balances and would file wrong${isPurchase ? " — and the input credit claimed on it would be wrong" : ""}.`);
       }
       if (t.cgst > 0 || t.sgst > 0) {
         if (Math.abs(t.cgst - t.sgst) > 0.02) errors.push(`CGST ₹${t.cgst.toFixed(2)} ≠ SGST ₹${t.sgst.toFixed(2)} — a local supply splits its tax in equal halves.`);
@@ -748,8 +779,11 @@ export function taxCheck(p: VoucherPayload, m: TallyMasters): {
 } {
   const TAX = /\b(CGST|SGST|UTGST|IGST|CESS)\b/i;
   const ROUND = /^\s*ROUND(ED)?\s*OFF\s*$/i;
+  // Outward: tax and adjustments sit on the credit side (positive here). Inward
+  // (Purchase): they sit on the debit side, so flip the sign and compare magnitudes.
+  const dir = isInwardSupply(p.voucherType) ? -1 : 1;
   const cr = (e: { amount: number; isDeemedPositive: boolean; signedAmount?: number }) =>
-    e.signedAmount !== undefined ? e.signedAmount : (e.isDeemedPositive ? -Math.abs(e.amount) : Math.abs(e.amount));
+    dir * (e.signedAmount !== undefined ? e.signedAmount : (e.isDeemedPositive ? -Math.abs(e.amount) : Math.abs(e.amount)));
   let base = 0; const rates: number[] = [];
   let stockTotal = 0;
   for (const ie of p.inventoryEntries ?? []) {
@@ -769,7 +803,10 @@ export function taxCheck(p: VoucherPayload, m: TallyMasters): {
   }
   const minR = rates.length ? Math.min(...rates) : 0, maxR = rates.length ? Math.max(...rates) : 0;
   const a = base + adj * minR / 100, b = base + adj * maxR / 100;
-  return { booked, lo: Math.min(a, b), hi: Math.max(a, b), tol: Math.max(1, 0.02 * rates.length), taxable: stockTotal + adj, cgst, sgst };
+  // A supplier's bill rounds tax their own way, per line and per head: wider
+  // tolerance inward (₹2, or 5 paise a line) than for our own invoices.
+  const tol = isInwardSupply(p.voucherType) ? Math.max(2, 0.05 * rates.length) : Math.max(1, 0.02 * rates.length);
+  return { booked, lo: Math.min(a, b), hi: Math.max(a, b), tol, taxable: stockTotal + adj, cgst, sgst };
 }
 
 /** The shared walk-in ledger — the same test as the web's `isWalkIn`:

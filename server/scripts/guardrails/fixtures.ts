@@ -18,6 +18,21 @@ import { DEFAULT_TALLY_COMPANY } from "../../src/config/company.js";
 
 export const COMPANY = DEFAULT_TALLY_COMPANY;
 
+/**
+ * A date that is always OUTSIDE the filed GST window: the first day of the
+ * current month. The filed boundary is the end of the month whose GSTR-1 was due
+ * on the 11th (pushGuard.gstReturnFiledThrough), so it never reaches the current
+ * month. The fixtures used to hard-code 2026-09-23/12, which was open when
+ * written and became "already filed" on 12-Oct-2026 -- ten offline tests then
+ * failed with a correct refusal, and would again on the 12th of every month
+ * (TALLY-38). Local time, matching how the guard computes the boundary.
+ */
+export function openPeriodDate(today: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${today.getFullYear()}-${p(today.getMonth() + 1)}-01`;
+}
+export const OPEN_DATE = openPeriodDate();
+
 const rev = (from: string, igst: number): GstRevision => ({ from, rate: igst, cgst: igst / 2, sgst: igst / 2, igst, taxability: "Taxable" });
 const BIKE_REVS = [rev("2017-07-01", 12), rev("2022-04-01", 12), rev("2025-09-22", 5)];
 
@@ -126,7 +141,7 @@ export function sale(o: {
   inter?: boolean; discount?: number; placeOfSupply?: string; buyerName?: string; buyerAddress?: string[];
   remoteId?: string | null; action?: VoucherPayload["action"];
 }): VoucherPayload {
-  const date = o.date ?? "2026-09-23";
+  const date = o.date ?? OPEN_DATE;
   const salesLedger = o.inter ? SALES_CENTRAL : SALES_WB;
   const gross = o.lines.reduce((s, l) => s + l.amount, 0);
   const disc = o.discount ?? 0;
@@ -150,7 +165,7 @@ export function sale(o: {
 }
 
 /** Interstate purchase: stock Dr, IGST Dr, supplier Cr, debit round-off. */
-export function purchase(number: string, lines: { item: string; amount: number; rate: number }[], date = "2026-09-23"): VoucherPayload {
+export function purchase(number: string, lines: { item: string; amount: number; rate: number }[], date = OPEN_DATE): VoucherPayload {
   const goods = lines.reduce((s, l) => s + l.amount, 0);
   const igst = r2(lines.reduce((s, l) => s + l.amount * l.rate / 100, 0));
   const exact = r2(goods + igst), grand = Math.round(exact), ro = r2(grand - exact);
@@ -168,7 +183,7 @@ export function purchase(number: string, lines: { item: string; amount: number; 
 
 export function receipt(number: string, party: string, amount: number, billType: "On Account" | "Agst Ref" = "On Account", billName = ""): VoucherPayload {
   return {
-    voucherType: "Receipt", date: "2026-09-23", voucherNumber: number, isInvoice: false, remoteId: `MKCP|GUARD|Receipt|${number}`,
+    voucherType: "Receipt", date: OPEN_DATE, voucherNumber: number, isInvoice: false, remoteId: `MKCP|GUARD|Receipt|${number}`,
     partyLedgerName: party,
     ledgerEntries: [
       { ledgerName: "Cash", amount, isDeemedPositive: true, isPartyLedger: false },
