@@ -18,6 +18,7 @@
 // Connects with the service-role key (server-side only — never bundled into any renderer)
 // so RLS does not block claims.
 
+import { withReadBackMismatch, mayReconcileFromMirror } from "./pushVerdict.js";
 import os from "os";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { tallyPost, HEALTH_XML } from "../tally.js";
@@ -335,7 +336,9 @@ async function processJob(job: PushJob): Promise<void> {
       const why = res.differences.length
         ? `stored differently from what was sent: ${res.differences.join("; ")}`
         : res.errors.join("; ") || "push failed";
-      await fail(job, job.max_attempts, why, result);
+      /* TALLY-7: a read-back difference means the voucher IS in the books. Say so
+         on the row, so neither reconcile() nor a requeue can quietly turn it green. */
+      await fail(job, job.max_attempts, why, res.differences.length ? withReadBackMismatch(result, res.differences) : result);
     }
   } catch (e: any) {
     await fail(job, newAttempts, e?.message ?? String(e), null);
@@ -385,7 +388,7 @@ async function reconcile(): Promise<void> {
   if (!client) return;
   const { data, error } = await client
     .from("push_queue")
-    .select("id, idempotency_key, company, payload")
+    .select("id, idempotency_key, company, payload, result")
     /* `dismissed` belongs here. A dismissed row is one a person read and set
        aside — usually Tally's silent duplicate-number refusal — and the whole
        reason that refusal is dangerous is that the voucher MAY be in the books
@@ -404,6 +407,7 @@ async function reconcile(): Promise<void> {
   type Cand = {
     id: string;
     idempotency_key: string;
+    result?: unknown;
     payload?: {
       reference?: string;
       voucherType?: string;
@@ -411,7 +415,12 @@ async function reconcile(): Promise<void> {
       partyLedgerName?: string;
     } | null;
   };
-  const rows = data as Cand[];
+  /* TALLY-7: a row whose read-back found differences is NOT confirmed by the
+     mirror merely holding a voucher with its key or number -- that voucher is
+     the one with the wrong stored quantity. Only rows that never reached Tally
+     may be flipped without a field comparison. */
+  const rows = (data as Cand[]).filter(mayReconcileFromMirror);
+  if (rows.length === 0) return;
 
   /* TWO ways to recognise a voucher Tally already holds, because there are two
      kinds of voucher.

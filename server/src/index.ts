@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import "dotenv/config";
 import express from "express";
+import { requeueRefusal } from "./services/pushVerdict.js";
 import { loadAgentAuthConfig, authStartupNotice, installAgentSecurity } from "./services/agentAuth.js";
 import { tallyPost, HEALTH_XML } from "./tally.js";
 import { convertCompanies } from "./converters/convert.js";
@@ -1012,6 +1013,11 @@ app.post("/api/push-agent/requeue", async (req: express.Request, res: express.Re
   if (!id) return res.status(400).json({ error: "id required" });
   const client = getAgentClient();
   if (!client) return res.status(503).json({ error: "Push agent not running (no Supabase client)" });
+  /* TALLY-7: a row whose read-back found Tally storing something different is not
+     retried blindly -- the same payload reproduces the same difference. */
+  const { data: row } = await client.from("push_queue").select("result").eq("id", id).eq("status", "failed").maybeSingle();
+  const refusal = requeueRefusal(row ?? {});
+  if (refusal) return res.status(409).json({ error: refusal });
   const { error } = await client
     .from("push_queue")
     .update({ status: "pending", attempts: 0, not_before: new Date().toISOString(), last_error: null })
@@ -1050,10 +1056,10 @@ app.post("/api/realtime/stop", (_req, res) => {
 });
 
 // ── File transfer (web ↔ desktop) ────────────────────────────────────────────
-// Incoming (web -> desktop) is handled entirely by fileTransferSync's own
-// Realtime listener (started above) -- these two routes cover the AgentStatus
-// UI's read (status panel) and the outgoing (desktop -> web) push, which needs
-// a local file path picked via a native dialog in the renderer first.
+// Only the outgoing (desktop -> web) direction remains: the inbound XML hand-off
+// was removed 19-Oct-2026 (TALLY-26). These routes cover the AgentStatus UI's
+// read (status panel) and the push, which needs a local file path picked via a
+// native dialog in the renderer first.
 app.get("/api/file-transfer/status", async (req, res) => {
   const company = String(req.query.company || process.env.TALLY_COMPANY || "");
   if (!company) return res.status(400).json({ error: "company query param required" });

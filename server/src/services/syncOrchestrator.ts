@@ -556,8 +556,9 @@ export class SyncOrchestrator {
    * Fetch every voucher whose AlterID is greater than `sinceAlterId`, regardless
    * of date. Catches edits to OLD vouchers that a date-windowed daybook pull
    * misses. Returns converted vouchers (same shape as a normal pull) so the
-   * caller can merge them by GUID. Best-effort: any Tally error returns an empty
-   * set rather than failing the whole sync.
+   * caller can merge them by GUID. A Tally error is THROWN (TALLY-20), never
+   * returned as an empty set: an empty set means "nothing changed" and lets the
+   * caller move its cursor past edits it never read.
    */
   async syncChangedVouchers(
     company: string,
@@ -573,14 +574,19 @@ export class SyncOrchestrator {
     const timeoutMs = voucherDef.timeout;
     try {
       const xml = buildChangedVoucherXml(voucherDef, company, since);
-      const result = await tallyPostWithRetry(this.tallyUrl, xml, timeoutMs, false, 1, signal);
+      const result = await this.post(this.tallyUrl, xml, timeoutMs, false, 1, signal);
       const converted = convertVouchers(result);
       console.log(`[CHANGED] AlterID > ${since}: ${converted.tallymessage.length} changed voucher(s)`);
       return converted;
     } catch (e: any) {
+      // TALLY-20 (19-Oct-2026): this used to swallow the error and return an empty
+      // list, which the real-time loop reads as "nothing changed" -- it then moved
+      // its cursor to the highest AlterID it had SEEN, so one timeout lost those
+      // edits for good (until the nightly pull). A failed read now propagates: the
+      // caller does not advance its cursor, and the same range is read again next tick.
       if (e?.message?.includes("Aborted")) throw e;
-      console.warn(`[CHANGED] AlterID fetch failed (skipping): ${e?.message || e}`);
-      return { tallymessage: [] };
+      console.warn(`[CHANGED] AlterID fetch failed -- cursor NOT advanced: ${e?.message || e}`);
+      throw new Error(`Could not read the changed vouchers from Tally (${e?.message || e}). Nothing was skipped; the same range will be read again.`);
     }
   }
 
