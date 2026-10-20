@@ -88,6 +88,38 @@ export interface VoucherTransport {
   dispatch_from_place: string | null;
   party_gstin: string | null;
   place_of_supply: string | null;
+  /** The rest of the e-way bill block (migration 049), null with no e-way bill. */
+  ewb_details: EwbDetails | null;
+}
+
+/**
+ * Phase 2 W2 (owner 20-Oct-2026). Probed 21-Oct on the dummy Tally: every tag
+ * below is in EWAYBILLDETAILS (scripts/probe-ewaybill-fields.ts, EWB_DUMP=1).
+ * Dates are ISO; `valid_from`/`valid_until` keep Tally's time (UPDATEDDATE is the
+ * moment Part-B was entered, which is when the bill's validity starts).
+ */
+export interface EwbDetails {
+  bill_date: string | null;
+  valid_from: string | null;
+  valid_until: string | null;
+  part_b_updated: boolean;
+  vehicle_type: string | null;
+  transporter_name: string | null;
+  transporter_id: string | null;
+  lr_number: string | null;
+  lr_date: string | null;
+  from_place: string | null;
+  from_pincode: string | null;
+  cancelled: boolean;
+  cancel_reason: string | null;
+}
+
+/** Tally's YYYYMMDD[HHMM…] → ISO "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM". Zero/empty → null. */
+export function tallyStamp(raw: unknown): string | null {
+  const s = String(raw ?? "").trim();
+  if (!/^\d{8}/.test(s) || /^0+$/.test(s)) return null;
+  const d = `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  return s.length >= 12 ? `${d}T${s.slice(8, 10)}:${s.slice(10, 12)}` : d;
 }
 
 /**
@@ -111,15 +143,40 @@ export function extractVoucherTransport(v: any): VoucherTransport {
   let vehicle: string | null = null;
   let mode: string | null = null;
   let distance: number | null = null;
+  let vehicleType: string | null = null, transporterName: string | null = null, transporterId: string | null = null;
+  let lrNumber: string | null = null, lrDate: string | null = null, partB = false;
   for (const td of listOf(ewb, "TRANSPORTDETAILS")) {
     if (!td || typeof td !== "object") continue;
     // Last non-empty value wins — see the Part-B note above.
     vehicle = txt(td.VEHICLENUMBER) || vehicle;
     mode = txt(td.TRANSPORTMODE) || mode;
     distance = num(td.DISTANCE) ?? distance;
+    vehicleType = txt(td.VEHICLETYPE) || vehicleType;
+    transporterName = txt(td.TRANSPORTERNAME) || transporterName;
+    transporterId = txt(td.TRANSPORTERID) || transporterId;
+    lrNumber = txt(td.DOCUMENTNUMBER) || lrNumber;
+    lrDate = tallyStamp(td.DOCUMENTDATE) ?? lrDate;
+    partB = partB || /^yes$/i.test(txt(td.ISPARTBUPDATED));
   }
 
   const s = (x: any): string | null => txt(x) || null;
+  const ewbDetails: EwbDetails | null = ewb
+    ? {
+        bill_date: tallyStamp(ewb.BILLDATE),
+        valid_from: tallyStamp(ewb.UPDATEDDATE),
+        valid_until: tallyStamp(ewb.VALIDUPTO),
+        part_b_updated: partB,
+        vehicle_type: vehicleType,
+        transporter_name: transporterName,
+        transporter_id: transporterId,
+        lr_number: lrNumber,
+        lr_date: lrDate,
+        from_place: s(ewb.CONSIGNORPLACE),
+        from_pincode: s(ewb.CONSIGNORPINCODE),
+        cancelled: /^yes$/i.test(txt(ewb.ISCANCELLED)),
+        cancel_reason: s(ewb.CANCELREASON),
+      }
+    : null;
 
   return {
     ewb_number: s(ewb?.BILLNUMBER),
@@ -137,6 +194,7 @@ export function extractVoucherTransport(v: any): VoucherTransport {
     dispatch_from_place: s(v.DISPATCHFROMPLACE),
     party_gstin: s(v.PARTYGSTIN),
     place_of_supply: s(v.PLACEOFSUPPLY),
+    ewb_details: ewbDetails,
   };
 }
 

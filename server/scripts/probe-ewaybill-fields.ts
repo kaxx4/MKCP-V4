@@ -74,6 +74,26 @@ async function main(): Promise<void> {
   /* EWB_DUMP=1 prints every voucher's EWAYBILLDETAILS block in full, so a tag
      outside the stem filter below (the bill's own number, date and validity)
      is seen rather than assumed (phase 2 W2, 21-Oct-2026). */
+  /* EWB_CONVERT=1 runs the SYNC's own converter over the same request, parsed the
+     way the sync parses it, so ewb_details is proven on real Tally output. */
+  if (process.env.EWB_CONVERT) {
+    const { extractVoucherTransport } = await import("../src/converters/convert.js");
+    const parsed = await tallyPost(TALLY, xmlFor(day, mode), 180_000, false);
+    const found: any[] = [];
+    const walk = (n: any) => {
+      if (!n || typeof n !== "object") return;
+      for (const [k, val] of Object.entries(n)) {
+        if (k === "VOUCHER") found.push(...(Array.isArray(val) ? val : [val]));
+        else walk(val);
+      }
+    };
+    walk(parsed);
+    for (const v of found) {
+      const t = extractVoucherTransport(v);
+      if (t.ewb_number) console.log(`  ${t.ewb_number}  ${JSON.stringify(t.ewb_details)}`);
+    }
+    console.log(`  converted ${found.length} voucher(s)`);
+  }
   if (process.env.EWB_DUMP) {
     for (const m of raw.matchAll(/<EWAYBILLDETAILS\.LIST>[\s\S]*?<\/EWAYBILLDETAILS\.LIST>/g)) console.log(m[0]);
   }
