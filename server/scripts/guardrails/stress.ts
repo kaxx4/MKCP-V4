@@ -270,6 +270,11 @@ async function stress(url: string, company: string, dry: boolean, clean: boolean
     q("S13d", "Sales Order Note to bill with freight above the discount (M1)", "ok", localDebtor!, [line(itB, 2, 80)], { kind: "order" }),
     { id: "S14d", what: "Order S13d billed with discount 50 and freight 120: ONE H.C. line, a charge of 70 (M1)", expect: "ok",
       spec: { builder: "convertWithCharges", from: "S13d", invoiceNumber: num("S14d"), discount: 50, handling: 120, gstRate: rateOf(itB) } },
+    /* M4/M6 (web handoff/phase2/GUARDRAILS.md), owner 20-Oct-2026: a typed line of
+       packages AND loose pieces is pushed as two rows of the same item, package rows
+       first in typed order, then loose rows, one per-piece rate. 2.5 packs of 4 = 8 + 2. */
+    q("S07L", "Loose split: 2 pkgs + 2 loose of one item, a whole item between (M4)", "ok", localDebtor!,
+      [{ ...line(itB, 2.5, 60), unitsPerPkg: 4 }, line(itA, 1, 310)]),
     { id: "S15", what: "Alter S01's amount (buildEditPayload) — must leave ONE voucher", expect: "ok",
       spec: { builder: "edit", from: "S01", action: "alter", editedFrom: "S01x" } },
     { id: "S16", what: "Cancel S03 (ACTION=Cancel)", expect: "ok", spec: { builder: "edit", from: "S03", action: "cancel" } },
@@ -510,6 +515,16 @@ async function stress(url: string, company: string, dry: boolean, clean: boolean
       check("TG-P33", hc.length === 1 && Math.abs(Math.abs(hc[0].amount) - want) < 0.02,
         `[stress M1 ${inv}] ${hc.length} H.C. line(s) (${hc.map((h) => h.amount).join(", ")}), wanted ONE of ${want} (${kind})`);
       console.log(`     M1 ${inv}: H.C. ${hc.map((h) => h.amount).join(", ")} (want ${want}, ${kind})`);
+    }
+    // M4/M6: the stored loose voucher holds itB 8, itA 1, itB 2 in that order, one rate.
+    const loose = one("S07L", "loose split S07L");
+    if (loose) {
+      const st = parseVoucher(loose, "stored").stock;
+      const got = st.map((s) => `${s.item} ${Math.abs(s.amount)}`);
+      const want = [`${itB.name} ${8 * 60}`, `${itA.name} 310`, `${itB.name} ${2 * 60}`];
+      check("TG-P33", got.length === 3 && got.every((g, i) => g === want[i]),
+        `[stress M4 S07L] stored rows [${got.join(" | ")}], wanted [${want.join(" | ")}]`);
+      console.log(`     M4 S07L: ${got.join(" | ")}`);
     }
     const s03 = one("S03", "cancelled S03");
     if (s03) check("TG-P04", /^yes$/i.test(tag(s03, "ISCANCELLED")), `[stress S16] S03 reads ISCANCELLED="${tag(s03, "ISCANCELLED")}"`);
