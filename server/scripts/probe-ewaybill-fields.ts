@@ -71,6 +71,12 @@ async function main(): Promise<void> {
   console.log(`  mode: ${mode === "wildcard" ? "NATIVEMETHOD * (what does Tally hold?)" : "explicit FETCH list (can the sync name it?)"}`);
   const raw: string = await tallyPost(TALLY, xmlFor(day, mode), 180_000, true);
   console.log(`  ${raw.length.toLocaleString()} bytes returned`);
+  /* EWB_DUMP=1 prints every voucher's EWAYBILLDETAILS block in full, so a tag
+     outside the stem filter below (the bill's own number, date and validity)
+     is seen rather than assumed (phase 2 W2, 21-Oct-2026). */
+  if (process.env.EWB_DUMP) {
+    for (const m of raw.matchAll(/<EWAYBILLDETAILS\.LIST>[\s\S]*?<\/EWAYBILLDETAILS\.LIST>/g)) console.log(m[0]);
+  }
 
   /* Every distinct tag name, so the answer does not depend on guessing the
      spelling. A field that exists under ANY name containing these stems will
