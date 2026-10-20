@@ -337,6 +337,16 @@ async function stress(url: string, company: string, dry: boolean, clean: boolean
       order: { voucherNumber: "NATIVE-ORDER-STRESS", partyName: localDebtor!.name, lines: [
         { type: "inventory", itemId: itB.name, qtyBase: 2, ratePerBase: 88 }, { type: "inventory", itemId: itC.name, qtyBase: 1, ratePerBase: 64 },
       ] } } },
+    /* W5 (web handoff/phase2/GUARDRAILS.md M9), owner 20-Oct-2026: a delivery note typed in Tally
+       is COPIED as a website-owned Sales Order Note (our REMOTEID, new number), discount carried. */
+    { id: "S38n", what: "noteCopyFromOrder (Tally-typed note → website note copy, discount carried) (M9)", expect: "ok",
+      spec: { builder: "noteCopy", number: num("S38n"), remoteId: rid("S38n"),
+      narration: nar("S38n"), date: today, interState: false, rates: { [itB.name]: rateOf(itB), [itC.name]: rateOf(itC) },
+      items: [{ name: itB.name, baseUnit: itB.baseUnit }, { name: itC.name, baseUnit: itC.baseUnit }],
+      order: { voucherNumber: "NATIVE-NOTE-STRESS", partyName: localDebtor!.name, lines: [
+        { type: "inventory", itemId: itB.name, qtyBase: 3, ratePerBase: 88 }, { type: "inventory", itemId: itC.name, qtyBase: 2, ratePerBase: 64 },
+        { type: "ledger", ledgerName: "TRADE DISCOUNTS / H.C.", signedAmount: -20 },
+      ] } } },
     q("S33", "XML-hostile + unicode + very long narration", "ok", localDebtor!, [line(itB, 1, 99)], { narration: longNarr }),
     // LAST: the two that make Tally itself refuse (a taken number). Health is asked after each.
     { ...q("S19", "S07's lines under S01's NUMBER and a NEW REMOTEID (app-assigned number)", "ok", localDebtor!, [line(itB, 1, 55)]),
@@ -540,6 +550,15 @@ async function stress(url: string, company: string, dry: boolean, clean: boolean
       const number = tag(b, "VOUCHERNUMBER");
       const refs = [...b.matchAll(/<BILLALLOCATIONS\.LIST>([\s\S]*?)<\/BILLALLOCATIONS\.LIST>/g)].map((x) => `${tag(x[1], "BILLTYPE")}:${tag(x[1], "NAME")}`).filter((x) => x !== ":");
       check("TG-P33", refs.includes(`New Ref:${number}`), `[stress ${id}] stored ${number} carries bill refs [${refs.join(", ")}], expected "New Ref:${number}"`);
+    }
+    // M9: the copy is a Sales Order Note of ours, both stock lines, ONE H.C. line of 20 (discount).
+    const copy = one("S38n", "note copy S38n");
+    if (copy) {
+      const pv = parseVoucher(copy, "stored");
+      const hc = pv.ledgers.filter((l) => /TRADE\s*DISCOUNT/i.test(l.ledger));
+      check("TG-P33", /SALES ORDER NOTE/i.test(pv.type) && pv.stock.length === 2 && hc.length === 1 && Math.abs(Math.abs(hc[0].amount) - 20) < 0.02,
+        `[stress M9 S38n] stored ${pv.type}, ${pv.stock.length} stock line(s), H.C. [${hc.map((h) => h.amount).join(", ")}], wanted SALES ORDER NOTE, 2, [20]`);
+      console.log(`     M9 S38n: ${pv.type} ${pv.number}, stock ${pv.stock.length}, H.C. ${hc.map((h) => h.amount).join(", ")}`);
     }
     check("TG-P33", !byId.has("S19o"), `[stress S19o] an overridden duplicate number landed in the books`);
     if (recvBill) {
