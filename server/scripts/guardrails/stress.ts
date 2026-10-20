@@ -260,6 +260,16 @@ async function stress(url: string, company: string, dry: boolean, clean: boolean
     q("S13", "Sales Order Note", "ok", localDebtor!, [line(itB, 5, 60)], { kind: "order" }),
     { id: "S14", what: "Order S13 billed in place: Alter, same REMOTEID, new number", expect: "ok",
       spec: { builder: "convert", from: "S13", invoiceNumber: num("S14") } },
+    /* M1 (web handoff/phase2/GUARDRAILS.md), owner 20-Oct-2026: "the trade discount got
+       put, but the freight wasn't offset against it". The billing modal now sends the
+       order's identity with the posting draft's content; Tally must hold ONE netted
+       TRADE DISCOUNTS / H.C. line = discount − freight, in both directions. */
+    q("S13c", "Sales Order Note to bill WITH charges (M1)", "ok", localDebtor!, [line(itB, 4, 75)], { kind: "order" }),
+    { id: "S14c", what: "Order S13c billed with discount 150 and freight 60: ONE H.C. line of 90 (M1)", expect: "ok",
+      spec: { builder: "convertWithCharges", from: "S13c", invoiceNumber: num("S14c"), discount: 150, handling: 60, gstRate: rateOf(itB) } },
+    q("S13d", "Sales Order Note to bill with freight above the discount (M1)", "ok", localDebtor!, [line(itB, 2, 80)], { kind: "order" }),
+    { id: "S14d", what: "Order S13d billed with discount 50 and freight 120: ONE H.C. line, a charge of 70 (M1)", expect: "ok",
+      spec: { builder: "convertWithCharges", from: "S13d", invoiceNumber: num("S14d"), discount: 50, handling: 120, gstRate: rateOf(itB) } },
     { id: "S15", what: "Alter S01's amount (buildEditPayload) — must leave ONE voucher", expect: "ok",
       spec: { builder: "edit", from: "S01", action: "alter", editedFrom: "S01x" } },
     { id: "S16", what: "Cancel S03 (ACTION=Cancel)", expect: "ok", spec: { builder: "edit", from: "S03", action: "cancel" } },
@@ -489,6 +499,17 @@ async function stress(url: string, company: string, dry: boolean, clean: boolean
         `[stress S14] converted voucher reads ${tag(conv, "VOUCHERTYPENAME")} ${tag(conv, "VOUCHERNUMBER")}, expected SALES ${num("S14")}`);
       const s13 = latest.get(rid("S13"));
       void s13;
+    }
+    // M1: a converted order carries exactly ONE netted H.C. line of discount − freight.
+    for (const [ord, inv, want, kind] of [["S13c", "S14c", 90, "discount"], ["S13d", "S14d", 70, "charge"]] as const) {
+      const v = one(ord, `order ${ord} converted with charges by ${inv}`);
+      if (!v) continue;
+      check("TG-P33", /^SALES$/i.test(tag(v, "VOUCHERTYPENAME")) && tag(v, "VOUCHERNUMBER") === num(inv),
+        `[stress M1 ${inv}] reads ${tag(v, "VOUCHERTYPENAME")} ${tag(v, "VOUCHERNUMBER")}, expected SALES ${num(inv)}`);
+      const hc = parseVoucher(v, "stored").ledgers.filter((l) => /TRADE\s*DISCOUNT/i.test(l.ledger));
+      check("TG-P33", hc.length === 1 && Math.abs(Math.abs(hc[0].amount) - want) < 0.02,
+        `[stress M1 ${inv}] ${hc.length} H.C. line(s) (${hc.map((h) => h.amount).join(", ")}), wanted ONE of ${want} (${kind})`);
+      console.log(`     M1 ${inv}: H.C. ${hc.map((h) => h.amount).join(", ")} (want ${want}, ${kind})`);
     }
     const s03 = one("S03", "cancelled S03");
     if (s03) check("TG-P04", /^yes$/i.test(tag(s03, "ISCANCELLED")), `[stress S16] S03 reads ISCANCELLED="${tag(s03, "ISCANCELLED")}"`);
