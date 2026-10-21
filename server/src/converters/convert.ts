@@ -841,6 +841,7 @@ export function convertVouchers(parsed: any): { tallymessage: any[] } {
         irn: txt(v.IRN),
         irnackno: txt(v.IRNACKNO),
         irnackdate: txt(v.IRNACKDATE),
+        irnqr: txt(v.IRNQRCODE),
         iscancelled: txt(v.ISCANCELLED) === "Yes",
         isoptional: txt(v.ISOPTIONAL) === "Yes",
         effectivedate: txt(v.EFFECTIVEDATE) || txt(v.DATE),

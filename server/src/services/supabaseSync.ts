@@ -1386,6 +1386,10 @@ export class SupabaseSync {
       irn: m.irn || null,
       irn_ack_no: m.irnackno || null,
       irn_ack_date: m.irnackdate || null,
+      // Migration 050: the signed QR. Same `|| null` rule — Tally sends an
+      // empty tag on a voucher with no IRN. ⚠ Apply 050 BEFORE this build runs
+      // anywhere: PostgREST rejects an upsert naming a missing column.
+      irn_qr: m.irnqr || null,
       reference: m.reference ?? null,   // mirror Tally <REFERENCE> for push-agent reconciliation (see migration 012)
       is_cancelled: m.iscancelled === true,
       is_optional: m.isoptional === true,

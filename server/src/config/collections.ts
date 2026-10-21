@@ -108,6 +108,13 @@ export const TRANSACTION_COLLECTIONS: CollectionDef[] = [
          boundary); it only needs to NOTICE. It cannot notice without these.
          server/scripts/probe-irn-fields.ts, 14-Sep-2026. */
       "IRN", "IRNAckNo", "IRNAckDate",
+      /* The IRP's SIGNED QR (a JWT, 944 and 948 characters on the two
+         e-invoiced samples in server/data/native-shape, 23-Sep-2026; a stored
+         field, present in the NATIVEMETHOD * capture). The web app draws it on
+         the printed A5 invoice (phase 2 W3). ~950 bytes on each e-invoiced
+         voucher (492 mirrored), so ~0.5 MB on a full-year pull against ~4 MB
+         trimmed (tally-object-type-map). Requires migration 050. */
+      "IRNQRCode",
       /* E-way bill and transport. convert.ts has read
          EWAYBILLDETAILS.TRANSPORTDETAILS.DISTANCE (plus the bill number, vehicle
          and mode) since it was written — and this list never asked for the
