@@ -1,0 +1,373 @@
+# AGENTS.md
+
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+
+Nicknamed **sync agent** in conversation with the user (companion repo: [MKCP MOB2](../MKCP%20MOB2/AGENTS.md), nicknamed **web app**).
+
+## What this repo is
+
+MK Cycles Electron desktop app that syncs a bicycle-parts distribution business's
+TallyPrime data to Supabase, and pushes vouchers back the other way. The web app
+(MKCP MOB2) reads/writes the same Supabase project but **cannot** talk to
+TallyPrime — Tally only listens on `localhost:9000` on the operator's machine.
+This repo is the only thing on both sides of that boundary, which is why almost
+every hard rule in the project lives here.
+
+Three jobs run in one process (`server/src/index.ts`):
+
+| Job | Direction | Entry |
+|---|---|---|
+| **Mirror sync** | Tally → Supabase | `syncOrchestrator.ts`, `scheduledSyncs.ts`, `nightlySync.ts` |
+| **Push agent** | Supabase `push_queue` → Tally | `pushAgent.ts` → `safePush.ts` → `voucherPusher.ts` |
+| **Report runner** | Tally reports → Supabase snapshots | `reportRunner.ts`, `tallyReports.ts` |
+
+## Commands
+
+```bash
+npm run dev                # electron renderer + server together
+npm run build              # tsc && vite build — the renderer
+npm run validate           # test.js + test-integration.js
+npm run build:prod         # packaged installer, --publish never
+```
+
+```bash
+cd server && npm run typecheck   # test:arch + tsc --noEmit + tsc -p tsconfig.scripts.json
+```
+
+`server`'s `typecheck` is the real gate for anything under `server/` — it runs
+`test-offline-mode.ts` first, which fails the build if a direct `createClient(`
+reappears outside `supabaseClient.ts`. **Run it from `server/`**; run it from the
+repo root and it reports the opposite of the truth in both directions.
+
+There is no vitest here. Tests are assertion scripts under `server/scripts/`
+(`test-push-guard.ts`, `test-edge-cases.ts`, `test-gstr-exceptions.ts`,
+`test-gate-recovery.ts`) that print `N passed, N failed` and exit non-zero.
+
+**To answer "is the Tally path broken?" run one thing:**
+
+```bash
+npx tsx server/scripts/tally-verify-all.ts          # preflight + every read
+npx tsx server/scripts/tally-verify-all.ts --push   # also the write path
+```
+
+It preflights, sweeps the reads with a non-zero floor on each, runs the four
+guard suites and — with `--push` — the round trip plus its cleanup. A stage it
+cannot run says **CANNOT RUN** and exits 2; it never reports a pass it did not
+earn. The preflight exists because `tallygatewayserver.exe` on 9999 is a Windows
+SERVICE that runs whether or not TallyPrime is open, so "Tally is open" and
+"port 9000 answers" are different facts that look identical in a timeout.
+
+## Talking to Tally
+
+Everything goes through **one function**: `tallyPost()` in `server/src/tally.ts`.
+All 28 request shapes pass through it, which is why the logging, the
+`<LINEERROR>` handling and the G7 enforcement all live there and nowhere else.
+
+### The risk classes are NOT the same, and this matters
+
+Getting this wrong costs a human walking to the office machine to restart
+TallyPrime, because an error modal blocks the XML port until someone clears it.
+
+| Mistake | Consequence |
+|---|---|
+| Wrong **report** name | `Could not find Report`. Safe. Sweepable. |
+| Wrong **function** name | `ERRORMSG`. Safe. Sweepable. |
+| Wrong **object type** | **MODAL — port dead until a human restarts Tally.** |
+| Wrong **named collection id** | **MODAL.** `List of Units` did it. |
+| Malformed header (no `<ID>`) | **MODAL.** |
+| `.*` wildcard in a fetch list | Crashes TallyPrime outright. |
+
+`assertKnownType()` in `tallyRequest.ts` is the guard: 13 verified types
+(`Company, Ledger, Group, StockItem, StockGroup, Unit, Godown, CostCentre,
+Voucher, VoucherType, Bills, Currency`). **Discovering new types is a mock-only
+activity** (guardrail P6) — never fuzz object types against live Tally.
+
+A bare `<NATIVEMETHOD>*</NATIVEMETHOD>` is fine and is the discovery tool; a
+`.*` inside a fetch field is the thing that crashes. `buildCollection()` refuses
+the latter. They are different, and the distinction is load-bearing.
+
+### Silent failures — the house speciality
+
+The characteristic Tally failure is not an error. It is `EXCEPTIONS=1` with no
+message, or `created=1` for a voucher you asked to alter. The catalogue lives in
+`server/scripts/edge-case-catalogue.ts`; the ones that cost the most:
+
+- **`Alter` with no `remoteId` silently CREATEs a duplicate** and returns
+  `created=1`. `REMOTEID` is the *only* handle Tally offers — GUID and VCHKEY
+  both fail, and the REMOTEID in Tally's own export is synthesised, not
+  addressable. A voucher created without one is permanently unreachable
+  (guardrail G5; 12 test vouchers in the books are stuck this way and can only
+  be deleted by hand in the Tally UI).
+- **`ISCANCELLED` on an Alter** returns `altered=1` and is discarded. Cancel is
+  an *action*: `ACTION="Cancel"`.
+- **A cross-party `Agst Ref` is rewritten as `New Ref`** — it reports success
+  and creates a liability. Only `safePush`'s read-back catches it.
+- **An unescaped `>` in an AlterID filter returns zero rows, no error.**
+- **Empty placeholder `.LIST` blocks**: a large voucher pull returns entry lists
+  unpopulated for some vouchers (186 of 310 in one 24 MB pull). Treating those
+  as "no entries" invents a defect per voucher. Chunk the pull smaller.
+- **`NATIVEMETHOD *` is partial** — stored fields only, no computed ones and no
+  voucher entry blocks. Use it to discover, never to measure.
+
+### A field you did not ask for is indistinguishable from a field Tally lacks
+
+This is guardrail **G7**, and it is the most expensive mistake available here
+because the response looks identical either way. Worked example, 18-Sep-2026:
+`gstrExceptions.ts` declined to check GST appropriation for months, stating in a
+comment that it was "not observable from a voucher read". It is observable —
+Tally returns `<APPROPRIATEFOR>GST</APPROPRIATEFOR>` on the entry — but only
+when the fetch list names `ALLLEDGERENTRIES.APPROPRIATEFOR`. The audit asked for
+a bare `ALLLEDGERENTRIES.LIST` and read the absence as Tally's answer. The same
+comment also claimed the value lived on the ledger master; all nine adjustment
+ledgers read `APPROPRIATEFOR = Not Applicable` there. It is set per transaction.
+
+**Before concluding Tally does not hold something, check the fetch list.**
+`probe-gst-appropriation.ts` is the template for settling this kind of question.
+
+## Proving a push is COMPLETE, not merely accepted
+
+`safePush`'s read-back asks "did Tally store what we sent". It is blind to a
+field we never sent, and that blind spot has now produced three separate silent
+failures: the missing GST identity block, the unappropriated discount line, and
+the party address.
+
+`scripts/fidelity-vs-native.ts` is the check that can see them. It profiles a
+voucher type from vouchers the OPERATOR keyed in, pushes one of ours, reads it
+back and diffs field by field. **A field most of theirs carry and ours does not
+is a defect.** Run it after any change to the push path.
+
+Two rules it encodes, both of which produced wrong answers here first:
+
+- **Fetch fields EXPLICITLY, and never trim the list.** Several fields are
+  COMPUTED by Tally, not stored, and come back empty unless the voucher's entry
+  lists are requested alongside them. Asking for PARTYGSTIN/STATENAME/
+  PLACEOFSUPPLY without ALLLEDGERENTRIES.LIST reported 0/39 on Sales Order
+  Notes; with them, 39/39.
+- **`NATIVEMETHOD *` is for discovery, never measurement.** Same lesson, one
+  layer up.
+
+Current state (19-Sep-2026): SALES and Sales Order Note both read back with
+**zero** missing fields against 1,030 and 39 hand-typed vouchers.
+
+## Adoption: a voucher Tally created cannot be altered
+
+Settled 19-Sep-2026 against the live company. MASTERID and VOUCHERKEY were the
+last untried handles; both returned `altered=0 created=0`, as did the no-handle
+control. GUID and VCHKEY had already failed, and the `<GUID>` element silently
+CREATES instead.
+
+So a Tally-typed voucher can be **read and copied, never altered or deleted**
+from this app. "Edit it in place" is not buildable — do not plan around it. The
+only honest flow is read-only plus an editable COPY carrying our own REMOTEID.
+
+13 vouchers are now permanently unreachable because they were written without
+identity. That is the whole argument for G5 in one number.
+
+## GST and the returns
+
+**Tally's own GSTR exception list is not readable over XML.** `GSTR-1`, `GSTR1`,
+`GSTR-3B`, `GST Returns`, `Returns Summary`, `HSN/SAC Summary` and `Statutory
+Reports` all return "Could not find Report" (asked 13-Sep-2026, re-confirmed
+18-Sep). Only `GST Rate Setup` answers. Report names fail safely, so re-probing
+costs nothing if you doubt it.
+
+So the gate is `server/src/services/gstrExceptions.ts` driven by
+`audit-gstr-exceptions.ts`: audit the same **preconditions** Tally checks, from
+the fields the voucher exposes, over all vouchers. Five exception kinds, all of
+them readable: `no-place-of-supply`, `no-party-gstin`, `tax-head-mismatch`,
+`no-tax-line`, `unappropriated-adjustment`.
+
+This is a weaker guarantee than reading the real list and the code says so
+(guardrail P7). What it gains is that it runs against the real books and catches
+a problem the day it is created rather than on the 11th.
+
+Two GST rules that balance, verify, read back byte-identical and still file wrong:
+
+- **Place of supply is the destination of the goods**, not "the other party's
+  state". Outward → the party's state. **Inward → OUR state** (a purchase from a
+  Delhi supplier stores `PLACEOFSUPPLY` West Bengal, `STATENAME` Delhi).
+- **An adjustment line must appropriate to GST.** `TRADE DISCOUNTS / H.C.`
+  without `<APPROPRIATEFOR>GST</APPROPRIATEFOR>` makes Tally compute expected tax
+  on the gross → "Mismatch between Expected and Modified Tax Amount". Enforced at
+  write time by `pushGuard` rule 30, and audited on reads.
+
+Also: **read `ALLLEDGERENTRIES.LIST` alone.** A pushed sales invoice comes back
+carrying `LEDGERENTRIES.LIST`, `ALLLEDGERENTRIES.LIST` and
+`ALLINVENTORYENTRIES.LIST`, describing the same money three ways. Only
+`ALLLEDGERENTRIES` balances and only it carries `BILLALLOCATIONS`. Summing more
+than one double-counts — and doubling a balanced sales voucher still balances, so
+only a purchase exposes the mistake.
+
+## Two safety systems, and why each exists
+
+### `MKCP_TALLY_ROLE` — which Tally is this machine holding
+
+**Two machines share one Supabase mirror and cannot be told apart**, because a
+Tally duplicate carries the same company name as the original and every mirror
+table is keyed on that name. So a dev machine would mirror its copy over the real
+company's vouchers, and its push agent would claim real jobs from the shared
+`push_queue` and book real invoices into the sandbox — where they vanish while
+the queue row reads "succeeded".
+
+```
+MKCP_TALLY_ROLE=primary   holds the real books (the DEFAULT)
+MKCP_TALLY_ROLE=sandbox   holds a copy — must not write to anything shared
+```
+
+Defaulting to `primary` is deliberate: defaulting to safe would silently stop the
+real machine syncing the moment it shipped, which is worse and much harder to
+notice. A copy is the unusual case and is the one that declares itself.
+`isSandbox()` makes `supabaseClient()` return null, so a sandbox machine is
+offline to everything shared by construction rather than by discipline.
+
+> **This development machine is `sandbox`.** Its Tally holds an old backup
+> company that shares production's name. Do not sync, push, or price-pull from
+> here, and do not flip the role to test something.
+
+### `pushGuard` + `safePush` — the strongest code in either repo
+
+33 rules, each traceable to a real silent failure, plus a read-back diff on every
+write. Do not route around them.
+
+⚠ **`safePush` returning `ok:false` does NOT mean nothing was created.** The
+read-back diff rejects vouchers Tally accepted. Clean up by sweeping what is
+actually in the books (`scripts/sweep-test-vouchers.ts`), never by a success list.
+
+## Migrations: TWO ledgers, one database
+
+`mkcycles-dashboard/migrations/` (this repo, 41 files, highest `044`) and
+`MKCP MOB2/web-dashboard/supabase/migrations/` both target the **same** Supabase
+project with independent, colliding numbering. Neither is a complete history, and
+live carries objects with no migration file at all.
+
+**`CREATE TABLE IF NOT EXISTS` is a no-op, not an upgrade.** When two migrations
+declare the same table the first to run wins and the second does nothing —
+silently, forever. That is how `push_queue` sat dead for months. This repo's
+folder owns the schema from now on; numbering continues from the highest
+existing; confirm the live object, never the file.
+
+## Build and OTA release
+
+`electron-builder.json5` publishes to GitHub releases on `kaxx4/MKCP-V4`.
+`electron-updater` reads `latest.yml`, emitted beside the `.exe`.
+
+- `npm run build:prod` builds **without** uploading. Releasing is a separate,
+  deliberate step.
+- `extraResources` bundles `dist/**/*`, `package.json`, `node_modules/**/*` — so
+  **changes under `scripts/` are not packaged** and do not warrant a version
+  bump. The check is
+  `git diff --stat <last-release>..HEAD -- src public server/src`.
+- `scripts/build-prod.js` refuses to publish a package containing a `.env`, and
+  verifies the unpacked tree rather than trusting a flag. A `.env`-carrying
+  provisioning build exists (`MKCP_EMBED_ENV=1`) for first-run setup on the
+  office machine and is **never** published.
+
+## Turning agent auth on (#98)
+
+The agent's HTTP routes (voucher push, bank push, file upload, raw Tally import)
+used to be gated by CORS alone, which a request with no Origin header ignores.
+`server/src/services/agentAuth.ts` adds two switches, both read at startup from
+the environment of the agent process (`server/.env`, or `<userData>/.env` on an
+installed machine):
+
+```
+AGENT_API_TOKEN=<long random string>            # route auth
+AGENT_ALLOWED_ORIGINS=https://your-dashboard.example   # comma list; optional
+```
+
+- **Unset (today's behaviour).** Every route stays open and the agent logs one
+  warning at startup naming `AGENT_API_TOKEN`. Nothing breaks the day this ships.
+- **Set.** Every route except `GET /api/tally/health` (and the static `GET /`
+  page shell) needs `Authorization: Bearer <token>`; anything else is a 401.
+  The compare is constant-time. Generate a token with
+  `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+- **CORS.** Allowed origins are loopback (Electron renderer, dev tabs) plus
+  EXACTLY the origins listed in `AGENT_ALLOWED_ORIGINS` (and the legacy
+  `ALLOWED_ORIGINS`). The old `https://*.vercel.app` wildcard is gone (TALLY-2,
+  19-Oct-2026): a deployed dashboard that must call this agent from a browser has
+  to be listed by exact origin.
+- **The agent's own calls send the token (TALLY-3).** `postTallySync`
+  (nightly, scheduled, price/GST, web-refresh) adds `Authorization` from
+  `AGENT_API_TOKEN` per call, and `public/electron.js` injects the same header on
+  the renderer's requests to the local agent port, so the token never enters the
+  renderer bundle. Nothing else needs changing before the token is set. The web
+  dashboard's own calls to the agent (Settings.tsx) are a web-repo concern.
+- **Running locally:** leave `AGENT_API_TOKEN` unset (loud startup warning, routes
+  open on loopback only) or set it in `server/.env` and use the same value in any
+  script that calls the agent.
+- Proof: `npx tsx server/scripts/test-agent-auth.ts` (offline).
+
+## Operator scripts that write to Tally (#104)
+
+Any script under `server/scripts/` that posts an Import, Alter, Delete or Cancel
+must call `guardScriptWrites("name")` from `src/services/scriptWriteGuard.ts`
+(or be exempt with a reason). It refuses unless `MKCP_TALLY_ROLE=sandbox` and
+`TALLY_URL` is loopback, or a mock transport is installed. The role default is
+unchanged (`primary`). `scripts/test-script-write-guard.ts` scans the source and
+fails on a new ungated writer. Real GSTINs and PANs must never be committed:
+`scripts/test-no-real-gstin.ts` fails on any tracked GSTIN-shaped string that is
+not a placeholder (`...0000...`, `...1234...`, or the `ZZZ` series), and fixture
+captures go to the ignored `server/fixtures/captured/`.
+Real party, person and supplier names are kept out the same way: fixtures and
+script literals use stable fakes (`PARTY 042 CYCLE STORES`, `PERSON 003`), and
+`scripts/test-no-real-names.ts` refuses names listed in a deny-list that is NOT in
+the repo (`MKCP_NAME_DENYLIST=<file>` or the ignored `server/data/name-denylist.txt`;
+skips with a notice when absent). Sandbox-only scripts that must find a real
+ledger take it from `MKCP_SANDBOX_*` env vars (`LOCAL_PARTY`, `ORDERS_PARTY`,
+`COLLISION_PARTY`, `SUPPLIER_RX`).
+
+## Secrets
+
+`server/.env` holds a live Supabase **service-role** key in plaintext. It has
+been inside installers. It must not enter a repo, index or retrieval corpus, and
+rotating it needs the Supabase dashboard (it is on the standing "needs a human"
+list). `MKCP_MASTER_KNOWLEDGE_DUMP.md` §13.3 is a full browser password export —
+same rule.
+
+## Where to look first
+
+| Question | File |
+|---|---|
+| Any Tally request | `server/src/tally.ts` (`tallyPost`) |
+| Building a request safely | `server/src/services/tallyRequest.ts` |
+| Why a push was refused | `server/src/services/pushGuard.ts` |
+| What Tally actually returned | `server/data/tally-log.jsonl` |
+| Is this machine allowed to write | `tallyRole.ts`, `supabaseClient.ts` |
+| Would this voucher file wrong | `gstrExceptions.ts` |
+| Reports that answer over XML | `tallyReports.ts`, `explore-reports.ts` |
+
+`server/data/tally-log.jsonl` is the exception log: one row per interaction,
+carrying `requestXml` and `responseXml` **for failures only** (guardrail P8 —
+persist the evidence of failure, not of success; the reverse was the old
+behaviour, and it left read failures with nothing but a console line naming the
+chunk).
+
+`server/scripts/` holds ~60 probes and harnesses. `explore-*` answers "what will
+Tally give us", `probe-*` settles one field question, `test-*` asserts, and
+`verify-*` / `roundtrip-verify.ts` drive real writes and clean up after
+themselves. Prefer extending one of these to writing a new one.
+
+## Guardrails that were earned here
+
+- **G1** One definition per concept. Three response parsers existed, reading
+  different fields, and could not agree.
+- **G5** Every write carries identity from creation. `REMOTEID` or it is
+  unreachable forever.
+- **G7** "Tally returned nothing", "my parser found nothing" and "I never asked
+  for it" are three different facts. Say which.
+- **G8** Names must not lie. `mock-run-all.ts` runs against the live company.
+- **G9** A comment asserting a constraint carries its evidence and a date. The
+  price list was imported by hand for months because of one comment claiming a
+  query crashes TallyPrime. It takes 0.18 seconds.
+- **P1** Done means observed against the live books, not tested.
+- **P6** Fuzz against the mock, never against live Tally.
+- **P8** Persist the evidence of failure, not of success.
+
+## Docs worth reading before large changes
+
+- `ARCHITECTURE.md` — process layout and the sync loop.
+- `TALLY_SYNC_GUIDE.md` / `TALLY_LIVE_SETUP.md` — operator-facing setup.
+- `ENGINE_FORMULAS_FOR_WEB.md` — the figures the web app re-derives.
+- The Obsidian vault (`Digital Directory/Vaults/MKCP Brain`), especially
+  `07_Systems/Contracts/Talking to Tally — Push and Pull From Zero.md`, which is
+  the long-form version of the Tally section above.

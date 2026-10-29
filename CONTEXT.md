@@ -1,0 +1,551 @@
+<!-- kani-context · built 2026-10-26 · 448 files · update with kani-context-builder -->
+# mkcycles-dashboard: context
+
+## In plain words
+This is the desktop program ("sync agent") that keeps the MK Cycles bicycle-parts distribution business's TallyPrime accounts in step with an online database.
+The office operator runs it on the company's Windows machine, next to TallyPrime.
+It copies sales, purchase, stock and party data out of Tally, and sends new vouchers from the web app back into Tally.
+It is built with Electron and React for the screen, and a Node server that is the only thing allowed to talk to Tally.
+The shared online database is Supabase, and new versions reach the machine over the air from GitHub releases.
+
+## How to run it
+- Install: `npm install` in the repo root and in `server/` (no install script is defined; inferred).
+- Dev (server on 3100 plus Vite on 5173): `npm run dev`.
+- Dev with the Electron window: `npm run electron:dev`.
+- Renderer build: `npm run build` (runs `tsc && vite build`). Server build: `npm run build:server`.
+- Production installer: `npm run build:prod` (publishes unless told `--publish never`). Side-by-side test build: `npm run build:test`.
+- Tests: `npm run validate` (runs `test:unit` and `test:integration`). Server typecheck: `cd server && npm run typecheck` (run from `server/`).
+- Tally health sweep: `npx tsx server/scripts/tally-verify-all.ts` (add `--push` for the write path).
+- Agent auth tests: `npx tsx server/scripts/test-agent-auth.ts`.
+- Other: `npm run setup`, `npm run clean`, `npm run preview`, `npm run generate-icon`.
+
+## Folder map
+- `.agents/skills/` — UI design guidance: interface-details, make-interfaces-feel-better, ui-ux-pro-max (CSV data plus python search scripts).
+- `docs/` — three operator and developer runbooks (Supabase SQL status, phantom master prune, releasing).
+- `migrations/` — Supabase SQL, 001 to 050 (numbering shared with MKCP MOB2 in name only); `migrations/selftests/` holds transactional self-tests meant for database copies.
+- `public/` — Electron main process (`electron.js`), `preload.js`, `autoUpdate.js`, static JSON templates.
+- `scripts/` — build, release, setup and root-level test runners.
+- `server/` — Node sync agent (Express, port 3100). `server/src/` holds the services, converters and config; `server/scripts/` holds about 200 probes, tests, verifiers and fidelity harnesses; `server/data/`, `server/fixtures/` hold local data and captured Tally responses.
+- `src/` — React renderer: `components/`, `store/` (Zustand), `services/`, `engine/`, `parser/`, `hooks/`, `db/` (IndexedDB), `data/`, `utils/`, `types/`, `status/`, `api/`, `config/`.
+- Repo root — configs (Vite, Tailwind, PostCSS, TypeScript, electron-builder), `index.html`, `package.json`, and guides (CLAUDE.md, AGENTS.md, ARCHITECTURE.md and others).
+
+## Main flows
+1. Mirror sync, Tally to Supabase: sync routes in `server/src/index.ts` call `server/src/services/syncOrchestrator.ts`, which reads collections through `server/src/tally.ts` and `server/src/config/collections.ts`. It then calls `server/src/services/supabaseSync.ts`, which upserts rows, replaces voucher child rows through the `replace_voucher_children` RPC, and prunes orphans through `delete_voucher_orphans_for_days` behind a mass-deletion guard.
+2. Real-time loop: `server/src/services/realtimeSync.ts` holds an AlterID cursor (`syncCursor.ts`), checks `changeDetector.ts` every tick, pulls only changed vouchers, and emits hints through `mirrorSignal.ts`.
+3. Voucher push, web to Tally: a row in `push_queue` is claimed by `server/src/services/pushAgent.ts` (RPC `claim_push_jobs`), then goes through `safePush.ts`: `pushGuard.ts` (`guardVoucher`), `voucherPusher.ts` (builds the Import XML), `tallyGate.ts` (`withTally`), `tally.ts` (`tallyPost`), then a read-back diff. A read-back mismatch is recorded with `pushVerdict.ts` so nothing can turn it green later.
+4. Renderer quick sync: `src/services/quickSync.ts` runs `tallyPull.ts` (day book through `src/api/tallyApi.ts` to `/api/tally/sync-daybook`), parses with `src/parser/transactionParser.ts`, and writes to `src/store/dataStore.ts`. Then `supabasePushAll.ts` posts masters to `/api/supabase/sync` and config through `src/hooks/useSupabaseConfigSync.ts` to `/api/supabase/sync-config`.
+5. Remote "Sync Tally" command: Supabase Realtime on `tally_refresh_commands` feeds `server/src/services/refreshListener.ts`. It claims each command atomically, coalesces bursts, and calls the local sync endpoints through `localSyncClient.ts`.
+6. Scheduled work: `scheduledSyncs.ts` (Today, last 7 days, FY day-book pulls), `nightlySync.ts` (once-a-day full FY sync), `priceGstDailySync.ts` (price list and GST at 18:00, with backoff), `cashBuyerBackfill.ts` (buyer fields on Cash sales every 10 minutes), `housekeeping.ts` (prunes old logs).
+7. Reports: `server/src/services/reportRunner.ts` drains `tally_report_jobs` one at a time through `tallyGate`, fetches with `tallyReports.ts`, and upserts `tally_report_snapshots`.
+8. Bank statement to receipts: `bankToReceipts.ts` plans rows against open bills (`billSettlement.ts`, FIFO) and pushes approved rows through `safePush`. `extraction.ts` resolves printed names to Tally masters.
+9. File transfer: `fileTransferSync.ts` uploads to the `file-transfers` storage bucket, writes a `file_transfers` row, and watches a folder with chokidar.
+10. Over-the-air update: `public/autoUpdate.js` checks GitHub releases every 6 hours and refuses to install while a push is busy (it polls `/api/push-agent/status`).
+11. Start-up: `public/electron.js` loads `.env` (userData, then the product folder, then bundled), starts `server/dist/index.js` in-process, and waits for port 3100.
+
+## Data
+Supabase tables (named in the parts):
+- Config (written by `/api/supabase/sync-config` through `supabaseSync.ts`; service-role only): discount_rules, order_groups, unit_overrides, rate_overrides, item_category_overrides, category_colors, vendor_group_assignments, item_notes, calling_list_entries, tally_price_list_imports, voucher_overrides, app_settings, order_draft_lines, gst_overrides.
+- Mirror of Tally (written by `supabaseSync.ts`, read by the web app): tally_vouchers, tally_voucher_ledger_entries, tally_voucher_inventory_entries, tally_ledgers, tally_stock_items, tally_stock_groups, tally_units, tally_godowns, tally_cost_centres, tally_companies, tally_gst_rates, tally_price_list, tally_sync_history, tally_price_pulls, tally_price_changes, price_list_change_signal.
+- Queues and commands: push_queue (web enqueues, agent claims; browsers may only change status and hidden_at), push_sync_log, tally_refresh_commands, tally_report_jobs, tally_report_snapshots.
+- Coordination: voucher_locks (90-second expiry), mirror_change_signal (append-only, pruned), mkcp_proposals, mkcp_recurring, contact_log (append-only), station_geocodes, party_stations (written by web `api/road-routes`, anon read), perf_logs (insert-only, housekeeping deletes after 30 days), config_edit_log (read), mkcp_bills (`derive-objects.ts`), file_transfers.
+- Local: `server/data/tally-log.jsonl` (exception log, failures only); `config.json` and `discount-rules.json` in userData; `server/data/cash-buyer-backfill-state.json`, `server/data/price-gst-sync-state.json`; IndexedDB `mkcycles-db` (stores parsedData, backups, jsonUploads, unitOverrides, predictions); localStorage keys written by zustand persist (for example `mkcycles-tally`, `mkcycles-order-groups`, `mkcycles-overrides`).
+
+## Pages and routes
+Renderer:
+- `#/pip` — `src/QuickView.tsx` (small always-on-top status window), chosen in `src/App.tsx`.
+- Main window — `src/AgentStatus.tsx` (sync-agent status board), with `src/MirrorPanel.tsx`.
+
+Local agent (`server/src/index.ts`, port 3100):
+- Tally: `/api/tally/health`, `/api/tally/company`, `/api/tally/logs`, `/api/tally/debug` (Export only), `/api/tally/sync`, `/api/tally/sync-masters`, `/api/tally/sync-daybook`, `/api/tally/sync-price-list`, `/api/tally/changed-vouchers`, `/api/tally/import` (retired, returns 410).
+- Queue: `/api/push-agent/status`, `/api/push-agent/drain`, `/api/push-agent/requeue`.
+- Supabase: `/api/supabase/sync`, `/api/supabase/sync-config`.
+- Local push and bank: `/api/local/status`, `/api/local/masters`, `/api/local/vouchers`, `/api/local/push`, `/api/bank/plan`, `/api/bank/push`.
+- Files and misc: `/api/file-transfer/status`, `/api/file-transfer/push`, `/api/file-transfer/watch/restart`, `/api/mirror/panel`, `/api/whoami`, `/api/distance`, and `/` (log viewer page, open without a token).
+
+## Outside services
+- TallyPrime XML port over HTTP, `http://localhost:9000` (env `TALLY_URL`).
+- Local agent, port 3100 (env `PORT`; scripts use `MKCP_AGENT_URL`).
+- Supabase: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` or `SUPABASE_SERVICE_ROLE_KEY` (server); `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` (renderer). Realtime channels `refresh-listener-<company>`, `report-jobs`, `agent-status-sync`. Storage bucket `file-transfers`.
+- GitHub Releases, `kaxx4/MKCP-V4` (electron-builder publish target; `electron-updater`).
+- NIC e-Waybill distance API, called from `/api/distance` in `server/src/index.ts`.
+- Google Fonts, loaded in `index.html`.
+- Webhooks: none found.
+
+## Conventions
+- Two repos share one Supabase project: this sync agent and MKCP MOB2 (the web app). Some files are copied by hand and must be kept in step, for example `gstIdentity.ts`, `fileTransferKind.ts`, `PageHeader.tsx`, `StatTile.tsx` and `theme-bento.css`.
+- Every Tally call goes through `tallyPost` (`server/src/tally.ts`) inside the `withTally` gate. Every voucher write goes through `safePush`. Operator scripts that write must call `guardScriptWrites` (`server/src/services/scriptWriteGuard.ts`).
+- `MKCP_TALLY_ROLE` decides which Tally this machine holds: `primary` (default, the real books) or `sandbox` (a copy, which must not write to shared storage).
+- REMOTEID format `MKCP|type|number|FY`. Alter, cancel and delete work only through REMOTEID.
+- Decision logic is kept in pure functions and tested in isolation (for example `dueForAttempt`, `selectMovedChanges`, `reconnectDelayMs`).
+- Tests are assertion scripts that print "N passed, N failed" (`server/scripts/test-*.ts`). There is no vitest on the server. `scripts/tiny-test.ts` is a small shim for the renderer tests.
+- Comments cite guardrail IDs G1–G9 and P1–P8, and cite dates and evidence for constraints.
+- Migrations are numbered in sequence (highest 050). Later files use `DROP POLICY IF EXISTS` and RLS is on by default.
+- Real names, real GSTINs and keys stay out of the repo. Fixtures use stable fakes (for example `PARTY 042 CYCLE STORES`, `ZZZ` or `0000` GSTIN patterns).
+- Renderer styling: Tailwind with design tokens (for example `bg-bg-page`, accent `#2f5fe0` in `tailwind.config.js`), Geist font, `data-theme="bento"` override layer in `src/theme-bento.css`.
+
+## Watch out for
+- Migration status is contradictory: headers in 045, 047 and 048 say both "APPLIED" and "NOT applied". 041 and 043 say not yet applied. Live state is unclear; confirm the live objects before relying on any file.
+- Migration 047 replaces the 3-argument `delete_voucher_orphans_for_days` with a 4-argument version. Any caller still using the old signature will fail.
+- Migration 048 calls `public.auth_enforced()` and `public.app_verb_allowed()`, which are not defined in this folder.
+- Migration 041 (`report_jobs_dismiss`) lets any browser role update any column of any job row.
+- Two migration folders (this repo and MKCP MOB2) target the same Supabase project. `CREATE TABLE IF NOT EXISTS` is a silent no-op when a table already exists.
+- `scripts/verify-tally-roundtrip.ts` and some `server/scripts/fidelity/case-*` scripts write to Tally without a visible `guardScriptWrites` call; whether `tallyPost` covers them is unclear.
+- `public/electron.js` and `electron-builder.test.json5` bundle `.env` in the test build (test config line 36); the production config excludes it.
+- Hard-coded Supabase project URL fallbacks, not secrets: `refreshListener.ts:112`, `supabaseSync.ts:96`, `supabaseClient.ts:33`, `fileTransferSync.ts:47`, `pushAgent.ts:531`. Several scripts also hard-code the MKCP MOB2 path under `C:/Users/kanis/...`.
+- `check-phantom-names.ts` (lines 22–36) contains a name that may be a real person's; flagged for review.
+- The company name literal appears in several places with two forms (with and without the FY suffix). `electron.js` lines 360 and 572 are one example.
+- When `AGENT_API_TOKEN` is unset, routes are open on loopback; `/api/whoami` also exposes `hasSupabaseKey` and `pid`.
+- `supabaseSync.ts` lines 1754–1800 interpolate `item_id` into a PostgREST `not.in` filter without escaping.
+- `AGENTS.md` and `CLAUDE.md` are near-duplicates; `ARCHITECTURE.md` gives an installer version of 1.0.0 against package version 1.5.11; `TALLY_LIVE_SETUP.md` lists retired endpoints.
+- `parser/transactionParser.ts`: uppercase `ALLLEDGERENTRIES` is not reached on the direct path, and `??` does not fall through an empty array.
+- `electron.js` lines 22–30 log and swallow `uncaughtException`, so the process keeps running.
+
+## File index
+- `.agents/skills/interface-details/SKILL.md` — skill entry point
+- `.agents/skills/interface-details/details/accessibility.md` — a11y rules
+- `.agents/skills/interface-details/details/browser.md` — favicons, URL state, OG
+- `.agents/skills/interface-details/details/button.md` — button hit areas and states
+- `.agents/skills/interface-details/details/content-intelligence.md` — smart defaults
+- `.agents/skills/interface-details/details/easter-egg.md` — delight ideas
+- `.agents/skills/interface-details/details/form.md` — form rules
+- `.agents/skills/interface-details/details/layout.md` — radius and alignment
+- `.agents/skills/interface-details/details/motion.md` — motion rules
+- `.agents/skills/interface-details/details/scroll.md` — scroll rules
+- `.agents/skills/interface-details/details/toast.md` — feedback rules
+- `.agents/skills/interface-details/details/typography.md` — text rules
+- `.agents/skills/make-interfaces-feel-better/SKILL.md` — polish principles
+- `.agents/skills/make-interfaces-feel-better/animations.md` — animation polish
+- `.agents/skills/make-interfaces-feel-better/performance.md` — CSS performance rules
+- `.agents/skills/make-interfaces-feel-better/surfaces.md` — radius, shadow, hit area
+- `.agents/skills/make-interfaces-feel-better/typography.md` — text wrap, smoothing
+- `.agents/skills/make-interfaces-feel-better/AUTO_GROUP_ASSIGNMENT.md` — feature note on order groups
+- `.agents/skills/make-interfaces-feel-better/ORDER_GROUPS_EXPORT_IMPORT.md` — feature note on export/import
+- `.agents/skills/ui-ux-pro-max/SKILL.md` — design-intelligence skill
+- `.agents/skills/ui-ux-pro-max/data/charts.csv` — chart data rows
+- `.agents/skills/ui-ux-pro-max/data/colors.csv` — product palettes
+- `.agents/skills/ui-ux-pro-max/data/icons.csv` — Lucide icon picks
+- `.agents/skills/ui-ux-pro-max/data/landing.csv` — landing patterns
+- `.agents/skills/ui-ux-pro-max/data/products.csv` — product-to-style rows
+- `.agents/skills/ui-ux-pro-max/data/react-performance.csv` — React perf rules
+- `.agents/skills/ui-ux-pro-max/data/styles.csv` — UI style rows
+- `.agents/skills/ui-ux-pro-max/data/typography.csv` — font pairings
+- `.agents/skills/ui-ux-pro-max/data/ui-reasoning.csv` — category decision rules
+- `.agents/skills/ui-ux-pro-max/data/ux-guidelines.csv` — UX guideline rows
+- `.agents/skills/ui-ux-pro-max/data/web-interface.csv` — web interface rules
+- `.agents/skills/ui-ux-pro-max/data/stacks/astro.csv` — Astro guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/flutter.csv` — Flutter guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/html-tailwind.csv` — Tailwind/HTML guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/jetpack-compose.csv` — Compose guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/nextjs.csv` — Next.js guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/nuxt-ui.csv` — Nuxt UI guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/nuxtjs.csv` — Nuxt 3 guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/react-native.csv` — React Native guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/react.csv` — React guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/shadcn.csv` — shadcn/ui guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/svelte.csv` — Svelte 4 and 5 guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/swiftui.csv` — SwiftUI guidelines
+- `.agents/skills/ui-ux-pro-max/data/stacks/vue.csv` — Vue 3 guidelines
+- `.agents/skills/ui-ux-pro-max/scripts/core.py` — BM25 search over CSVs
+- `.agents/skills/ui-ux-pro-max/scripts/design_system.py` — design-system generator
+- `.agents/skills/ui-ux-pro-max/scripts/search.py` — CLI for search
+- `docs/PENDING_SUPABASE.sql` — Supabase status and policy SQL
+- `docs/PRUNE_PHANTOM_MASTERS.md` — phantom master prune runbook
+- `docs/RELEASING.md` — OTA release steps
+- `migrations/001_config_tables.sql` — config tables
+- `migrations/002_add_company_to_sync_history.sql` — company column
+- `migrations/003_extended_config_tables.sql` — extended config tables
+- `migrations/004_fix_schema_gaps.sql` — schema catch-up
+- `migrations/005_add_synced_at_columns.sql` — synced_at columns
+- `migrations/006_fix_discount_rules_id_type.sql` — discount_rules id type
+- `migrations/007_voucher_overrides.sql` — voucher overrides
+- `migrations/008_app_settings_and_order_draft.sql` — app settings, draft lines
+- `migrations/009_gst_overrides.sql` — GST overrides
+- `migrations/010_orphan_cleanup_function.sql` — delete_orphans
+- `migrations/011_push_queue.sql` — push_queue and claim function
+- `migrations/012_tally_vouchers_reference.sql` — reference column
+- `migrations/016_voucher_orphan_cleanup.sql` — voucher orphan cleanup
+- `migrations/017_voucher_range_orphan_cleanup.sql` — range orphan cleanup
+- `migrations/018_secure_tally_tables_and_rpcs.sql` — RLS on tally tables
+- `migrations/019_voucher_per_day_prune.sql` — per-day prune
+- `migrations/020_tally_refresh_commands.sql` — refresh commands
+- `migrations/021_refresh_command_days.sql` — days column
+- `migrations/022_tally_sync_history_realtime.sql` — realtime for sync history
+- `migrations/023_discount_tables_realtime.sql` — discount realtime
+- `migrations/024_order_groups_realtime_and_read.sql` — order groups realtime
+- `migrations/025_voucher_transport_fields.sql` — e-way transport columns
+- `migrations/026_voucher_prune_mass_delete_guard.sql` — prune guard
+- `migrations/027_tally_price_list_and_gst_rates.sql` — price list and GST tables
+- `migrations/028_ledger_contact_and_state.sql` — ledger contact columns
+- `migrations/029_voucher_identity_columns.sql` — identity columns
+- `migrations/030_inventory_entry_location_key.sql` — godown and batch keys
+- `migrations/031_object_spine.sql` — stub, no DDL
+- `migrations/032_voucher_edit_locks.sql` — voucher_locks
+- `migrations/033_mirror_change_signal.sql` — mirror change signal
+- `migrations/034_approval_spine.sql` — proposals and recurring
+- `migrations/035_voucher_irn.sql` — IRN columns
+- `migrations/036_purchase_capture_qr.sql` — QR column
+- `migrations/037_contact_log.sql` — contact log
+- `migrations/038_push_queue_dismiss.sql` — dismiss policies
+- `migrations/039_refresh_command_scope.sql` — refresh scope
+- `migrations/040_sales_quote_push_state.sql` — quote push state
+- `migrations/041_tally_report_jobs.sql` — report jobs and snapshots
+- `migrations/042_price_pull_log.sql` — price pull log
+- `migrations/043_voucher_cash_buyer.sql` — cash buyer columns
+- `migrations/044_station_geocodes.sql` — station geocodes
+- `migrations/045_replace_voucher_children.sql` — replace children RPC
+- `migrations/047_voucher_prune_guard_tighten.sql` — tighter prune guard
+- `migrations/048_push_queue_no_browser_delete.sql` — browser guard trigger
+- `migrations/049_voucher_ewb_details.sql` — e-way bill details
+- `migrations/050_voucher_irn_qr.sql` — IRN QR column
+- `migrations/selftests/045_replace_children_selftest.sql` — self-test on a copy
+- `migrations/selftests/047_prune_guard_selftest.sql` — self-test on a copy
+- `public/autoUpdate.js` — OTA update logic
+- `public/defaultUnitOverrides.json` — unit override template
+- `public/electron.js` — Electron main process
+- `public/package.json` — commonjs marker
+- `public/preload.js` — window.electronAPI bridge
+- `.gitignore` — ignore rules
+- `AGENTS.md` — agent guide (duplicate of CLAUDE.md)
+- `ARCHITECTURE.md` — architecture guide
+- `AUTO_ASSIGNMENT_GUIDE.md` — vendor-group auto-assign
+- `CLAUDE.md` — Claude guide for this repo
+- `ENGINE_FORMULAS_FOR_WEB.md` — formulas for the web app
+- `MK_CYCLES_MOBILE_APP_PRD.md` — mobile app PRD
+- `SUPABASE_SETUP.md` — older Supabase setup guide
+- `TALLY_LIVE_SETUP.md` — older Tally setup guide
+- `TALLY_SYNC_GUIDE.md` — operator troubleshooting
+- `UNIT_CONFIGURATION_GUIDE.md` — unit config via Excel
+- `electron-builder.json5` — production packaging config
+- `electron-builder.test.json5` — test packaging config
+- `index.html` — Vite entry HTML
+- `package.json` — manifest and scripts
+- `postcss.config.js` — PostCSS config
+- `skills-lock.json` — skills lockfile
+- `tailwind.config.js` — Tailwind theme tokens
+- `tsconfig.json` — renderer TS config
+- `tsconfig.node.json` — Vite config TS
+- `vite.config.ts` — Vite config
+- `scripts/backup-supabase.ts` — dumps Supabase tables to JSON
+- `scripts/build-prod.js` — Windows production build
+- `scripts/generate-icon.js` — writes icon.png
+- `scripts/go-live-check.ts` — go-live gate
+- `scripts/import-and-validate.mjs` — FY sync and report cross-check
+- `scripts/run-unit-tests.ts` — unit test entry
+- `scripts/setup.js` — environment check
+- `scripts/test-integration.js` — integration checks
+- `scripts/test.js` — source assertions
+- `scripts/tiny-test.ts` — test shim
+- `scripts/verify-tally-roundtrip.ts` — live Tally verification
+- `server/package.json` — server manifest and scripts
+- `server/test-tally.js` — standalone Tally connectivity probe
+- `server/tsconfig.json` — server TS config
+- `server/tsconfig.scripts.json` — scripts TS config
+- `server/data/fidelity-vs-native.json` — saved fidelity output
+- `server/fixtures/List_of_Companies.json` — captured company list
+- `server/fixtures/MKCP_CostCentre.json` — captured cost centres
+- `server/fixtures/MKCP_Godown.json` — captured godowns
+- `server/fixtures/MKCP_StockGroup.json` — captured stock groups
+- `server/fixtures/MKCP_Unit.json` — captured units
+- `server/scripts/audit-gstr-exceptions.ts` — GSTR exception audit
+- `server/scripts/audit-mirror-phantoms.ts` — phantom voucher audit
+- `server/scripts/backfill-cash-buyers.ts` — cash buyer backfill
+- `server/scripts/capture-fixtures.ts` — captures Tally responses
+- `server/scripts/check-alterid.ts` — AlterID detection check
+- `server/scripts/check-gst-rates.ts` — GST rate resolution count
+- `server/scripts/check-mirror-truth.ts` — mirror column census
+- `server/scripts/check-phantom-names.ts` — phantom master check
+- `server/scripts/clean-test-pollution.ts` — test voucher cleanup
+- `server/scripts/delete-by-remoteid.ts` — delete by REMOTEID
+- `server/scripts/derive-objects.ts` — derives mkcp_bills
+- `server/scripts/drain-one-queued.ts` — pushes one queued job
+- `server/scripts/dump-voucher-by-number.ts` — dumps one voucher XML
+- `server/scripts/dump-voucher-xml.ts` — prints builder XML
+- `server/scripts/edge-case-catalogue.ts` — mock edge cases
+- `server/scripts/explore-adopt-voucher.ts` — adoption probe
+- `server/scripts/explore-blocks.ts` — block census
+- `server/scripts/explore-collections.ts` — collection name probe
+- `server/scripts/explore-fields.ts` — field set probe
+- `server/scripts/explore-gst-block.ts` — GST block probe
+- `server/scripts/explore-gst-dated.ts` — dated GST revisions
+- `server/scripts/explore-gst-heads.ts` — GST duty heads
+- `server/scripts/explore-incremental.ts` — incremental pull cost
+- `server/scripts/explore-master-create.ts` — master create probe
+- `server/scripts/explore-population.ts` — field population census
+- `server/scripts/explore-pricelist-shape.ts` — price list shape
+- `server/scripts/explore-pricelist.ts` — price list pull
+- `server/scripts/explore-reports.ts` — report sweep
+- `server/scripts/explore-verbs.ts` — verb probe
+- `server/scripts/explore-voucher-types.ts` — voucher type probe
+- `server/scripts/fidelity-vs-native.ts` — fidelity profile
+- `server/scripts/fidelity/.gitignore` — ignores journal
+- `server/scripts/fidelity/_ping.ts` — Tally alive check
+- `server/scripts/fidelity/case-cancel.ts` — cancel behaviour case
+- `server/scripts/fidelity/case-cash-buyer.ts` — cash buyer case
+- `server/scripts/fidelity/case-cheque-seam.ts` — cheque payload case
+- `server/scripts/fidelity/case-collision.ts` — number collision case
+- `server/scripts/fidelity/case-gst-identity.ts` — GST identity case
+- `server/scripts/fidelity/case-money.ts` — payment and receipt cases
+- `server/scripts/fidelity/case-notes.ts` — credit and debit note case
+- `server/scripts/fidelity/case-party.ts` — party master case
+- `server/scripts/fidelity/case-purchase.ts` — purchase case
+- `server/scripts/fidelity/case-receipt.ts` — receipt cases
+- `server/scripts/fidelity/case-remaining-types.ts` — contra, journal, receipt note
+- `server/scripts/fidelity/case-sales.ts` — sales cases
+- `server/scripts/fidelity/explore-named.ts` — named collection probe
+- `server/scripts/fidelity/explore-reports.ts` — report sweep for fidelity
+- `server/scripts/fidelity/explore-unused.ts` — unused field probe
+- `server/scripts/fidelity/harness.ts` — shared fidelity helpers
+- `server/scripts/fidelity/probe-gstin-gap.ts` — nested GSTIN probe
+- `server/scripts/fidelity/probe-party-fields.ts` — party field population
+- `server/scripts/fidelity/sweep.ts` — removes ZZTEST vouchers
+- `server/scripts/fidelity/test-numbering.ts` — numbering asserts
+- `server/scripts/fidelity/verify-report-loop.ts` — report loop check
+- `server/scripts/fidelity/verify-reports.ts` — report fetch check
+- `server/scripts/find-stranded-test-vouchers.ts` — stranded voucher finder
+- `server/scripts/fixtures/xml/on-account-payment.stored.xml` — stored payment fixture
+- `server/scripts/guardrails/calibrate.ts` — calibration check
+- `server/scripts/guardrails/catalogue.ts` — guardrail IDs
+- `server/scripts/guardrails/fixtures.ts` — fixture masters and payloads
+- `server/scripts/guardrails/g7.ts` — G7 source checks
+- `server/scripts/guardrails/lib.ts` — shared checker
+- `server/scripts/guardrails/mirror.ts` — read-only mirror client
+- `server/scripts/guardrails/pull.ts` — mirror audit
+- `server/scripts/guardrails/run.ts` — guardrail runner
+- `server/scripts/guardrails/sandbox.ts` — sandbox push audit
+- `server/scripts/guardrails/simulate.ts` — simulated Tally run
+- `server/scripts/guardrails/static.ts` — static builder and guard checks
+- `server/scripts/guardrails/stress.ts` — sandbox stress push
+- `server/scripts/guardrails/suites.ts` — runs test suites
+- `server/scripts/lib/testVoucherMatch.ts` — test voucher matchers
+- `server/scripts/mock-run-all.ts` — live end-to-end run
+- `server/scripts/probe-bill-allocations.ts` — bill allocation probe
+- `server/scripts/probe-cash-ledger.ts` — cash ledger state probe
+- `server/scripts/probe-created-party.ts` — created party probe
+- `server/scripts/probe-ewaybill-fields.ts` — e-way bill field probe
+- `server/scripts/probe-gst-appropriation.ts` — appropriation probe
+- `server/scripts/probe-gstreg-block.ts` — GST block dump
+- `server/scripts/probe-irn-fields.ts` — IRN field probe
+- `server/scripts/probe-ledger-gstin.ts` — GSTIN position probe
+- `server/scripts/probe-native-sales-census.ts` — native sales census
+- `server/scripts/probe-native-sales-shape.ts` — native voucher shape
+- `server/scripts/probe-party-master-shape.ts` — party master shape
+- `server/scripts/probe-readback-query.ts` — read-back query probe
+- `server/scripts/probe-stockitem-fields.ts` — stock item field probe
+- `server/scripts/probe-unpriced-items.ts` — unpriced items count
+- `server/scripts/push-fidelity.ts` — fidelity baseline reporter
+- `server/scripts/regen-gst-master.ts` — regenerates GST rates
+- `server/scripts/resync-range.ts` — re-pulls a date range
+- `server/scripts/rotate-service-key.ts` — rotates service key
+- `server/scripts/roundtrip-verify.ts` — round-trip verifier
+- `server/scripts/simulate-real-vouchers.ts` — builds real-shaped vouchers
+- `server/scripts/status-check.ts` — status routine CLI
+- `server/scripts/sweep-test-vouchers.ts` — sweeps test vouchers
+- `server/scripts/tally-verify-all.ts` — full Tally verifier
+- `server/scripts/test-agent-auth.ts` — agent auth tests
+- `server/scripts/test-agent-guards.ts` — agent guard tests
+- `server/scripts/test-alter-delete.ts` — alter and delete check
+- `server/scripts/test-bank-narrations.ts` — narration party tests
+- `server/scripts/test-bank-statement-match.ts` — statement match tests
+- `server/scripts/test-bank-to-receipts.ts` — bank plan tests
+- `server/scripts/test-bulk-entry.ts` — bulk entry tests
+- `server/scripts/test-bulk-money.ts` — bulk money harness
+- `server/scripts/test-cancel-voucher.ts` — cancel probe
+- `server/scripts/test-cash-buyer-backfill.ts` — backfill tests
+- `server/scripts/test-cash-buyer-converter.ts` — buyer converter tests
+- `server/scripts/test-cash-invoice-converter.ts` — cash invoice harness
+- `server/scripts/test-changed-vouchers-cursor.ts` — cursor tests
+- `server/scripts/test-company-literal-guard.ts` — company literal scan
+- `server/scripts/test-daybook-fallback.ts` — day book fallback tests
+- `server/scripts/test-debug-guard.ts` — debug guard tests
+- `server/scripts/test-draft-engine.ts` — draft engine harness
+- `server/scripts/test-edge-cases.ts` — edge-case push tests
+- `server/scripts/test-ewb-details.ts` — e-way bill mapping tests
+- `server/scripts/test-extraction.ts` — extraction tests
+- `server/scripts/test-gate-recovery.ts` — circuit breaker test
+- `server/scripts/test-gstr-exceptions.ts` — GSTR exception tests
+- `server/scripts/test-line-gst-source.ts` — line GST source tests
+- `server/scripts/test-local-session.ts` — offline dummy session
+- `server/scripts/test-migrations-idempotent.ts` — migration scan
+- `server/scripts/test-mirror-panel-edit-log.ts` — edit log tests
+- `server/scripts/test-mirror-signal-dedupe.ts` — signal dedupe tests
+- `server/scripts/test-no-real-gstin.ts` — GSTIN scan
+- `server/scripts/test-no-real-names.ts` — name scan
+- `server/scripts/test-offline-mode.ts` — offline mode tests
+- `server/scripts/test-order-lifecycle.ts` — order to invoice harness
+- `server/scripts/test-party-identity-xml.ts` — party identity XML tests
+- `server/scripts/test-pay-p1.ts` — payment rule tests
+- `server/scripts/test-phantom-master-guard.ts` — GUID guard tests
+- `server/scripts/test-place-of-supply.ts` — place of supply tests
+- `server/scripts/test-practice-company.ts` — practice company tests
+- `server/scripts/test-price-gst-daily-sync.ts` — daily sync tests
+- `server/scripts/test-price-list-signal.ts` — price signal tests
+- `server/scripts/test-price-log-seam.ts` — price log live seam
+- `server/scripts/test-price-log.ts` — price diff tests
+- `server/scripts/test-pricelist.ts` — price list pull test
+- `server/scripts/test-prune-guard.ts` — prune guard tests
+- `server/scripts/test-purchase-converter.ts` — purchase path comparison
+- `server/scripts/test-purchase-remoteid.ts` — purchase REMOTEID test
+- `server/scripts/test-push-date-guard.ts` — backdated purchase tests
+- `server/scripts/test-push-fidelity-sandbox.ts` — push fidelity harness
+- `server/scripts/test-push-guard.ts` — push guard suite
+- `server/scripts/test-push-verdict.ts` — verdict tests
+- `server/scripts/test-push-vouchers.ts` — sample voucher push
+- `server/scripts/test-realtime.ts` — realtime loop test
+- `server/scripts/test-reconcile.ts` — reconcile run
+- `server/scripts/test-refresh-listener-reconnect.ts` — reconnect tests
+- `server/scripts/test-remaining-types.ts` — voucher type probe
+- `server/scripts/test-replace-children.ts` — replace children tests
+- `server/scripts/test-report-schedule.ts` — report schedule tests
+- `server/scripts/test-response-parsers.ts` — parser agreement tests
+- `server/scripts/test-scheduled-syncs.ts` — scheduled sync tests
+- `server/scripts/test-script-write-guard.ts` — write gate scan
+- `server/scripts/test-so-to-invoice.ts` — order conversion test
+- `server/scripts/test-stock-item-gst.ts` — stock item GST tests
+- `server/scripts/test-sync-history-changed.ts` — change summary tests
+- `server/scripts/test-tally-request.ts` — request builder tests
+- `server/scripts/test-tally-role.ts` — role tests
+- `server/scripts/test-tally-safety.ts` — gate safety test
+- `server/scripts/test-tally-script-guard.ts` — checked request tests
+- `server/scripts/test-test-voucher-match.ts` — voucher matcher tests
+- `server/scripts/test-voucher-edit.ts` — voucher edit test
+- `server/scripts/test-xml-hardening.ts` — XML hardening suite
+- `server/scripts/verify-alterid-detection.ts` — AlterID detection check
+- `server/scripts/verify-cash-split-push.ts` — cash split guard check
+- `server/scripts/verify-edit-locks.ts` — edit lock check
+- `server/scripts/verify-exception-log.ts` — exception log check
+- `server/scripts/verify-filed-period-gate.ts` — filed period check
+- `server/scripts/verify-gst-rate-chain.ts` — GST rate chain check
+- `server/scripts/verify-gst-rates.ts` — GST rate sync check
+- `server/scripts/verify-gstr1-discount.ts` — discount encoding check
+- `server/scripts/verify-incremental-cursor.ts` — cursor check
+- `server/scripts/verify-ledger-fields.ts` — ledger field check
+- `server/scripts/verify-location-key.ts` — godown key check
+- `server/scripts/verify-master-create.ts` — master create check
+- `server/scripts/verify-master-fields.ts` — master field check
+- `server/scripts/verify-pay-p1.ts` — payload push check
+- `server/scripts/verify-price-list.ts` — price list check
+- `server/scripts/verify-push-date.ts` — backdated push check
+- `server/scripts/verify-quote-price-roundtrip.ts` — quote price check
+- `server/scripts/verify-request-builder.ts` — builder shape check
+- `server/scripts/verify-six-vouchers.ts` — six voucher check
+- `server/scripts/verify-supabase-tables.ts` — table existence check
+- `server/scripts/verify-voucher-identity.ts` — identity check
+- `server/scripts/verify-voucher-type-name.ts` — type name check
+- `server/scripts/watch-agent-drain.ts` — drain watcher
+- `server/src/config/collections.ts` — collection field lists
+- `server/src/config/company.ts` — company name
+- `server/src/converters/convert.ts` — Tally to internal shapes
+- `server/src/index.ts` — agent entry and routes
+- `server/src/services/agentAuth.ts` — token and CORS
+- `server/src/services/bankToReceipts.ts` — bank plan
+- `server/src/services/billSettlement.ts` — FIFO bills
+- `server/src/services/bulkEntry.ts` — bulk payments
+- `server/src/services/cashBuyerBackfill.ts` — cash buyer backfill
+- `server/src/services/changeDetector.ts` — AlterID change detection
+- `server/src/services/debugGuard.ts` — debug allowlist
+- `server/src/services/editLocks.ts` — voucher locks
+- `server/src/services/extraction.ts` — name resolution
+- `server/src/services/fileTransferKind.ts` — file kind classifier
+- `server/src/services/fileTransferSync.ts` — file transfer and watch
+- `server/src/services/gstIdentity.ts` — GST identity helpers
+- `server/src/services/gstrExceptions.ts` — GSTR exception audit
+- `server/src/services/housekeeping.ts` — log pruning
+- `server/src/services/localSession.ts` — day vouchers for session
+- `server/src/services/localSyncClient.ts` — loopback sync calls
+- `server/src/services/masterDiff.ts` — master diff
+- `server/src/services/masterPusher.ts` — ledger create and alter
+- `server/src/services/mirrorPanel.ts` — status panel data
+- `server/src/services/mirrorSignal.ts` — change hints
+- `server/src/services/nightlySync.ts` — nightly full sync
+- `server/src/services/priceChangeLog.ts` — price pull log
+- `server/src/services/priceGstDailySync.ts` — daily price and GST sync
+- `server/src/services/pushAgent.ts` — queue drain loop
+- `server/src/services/pushGuard.ts` — pre-push rules
+- `server/src/services/pushVerdict.ts` — read-back verdict marker
+- `server/src/services/realtimeSync.ts` — real-time poller
+- `server/src/services/reconcile.ts` — day and type counts
+- `server/src/services/refreshListener.ts` — refresh command listener
+- `server/src/services/remoteId.ts` — REMOTEID builder
+- `server/src/services/reportRunner.ts` — report job runner
+- `server/src/services/safePush.ts` — guarded voucher write
+- `server/src/services/scheduledSyncs.ts` — scheduled pulls
+- `server/src/services/scriptWriteGuard.ts` — script write gate
+- `server/src/services/statusRoutine.ts` — health check
+- `server/src/services/supabaseClient.ts` — Supabase client chokepoint
+- `server/src/services/supabaseSync.ts` — mirror writes
+- `server/src/services/syncCursor.ts` — voucher cursor
+- `server/src/services/syncOrchestrator.ts` — Tally pulls
+- `server/src/services/tallyBusy.ts` — busy flag
+- `server/src/services/tallyGate.ts` — serialised Tally writes
+- `server/src/services/tallyGstRates.ts` — GST rate pull
+- `server/src/services/tallyLog.ts` — exception log
+- `server/src/services/tallyMasters.ts` — master cache and resolution
+- `server/src/services/tallyMock.ts` — mock transport
+- `server/src/services/tallyPriceList.ts` — price list pull
+- `server/src/services/tallyReports.ts` — report catalogue
+- `server/src/services/tallyRequest.ts` — request builders
+- `server/src/services/tallyRole.ts` — machine role
+- `server/src/services/verifyContext.ts` — verification context
+- `server/src/services/voucherNumbering.ts` — next free number
+- `server/src/services/voucherPusher.ts` — Import XML builder
+- `server/src/services/xml.ts` — XML escape and read
+- `server/src/services/xmlBuilder.ts` — request builders
+- `server/src/tally.ts` — Tally HTTP transport
+- `server/src/types.ts` — shared types
+- `src/AgentStatus.tsx` — sync-agent status board
+- `src/App.tsx` — root and routing
+- `src/MirrorPanel.tsx` — mirror panel
+- `src/QuickView.tsx` — always-on-top status
+- `src/index.css` — Tailwind layers and classes
+- `src/theme-bento.css` — bento theme layer
+- `src/main.tsx` — renderer entry
+- `src/api/tallyApi.ts` — renderer calls to agent
+- `src/components/ErrorBoundary.tsx` — error boundary
+- `src/components/Layout.tsx` — page wrapper
+- `src/components/LogsPanel.tsx` — log tail panel
+- `src/components/PageHeader.tsx` — page header (copied from web)
+- `src/components/PullSyncPanel.tsx` — pull controls
+- `src/components/PushQueuePanel.tsx` — push queue view
+- `src/components/QuickSyncPanel.tsx` — quick sync buttons
+- `src/components/StatTile.tsx` — KPI tile (copied from web)
+- `src/components/StatusRow.tsx` — shared status row
+- `src/components/SupabaseCloudPanel.tsx` — cloud write channels
+- `src/components/TallyPanel.tsx` — Tally connectivity panel
+- `src/components/Toast.tsx` — toast provider
+- `src/components/UpdatesPanel.tsx` — OTA update panel
+- `src/config/serverUrl.ts` — local server base URL
+- `src/data/defaultOrderGroups.json` — seed order groups
+- `src/data/discountDefaults.json` — seed discount config
+- `src/data/vendorGroupMapping.ts` — generated item lists
+- `src/data/vendorGroupReference.json` — generated vendor reference
+- `src/data/vendorGroups.ts` — vendor group patterns
+- `src/db/idb.ts` — IndexedDB wrapper
+- `src/engine/__tests__/audit.test.ts` — audit tests
+- `src/engine/audit.ts` — stock and invoice audits
+- `src/engine/discounts.ts` — default discount categories
+- `src/engine/inventory.ts` — stock and bucket computation
+- `src/hooks/usePersistenceMonitor.ts` — IndexedDB autosave and backup
+- `src/hooks/useScheduledSyncs.ts` — renderer quick-sync timers
+- `src/hooks/useSupabaseConfigSync.ts` — config push to server
+- `src/parser/transactionParser.ts` — Tally voucher parser
+- `src/services/quickSync.ts` — quick sync run
+- `src/services/supabasePushAll.ts` — push masters and config
+- `src/services/tallyPull.ts` — day-book pull and merge
+- `src/status/agentFacts.ts` — pipeline status facts
+- `src/store/calendarStore.ts` — calendar overlay store
+- `src/store/callingListStore.ts` — calling list store
+- `src/store/dataStore.ts` — in-memory Tally data
+- `src/store/discountStore.ts` — discount store
+- `src/store/notesStore.ts` — item notes store
+- `src/store/orderGroupStore.ts` — order groups store
+- `src/store/orderStore.ts` — current order draft
+- `src/store/overrideStore.ts` — unit, rate, GST overrides
+- `src/store/quickSyncStore.ts` — quick sync status
+- `src/store/supabaseSyncStatusStore.ts` — cloud push status
+- `src/store/tallyPriceListStore.ts` — price list store
+- `src/store/tallyStore.ts` — Tally settings store
+- `src/store/uiStore.ts` — UI preferences
+- `src/store/vendorGroupStore.ts` — vendor group assignments
+- `src/types/canonical.ts` — canonical data model
+- `src/utils/applyOverrides.ts` — apply unit and rate overrides
+- `src/utils/serialize.ts` — ParsedData serialisation
