@@ -54,6 +54,30 @@ interface PushJob {
   status: string;
   attempts: number;
   max_attempts: number;
+  /** 'web' for the production site, 'preview' for a branch preview (migration 0103). Absent before it is applied. */
+  source?: string | null;
+}
+
+/* Batch 0.2 (3-Nov-2026). A branch preview of the web app uses the LIVE database,
+   and an Owner can switch writing on for a preview session. Its queue rows carry
+   source = 'preview' and must never reach Tally. They are dismissed with a
+   reason rather than released back to pending: a released row would be claimed
+   again on every tick, forever. A row with no source (the column does not exist
+   until 0103 is applied) is a normal job. */
+export const PREVIEW_DISMISS_REASON =
+  "Queued from a preview build, so it was not sent to Tally. Queue it again from the live site if it is real.";
+
+export function partitionPreviewJobs<T extends { source?: string | null }>(jobs: T[]): { run: T[]; preview: T[] } {
+  const run: T[] = [], preview: T[] = [];
+  for (const j of jobs) (String(j.source ?? "").toLowerCase() === "preview" ? preview : run).push(j);
+  return { run, preview };
+}
+
+export async function dismissPreviewJobs(c: { from: (t: string) => any }, jobs: { id: string }[]): Promise<void> {
+  if (jobs.length === 0) return;
+  await c.from("push_queue")
+    .update({ status: "dismissed", last_error: PREVIEW_DISMISS_REASON, claimed_by: null, claimed_at: null, lease_until: null })
+    .in("id", jobs.map((j) => j.id));
 }
 
 // ── Runtime state (exposed via GET /api/push-agent/status) ───────────────────────
@@ -187,7 +211,11 @@ async function tick(): Promise<void> {
       return;
     }
 
-    const claimed = (jobs ?? []) as PushJob[];
+    const { run: claimed, preview: previewJobs } = partitionPreviewJobs((jobs ?? []) as PushJob[]);
+    if (previewJobs.length) {
+      try { await dismissPreviewJobs(client, previewJobs); }
+      catch (e: any) { console.warn(`[pushAgent] could not dismiss ${previewJobs.length} preview job(s): ${e?.message || e}`); }
+    }
     state.claimedCount = claimed.length;
 
     if (claimed.length === 0) {
