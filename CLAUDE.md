@@ -235,16 +235,17 @@ actually in the books (`scripts/sweep-test-vouchers.ts`), never by a success lis
 
 ## Migrations: TWO ledgers, one database
 
-`mkcycles-dashboard/migrations/` (this repo, 41 files, highest `044`) and
+`mkcycles-dashboard/migrations/` (this repo, highest `050`) and
 `MKCP MOB2/web-dashboard/supabase/migrations/` both target the **same** Supabase
 project with independent, colliding numbering. Neither is a complete history, and
 live carries objects with no migration file at all.
 
 **`CREATE TABLE IF NOT EXISTS` is a no-op, not an upgrade.** When two migrations
 declare the same table the first to run wins and the second does nothing —
-silently, forever. That is how `push_queue` sat dead for months. This repo's
-folder owns the schema from now on; numbering continues from the highest
-existing; confirm the live object, never the file.
+silently, forever. That is how `push_queue` sat dead for months. Rebuild decision D-0.1 (3-Nov-2026): new migrations go to the web repo's
+`web-dashboard/supabase/migrations/`, numbered from `0103`, because every
+migration since `0090` already landed there. This folder (highest file `050`) is
+kept as history; see `migrations/README.md`. Confirm the live object, never the file.
 
 ## Build and OTA release
 
