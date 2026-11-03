@@ -73,13 +73,30 @@ export const NARRATION_MARKS = [
   "probe. delete", "harness. delete",
 ];
 
-/** REMOTEID spellings the harnesses have used, newest first. */
-const remoteIdGuesses = (type: string, number: string) => [
-  `MKCP|${type}|${number}|2026-27`,
-  `MKCP-RT|${type}|${number}`,
-  `MKCP|QuotePrice|${number}|2026-27`,
-  `MKCP|TypeProbe|${number}|2026-27`,
-];
+/**
+ * Every REMOTEID spelling a harness has used, newest first. This is the one
+ * list (G1): the sweep script imports it, so a new spelling is added here once.
+ * Spellings seen in the test scripts on 3-Nov-2026: the pipe form
+ * `MKCP|type|number|year` (and the type spelled in Title Case or as a probe tag),
+ * the dash form `MKCP-TYPE-NUMBER` (type upper-cased, spaces to dashes) and the
+ * older `MKCP-RT|type|number`.
+ */
+export const remoteIdGuesses = (type: string, number: string) => {
+  const dashed = type.toUpperCase().replace(/\s+/g, "-");
+  const title = type.replace(/\w/g, (c) => c.toUpperCase());
+  return [...new Set([
+    `MKCP|${type}|${number}|2026-27`,
+    `MKCP|${title}|${number}|2026-27`,
+    `MKCP|${type}|${number}`,
+    `MKCP|${title}|${number}`,
+    `MKCP-${dashed}-${number}`,
+    `MKCP-RT|${type}|${number}`,
+    `MKCP|QuotePrice|${number}|2026-27`,
+    `MKCP|TypeProbe|${number}|2026-27`,
+    `MKCP|Adopted|${number}|2026-27`,
+    `MKCP|${number}|2026-27`,
+  ])];
+};
 
 export async function pull(company: string) {
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>StrandScan</ID></HEADER>

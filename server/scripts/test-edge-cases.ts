@@ -163,11 +163,14 @@ async function main() {
       return p;
     };
     await expectPush("quantity of 1", qty(1), company);
+    /* TALLY-13 (19-Oct-2026) turned the fractional-quantity warning into a refusal,
+       and this case still expected the warning. Diagnosed 3-Nov-2026: the only
+       failure in the suite was this stale expectation, not the guard. */
     const frac = qty(1.5);
     const fg = guardVoucher(withId(frac), m);
-    record("fractional quantity warns that Tally may round it",
-      fg.warnings.some(w => /fractional/i.test(w)),
-      fg.warnings.find(w => /fractional/i.test(w)) ? "warned before sending" : "no warning raised");
+    record("fractional quantity is refused before sending",
+      fg.errors.some(e => /is a fraction/i.test(e)),
+      fg.errors.find(e => /is a fraction/i.test(e)) ? "refused locally" : "no refusal raised");
     await expectPush("large quantity (10,000)", qty(10000), company);
     await expectPush(`compound-unit item (denominator ${compound.denominator})`, qty(compound.denominator * 3, compound), company);
 

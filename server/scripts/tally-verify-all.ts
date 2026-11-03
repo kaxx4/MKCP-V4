@@ -136,10 +136,11 @@ async function preflight(): Promise<string | null> {
  * this harness OR of Tally, and those are different facts (G7) — so the count
  * is asserted and a zero says which side produced it.
  */
-async function read(stage: string, tdlType: string, fields: string[], floor: number) {
+async function read(company: string, stage: string, tdlType: string, fields: string[], floor: number) {
   const id = `VA${Date.now().toString().slice(-6)}`;
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>${id}</ID></HEADER>
-<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT></STATICVARIABLES>
+<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
 <TDL><TDLMESSAGE><COLLECTION NAME="${id}" ISMODIFY="No"><TYPE>${esc(tdlType)}</TYPE>
 ${fields.map((f) => `<NATIVEMETHOD>${esc(f)}</NATIVEMETHOD>`).join("")}
 </COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
@@ -194,11 +195,11 @@ function runHarness(stage: string, script: string, args: string[] = []) {
   }
 
   console.log(`\n  ── pull  ${D}(reads only; nothing is written)${X}`);
-  await read("masters · ledgers", "Ledger", ["NAME", "PARENT", "LEDSTATENAME", "PARTYGSTIN"], 100);
-  await read("masters · stock items", "StockItem", ["NAME", "PARENT", "BASEUNITS"], 100);
-  await read("masters · stock groups", "StockGroup", ["NAME", "PARENT"], 10);
-  await read("masters · voucher types", "VoucherType", ["NAME", "PARENT"], 10);
-  await read("books · vouchers (trimmed)", "Voucher",
+  await read(company, "masters · ledgers", "Ledger", ["NAME", "PARENT", "LEDSTATENAME", "PARTYGSTIN"], 100);
+  await read(company, "masters · stock items", "StockItem", ["NAME", "PARENT", "BASEUNITS"], 100);
+  await read(company, "masters · stock groups", "StockGroup", ["NAME", "PARENT"], 10);
+  await read(company, "masters · voucher types", "VoucherType", ["NAME", "PARENT"], 10);
+  await read(company, "books · vouchers (trimmed)", "Voucher",
     ["DATE", "VOUCHERNUMBER", "VOUCHERTYPENAME", "PARTYLEDGERNAME"], 100);
 
   console.log(`\n  ── guards  ${D}(the 33 push rules and the silent-failure catalogue)${X}`);

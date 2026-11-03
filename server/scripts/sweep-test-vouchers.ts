@@ -18,6 +18,7 @@
  */
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
+import { remoteIdGuesses } from "./find-stranded-test-vouchers.js";
 import { isSweepVoucher, sweepPrefixAllowed } from "./lib/testVoucherMatch.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 guardScriptWrites("sweep-test-vouchers"); // #104: writes only on a sandbox role against a local Tally
@@ -79,13 +80,10 @@ const fld = (v: string, t: string) => {
     const type = fld(v, "VOUCHERTYPENAME");
     const number = fld(v, "VOUCHERNUMBER");
     /* The REMOTEID these were created with. Tally accepts no other handle, so
-       a wrong guess reads as "Voucher does not exist!" — which is exactly what
-       this printed for every RT voucher until `roundtrip-verify.ts` started
-       assigning one. Two producers, two spellings; try each. */
-    const remoteIds = [
-      `MKCP|${type}|${number}|2026-27`,
-      `MKCP-RT|${type}|${number}`,
-    ];
+       a wrong guess reads as "Voucher does not exist!". Every spelling the test
+       scripts use lives in find-stranded-test-vouchers.ts (one list, G1); the
+       old two-spelling list here missed 73 vouchers on 2-Nov. */
+    const remoteIds = remoteIdGuesses(type, number);
     const remoteId = remoteIds[0];
     const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Import</TALLYREQUEST><TYPE>Data</TYPE><ID>Vouchers</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES></DESC>
