@@ -343,3 +343,207 @@ export async function deleteLedger(
     requestXml, responseXml,
   } as MasterPushResult & { deleted: number };
 }
+
+/* ═══ Stock item, unit and godown builders (rebuild batch 0.4, 3-Nov-2026) ═══
+   The ERP's "New product" and "Create item" need these. Same rules as the
+   ledger builder above: GST goes in NESTED blocks, and success means a
+   read-back found what was sent, never CREATED=1 alone (G7). */
+
+export interface NewStockItem {
+  name: string;
+  /** Stock group, e.g. "BICYCLE PARTS ( 87149990 )". */
+  parent: string;
+  /** Base unit that already exists in the company, e.g. "PC". */
+  baseUnit: string;
+  /** Combined GST rate in percent, e.g. 18. Split into CGST and SGST halves. */
+  gstRate: number;
+  hsn?: string;
+  /** YYYYMMDD. Tally's item GST is DATED. Defaults to the FY start. */
+  applicableFrom?: string;
+  taxability?: "Taxable" | "Exempt" | "Nil Rated";
+}
+
+export interface NewUnit {
+  name: string;
+  /** Decimal places the unit holds. 0 for pieces. */
+  decimals?: number;
+}
+
+export interface NewGodown {
+  name: string;
+}
+
+export interface MasterWriteResult {
+  ok: boolean;
+  created: number;
+  deleted: number;
+  errors: number;
+  exceptions: number;
+  lineErrors: string[];
+  notes: string[];
+  requestXml: string;
+  responseXml: string;
+}
+
+/** One rate row per duty head, in the order Tally stores them. */
+function rateRows(gstRate: number): string {
+  const half = Math.round((gstRate / 2) * 100) / 100;
+  const row = (head: string, rate: number, type = "Based on Value") => `
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>${head}</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>${type}</GSTRATEVALUATIONTYPE>
+            <GSTRATE>${rate}</GSTRATE>
+          </RATEDETAILS.LIST>`;
+  return row("CGST", half) + row("SGST/UTGST", half) + row("IGST", gstRate)
+    + row("Cess", 0, "&#4; Not Applicable");
+}
+
+/** Exported so a test can assert the nesting without touching Tally. */
+export function buildStockItemXml(i: NewStockItem, action: "Create" | "Alter" = "Create"): string {
+  const from = i.applicableFrom ?? "20260401";
+  return `
+    <STOCKITEM NAME="${esc(i.name)}" ACTION="${action}">
+      <NAME>${esc(i.name)}</NAME>
+      <PARENT>${esc(i.parent)}</PARENT>
+      <BASEUNITS>${esc(i.baseUnit)}</BASEUNITS>
+      <ISBATCHWISEON>No</ISBATCHWISEON>
+      <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+      <GSTDETAILS.LIST>
+        <APPLICABLEFROM>${from}</APPLICABLEFROM>
+        ${i.hsn ? `<HSNCODE>${esc(i.hsn)}</HSNCODE>` : ""}
+        <TAXABILITY>${i.taxability ?? "Taxable"}</TAXABILITY>
+        <STATEWISEDETAILS.LIST>
+          <STATENAME>&#4; Any</STATENAME>${rateRows(i.gstRate)}
+        </STATEWISEDETAILS.LIST>
+      </GSTDETAILS.LIST>
+    </STOCKITEM>`;
+}
+
+export function buildUnitXml(u: NewUnit, action: "Create" | "Alter" = "Create"): string {
+  return `
+    <UNIT NAME="${esc(u.name)}" ACTION="${action}">
+      <NAME>${esc(u.name)}</NAME>
+      <ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>
+      <DECIMALPLACES>${u.decimals ?? 0}</DECIMALPLACES>
+    </UNIT>`;
+}
+
+export function buildGodownXml(g: NewGodown, action: "Create" | "Alter" = "Create"): string {
+  return `
+    <GODOWN NAME="${esc(g.name)}" ACTION="${action}">
+      <NAME>${esc(g.name)}</NAME>
+      <PARENT/>
+    </GODOWN>`;
+}
+
+async function writeMaster(
+  tallyUrl: string, company: string, body: string, want: "created" | "deleted", what: string,
+): Promise<MasterWriteResult> {
+  const refusal = refuseCompanyWrite(company);
+  if (refusal) {
+    return { ok: false, created: 0, deleted: 0, errors: 0, exceptions: 0, lineErrors: [],
+      notes: [refusal], requestXml: "", responseXml: "" };
+  }
+  const requestXml = envelope(company, body);
+  const responseXml: string = await tallyPost(tallyUrl, requestXml, 60_000, true);
+  const created = num(responseXml, "CREATED");
+  const deleted = num(responseXml, "DELETED");
+  const errors = num(responseXml, "ERRORS");
+  const exceptions = num(responseXml, "EXCEPTIONS");
+  if (created > 0 || deleted > 0) invalidateMasters();
+  const wrote = want === "created" ? created > 0 : deleted > 0;
+  return {
+    ok: wrote, created, deleted, errors, exceptions,
+    lineErrors: [...responseXml.matchAll(/<LINEERROR>([^<]*)/gi)].map((m) => m[1].trim()),
+    notes: wrote ? [] : [`Tally did not ${want === "created" ? "create" : "delete"} the ${what}.` +
+      (exceptions > 0 ? " EXCEPTIONS=1 with no message is the silent-failure signature." : "")],
+    requestXml, responseXml,
+  };
+}
+
+/** Read one master of a known-safe type back by name. Returns the raw blocks. */
+async function readMasterRaw(
+  tallyUrl: string, company: string, type: "StockItem" | "Unit" | "Godown", name: string, fields: string[],
+): Promise<string> {
+  const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MpRead${type}</ID></HEADER>
+<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
+<TDL><TDLMESSAGE><COLLECTION NAME="MpRead${type}" ISMODIFY="No"><TYPE>${type}</TYPE>
+${fields.map((f) => `<NATIVEMETHOD>${f}</NATIVEMETHOD>`).join("")}
+<FILTER>MpRead${type}F</FILTER></COLLECTION>
+<SYSTEM TYPE="Formulae" NAME="MpRead${type}F">$Name = "${esc(name)}"</SYSTEM>
+</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+  const raw: string = await tallyPost(tallyUrl, xml, 30_000, true);
+  return blocksOf(raw, type.toUpperCase()).join("\n");
+}
+
+/**
+ * Create a stock item and prove the GST stuck. The read-back asks for the
+ * nested GSTDETAILS block and checks the HSN and the IGST rate came back.
+ */
+export async function createStockItem(
+  tallyUrl: string, company: string, item: NewStockItem,
+): Promise<MasterWriteResult & { readBack?: { baseUnit: string; igst: string; hsn: string } | null }> {
+  const res = await writeMaster(tallyUrl, company, buildStockItemXml(item), "created", "stock item");
+  if (!res.ok) return res;
+  const block = await readMasterRaw(tallyUrl, company, "StockItem", item.name,
+    ["Name", "Parent", "BaseUnits", "GstDetails"]);
+  if (!block) {
+    return { ...res, ok: false, readBack: null,
+      notes: ["Tally reported success and the item cannot be read back. Do not use it."] };
+  }
+  const f = (t: string, src = block) => (new RegExp(`<${t}[^>]*>([^<]*)</${t}>`, "i").exec(src)?.[1] ?? "").replace(/&#4;\s*/g, "").trim();
+  const igstRow = /<RATEDETAILS\.LIST>\s*<GSTRATEDUTYHEAD>IGST<\/GSTRATEDUTYHEAD>[\s\S]*?<\/RATEDETAILS\.LIST>/i.exec(block)?.[0] ?? "";
+  const readBack = { baseUnit: f("BASEUNITS"), igst: f("GSTRATE", igstRow), hsn: f("HSNCODE") };
+  const rateOk = Number(readBack.igst) === item.gstRate;
+  const hsnOk = !item.hsn || readBack.hsn === item.hsn;
+  if (!rateOk || !hsnOk) {
+    return { ...res, ok: false, readBack, notes: [
+      `Item created but the GST did not stick: IGST read back "${readBack.igst}" (sent ${item.gstRate}), HSN "${readBack.hsn}" (sent "${item.hsn ?? ""}"). ` +
+      `A flat GST field is accepted and lost; the rate must sit in the nested block.`] };
+  }
+  return { ...res, readBack, notes: [`Read back with IGST ${readBack.igst}% and HSN "${readBack.hsn}".`] };
+}
+
+export const deleteStockItem = (tallyUrl: string, company: string, name: string) =>
+  writeMaster(tallyUrl, company, `<STOCKITEM NAME="${esc(name)}" ACTION="Delete"><NAME>${esc(name)}</NAME></STOCKITEM>`, "deleted", "stock item");
+
+/** Tally answered BAD UNIT NAME for ZZU1 and "ZZ U2" and accepted ZZUNIT
+ *  (dummy company, 3-Nov-2026): a unit symbol is letters only. */
+export const isValidUnitName = (name: string): boolean => /^[A-Za-z]{1,20}$/.test(name);
+
+export async function createUnit(tallyUrl: string, company: string, unit: NewUnit): Promise<MasterWriteResult> {
+  if (!isValidUnitName(unit.name)) {
+    return { ok: false, created: 0, deleted: 0, errors: 0, exceptions: 0, lineErrors: [],
+      notes: [`Refused before sending: Tally rejects a unit symbol with digits or spaces ("${unit.name}" would answer BAD UNIT NAME). Use letters only.`],
+      requestXml: "", responseXml: "" };
+  }
+  const res = await writeMaster(tallyUrl, company, buildUnitXml(unit), "created", "unit");
+  if (!res.ok) return res;
+  const block = await readMasterRaw(tallyUrl, company, "Unit", unit.name, ["Name", "DecimalPlaces"]);
+  if (!block) return { ...res, ok: false, notes: ["Tally reported success and the unit cannot be read back."] };
+  return res;
+}
+
+/** Tally answers DELETED=1 for a unit that does not exist (3-Nov-2026), so the
+ *  unit is read first and a missing one is reported as missing, not deleted. */
+export async function deleteUnit(tallyUrl: string, company: string, name: string): Promise<MasterWriteResult> {
+  const before = await readMasterRaw(tallyUrl, company, "Unit", name, ["Name"]);
+  if (!before) {
+    return { ok: false, created: 0, deleted: 0, errors: 0, exceptions: 0, lineErrors: [],
+      notes: [`Unit "${name}" is not in the books. Tally would still have answered DELETED=1, so nothing was sent.`],
+      requestXml: "", responseXml: "" };
+  }
+  return writeMaster(tallyUrl, company, `<UNIT NAME="${esc(name)}" ACTION="Delete"><NAME>${esc(name)}</NAME></UNIT>`, "deleted", "unit");
+}
+
+export async function createGodown(tallyUrl: string, company: string, godown: NewGodown): Promise<MasterWriteResult> {
+  const res = await writeMaster(tallyUrl, company, buildGodownXml(godown), "created", "godown");
+  if (!res.ok) return res;
+  const block = await readMasterRaw(tallyUrl, company, "Godown", godown.name, ["Name"]);
+  if (!block) return { ...res, ok: false, notes: ["Tally reported success and the godown cannot be read back."] };
+  return res;
+}
+
+export const deleteGodown = (tallyUrl: string, company: string, name: string) =>
+  writeMaster(tallyUrl, company, `<GODOWN NAME="${esc(name)}" ACTION="Delete"><NAME>${esc(name)}</NAME></GODOWN>`, "deleted", "godown");
