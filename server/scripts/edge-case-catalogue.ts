@@ -51,6 +51,7 @@ import {
   buildCollection, blocksOf, readCollection,
 } from "../src/services/tallyRequest.js";
 import { parseImportResponse } from "../src/services/voucherPusher.js";
+import { practiceForFixtures } from "./lib/mockPractice.js";
 
 const DIR = join(here, "..", "fixtures");
 const store = new FixtureStore(DIR);
@@ -72,12 +73,14 @@ async function post(id: string, raw = false): Promise<{ ok: true; value: any } |
   catch (e: any) { return { ok: false, err: e.message }; }
 }
 
+let practice: ReturnType<typeof practiceForFixtures>;
+
 /** Post a DAMAGED version of a fixture's response. */
 async function postMutated(id: string, how: Mutation, raw = false) {
   const fx = store.get(id)!;
-  installMock(async () => mutate(fx.responseXml, how));
+  installMock(practice.wrap(async () => mutate(fx.responseXml, how)));
   const r = await post(id, raw);
-  installMock(store.transport());
+  installMock(practice.wrap(store.transport()));
   return r;
 }
 
@@ -91,7 +94,12 @@ async function main(): Promise<void> {
   }
   console.log(`  ${store.size} fixtures: ${store.ids().join(", ")}\n`);
 
-  installMock(store.transport());
+  /* 0-3 (5-Nov-2026): the #128 practice-company check stays on; for this
+     process it is pointed at the fixtures' company with a fake GUID. Without
+     this every replay was refused before the mock and section C measured
+     nothing (see scripts/lib/mockPractice.ts). */
+  practice = practiceForFixtures(store.get("MKCP_Ledger")!.requestXml, store.get("List of Companies")!.responseXml);
+  installMock(practice.wrap(store.transport()));
 
   // ── A. The mock is really standing in for Tally ─────────────────────────
   console.log("  A. The mock replaces the socket and nothing else");
@@ -100,8 +108,10 @@ async function main(): Promise<void> {
   check("a live-captured response replays through tallyPost", health.ok);
 
   const unknown = await (async () => {
-    installMock(store.transport());
-    try { await tallyPost("http://mock", "<ENVELOPE><HEADER><ID>Nothing At All</ID></HEADER></ENVELOPE>", 5_000); return null; }
+    installMock(practice.wrap(store.transport()));
+    /* Names the company, so the practice check lets it through to the mock and the mock is what answers. */
+    const nothing = `<ENVELOPE><HEADER><ID>Nothing At All</ID></HEADER><BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${practice.company}</SVCURRENTCOMPANY></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
+    try { await tallyPost("http://mock", nothing, 5_000); return null; }
     catch (e: any) { return e.message; }
   })();
   check("an uncaptured shape THROWS rather than answering empty",
@@ -160,6 +170,7 @@ async function main(): Promise<void> {
   console.log("     Each row: what the pipeline DID with a response we broke on purpose.\n");
 
   const g7: { mutation: Mutation; outcome: string; distinguished: boolean }[] = [];
+  const readOf = new Map<Mutation, string>();
 
   for (const how of ALL_MUTATIONS) {
     const r = await postMutated("MKCP_Ledger", how);
@@ -170,9 +181,16 @@ async function main(): Promise<void> {
       outcome = `rejected: ${r.err.slice(0, 58)}`;
       distinguished = true;                       // an error is an error — correct
     } else {
-      const rows = convertLedgers(r.value).tallymessage;
+      const conv = convertLedgers(r.value) as { tallymessage: any[]; read?: { fact: string; note: string } };
+      const rows = conv.tallymessage;
       const before = baseline.get("ledgers") ?? 0;
-      if (rows.length === 0) {
+      readOf.set(how, conv.read?.fact ?? "(none)");
+      /* T-6 (0-3): a zero is honest only when the converter SAYS which zero it
+         is: Tally sent no objects, or it sent objects the parser could not read. */
+      if (rows.length === 0 && (conv.read?.fact === "empty-from-tally" || conv.read?.fact === "parser-failed")) {
+        outcome = `resolved, 0 rows, and the converter names it: ${conv.read!.note.slice(0, 70)}`;
+        distinguished = true;
+      } else if (rows.length === 0) {
         outcome = "resolved, 0 rows — INDISTINGUISHABLE from an empty company";
         distinguished = false;                    // the G7 failure, exactly
       } else if (rows.length < before) {
@@ -191,30 +209,21 @@ async function main(): Promise<void> {
 
   console.log("");
 
-  /* ── The known blind spots, named rather than tolerated ───────────────────
-     `convertX()` reads a parsed object and has no way to say "this response
-     was damaged". Two mutations therefore still come out of the converter as
-     a clean zero. They are listed HERE, by name, so that a NEW blind spot
-     fails this check loudly instead of joining a silent majority.
-
-     `no-data-node` is NOT on this list any more: the transport now rejects a
-     DATA-less envelope outright, which closed it for every read caller at
-     once. That is the shape of the fix for the remaining two as well — move
-     the decision to where the bytes still exist. */
-  const KNOWN_BLIND: Mutation[] = ["cmpinfo-only", "attributes-stripped"];
+  /* ── The two former blind spots (T-6), now handled ────────────────────────
+     Until 5-Nov-2026 `cmpinfo-only` and `attributes-stripped` came out of the
+     converter as a clean zero and sat here on a KNOWN_BLIND list. The
+     converters now report WHICH zero they return (`read.fact`, from
+     readFact in convert.ts): Tally sent no objects, or Tally sent objects the
+     parser could not read. The list is empty, so any blind spot fails. */
+  const KNOWN_BLIND: Mutation[] = [];
 
   const blind = g7.filter((g) => !g.distinguished).map((g) => g.mutation);
-  const surprises = blind.filter((m) => !KNOWN_BLIND.includes(m));
-  const fixed = KNOWN_BLIND.filter((m) => !blind.includes(m));
-
-  check("no NEW converter blind spot", surprises.length === 0,
-    surprises.length ? `unlisted: ${surprises.join(", ")}` : `${KNOWN_BLIND.length} known and named`);
-
-  for (const m of blind.filter((x) => KNOWN_BLIND.includes(x))) {
-    console.log(`     known blind spot: ${m} — the converter reports 0 rows. ` +
-      `readCollection() names it correctly; no convertX() uses readCollection yet.`);
-  }
-  if (fixed.length) console.log(`     now fixed, remove from KNOWN_BLIND: ${fixed.join(", ")}`);
+  check("T-6 cmpinfo-only: the converter names it Tally-empty (preamble count tags are not objects)",
+    readOf.get("cmpinfo-only") === "empty-from-tally", `read.fact = ${readOf.get("cmpinfo-only")}`);
+  check("T-6 attributes-stripped: the converter names it a parser failure, not an empty company",
+    readOf.get("attributes-stripped") === "parser-failed", `read.fact = ${readOf.get("attributes-stripped")}`);
+  check("no converter blind spot (none known, none new)", blind.filter((m) => !KNOWN_BLIND.includes(m)).length === 0,
+    blind.length ? `blind: ${blind.join(", ")}` : `${ALL_MUTATIONS.length} mutations, each named`);
 
   /* readCollection (tallyRequest.ts) exists BECAUSE of the blind spots above.
      It is the fix, so it is the thing that must actually hold. */
