@@ -10,7 +10,7 @@
  *
  *   npx tsx server/scripts/test-bulk-invoice-helpers.ts
  */
-import { bulkKept, removalDate, removalOk } from "./lib/bulkInvoice.js";
+import { bulkKept, removalDate, removalVerdict, removalExit, removalCommand } from "./lib/bulkInvoice.js";
 
 let pass = 0, fail = 0;
 const ok = (what: string, cond: boolean) => { if (cond) { pass++; console.log(`  ok    ${what}`); } else { fail++; console.log(`  FAIL  ${what}`); } };
@@ -32,9 +32,26 @@ ok("no date anywhere is refused, never today's", "error" in removalDate(["--remo
 ok("a malformed --remove-date is refused", "error" in removalDate(["--remove-date=2026-11-05"], summary, "393119"));
 
 console.log("\n  the exit code");
-ok("invoice, item and party all removed: success", removalOk(1, true, true));
-ok("invoice not deleted: failure, even when item and party went", !removalOk(0, true, true));
-ok("party left: failure", !removalOk(1, true, false));
+const gone = { invoiceDeleted: 1, invoiceStillThere: false, itemRemoved: true, itemStillThere: false, partyRemoved: true, partyStillThere: false };
+ok("invoice, item and party all removed: removed", removalVerdict(gone) === "removed");
+ok("invoice not deleted and still there: failed", removalVerdict({ ...gone, invoiceDeleted: 0, invoiceStillThere: true }) === "failed");
+ok("party left: failed", removalVerdict({ ...gone, partyRemoved: false, partyStillThere: true }) === "failed");
+// Review, 5-Nov-2026: a re-run on an invoice already gone.
+ok("re-run: invoice, item and party already absent on read-back: already removed",
+  removalVerdict({ invoiceDeleted: 0, invoiceStillThere: false, itemRemoved: false, itemStillThere: false, partyRemoved: false, partyStillThere: false }) === "already removed");
+ok("invoice not deleted, absent on read-back, item and party removed now: already removed",
+  removalVerdict({ ...gone, invoiceDeleted: 0 }) === "already removed");
+ok("removalExit: removed and already removed exit 0, failed exits 1",
+  removalExit("removed") === 0 && removalExit("already removed") === 0 && removalExit("failed") === 1);
+
+console.log("\n  a send that threw");
+ok("safePush threw (a timeout after Tally may have accepted): kept", bulkKept("threw", false));
+
+console.log("\n  the LEFT IN PLACE hint is the whole command");
+const cmd = removalCommand("C:/scratch/c13", "393119", "20261105");
+ok("it names the evidence folder", cmd.includes('"C:/scratch/c13"'));
+ok("it names the stamp and the date", cmd.includes("--remove-stamp=393119") && cmd.includes("--remove-date=20261105"));
+ok("it runs the same script with the env file", cmd.includes("npx tsx --env-file=.env scripts/test-batch04-dummy.ts"));
 
 console.log(`\n  ${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
