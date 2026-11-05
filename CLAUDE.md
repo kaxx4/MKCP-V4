@@ -121,3 +121,11 @@ G1 one definition per concept. G5 identity from creation. G7 "returned nothing",
 | Would this voucher file wrong | `gstrExceptions.ts` |
 | Which script does what | `server/scripts/README.md` |
 | Why a rule exists | the hand-off package (files 07 and 13) and the rebuild decisions log, both local folders on the owner's laptop, not in this repo |
+
+## Docs worth reading before large changes
+
+- `ARCHITECTURE.md`: process layout and the sync loop.
+- `TALLY_SYNC_GUIDE.md` and `TALLY_LIVE_SETUP.md`: operator-facing setup.
+- `ENGINE_FORMULAS_FOR_WEB.md`: the figures the web app re-derives (stale on discounts; the web CLAUDE.md says which).
+- `server/scripts/README.md`: what each script does.
+- The Brain vault (`Digital Directory\MKCP Brain`), especially `07_Systems/Contracts/Talking to Tally — Push and Pull From Zero.md`, the long-form version of the Tally section above. Update it after substantive work.
