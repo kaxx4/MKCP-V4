@@ -72,6 +72,84 @@ export function supabaseClient(options?: SupabaseClientOptions<"public">): Supab
   return createClient(url, key, { auth: { persistSession: false }, ...(options ?? {}) });
 }
 
+/* ── The ERP test queue (rebuild task 1-0, 5-Nov-2026, D-1-0.1v) ──────────
+   There is no bench project. End-to-end push tests write only to the new ERP
+   table `erp_push_queue_test` on the live project, which the office agent never
+   reads. The laptop (sandbox) may reach that one table and its functions, and
+   nothing else: `supabaseClient()` above stays null on a sandbox, and this
+   second client sends every request through `erpTestFence`, which refuses any
+   path that is not on the list below BEFORE it leaves the process. So the real
+   `push_queue`, `claim_push_jobs`, the mirror and every other table stay out of
+   reach even though the key in hand is the service key. */
+
+/** The only functions the test-queue client may call. */
+export const ERP_TEST_RPCS: readonly string[] = [
+  "enqueue_erp_test_job", "claim_erp_test_jobs", "renew_erp_test_job",
+  "mark_erp_test_job_sent", "finish_erp_test_job", "cancel_erp_test_job", "erp_stale_test_rows",
+];
+/** The only table it may name directly, for reading a job and deleting its own test rows. */
+export const ERP_TEST_TABLE = "erp_push_queue_test";
+
+/**
+ * Pure: may the test-queue client send this request? Null when allowed, else the refusal.
+ * Allowed: POST to /rest/v1/rpc/<one of ERP_TEST_RPCS>; GET or DELETE on
+ * /rest/v1/erp_push_queue_test, a DELETE only with `is_test=eq.true` in the query.
+ * The host must be the configured project's host.
+ */
+export function erpTestFence(url: string, method: string, projectUrl: string): string | null {
+  let u: URL, p: URL;
+  try { u = new URL(url); p = new URL(projectUrl); } catch { return `refused: not a URL (${url})`; }
+  if (u.host !== p.host) return `refused: host ${u.host} is not the project host`;
+  const m = (method || "GET").toUpperCase();
+  const path = u.pathname.replace(/\/+$/, "");
+  const rpc = /^\/rest\/v1\/rpc\/([a-z_][a-z0-9_]*)$/.exec(path);
+  if (rpc) {
+    if (m !== "POST") return `refused: ${m} on rpc ${rpc[1]}`;
+    return ERP_TEST_RPCS.includes(rpc[1]) ? null
+      : `refused: rpc ${rpc[1]} is not an ERP test-queue function. The sandbox laptop may not call it.`;
+  }
+  if (path === `/rest/v1/${ERP_TEST_TABLE}`) {
+    if (m === "GET" || m === "HEAD") return null;
+    if (m === "DELETE") return u.searchParams.get("is_test") === "eq.true" ? null
+      : "refused: a delete on the test queue must filter is_test=eq.true";
+    return `refused: ${m} on ${ERP_TEST_TABLE}; writes go through its functions`;
+  }
+  return `refused: ${path} is outside the ERP test queue. The sandbox laptop reaches nothing else.`;
+}
+
+/** Why the test-queue client is unavailable on this machine, or null when it may be built. */
+export function erpTestQueueRefusal(env: Record<string, string | undefined> = process.env): string | null {
+  if ((env.MKCP_TALLY_ROLE ?? "").trim().toLowerCase() !== "sandbox") {
+    return "refused: the ERP test queue is for the sandbox laptop only (MKCP_TALLY_ROLE is not sandbox).";
+  }
+  if ((env.MKCP_ERP_TEST_QUEUE ?? "").trim().toLowerCase() !== "on") {
+    return "refused: MKCP_ERP_TEST_QUEUE is not on. Set it for the one test process only.";
+  }
+  if (!(env.MKCP_PRACTICE_COMPANY ?? "").trim() || !(env.MKCP_PRACTICE_COMPANY_GUID ?? "").trim()) {
+    return "refused: the practice company name and GUID must both be set, so pushes can only reach the dummy.";
+  }
+  if (!env.SUPABASE_SERVICE_KEY) return "refused: SUPABASE_SERVICE_KEY is not set.";
+  return null;
+}
+
+/** A Supabase client that can reach only the ERP test queue, or a thrown refusal. */
+export function erpTestQueueClient(fetchImpl: typeof fetch = fetch): SupabaseClient {
+  const why = erpTestQueueRefusal();
+  if (why) throw new Error(why);
+  const url = process.env.SUPABASE_URL || DEFAULT_SUPABASE_URL;
+  const fenced: typeof fetch = async (input, init) => {
+    const href = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+    const method = init?.method ?? (typeof input === "object" && "method" in (input as Request) ? (input as Request).method : "GET");
+    const refusal = erpTestFence(href, method, url);
+    if (refusal) throw new Error(`[erpTestQueue] ${refusal}`);
+    return fetchImpl(input as any, init);
+  };
+  return createClient(url, process.env.SUPABASE_SERVICE_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: fenced },
+  });
+}
+
 /**
  * For the two callers that legitimately want to fail loudly rather than degrade
  * — a diagnostic script is useless if it silently reports nothing.

@@ -27,6 +27,8 @@ export const OFFLINE: string[][] = [
   ["test-read-modes-on-primary.ts"],
   // Rebuild task 0-7 review (5-Nov-2026): the C13 bulk-invoice harness's decisions, pure.
   ["test-bulk-invoice-helpers.ts"],
+  // Rebuild task 1-0 (5-Nov-2026): the ERP test queue's fence and claim path, pure.
+  ["test-erp-test-queue.ts"],
 ];
 export const LIVE: string[][] = [
   ["test-push-guard.ts", "--live", "--push"], ["test-edge-cases.ts"], ["test-push-fidelity-sandbox.ts", "--push"],
