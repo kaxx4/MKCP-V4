@@ -20,6 +20,7 @@ import { buildVoucherImportXml } from "../src/services/voucherPusher.js";
 import { safePush } from "../src/services/safePush.js";
 import { createLedger, deleteLedger, createStockItem, deleteStockItem } from "../src/services/masterPusher.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+import { gstinCheckDigit } from "../src/services/gstIdentity.js";
 import type { VoucherPayload } from "../src/types.js";
 guardScriptWrites("test-batch04-dummy"); // #104
 
@@ -30,10 +31,20 @@ mkdirSync(OUT, { recursive: true });
 const ONLY = (process.argv.find((a) => a.startsWith("--only="))?.slice(7) ?? "reuse,note,eway,bulk,batch60").split(",");
 const TODAY = new Date().toISOString().slice(0, 10);
 const DAY = TODAY.replace(/-/g, "");
-const STAMP = Date.now().toString().slice(-6);
+/* --remove-stamp=NNNNNN removes what an earlier run left under that stamp
+   (the bulk invoice by its REMOTEID, then the ZZ TEST item and party) and exits.
+   Added 5-Nov-2026 (0-7): a refused bulk invoice used to leave its party and
+   item behind with no committed way to remove them. */
+const REMOVE = process.argv.find((a) => a.startsWith("--remove-stamp="))?.slice(15);
+if (REMOVE !== undefined && !/^\d{6}$/.test(REMOVE)) { console.error("--remove-stamp needs the six-digit stamp of an earlier run"); process.exit(2); }
+const STAMP = REMOVE ?? Date.now().toString().slice(-6);
 const PARTY = `ZZ TEST PARTY ${STAMP}`;
 const ITEM = `ZZ TEST ITEM ${STAMP}`;
 const GODOWN = "Main Location";
+/* A ZZZ-series fake GSTIN with a VALID check digit. The old 19AAAAA0000A1Z5
+   fails its check digit, so pushGuard refused the C13 invoice once it went
+   through safePush (5-Nov-2026). */
+const FAKE_GSTIN = "19ZZZAA0000A1Z" + gstinCheckDigit("19ZZZAA0000A1Z");
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 /** First NON-EMPTY value of a tag. Tally pads blocks with self-closing placeholders, which must not match. */
 const fld = (x: string, t: string) => ([...x.matchAll(new RegExp(`<${t}(?:\s[^>/]*)?>([^<]*)</${t}>`, "gi"))].map((m) => m[1].trim()).find(Boolean) ?? "");
@@ -57,7 +68,10 @@ async function readVoucher(number: string): Promise<string | null> {
 <SYSTEM TYPE="Formulae" NAME="B04VF">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${stamp} AND $VoucherNumber = "${esc(number)}"</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
   const raw = await post(xml, 180_000);
-  const all = [...raw.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0]);
+  /* Only real voucher blocks: the response also carries a count element
+     <VOUCHER>105</VOUCHER>, which read as "found" and turned a refused C13
+     invoice into a PASS (5-Nov-2026). */
+  const all = [...raw.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0]).filter((b) => b.includes("<VOUCHERNUMBER>"));
   return all.length ? all.join("\n") : null;
 }
 const countByNumber = (v: string | null) => (v ? (v.match(/<VOUCHERNUMBER>/g) ?? []).length : 0);
@@ -207,7 +221,10 @@ async function bulk(m: TallyMasters) {
   steps.push({ step: "create ONE B2B invoice and LEAVE it for a person to look at in Tally's e-invoice list", requestXml: req, responseXml: res,
     note: `safePush ok=${r.ok} stage=${r.stage}${r.errors.length ? ` errors=${r.errors.join(" | ")}` : ""}${r.differences.length ? ` differences=${r.differences.join(" | ")}` : ""} ${res ? counts(res) : ""}`, voucher: v });
   steps.push({ step: "state", note: `IRN on the saved voucher: "${v ? fld(v, "IRN") : ""}" (empty means Tally has not marked it as sent)` });
-  save("4-bulk-send-pickup", steps, !!v, `invoice ${N} left in the books for a person to check whether Tally's bulk e-invoice list shows it. NEVER press send. Remove with sweep afterwards.`);
+  save("4-bulk-send-pickup", steps, r.ok && !!v,
+    r.ok && v ? `invoice ${N} left in the books for a person to check whether Tally's bulk e-invoice list shows it. NEVER press send. Remove afterwards with --remove-stamp=${STAMP}.`
+      : `invoice ${N} was NOT stored (${r.errors[0] ?? "not found on read-back"}); its party and item are removed.`);
+  return r.ok && !!v;
 }
 
 // ── 7. Sixty pushes in a row ──────────────────────────────────────────────────
@@ -238,28 +255,38 @@ async function batch60() {
 
 (async () => {
   COMPANY = convertCompanies(await tallyPost(U, HEALTH_XML, 10_000))[0]!.name;
+  if (REMOVE !== undefined) {
+    const N = `ZZTEST/BULK${STAMP}`;
+    const dv = await deleteVoucher("Sales", N, `MKCP|Sales|${N}|2026-27`);
+    console.log(`\n  invoice ${N}: ${counts(dv)}`);
+    const di = await deleteStockItem(U, COMPANY, ITEM);
+    const dl = await deleteLedger(U, COMPANY, PARTY);
+    console.log(`  test item "${ITEM}" removed: ${di.ok}  test party "${PARTY}" removed: ${dl.ok}`);
+    process.exit(di.ok && dl.ok ? 0 : 1);
+  }
   console.log(`\n  company "${COMPANY}"  tests: ${ONLY.join(", ")}  evidence: ${OUT}\n`);
-  const lg = await createLedger(U, COMPANY, { name: PARTY, parent: "SUNDRY DEBTORS", state: "West Bengal", gstin: "19AAAAA0000A1Z5", address: ["ZZ TEST STREET", "ZZ TEST CITY"], pincode: "700001" });
+  const lg = await createLedger(U, COMPANY, { name: PARTY, parent: "SUNDRY DEBTORS", state: "West Bengal", gstin: FAKE_GSTIN, address: ["ZZ TEST STREET", "ZZ TEST CITY"], pincode: "700001" });
   if (!lg.ok) { console.error("could not create the test party:", lg.notes.join(" ")); process.exit(1); }
   const it = await createStockItem(U, COMPANY, { name: ITEM, parent: "BICYCLE PARTS ( 87149990 )", baseUnit: "PC", gstRate: 18, hsn: "87149990" });
   if (!it.ok) { await deleteLedger(U, COMPANY, PARTY); console.error("could not create the test item:", it.notes.join(" ")); process.exit(1); }
   invalidateMasters();
   const m = await loadMasters(U, COMPANY);
+  let keptBulk = false;
   console.log(`  voucher types here: ${[...m.voucherTypes].join(", ")}\n`);
   try {
     if (ONLY.includes("reuse")) await reuse(m);
     if (ONLY.includes("note")) await note(m);
     if (ONLY.includes("eway")) await eway(m);
-    if (ONLY.includes("bulk")) await bulk(m);
+    if (ONLY.includes("bulk")) keptBulk = await bulk(m);
     if (ONLY.includes("batch60")) await batch60();
   } finally {
     // The bulk invoice stays on purpose; the party and item stay with it.
-    if (!ONLY.includes("bulk")) {
+    if (!keptBulk) {
       const di = await deleteStockItem(U, COMPANY, ITEM);
       const dl = await deleteLedger(U, COMPANY, PARTY);
       console.log(`\n  test item removed: ${di.ok}  test party removed: ${dl.ok}`);
     } else {
-      console.log(`\n  LEFT IN PLACE for the bulk-send check: party "${PARTY}", item "${ITEM}", invoice ZZTEST/BULK${STAMP}`);
+      console.log(`\n  LEFT IN PLACE for the bulk-send check: party "${PARTY}", item "${ITEM}", invoice ZZTEST/BULK${STAMP}. Remove with --remove-stamp=${STAMP}.`);
     }
   }
   writeFileSync(join(OUT, "summary.json"), JSON.stringify({ stamp: STAMP, company: COMPANY, verdicts }, null, 2));
