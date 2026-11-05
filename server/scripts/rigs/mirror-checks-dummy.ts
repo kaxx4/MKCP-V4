@@ -27,8 +27,8 @@
  * that prunes only from a checked read (H1); an empty balance is stored as 0
  * and every ledger row carries its as-of date (M1, M2); the ledgers are read
  * twice as of one date and must agree, and their sum per primary group must
- * match Tally's own Trial Balance for that date (M2, counts only in the
- * output); the job is linked on the AlterID read after the push (M3).
+ * match Tally's own Trial Balance for the loaded period (D-C.2, counts only
+ * in the output); the job is linked on the AlterID read after the push (M3).
  * Everything is swept and every test row deleted. The tally_* tables are
  * never read or written. Every request to Tally goes through tallyPost, which
  * checks the practice company's GUID before sending anything.
@@ -50,7 +50,7 @@ import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/s
 import { practiceCompany, practiceGuid } from "../../src/services/tallyRole.js";
 import { safePush } from "../../src/services/safePush.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams } from "../../src/services/erpJobAgent.js";
-import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, indiaToday, ledgerPeriod, parseBalance, assertParsedCollection, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
+import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, ledgerPeriod, parseBalance, assertParsedCollection, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
 import { buildCollectionXml } from "../../src/services/xmlBuilder.js";
 import { txt as tallyText, arr as tallyList } from "../../src/converters/convert.js";
 import { fetchReport, REPORTS } from "../../src/services/tallyReports.js";
@@ -142,17 +142,17 @@ function pickWindow(byDay: Record<string, number>) {
     step("ledger and group names from the dummy are stored only as ZZ TEST stand-ins", (leds ?? []).every((l: any) => /^ZZ TEST\b/.test(l.name) && (!l.parent || /^ZZ TEST\b/.test(l.parent))));
     const asOf = full.ledgersAsOf;
     const empties = (leds ?? []).filter((l: any) => l.row?.closing_balance_sent === false);
-    step("0120 M1 and M2: every ledger row carries the as-of date Tally was asked for (today in India), and a balance Tally left empty is stored as 0, marked as not sent",
-      asOf === indiaToday() && (leds ?? []).every((l: any) => l.balance_as_of === asOf) && empties.every((l: any) => Number(l.closing_balance) === 0),
-      `as of ${asOf}; ${empties.length} empty balances stored as ${[...new Set(empties.map((l: any) => Number(l.closing_balance)))].join(",") || "none"}`);
+    step("D-C.2 and 0120 M1: every ledger row carries as balance_as_of the end of the period Tally has loaded, flagged when that is not the year to date, and a balance Tally left empty is stored as 0, marked as not sent",
+      !!asOf && asOf === full.ledgerPeriod?.to && (leds ?? []).every((l: any) => l.balance_as_of === asOf && l.row?.balance_period_unexpected === full.ledgerPeriod?.unexpected) && empties.every((l: any) => Number(l.closing_balance) === 0),
+      `as of ${asOf}, loaded from ${full.ledgerPeriod?.from}, ${full.ledgerPeriod?.unexpected ? `flagged balance_period_unexpected: ${full.ledgerPeriod?.why}` : "the year to date"}; ${empties.length} empty balances stored as ${[...new Set(empties.map((l: any) => Number(l.closing_balance)))].join(",") || "none"}`);
 
-    // 0120 M2: the same figures twice, and the same figures as Tally's Trial Balance, as of one date (in memory, counts only)
-    const readA = await tally.ledgers(asOf!), readB = await tally.ledgers(asOf!);
+    // D-C.2: the same figures twice (no period asked), and the same figures as Tally's Trial Balance for the loaded period (in memory, counts only)
+    const readA = await tally.ledgers(), readB = await tally.ledgers();
     const figs = (rs: typeof readA) => new Map(rs.map((l) => [l.guid, parseBalance(l.closingbalance) ?? 0]));
     const fa = figs(readA), fb = figs(readB);
     const sameTwice = fa.size === fb.size && [...fa].every(([g, v]) => fb.get(g) === v);
     const groupDef = { name: "erpRigGroups", tallyCollection: "Group", metadataType: "Group", category: "master", fetch: ["Name", "Parent"], timeout: 120_000, parallel: false } as any;
-    const period = ledgerPeriod(asOf!);
+    const period = { from: full.ledgerPeriod?.from ?? ledgerPeriod(asOf!).from, to: asOf! };
     const gParsed = assertParsedCollection(await post(TALLY_URL, buildCollectionXml(groupDef, company!)), "the group read");
     const gcol = gParsed?.ENVELOPE?.BODY?.DATA?.COLLECTION;
     const parentOf = new Map<string, string>(tallyList(gcol?.GROUP ?? gcol?.["GROUP.LIST"]).map((g: any) => [(tallyText(g?.["@_NAME"]) || tallyText(g?.NAME)).trim(), tallyText(g?.PARENT).trim()]));
@@ -167,8 +167,8 @@ function pickWindow(byDay: Record<string, number>) {
     const matched = Math.max(same, flipped), sign = same >= flipped ? "the sign as Tally keeps it" : "the opposite sign";
     counts.balanceProof = { asOf, period, ledgersReadA: readA.length, ledgersReadB: readB.length, sameTwice, groupsRead: parentOf.size,
       primaryGroupsWithBalance: groups.length, trialBalanceRows: tb.rows.length, matchedTrialBalance: matched, sign, unmatched: groups.length - matched };
-    step("0120 M2: two ledger reads as of one date give the same figures", sameTwice && readA.length === full.ledgers, `${readA.length} and ${readB.length} ledgers as of ${asOf}`);
-    step("0120 M2: the ledgers' closing balances summed per primary group match Tally's Trial Balance for the same date",
+    step("D-C.2: two ledger reads with no period give the same figures", sameTwice && readA.length === full.ledgers, `${readA.length} and ${readB.length} ledgers as of ${asOf}`);
+    step("D-C.2: the ledgers' closing balances summed per primary group match Tally's Trial Balance for the loaded period",
       groups.length > 0 && matched === groups.length, `${matched} of ${groups.length} primary groups match (${sign}); the Trial Balance has ${tb.rows.length} rows`);
 
     // 2. the nightly check right after

@@ -56,8 +56,14 @@
  *   which keeps the mark. planMirrorWork says what to run next.
  *
  * -- Review fixes (6-Nov-2026, migration 0120) -----------------------------
- * - The ledgers are read with SVFROMDATE (the year's 1 April) and SVTODATE
- *   (today, India time), and every row carries that balance_as_of date (M2).
+ * - M2, as decided in D-C.2 (6-Nov-2026): the ledgers are read with NO
+ *   period. A dated read (SVFROMDATE/SVTODATE) made the dummy Tally recompute
+ *   every ledger: no answer in 120 s, then the port stayed dead. Instead the
+ *   run reads the period Tally has loaded from the Company object
+ *   (StartingFrom, EndingAt) and stores its end as balance_as_of. A loaded
+ *   period that is not the financial year to date marks every row
+ *   balance_period_unexpected, and those figures are never the year's
+ *   closing balances.
  * - A balance Tally leaves empty is 0, as Tally shows it and today's
  *   converter writes it; the row says closing_balance_sent false (M1). A
  *   balance with text after the number fails the run (parseTallyAmount,
@@ -74,7 +80,7 @@ import type { CollectionDef } from "../types.js";
 import { tallyPost } from "../tally.js";
 import { buildCollectionXml, buildChangedVoucherXml } from "./xmlBuilder.js";
 import { convertVouchers, txt as tallyText, arr as tallyList } from "../converters/convert.js";
-import { parseTallyAmount, tallyDate } from "./xml.js";
+import { parseTallyAmount } from "./xml.js";
 
 /** The ERP mirror's voucher fields for this half: header, identity, ledger lines (for totals). */
 export const ERP_MIRROR_VOUCHER_DEF: CollectionDef = {
@@ -114,6 +120,28 @@ export const ERP_MIRROR_LEDGER_DEF: CollectionDef = {
   parallel: false,
 };
 
+/** D-C.2: the company's loaded period, one Company collection (StartingFrom, EndingAt), no period of its own. */
+export const ERP_MIRROR_COMPANY_DEF: CollectionDef = {
+  name: "erpMirrorCompanyPeriod",
+  tallyCollection: "Company",
+  metadataType: "Company",
+  category: "master",
+  fetch: ["Name", "Guid", "StartingFrom", "EndingAt"],
+  timeout: 30_000,
+  parallel: false,
+};
+
+/** Pure: the loaded period of the company named `company` from a Company collection; exactly one such company or it throws. */
+export function loadedPeriodFromParsed(parsed: any, company: string): LoadedPeriod {
+  const col = parsed?.ENVELOPE?.BODY?.DATA?.COLLECTION;
+  const all = tallyList(col?.COMPANY ?? col?.["COMPANY.LIST"]).map((c: any) => ({
+    name: (tallyText(c?.["@_NAME"]) || tallyText(c?.NAME)).trim(), from: tallyText(c?.STARTINGFROM).trim() || null, to: tallyText(c?.ENDINGAT).trim() || null,
+  }));
+  const mine = all.filter((c) => c.name === company.trim());
+  if (mine.length !== 1) throw new Error(`refused: the company period read found ${mine.length} companies named as this one (of ${all.length}), so the ledger balances would have no date; the run fails`);
+  return { from: mine[0].from, to: mine[0].to };
+}
+
 export interface MirrorLedgerRow {
   key: string;
   name: string;
@@ -123,7 +151,7 @@ export interface MirrorLedgerRow {
   alter_id: number | null;
   master_id: number | null;
   row: Record<string, unknown>;
-  /** The date Tally was asked for (SVTODATE), YYYY-MM-DD (0120 M2). */
+  /** The date the balance is for: the end of the period Tally has loaded, YYYY-MM-DD (D-C.2). */
   balance_as_of: string;
 }
 
@@ -238,11 +266,44 @@ export function indiaToday(now: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 }
 
-/** The period the ledger balances are read for (0120 M2): the financial year's 1 April to `asOf`. */
+/** The financial year to date that holds `asOf`: its 1 April to `asOf`. */
 export function ledgerPeriod(asOf: string): { from: string; to: string } {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) throw new Error(`refused: ${asOf} is not a YYYY-MM-DD date`);
   const y = Number(asOf.slice(0, 4)), mth = Number(asOf.slice(5, 7));
   return { from: `${mth >= 4 ? y : y - 1}-04-01`, to: asOf };
+}
+
+/** A date as Tally's Company object gives it (YYYYMMDD, or already ISO) to ISO, or null. */
+export function tallyDateToIso(raw: unknown): string | null {
+  const s = String(raw ?? "").trim();
+  const m = /^(\d{4})-?(\d{2})-?(\d{2})$/.exec(s);
+  if (!m) return null;
+  const iso = `${m[1]}-${m[2]}-${m[3]}`;
+  const d = new Date(`${iso}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== iso ? null : iso;
+}
+
+/** The period Tally has loaded, as the Company object says (raw strings). */
+export interface LoadedPeriod { from: string | null; to: string | null }
+
+/**
+ * Pure (D-C.2): the as-of date for a ledger read with no period is the end of
+ * the period Tally has loaded. That period is expected when it starts on the
+ * financial year's 1 April (of today, India time) and ends today or later
+ * within that year. Anything else is balance_period_unexpected. An end date
+ * that cannot be read refuses the run: a balance with no known date is not
+ * kept.
+ */
+export function judgeLoadedPeriod(p: LoadedPeriod, today: string): { asOf: string; from: string | null; unexpected: boolean; why: string | null } {
+  const to = tallyDateToIso(p.to), from = tallyDateToIso(p.from);
+  if (!to) throw new Error(`refused: Tally's loaded period has no end date that can be read (${JSON.stringify(p.to ?? null)}), so the ledger balances would have no date; the run fails and nothing is swapped`);
+  const fy = ledgerPeriod(today);
+  const fyEnd = `${Number(fy.from.slice(0, 4)) + 1}-03-31`;
+  const why = from !== fy.from ? `the loaded period starts ${from ?? "on no readable date"}, not ${fy.from}`
+    : to < today ? `the loaded period ends ${to}, before today ${today}`
+    : to > fyEnd ? `the loaded period ends ${to}, after the financial year ends ${fyEnd}`
+    : null;
+  return { asOf: to, from, unexpected: why !== null, why };
 }
 
 /** Pure: why this ledger cannot be trusted as read, or null. */
@@ -254,7 +315,8 @@ export function ledgerProblem(l: TallyLedger): string | null {
 }
 
 /** Pure: one checked ledger to a staging row. Test runs store names only as stand-ins. */
-export function ledgerRowFrom(l: TallyLedger, opts: { scrub: false } | { scrub: true; salt: string }, asOf: string): MirrorLedgerRow {
+export function ledgerRowFrom(l: TallyLedger, opts: { scrub: false } | { scrub: true; salt: string }, asOf: string,
+  period?: { from: string | null; unexpected: boolean; why: string | null }): MirrorLedgerRow {
   const name = (kind: string, s: string) => (opts.scrub ? scrubName(kind, s, opts.salt) : (s || "").trim() || null);
   const closing = parseBalance(l.closingbalance), opening = parseBalance(l.openingbalance);
   return {
@@ -269,7 +331,8 @@ export function ledgerRowFrom(l: TallyLedger, opts: { scrub: false } | { scrub: 
     opening_balance: opening ?? 0,
     alter_id: Number(l.alterid) || null,
     master_id: Number(l.masterid) || null,
-    row: { closing_balance_sent: closing !== null, opening_balance_sent: opening !== null },
+    row: { closing_balance_sent: closing !== null, opening_balance_sent: opening !== null, balance_period_unexpected: period?.unexpected ?? false,
+      ...(period?.unexpected ? { loaded_from: period.from, loaded_to: asOf, why: period.why } : {}) },
     balance_as_of: asOf,
   };
 }
@@ -304,8 +367,10 @@ export interface MirrorTally {
   vouchersOn(day: string): Promise<any[]>;
   /** Converted vouchers whose AlterID is above `mark` (any date). */
   changedSince(mark: number): Promise<any[]>;
-  /** Every ledger master with its closing balance as of `asOf` (one request, SVFROMDATE and SVTODATE). */
-  ledgers(asOf: string): Promise<TallyLedger[]>;
+  /** Every ledger master with its closing balance for the loaded period (one request, no period: D-C.2). */
+  ledgers(): Promise<TallyLedger[]>;
+  /** The period Tally has loaded for the company (Company StartingFrom and EndingAt), D-C.2. */
+  loadedPeriod(): Promise<LoadedPeriod>;
 }
 
 /** One voucher as the nightly check sends it: key, ISO date, AlterID (raw; the database checks each). */
@@ -376,11 +441,14 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
       const parsed = assertParsedCollection(await post(tallyUrl, buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, company, mark), ERP_MIRROR_VOUCHER_DEF.timeout, false), `the read above AlterID ${mark}`);
       return convertVouchers(parsed).tallymessage;
     },
-    async ledgers(asOf: string) {
-      const p = ledgerPeriod(asOf);
-      const xml = buildCollectionXml(ERP_MIRROR_LEDGER_DEF, company, undefined, undefined, { SVFROMDATE: tallyDate(p.from), SVTODATE: tallyDate(p.to) });
-      const parsed = assertParsedCollection(await post(tallyUrl, xml, ERP_MIRROR_LEDGER_DEF.timeout, false), "the ledger read");
+    async ledgers() {
+      /* D-C.2: no period, ever. A dated ledger read hung the dummy Tally (6-Nov-2026). */
+      const parsed = assertParsedCollection(await post(tallyUrl, buildCollectionXml(ERP_MIRROR_LEDGER_DEF, company), ERP_MIRROR_LEDGER_DEF.timeout, false), "the ledger read");
       return ledgersFromParsed(parsed);
+    },
+    async loadedPeriod() {
+      const parsed = assertParsedCollection(await post(tallyUrl, buildCollectionXml(ERP_MIRROR_COMPANY_DEF, company), ERP_MIRROR_COMPANY_DEF.timeout, false), "the company period read");
+      return loadedPeriodFromParsed(parsed, company);
     },
   };
 }
@@ -422,8 +490,10 @@ export interface MirrorSyncReport {
   tallyReads: number;
   /** Ledgers staged with the run (null when none were read). */
   ledgers: number | null;
-  /** The date the ledger balances were read for (null when none were read). */
+  /** The date the ledger balances are for: the end of Tally's loaded period (null when none were read). */
   ledgersAsOf: string | null;
+  /** D-C.2: the loaded period, and whether it is the financial year to date. */
+  ledgerPeriod?: { from: string | null; to: string; unexpected: boolean; why: string | null } | null;
 }
 
 const STAGE_BATCH = 500;
@@ -440,8 +510,8 @@ export async function runMirrorSync(opts: {
   scope?: { from: string; to: string };
   /** Read the ledger masters with the run (default yes). */
   ledgers?: boolean;
-  /** The date to read the balances for (default today in India). */
-  ledgersAsOf?: string;
+  /** Today, for judging Tally's loaded period (default today in India). */
+  today?: string;
   log?: (line: string) => void;
 }): Promise<MirrorSyncReport> {
   return (await runMirror({ ...opts }))!;
@@ -456,7 +526,7 @@ async function runMirror(opts: {
   store: MirrorStore; tally: MirrorTally; kind: "full" | "incremental" | "repull";
   scope?: { from: string; to: string };
   ledgers?: boolean;
-  ledgersAsOf?: string;
+  today?: string;
   log?: (line: string) => void;
 }): Promise<MirrorSyncReport | null> {
   const { store, tally, kind } = opts;
@@ -531,9 +601,12 @@ async function runMirror(opts: {
     if (readLedgers) {
       /* M-6: the ledgers and their closing balances, one request, checked
          before any is kept. An empty list is never "no ledgers". */
-      const asOf = opts.ledgersAsOf ?? indiaToday();
-      ledgerPeriod(asOf);   // a bad date refuses before Tally is asked
-      const [list, msL] = await timed(() => tally.ledgers(asOf));
+      /* D-C.2: the balances are for the period Tally has loaded; its end is the as-of date. */
+      const period = judgeLoadedPeriod(await tally.loadedPeriod(), opts.today ?? indiaToday());
+      report.tallyReads++;
+      const asOf = period.asOf;
+      if (period.unexpected) log(`ledger read flagged balance_period_unexpected: ${period.why}`);
+      const [list, msL] = await timed(() => tally.ledgers());
       report.tallyReads++;
       if (!list.length) throw new Error("refused: the ledger read came back empty, which is not a list of ledgers, so the run fails and nothing is swapped");
       const problems = list.map(ledgerProblem).filter((p): p is string => !!p);
@@ -541,13 +614,14 @@ async function runMirror(opts: {
         const counts = [...new Set(problems)].map((p) => `${problems.filter((x) => x === p).length} with ${p}`).join("; ");
         throw new Error(`refused: the ledger read returned ledgers that cannot be trusted as read (${counts}), so the run fails and nothing is swapped`);
       }
-      const rows = list.map((l) => ledgerRowFrom(l, scrubOpts, asOf));
+      const rows = list.map((l) => ledgerRowFrom(l, scrubOpts, asOf, period));
       let n = 0;
       for (let i = 0; i < rows.length; i += STAGE_BATCH) n = await store.stageLedgers(run.run_id, rows.slice(i, i + STAGE_BATCH));
       report.ledgers = n;
       report.ledgersAsOf = asOf;
-      await store.step(run.run_id, "read and staged the ledgers with their closing balances", "ok", n, msL,
-        { balance_as_of: asOf, closing_balance_sent: rows.filter((r) => r.row.closing_balance_sent).length });
+      report.ledgerPeriod = { from: period.from, to: asOf, unexpected: period.unexpected, why: period.why };
+      await store.step(run.run_id, period.unexpected ? "read and staged the ledgers, flagged balance_period_unexpected" : "read and staged the ledgers with their closing balances", "ok", n, msL,
+        { balance_as_of: asOf, loaded_from: period.from, balance_period_unexpected: period.unexpected, why: period.why, closing_balance_sent: rows.filter((r) => r.row.closing_balance_sent).length });
     }
     const [res, msS] = await timed(() => store.swap(run.run_id, top.alterId));
     report.swap = res;

@@ -23,7 +23,7 @@ import { createHash } from "node:crypto";
 import {
   mirrorRowFrom, scrubName, scrubSaltFrom, voucherProblem, isAccountingType, eachDay, runMirrorSync, assertParsedCollection, tallyMirrorReads,
   parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_MARK_DEF,
-  indiaToday, ledgerPeriod,
+  indiaToday, ledgerPeriod, judgeLoadedPeriod, loadedPeriodFromParsed, tallyDateToIso, ERP_MIRROR_COMPANY_DEF,
   type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult, type MirrorLedgerRow, type TallyLedger, type DayCheckVoucher,
 } from "../src/services/erpMirrorSync.js";
 import { erpTestFence, ERP_TEST_RPCS } from "../src/services/supabaseClient.js";
@@ -55,7 +55,7 @@ function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boo
   const staged: MirrorRow[] = [];
   const ledgers: MirrorLedgerRow[] = [];
   let checked: { highest: number; vouchers: DayCheckVoucher[] } | null = null;
-  const steps: { step: string; state: string; rows?: number | null }[] = [];
+  const steps: { step: string; state: string; rows?: number | null; detail?: unknown }[] = [];
   let swapArgs: { mark: number } | null = null; let failed: string | null = null;
   const store: MirrorStore = {
     isTest: opts.isTest ?? true,
@@ -65,7 +65,7 @@ function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boo
       return kind === "full" ? { run_id: "R1", scope_from: scope!.from, scope_to: scope!.to, mark: opts.mark ?? null }
         : { run_id: "R2", scope_from: "2026-10-30", scope_to: "2026-11-05", mark: opts.mark ?? 50 };
     },
-    async step(_r, step, state, rows) { calls.push(`step ${step}`); steps.push({ step, state, rows }); },
+    async step(_r, step, state, rows, _ms, detail) { calls.push(`step ${step}`); steps.push({ step, state, rows, detail }); },
     async stage(_r, rows) { calls.push(`stage ${rows.length}`); staged.push(...rows); return new Set(staged.map((x) => x.key)).size; },
     async swap(_r, mark) { calls.push("swap"); swapArgs = { mark }; return opts.swap ?? { state: "swapped", inserted: staged.length }; },
     async fail(_r, e) { calls.push("fail"); failed = e; },
@@ -81,7 +81,11 @@ const ledger = (guid: string, name: string, closing = "-1234.50", extra: Partial
   ({ guid, name, parent: "Sundry Debtors", closingbalance: closing, openingbalance: "100.00", alterid: "7", masterid: "70", ...extra });
 const LEDGERS = [ledger("L-1", "REAL LOOKING TRADERS"), ledger("L-2", "Cash", "5000.00"), ledger("L-3", "ZERO LEDGER", "")];
 
-function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failOn?: string; changed?: any[]; ledgers?: TallyLedger[]; vouchers?: DayCheckVoucher[] } = {}) {
+/** Tally's loaded period in the fakes: this financial year, 1 April to 31 March (YYYYMMDD, as the Company object gives it). */
+const FY_START = ledgerPeriod(indiaToday()).from;
+const FY_NOW = { from: FY_START.replace(/-/g, ""), to: `${Number(FY_START.slice(0, 4)) + 1}0331` };
+const FY_END = `${Number(FY_START.slice(0, 4)) + 1}-03-31`;
+function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failOn?: string; changed?: any[]; ledgers?: TallyLedger[]; vouchers?: DayCheckVoucher[]; period?: { from: string | null; to: string | null } } = {}) {
   const calls: string[] = [];
   const asOf: string[] = [];
   let inFlight = 0, maxInFlight = 0;
@@ -96,7 +100,8 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
     highest: () => wrap("highest", () => ({ alterId: opts.highest ?? 100, latestDate: "2026-11-05", count: 9, byDay: {}, vouchers: opts.vouchers ?? [{ k: "A", d: "2026-11-01", a: 90 }] })),
     vouchersOn: (day) => wrap(`day ${day}`, () => byDay[day] ?? []),
     changedSince: (mark) => wrap(`changed ${mark}`, () => opts.changed ?? []),
-    ledgers: (d) => { asOf.push(d); return wrap("ledgers", () => opts.ledgers ?? LEDGERS); },
+    ledgers: (...a: unknown[]) => { asOf.push(String(a.length)); return wrap("ledgers", () => opts.ledgers ?? LEDGERS); },
+    loadedPeriod: () => wrap("period", () => opts.period ?? FY_NOW),
   };
   return { tally, calls, asOf, get maxInFlight() { return maxInFlight; } };
 }
@@ -141,12 +146,12 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   const days = { "2026-11-01": [voucher("A", "20261101", 101)], "2026-11-03": [voucher("B", "20261103", 120), voucher("C", "20261103", 121)] };
   let s = fakeStore(), t = fakeTally(days, { highest: 100 });
   let rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-03" } });
-  ok("Tally's highest AlterID is read before any voucher", t.calls[0] === "highest" && t.calls.slice(1, -1).every((c) => c.startsWith("day ")), t.calls.join(", "));
-  ok("one read per day of the scope, in order, then the ledgers once (0119)", t.calls.slice(1).join(",") === "day 2026-11-01,day 2026-11-02,day 2026-11-03,ledgers");
+  ok("Tally's highest AlterID is read before any voucher", t.calls[0] === "highest" && t.calls.slice(1, -2).every((c) => c.startsWith("day ")), t.calls.join(", "));
+  ok("one read per day of the scope, in order, then the loaded period and the ledgers once (0119, D-C.2)", t.calls.slice(1).join(",") === "day 2026-11-01,day 2026-11-02,day 2026-11-03,period,ledgers");
   ok("never two Tally requests at once", t.maxInFlight === 1, `max ${t.maxInFlight}`);
   ok("the swap gets the mark read BEFORE the reads (100), not the highest staged (121)", s.swapArgs?.mark === 100 && rep.markCandidate === 100);
   ok("every step is written: the mark, each day, staged, the ledgers, swapped", s.steps.length === 7 && s.steps.every((x) => x.state === "ok"), s.steps.map((x) => x.step).join(" | "));
-  ok("the report says swapped", rep.state === "swapped" && rep.read === 3 && rep.tallyReads === 5 && s.staged.length === 3 && rep.ledgers === 3);
+  ok("the report says swapped", rep.state === "swapped" && rep.read === 3 && rep.tallyReads === 6 && s.staged.length === 3 && rep.ledgers === 3);
   ok("0119: the ledgers are staged before the swap", s.calls.indexOf("ledgers 3") >= 0 && s.calls.indexOf("ledgers 3") < s.calls.indexOf("swap"), s.calls.join(","));
   ok("stage comes before swap, swap once", s.calls.indexOf("swap") > s.calls.findIndex((c) => c.startsWith("stage")) && s.calls.filter((c) => c === "swap").length === 1);
   ok("review M3: a test store's rows reach staging scrubbed (the caller has no switch for it)", s.staged.every((r) => /^ZZ TEST\b/.test(r.party ?? "") && (r.row.ledgers as any[]).every((l) => /^ZZ TEST\b/.test(l.ledger))));
@@ -183,11 +188,11 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   H("AN INCREMENTAL RUN");
   s = fakeStore({ mark: 50 }); t = fakeTally({}, { highest: 130, changed: [voucher("C", "20261104", 125)] });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
-  ok("it reads above the run's mark, after reading Tally's highest, then the ledgers", t.calls.join(",") === "highest,changed 50,ledgers");
+  ok("it reads above the run's mark, after reading Tally's highest, then the ledgers", t.calls.join(",") === "highest,changed 50,period,ledgers");
   ok("the swap gets Tally's highest (130)", s.swapArgs?.mark === 130 && rep.state === "swapped" && s.staged.length === 1);
   s = fakeStore({ mark: 130 }); t = fakeTally({}, { highest: 130 });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
-  ok("Tally's highest equal to the mark: it reads above the mark, nothing new", t.calls.join(",") === "highest,changed 130,ledgers" && rep.state === "swapped");
+  ok("Tally's highest equal to the mark: it reads above the mark, nothing new", t.calls.join(",") === "highest,changed 130,period,ledgers" && rep.state === "swapped");
 
   H("TALLY'S HIGHEST BELOW THE MARK (review H1)");
   s = fakeStore({ mark: 150, swap: { state: "refused", reason: "needs_full_run", mark: 150, candidate: 130 } }); t = fakeTally({}, { highest: 130, changed: [voucher("D", "20261104", 131)] });
@@ -200,7 +205,7 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("if the database swapped anyway, the agent fails the run", rep.state === "failed" && /did not refuse/.test(rep.error ?? ""), rep.error ?? "");
   s = fakeStore({ mark: 150 }); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] }, { highest: 130 });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" } });
-  ok("a full run reads as usual and hands the lower AlterID to the swap (only a full run may lower the mark)", rep.state === "swapped" && s.swapArgs?.mark === 130 && t.calls.join(",") === "highest,day 2026-11-01,ledgers");
+  ok("a full run reads as usual and hands the lower AlterID to the swap (only a full run may lower the mark)", rep.state === "swapped" && s.swapArgs?.mark === 130 && t.calls.join(",") === "highest,day 2026-11-01,period,ledgers");
 
   H("FAILURES");
   s = fakeStore(); t = fakeTally(days, { failOn: "day 2026-11-02" });
@@ -228,14 +233,21 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   await reads.highest(); await reads.vouchersOn("2026-11-03"); await reads.changedSince(42);
   ok("every request has an <ID>, names the company, fetches no '*'", sent.length === 3 && sent.every((x) => /<ID>[^<]+<\/ID>/.test(x) && x.includes("<SVCURRENTCOMPANY>ZZ PRACTICE CO<") && !/<NATIVEMETHOD>[^<]*\*/.test(x)));
   ok("the AlterID read asks for AlterID, Date and Guid only (0119: Guid for the key compare), above 0, escaped", /\$AlterID &gt; 0</.test(sent[0]) && (sent[0].match(/<NATIVEMETHOD>/g) ?? []).length === 3 && sent[0].includes(">Guid<"));
-  await reads.ledgers("2026-11-06");
-  ok("0119: the ledger read is one Ledger collection with an <ID>, the company, the named fields and no filter", sent.length === 4 && /<TYPE>Ledger<\/TYPE>/.test(sent[3]) && /<ID>[^<]+<\/ID>/.test(sent[3])
+  await reads.ledgers(); await reads.loadedPeriod().catch(() => null);
+  ok("0119: the ledger read is one Ledger collection with an <ID>, the company, the named fields and no filter", sent.length === 5 && /<TYPE>Ledger<\/TYPE>/.test(sent[3]) && /<ID>[^<]+<\/ID>/.test(sent[3])
     && sent[3].includes("<SVCURRENTCOMPANY>ZZ PRACTICE CO<") && sent[3].includes(">ClosingBalance<") && !/<NATIVEMETHOD>[^<]*\*/.test(sent[3]) && !/<FILTER>/.test(sent[3]));
-  ok("0120 M2: the ledger read asks for the balances from the year's 1 April to the as-of date", sent[3].includes("<SVFROMDATE>20260401</SVFROMDATE>") && sent[3].includes("<SVTODATE>20261106</SVTODATE>"));
-  ok("0120 M2: the voucher reads carry no period (their requests are as before)", !/<SV(FROM|TO)DATE>/.test(sent[0] + sent[1] + sent[2]));
-  const plainXml = buildCollectionXml(ERP_MIRROR_LEDGER_DEF, "ZZ CO");
-  ok("0120: with no extra static variables the collection request is exactly as before", plainXml.includes("<SVCURRENTCOMPANY>ZZ CO</SVCURRENTCOMPANY>\n</STATICVARIABLES>") && !/SVTODATE/.test(plainXml));
-  ok("0120: an extra static variable must be a plain SV name", (() => { try { buildCollectionXml(ERP_MIRROR_LEDGER_DEF, "ZZ CO", undefined, undefined, { "SVX><B": "1" }); return false; } catch { return true; } })());
+  ok("D-C.2: the ledger request carries no period (no SVFROMDATE, no SVTODATE): a dated ledger read hung the dummy Tally", !/SVFROMDATE|SVTODATE/.test(sent[3]) && sent[3] === buildCollectionXml(ERP_MIRROR_LEDGER_DEF, "ZZ PRACTICE CO"));
+  ok("D-C.2: no request of the mirror carries a period", sent.length === 5 && sent.every((x) => !/SVFROMDATE|SVTODATE/.test(x)));
+  ok("D-C.2: the period read is one Company collection with an <ID>, the company, StartingFrom and EndingAt, no '*'", /<TYPE>Company<\/TYPE>/.test(sent[4]) && /<ID>[^<]+<\/ID>/.test(sent[4])
+    && sent[4].includes(">StartingFrom<") && sent[4].includes(">EndingAt<") && !/<NATIVEMETHOD>[^<]*\*/.test(sent[4]) && ERP_MIRROR_COMPANY_DEF.tallyCollection === "Company");
+  const coll = (cs: any[]) => ({ ENVELOPE: { BODY: { DATA: { COLLECTION: { COMPANY: cs } } } } });
+  ok("D-C.2: the loaded period is read for this company only", JSON.stringify(loadedPeriodFromParsed(coll([{ "@_NAME": "OTHER CO", STARTINGFROM: "20250401", ENDINGAT: "20260331" }, { "@_NAME": "ZZ CO", STARTINGFROM: "20260401", ENDINGAT: "20270331" }]), "ZZ CO")) === JSON.stringify({ from: "20260401", to: "20270331" }));
+  ok("D-C.2: no company of that name, or two, refuses", bad(() => loadedPeriodFromParsed(coll([{ "@_NAME": "OTHER CO", ENDINGAT: "20270331" }]), "ZZ CO")) && bad(() => loadedPeriodFromParsed(coll([{ "@_NAME": "ZZ CO" }, { "@_NAME": "ZZ CO" }]), "ZZ CO")));
+  ok("D-C.2: Tally's dates read as ISO; anything else is no date", tallyDateToIso("20270331") === "2027-03-31" && tallyDateToIso("2027-03-31") === "2027-03-31" && tallyDateToIso("20270231") === null && tallyDateToIso("31-Mar-2027") === null && tallyDateToIso("") === null);
+  const jp = (from: string | null, to: string | null) => judgeLoadedPeriod({ from, to }, "2026-11-06");
+  ok("D-C.2: the year to date is expected, and its end is the as-of date", JSON.stringify(jp("20260401", "20270331")) === JSON.stringify({ asOf: "2027-03-31", from: "2026-04-01", unexpected: false, why: null }) && !jp("20260401", "20261106").unexpected);
+  ok("D-C.2: a period that starts on another day, ends before today or after the year is unexpected", jp("20260501", "20270331").unexpected && jp("20250401", "20260331").unexpected && jp("20260401", "20261031").unexpected && jp("20260401", "20270430").unexpected && /before today/.test(jp("20260401", "20261031").why ?? ""));
+  ok("D-C.2: a loaded period with no readable end refuses the run (a balance with no date is never kept)", bad(() => jp("20260401", null)) && bad(() => jp("20260401", "31-Mar-2027")));
   ok("0120 M2: the period runs from the financial year's 1 April", ledgerPeriod("2026-11-06").from === "2026-04-01" && ledgerPeriod("2027-02-10").from === "2026-04-01" && ledgerPeriod("2026-04-01").from === "2026-04-01");
   ok("0120 M2: today is India's date, never the UTC date", indiaToday(new Date("2026-11-06T20:00:00Z")) === "2026-11-07" && indiaToday(new Date("2026-11-06T10:00:00Z")) === "2026-11-06");
   ok("a day read is filtered to that one day inside Tally", sent[1].includes("&gt;= 20261103") && sent[1].includes("&lt;= 20261103"));
@@ -284,13 +296,19 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("a run told not to read ledgers reads none", !t.calls.includes("ledgers") && rep.ledgers === null && rep.state === "swapped");
   s = fakeStore(); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" } });
-  ok("0120 M2: by default the balances are read for today in India, and every staged row says so", t.asOf.join(",") === indiaToday() && rep.ledgersAsOf === indiaToday() && s.ledgers.every((l) => l.balance_as_of === indiaToday()));
-  s = fakeStore(); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] });
-  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" }, ledgersAsOf: "2026-10-31" });
-  ok("0120 M2: a chosen as-of date is the one asked for and stored", t.asOf.join(",") === "2026-10-31" && s.ledgers.every((l) => l.balance_as_of === "2026-10-31"));
-  s = fakeStore(); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] });
-  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" }, ledgersAsOf: "31-Oct" });
-  ok("0120 M2: an as-of date that is not a date fails the run before the ledgers are asked for", rep.state === "failed" && !t.calls.includes("ledgers") && !s.calls.includes("swap"));
+  ok("D-C.2: the ledgers are read with no period, the loaded period first, and every staged row carries its end as balance_as_of, not flagged",
+    t.asOf.join(",") === "0" && t.calls.indexOf("period") >= 0 && t.calls.indexOf("period") < t.calls.indexOf("ledgers") && rep.ledgersAsOf === FY_END
+    && s.ledgers.every((l) => l.balance_as_of === FY_END && (l.row as any).balance_period_unexpected === false) && rep.ledgerPeriod?.unexpected === false);
+  s = fakeStore(); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] }, { period: { from: "20250401", to: "20260331" } });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" }, today: "2026-11-06" });
+  const flagStep = s.steps.find((x: any) => /ledgers/.test(x.step)) as any;
+  ok("D-C.2: last year's period still swaps, but every row and the run step say balance_period_unexpected, with the loaded period",
+    rep.state === "swapped" && rep.ledgersAsOf === "2026-03-31" && rep.ledgerPeriod?.unexpected === true
+    && s.ledgers.every((l) => l.balance_as_of === "2026-03-31" && (l.row as any).balance_period_unexpected === true && (l.row as any).loaded_from === "2025-04-01")
+    && /balance_period_unexpected/.test(flagStep?.step ?? "") && flagStep?.detail?.balance_period_unexpected === true, JSON.stringify(flagStep ?? null));
+  s = fakeStore(); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] }, { period: { from: "20260401", to: null } });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" } });
+  ok("D-C.2: a loaded period with no end fails the run before the ledgers are asked for", rep.state === "failed" && !t.calls.includes("ledgers") && !s.calls.includes("swap") && /no end date/.test(rep.error ?? ""));
   s = fakeStore(); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] });
   await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" } });
   const readStep = s.steps.find((x) => x.step === "read 2026-11-01");
