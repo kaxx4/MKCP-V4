@@ -42,6 +42,7 @@ import { fileURLToPath } from "node:url";
 
 import { priceListSignalRow } from "../src/services/supabaseSync.js";
 import { DEFAULT_TALLY_COMPANY } from "../src/config/company.js";
+import { resolveWebDir } from "./guardrails/lib.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -105,7 +106,7 @@ console.log("\n  3. item_count means distinct items, not dated revisions");
 // ── 4. G1: the other writer must still agree ──────────────────────────────
 console.log("\n  4. The file-import writer in MKCP MOB2 still writes the same shape");
 {
-  const sibling = join(here, "..", "..", "..", "MKCP MOB2", "web-dashboard", "api", "price-list.ts");
+  const sibling = join(resolveWebDir(), "api", "price-list.ts");   // T-7
   if (!existsSync(sibling)) {
     unchecked("import path columns match", `sibling repo not present at ${sibling}`);
   } else {

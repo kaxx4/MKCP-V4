@@ -436,8 +436,10 @@ export function voucherFromMirror(row: any): Voucher {
  * Where the web app lives. MKCP_WEB_DIR wins; otherwise the sibling checkout
  * under either name it has had ("MKCP MOB2" on the office PC, "MKCPWEB" in a
  * cloud clone). Returns the first that exists, else the first candidate.
+ * The one resolver for the web repo path (T-7, 5-Nov-2026): every script that
+ * needs the web app calls this; no hard-coded path, no second variable name.
  */
-export function webDir(): string {
+export function resolveWebDir(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   const root = join(here, "..", "..", "..", "..");
   const cands = process.env.MKCP_WEB_DIR ? [resolve(process.env.MKCP_WEB_DIR)]

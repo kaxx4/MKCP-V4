@@ -36,7 +36,7 @@
  *   npx tsx scripts/test-push-fidelity-sandbox.ts --push [--only S3,S4]
  *   npx tsx scripts/test-push-fidelity-sandbox.ts --cleanup
  *
- * MKCP_WEB_DIR overrides where the web app lives (default ../../MKCP MOB2/web-dashboard).
+ * MKCP_WEB_DIR overrides where the web app lives (default: the sibling checkout, see resolveWebDir in guardrails/lib.ts).
  */
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,6 +55,7 @@ import { safePush } from "../src/services/safePush.js";
 import { buildCollection, blocksOf, tagOf, onDate } from "../src/services/tallyRequest.js";
 import { isSandbox } from "../src/services/tallyRole.js";
 import type { VoucherPayload } from "../src/types.js";
+import { resolveWebDir } from "./guardrails/lib.js";
 
 // ── 1. Refuse anything but the sandbox ──────────────────────────────────────
 const U = process.env.TALLY_URL || "http://localhost:9000";
@@ -76,7 +77,7 @@ const DATE = process.env.MKCP_TEST_DATE || new Date().toLocaleDateString("en-CA"
 const STAMP = DATE.slice(5).replace("-", "");
 const DATA = join(here, "..", "data");
 const JOURNAL = join(DATA, "push-fidelity-journal.jsonl");
-const WEB_DIR = resolve(process.env.MKCP_WEB_DIR || join(here, "..", "..", "..", "MKCP MOB2", "web-dashboard"));
+const WEB_DIR = resolveWebDir();   // T-7: one resolver for the web repo
 mkdirSync(DATA, { recursive: true });
 
 const HOME = "West Bengal";

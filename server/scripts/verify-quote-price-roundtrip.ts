@@ -57,13 +57,14 @@ import { safePush } from "../src/services/safePush.js";
 import { esc, blocksOf, tagOf } from "../src/services/tallyRequest.js";
 import type { VoucherPayload } from "../src/types.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+import { resolveWebDir } from "./guardrails/lib.js";
 guardScriptWrites("verify-quote-price-roundtrip"); // #104: writes only on a sandbox role against a local Tally
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
 const TODAY = new Date().toISOString().slice(0, 10);
 const TAG = `MKCP-QP${Date.now().toString().slice(-5)}`;
-const WEB = join(HERE, "..", "..", "..", "MKCP MOB2", "web-dashboard");
+const WEB = resolveWebDir();   // T-7: MKCP_WEB_DIR, else the sibling checkout
 
 /** Decode Tally's entities, then case-fold — the price list and the item master
  *  escape the same name differently, and `&QUOT;`/`&APOS;` come back in CAPS. */

@@ -207,7 +207,7 @@ export async function runStatic(opts: { replay: boolean }): Promise<void> {
   // ── Second sources of rates ──────────────────────────────────────────────
   const agentSrc = ["voucherPusher.ts", "pushGuard.ts", "safePush.ts"].map((f) => readFileSync(join(here, "..", "..", "src", "services", f), "utf8")).join("\n");
   check("TG-P32", !/gstMasterRates|gstMasterHsn/.test(agentSrc), `the agent push path reads a checked-in rate file`);
-  const { webDir: findWebDir } = await import("./lib.js");
+  const { resolveWebDir: findWebDir } = await import("./lib.js");
   const webDir = findWebDir();
   const webCash = join(webDir, "src", "engine", "cashInvoice.ts");
   if (existsSync(webCash)) {

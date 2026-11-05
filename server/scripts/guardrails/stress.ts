@@ -32,7 +32,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync, openSync, closeSy
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { check, unverified, parseVoucher, checkVoucherShape, tag, webDir } from "./lib.js";
+import { check, unverified, parseVoucher, checkVoucherShape, tag, resolveWebDir } from "./lib.js";
 import { assertSandboxTarget, todayLocal, READ_FIELDS } from "./sandbox.js";
 import type { VoucherPayload } from "../../src/types.js";
 import type { TallyMasters, MasterLedger, MasterItem } from "../../src/services/tallyMasters.js";
@@ -66,7 +66,7 @@ interface Scenario {
 class Stop extends Error {}
 
 function emit(company: string, scenarios: Scenario[]): Map<string, { payload?: VoucherPayload; error?: string }> | string {
-  const web = webDir();
+  const web = resolveWebDir();
   const emitter = join(web, "scripts", "emit-stress.mts");
   if (!existsSync(emitter)) return `web emitter not found at ${emitter} (set MKCP_WEB_DIR)`;
   const dir = mkdtempSync(join(tmpdir(), "mkcp-stress-"));

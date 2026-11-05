@@ -23,12 +23,12 @@ import { resolve } from "node:path";
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { loadMasters, gstRateFor } from "../src/services/tallyMasters.js";
+import { resolveWebDir } from "./guardrails/lib.js";
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const WRITE = process.argv.includes("--write");
 const TARGET = resolve(
-  process.env.WEB_DASHBOARD_DIR ??
-    "C:/Users/kanis/Desktop/Code/MKCP/Live-Sync/MKCP MOB2/web-dashboard",
+  resolveWebDir(),   // T-7: MKCP_WEB_DIR, else the sibling checkout
   "src/data/gstMasterRates.json",
 );
 

@@ -32,7 +32,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { check, unverified, parseVoucher, checkVoucherShape, checkTaxParity, webDir, headerOf, tag } from "./lib.js";
+import { check, unverified, parseVoucher, checkVoucherShape, checkTaxParity, resolveWebDir, headerOf, tag } from "./lib.js";
 import { fixtureMasters, fixtureOpenBills, OPEN_DATE, COMPANY, PARTY_LOCAL, PARTY_INTER, PARTY_UNREG, SUPPLIER, receipt } from "./fixtures.js";
 import type { VoucherPayload } from "../../src/types.js";
 import type { TallyMasters } from "../../src/services/tallyMasters.js";
@@ -215,7 +215,7 @@ function scenarios(m: TallyMasters) {
 }
 
 function emit(doc: unknown): Array<{ id: string; what: string; payload: VoucherPayload }> | string {
-  const web = webDir();
+  const web = resolveWebDir();
   const emitter = join(web, "scripts", "emit-push-fidelity.mts");
   if (!existsSync(emitter)) return `web emitter not found at ${emitter} (set MKCP_WEB_DIR)`;
   const dir = mkdtempSync(join(tmpdir(), "mkcp-sim-"));

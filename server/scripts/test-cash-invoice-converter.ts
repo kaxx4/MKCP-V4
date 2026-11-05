@@ -26,12 +26,12 @@ import { loadMasters, gstRateFor, type TallyMasters } from "../src/services/tall
 import { safePush } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+import { resolveWebDir } from "./guardrails/lib.js";
 guardScriptWrites("test-cash-invoice-converter"); // #104: writes only on a sandbox role against a local Tally
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const KEEP = process.argv.includes("--keep");
-const WEB = process.env.WEB_DASHBOARD_DIR
-  ?? "C:/Users/kanis/Desktop/Code/MKCP/Live-Sync/MKCP MOB2/web-dashboard";
+const WEB = resolveWebDir();   // T-7: MKCP_WEB_DIR, else the sibling checkout
 
 const DATE = new Date().toISOString().slice(0, 10);
 const STAMP = DATE.replace(/-/g, "");

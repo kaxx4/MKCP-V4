@@ -50,14 +50,15 @@ import {
   check, checkNum, report, remember,
 } from "./harness.js";
 import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+import { resolveWebDir } from "../guardrails/lib.js";
 guardScriptWrites("case-cheque-seam"); // #104: writes only on a sandbox role against a local Tally
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const stamp = Date.now().toString().slice(-5);
-/* `fileURLToPath`, not `.pathname`: the repo folder is "MKCP MOB2" and a URL
-   percent-encodes that space, so the raw pathname names a directory that does
-   not exist and spawn fails with a bare ENOENT. */
-const WEB = fileURLToPath(new URL("../../../../MKCP MOB2/web-dashboard", import.meta.url));
+/* The web repo folder ("MKCP MOB2") has a space; resolveWebDir returns a plain
+   file-system path, never a URL pathname, so spawn gets a directory that exists
+   (a raw URL pathname percent-encodes the space and fails with a bare ENOENT). T-7. */
+const WEB = resolveWebDir();
 
 (async () => {
   const co = await company();
