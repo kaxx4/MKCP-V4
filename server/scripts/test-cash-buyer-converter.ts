@@ -29,6 +29,7 @@ delete process.env.SUPABASE_SERVICE_KEY;
 
 import { tallyPost } from "../src/tally.js";
 import { installMock, uninstallMock } from "../src/services/tallyMock.js";
+import { practiceForCompany } from "./lib/mockPractice.js";
 import { configureTallyLog } from "../src/services/tallyLog.js";
 import { convertVouchers, extractVoucherBuyer } from "../src/converters/convert.js";
 import { TRANSACTION_COLLECTIONS } from "../src/config/collections.js";
@@ -51,8 +52,12 @@ const envelope = (vouchers: string) =>
   vouchers + `</COLLECTION></DATA></BODY></ENVELOPE>`;
 
 /** Replay `body` as Tally's answer and run the production converter over it. */
+/* With server/.env loaded (guardrails/run.ts --offline) the practice-company
+   check refused "TEST CO" before the mock answered. mockPractice keeps the
+   check on and makes TEST CO the practice company for this process only. */
+const practice = practiceForCompany("TEST CO");
 async function convert(body: string): Promise<any[]> {
-  installMock(async () => body);
+  installMock(practice.wrap(async () => body));
   try {
     const parsed = await tallyPost("http://mock.invalid", buildCollectionXml(TRANSACTION_COLLECTIONS[0], "TEST CO", "20260905", "20260905"));
     return convertVouchers(parsed).tallymessage;

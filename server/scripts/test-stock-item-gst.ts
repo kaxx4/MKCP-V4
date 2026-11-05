@@ -39,6 +39,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 import { tallyPost } from "../src/tally.js";
 import { FixtureStore, installMock, uninstallMock } from "../src/services/tallyMock.js";
+import { practiceForFixtures } from "./lib/mockPractice.js";
 import { convertStockItems, tallyIsoDate } from "../src/converters/convert.js";
 
 let pass = 0, fail = 0;
@@ -74,7 +75,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  installMock(store.transport());
+  /* The captured fixtures predate #128 (no GUID in their company listing), so
+     with server/.env loaded the check refused this replay. Same fix as the
+     edge-case catalogue: the check stays on, for the fixtures' company. */
+  const listing = store.get("List of Companies");
+  if (!listing) { console.log("\n  No List of Companies fixture. Run: npx tsx server/scripts/capture-fixtures.ts\n"); process.exit(1); }
+  const practice = practiceForFixtures(fx.requestXml, listing.responseXml);
+  installMock(practice.wrap(store.transport()));
   const parsed = await tallyPost("http://mock", fx.requestXml, 30_000);
   uninstallMock();
 

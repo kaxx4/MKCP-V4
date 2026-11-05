@@ -45,3 +45,22 @@ export function practiceForFixtures(requestXml: string, listingXml: string): { c
   const wrap = (t: Transport): Transport => async (url, xml, timeoutMs) => (isListing(xml) ? listing : t(url, xml, timeoutMs));
   return { company, wrap };
 }
+
+/**
+ * The same, for a mock-only test whose company is made up (`TEST CO`) and has
+ * no captured listing: the practice company becomes that name for this process,
+ * with the fake GUID, and the wrapper answers the company listing with a
+ * one-company listing carrying it. Added for guardrails/run.ts --offline
+ * (5-Nov-2026), where server/.env names the real practice company and the
+ * check refused these tests before their mock answered.
+ */
+export function practiceForCompany(company: string): { company: string; wrap: (t: Transport) => Transport } {
+  if (!company.trim()) throw new Error("practiceForCompany: no company named");
+  process.env.MKCP_PRACTICE_COMPANY = company;
+  process.env.MKCP_PRACTICE_COMPANY_GUID = FIXTURE_GUID;
+  resetListingCache();
+  const name = company.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const listing = `<ENVELOPE><BODY><DATA><COLLECTION><COMPANY NAME="${name}"><NAME>${name}</NAME><GUID>${FIXTURE_GUID}</GUID></COMPANY></COLLECTION></DATA></BODY></ENVELOPE>`;
+  const wrap = (t: Transport): Transport => async (url, xml, timeoutMs) => (isListing(xml) ? listing : t(url, xml, timeoutMs));
+  return { company, wrap };
+}
