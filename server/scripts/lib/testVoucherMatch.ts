@@ -49,3 +49,39 @@ export function isSweepVoucher(v: { number: string; narration: string }, prefix:
   const numberShape = new RegExp(`^${prefix}\\d*[/-]`);
   return numberShape.test(number) && narration.includes(prefix);
 }
+
+/** What a harness sent, as far as finding its stored copy goes. */
+export interface SentVoucher { voucherType: string; voucherNumber?: string; narration?: string }
+/** One voucher as a day's read-back lists it. */
+export interface StoredVoucher { number: string; narration: string; type: string }
+
+/**
+ * The stored copy of a voucher the harness sent, or undefined.
+ * By number first. When Tally stored no number (this company's Journal type
+ * numbers "None", so a sent number is dropped), by narration, and only when
+ * exactly one voucher of that type carries it: narrations repeat, and a
+ * guess would point at another voucher.
+ */
+export function storedCopyOf(sent: SentVoucher, day: readonly StoredVoucher[]): StoredVoucher | undefined {
+  const num = (sent.voucherNumber ?? "").trim();
+  if (num) {
+    const byNumber = day.filter((v) => v.number === num && v.type.toLowerCase() === sent.voucherType.toLowerCase());
+    if (byNumber.length === 1) return byNumber[0];
+  }
+  const narr = (sent.narration ?? "").trim();
+  if (!narr) return undefined;
+  const byNarration = day.filter((v) => !v.number && v.narration === narr && v.type.toLowerCase() === sent.voucherType.toLowerCase());
+  return byNarration.length === 1 ? byNarration[0] : undefined;
+}
+
+/**
+ * True when the harness must remove this voucher itself, by the REMOTEID it
+ * created it with, because the normal sweep (isSweepVoucher) cannot see it:
+ * an empty narration, or a number Tally did not keep. Only for a voucher the
+ * harness sent under its own mark, so a real voucher is never chosen.
+ */
+export function harnessMustRemove(sent: SentVoucher, stored: StoredVoucher | undefined, prefix: string): boolean {
+  if (!stored || !sweepPrefixAllowed(prefix)) return false;
+  if (!new RegExp(`^${prefix}\\d*[/-]`).test((sent.voucherNumber ?? "").trim())) return false;
+  return !isSweepVoucher(stored, prefix);
+}

@@ -15,8 +15,11 @@
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { loadMasters, type TallyMasters, type MasterItem, type MasterLedger } from "../src/services/tallyMasters.js";
-import { guardVoucher } from "../src/services/pushGuard.js";
-import { safePush } from "../src/services/safePush.js";
+import { guardVoucher, filedBoundaryFor } from "../src/services/pushGuard.js";
+import { safePush, vouchersOnDateXml } from "../src/services/safePush.js";
+import { gstRateFor } from "../src/services/tallyMasters.js";
+import { escapeXml, readTag } from "../src/services/xml.js";
+import { storedCopyOf, harnessMustRemove, type StoredVoucher } from "./lib/testVoucherMatch.js";
 import { loadOpenBills, receivableBills, billsForParty, type OpenBill } from "../src/services/billSettlement.js";
 import type { VoucherPayload, LedgerEntry, InventoryEntry } from "../src/types.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
@@ -33,6 +36,8 @@ const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOStri
 
 let pass = 0, fail = 0, skipped = 0, halted = false;
 const results: Array<{ n: number; name: string; verdict: string }> = [];
+/** Every voucher that got past the guard and was sent, for the self-clean at the end. */
+const sent: VoucherPayload[] = [];
 let counter = 0;
 
 function record(name: string, ok: boolean, verdict: string) {
@@ -66,12 +71,48 @@ async function expectPush(name: string, p0: VoucherPayload, company: string) {
   if (!PUSH) { skipped++; counter++; return; }
   try {
     const res = await safePush(TALLY_URL, company, p);
+    if (res.stage !== "guard") sent.push(p);
     if (res.ok) record(name, true, `voucher ${res.voucherId}`);
     else record(name, false, res.differences.length ? `stored differently: ${res.differences[0]}` : res.errors[0] ?? "rejected");
   } catch (e) {
     halted = true;
+    sent.push(p);
     record(name, false, `TRANSPORT — ${(e as Error).message}`);
   }
+}
+
+/**
+ * Third review, 5-Nov-2026: remove, by the REMOTEID it was created with, every
+ * voucher this run stored that the normal sweep cannot see. Two kinds were
+ * left behind on the first run: the empty-narration purchase (the sweep needs
+ * the ZZTEST mark in the narration) and the Journals, stored with no number
+ * because this company numbers Journal "None". Everything else is left for
+ * `sweep-test-vouchers.ts ZZTEST <date> --yes`, which sweeps by what is in the
+ * books. Returns the number of removals that failed.
+ */
+async function removeSweepBlind(company: string): Promise<number> {
+  let failed = 0;
+  const dates = [...new Set(sent.map((p) => p.date))];
+  for (const date of dates) {
+    const book: string = await tallyPost(TALLY_URL, vouchersOnDateXml(company, date), 180_000, true);
+    const day: StoredVoucher[] = [...book.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((x) => ({
+      number: readTag(x[0], "VOUCHERNUMBER").trim(), narration: readTag(x[0], "NARRATION").trim(), type: readTag(x[0], "VOUCHERTYPENAME").trim(),
+    }));
+    for (const p of sent.filter((s) => s.date === date)) {
+      const stored = storedCopyOf(p, day);
+      if (!harnessMustRemove(p, stored, "ZZTEST") || !p.remoteId) continue;
+      const type = stored!.type;
+      const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Import</TALLYREQUEST><TYPE>Data</TYPE><ID>Vouchers</ID></HEADER>
+<BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY></STATICVARIABLES></DESC>
+<DATA><TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="${escapeXml(p.remoteId)}" VCHTYPE="${escapeXml(type)}" ACTION="Delete"><DATE>${date.replace(/-/g, "")}</DATE><VOUCHERTYPENAME>${escapeXml(type)}</VOUCHERTYPENAME>${stored!.number ? `<VOUCHERNUMBER>${escapeXml(stored!.number)}</VOUCHERNUMBER>` : ""}</VOUCHER></TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
+      const res: string = await tallyPost(TALLY_URL, xml, 60_000, true);
+      const gone = parseInt(readTag(res, "DELETED") || "0", 10) || 0;
+      const why = !stored!.number ? "stored with no number" : "no ZZTEST mark in its narration";
+      console.log(`  ${gone ? "✓ removed" : "✗ FAILED "} ${type} ${p.voucherNumber} (${why}) by REMOTEID${gone ? "" : ` — ${readTag(res, "LINEERROR") || "no DELETED in response"}`}`);
+      if (!gone) failed++;
+    }
+  }
+  return failed;
 }
 
 async function main() {
@@ -258,13 +299,18 @@ async function main() {
   console.log("\nGST and party state:");
   {
     // A full local sale: party + CGST + SGST + rounding, stock on the other side.
+    /* 0-3 follow-up (5-Nov-2026): the rate comes from the item master as at the
+       voucher's date, never a typed 18%. The first --push run sent 9% + 9% on a
+       5% item and the tax-parity rule rightly refused it. */
+    const saleItem = items.find(i => gstRateFor(m, i.name, TODAY).rate > 0 && i.closingStock > 4) ?? item;
+    const saleRate = gstRateFor(m, saleItem.name, TODAY).rate;
     const lines: InventoryEntry[] = [{
-      stockItemName: item.name, quantity: 4, unit: item.baseUnit, rate: item.closingRate,
-      amount: r2(4 * item.closingRate), isDeemedPositive: false,
+      stockItemName: saleItem.name, quantity: 4, unit: saleItem.baseUnit, rate: saleItem.closingRate,
+      amount: r2(4 * saleItem.closingRate), isDeemedPositive: false,
       salesLedgerName: SALES_LOCAL, godownName: godown, batchName: "Primary Batch",
     }];
     const goods = lines[0].amount;
-    const half = r2(goods * 0.09);
+    const half = r2(goods * saleRate / 200);
     const gross = r2(goods + half * 2);
     const total = Math.round(gross), rounding = r2(total - gross);
     const led: LedgerEntry[] = [
@@ -273,8 +319,10 @@ async function main() {
       { ledgerName: "OUTPUT CGST", amount: half, isDeemedPositive: false, isPartyLedger: false },
       { ledgerName: "OUTPUT SGST", amount: half, isDeemedPositive: false, isPartyLedger: false },
     ];
+    /* A sale's round-off sits on the CREDIT side with its sign on the amount
+       (pushGuard TG-P17; every hand-typed sale does). */
     if (Math.abs(rounding) >= 0.01)
-      led.push({ ledgerName: "ROUNDED OFF", amount: Math.abs(rounding), isDeemedPositive: rounding < 0, isPartyLedger: false });
+      led.push({ ledgerName: "ROUNDED OFF", amount: Math.abs(rounding), isDeemedPositive: false, signedAmount: rounding, isPartyLedger: false });
 
     await expectPush("local sale — CGST + SGST + rounding", {
       voucherType: "Sales", date: TODAY, voucherNumber: `${TAG}/S${vnum}`,
@@ -284,7 +332,7 @@ async function main() {
 
     // Interstate purchase with IGST.
     const iAmt = r2(2 * item.closingRate);
-    const igst = r2(iAmt * 0.05);
+    const igst = r2(iAmt * gstRateFor(m, item.name, TODAY).rate / 100);
     const iTotalGross = r2(iAmt + igst);
     const iTotal = Math.round(iTotalGross), iRound = r2(iTotal - iTotalGross);
     const iLed: LedgerEntry[] = [
@@ -293,7 +341,8 @@ async function main() {
       { ledgerName: "INPUT IGST", amount: igst, isDeemedPositive: true, isPartyLedger: false },
     ];
     if (Math.abs(iRound) >= 0.01)
-      iLed.push({ ledgerName: "ROUNDED OFF", amount: Math.abs(iRound), isDeemedPositive: iRound > 0, isPartyLedger: false });
+      // A purchase's round-off sits on the DEBIT side with its sign on the amount (TG-P17).
+      iLed.push({ ledgerName: "ROUNDED OFF", amount: Math.abs(iRound), isDeemedPositive: true, signedAmount: -iRound, isPartyLedger: false });
     await expectPush("interstate purchase — IGST", purchase({ voucherNumber: `${TAG}/I${vnum}`, reference: `${TAG}/I${vnum}` }, undefined, iLed), company);
 
     // The silent mis-filing: interstate party booked to the local tax head.
@@ -335,18 +384,28 @@ async function main() {
       ],
     });
 
+    /* 0-3 follow-up (5-Nov-2026): each settlement re-reads the party's open
+       bills from Tally. The first --push run reused the list read before the
+       run, so after case 28 settled bill 1, cases 29 and 30 named a bill that
+       was no longer open and safePush (which re-reads) rightly refused them. */
+    const openNow = async (): Promise<OpenBill[]> =>
+      PUSH && target ? billsForParty(receivableBills(await loadOpenBills(TALLY_URL, company)), target.party) : target?.list ?? [];
+
     if (target?.list.length) {
       const one = target.list[0];
       await expectPush("receipt settling one bill exactly", receipt(one.outstanding, [{ name: one.name, amount: one.outstanding }], "one bill"), company);
 
-      if (target.list.length >= 2) {
-        const two = target.list.slice(0, 2);
+      const afterOne = await openNow();
+      if (afterOne.length >= 2) {
+        const two = afterOne.slice(0, 2);
         const sum = r2(two.reduce((s, b) => s + b.outstanding, 0));
         await expectPush("receipt settling two bills", receipt(sum, two.map(b => ({ name: b.name, amount: b.outstanding })), "two bills"), company);
-      } else { counter++; skipped++; console.log(`  – ${counter}. receipt settling two bills — only one open`); }
+      } else { counter++; skipped++; console.log(`  – ${counter}. receipt settling two bills — fewer than two still open`); }
 
-      const partial = target.list[0];
-      await expectPush("part payment against one bill", receipt(r2(partial.outstanding / 2), [{ name: partial.name, amount: r2(partial.outstanding / 2) }], "part"), company);
+      const afterTwo = await openNow();
+      const partial = afterTwo[0];
+      if (partial) await expectPush("part payment against one bill", receipt(r2(partial.outstanding / 2), [{ name: partial.name, amount: r2(partial.outstanding / 2) }], "part"), company);
+      else { counter++; skipped++; console.log(`  – ${counter}. part payment against one bill — no bill still open`); }
 
       await expectPush("unallocated receipt (sits on account)", receipt(777, [], "on account"), company);
 
@@ -362,9 +421,17 @@ async function main() {
   // ══ DATES ════════════════════════════════════════════════════════════════
   console.log("\nDates:");
   {
-    await expectPush("backdated 30 days", purchase({ date: ago(30) }), company);
-    await expectPush("backdated 150 days (worst lag in the books)", purchase({ date: ago(150) }), company);
-    await expectPush("financial-year start (1 Apr 2026)", purchase({ date: "2026-04-01" }), company);
+    /* 0-3 follow-up (5-Nov-2026): a NEW purchase dated in a filed GST period is
+       refused (TG-P05, newer than this test), so the deep backdate goes to the
+       first day the GST period is still open, and the financial-year start is
+       asserted as the refusal it now is (D-0-3.5). */
+    const filed = filedBoundaryFor("Purchase");
+    const firstOpen = filed ? new Date(Date.parse(`${filed}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10) : ago(150);
+    const thirty = ago(30) > filed ? ago(30) : firstOpen;
+    await expectPush(`backdated ${thirty === ago(30) ? "30 days" : `to ${thirty}, the first open GST day`}`, purchase({ date: thirty }), company);
+    await expectPush(`backdated to the first open GST day (${firstOpen}; filed through ${filed || "nothing"})`, purchase({ date: firstOpen }), company);
+    if (filed && "2026-04-01" <= filed) expectReject("financial-year start (1 Apr 2026) is refused: a filed GST period", purchase({ date: "2026-04-01" }), m, "already filed");
+    else await expectPush("financial-year start (1 Apr 2026)", purchase({ date: "2026-04-01" }), company);
     expectReject("malformed date", purchase({ date: "11/09/2026" }), m, "YYYY-MM-DD");
   }
 
@@ -380,7 +447,8 @@ async function main() {
       ],
     } as VoucherPayload);
 
-    await expectPush("Contra — cash to bank", simple("Journal", bank, cash, 5000), company);
+    // It was built as a Journal and never tested a Contra (0-3 run, 5-Nov-2026).
+    await expectPush("Contra — cash to bank", simple("Contra", bank, cash, 5000), company);
     await expectPush("Journal — adjustment", simple("Journal", cash, bank, 250), company);
 
     const notAType = purchase({ voucherType: "Delivery Note" as VoucherPayload["voucherType"] });
@@ -431,10 +499,21 @@ async function main() {
     expectReject("two party lines", twoParties, m, "at most one party");
   }
 
+  // ══ SELF-CLEAN: what the normal sweep cannot see ═════════════════════════
+  let cleanFailed = 0;
+  if (PUSH && !halted && sent.length) {
+    console.log("\nRemoving this run's sweep-blind vouchers (the rest is for sweep-test-vouchers.ts):");
+    cleanFailed = await removeSweepBlind(company);
+    if (cleanFailed) fail++;
+  } else if (PUSH && halted && sent.length) {
+    console.log("\n⚠ Halted: this run's sweep-blind vouchers were NOT removed. Sweep by what is in the books.");
+  }
+
   // ══ REPORT ═══════════════════════════════════════════════════════════════
   console.log(`\n${"═".repeat(70)}`);
   console.log(`${counter} cases — ${pass} passed, ${fail} failed, ${skipped} skipped`);
   if (halted) console.log(`⚠ Halted early: Tally stopped responding. It may need a restart.`);
+  if (cleanFailed) console.log(`✗ ${cleanFailed} sweep-blind voucher(s) could not be removed by REMOTEID.`);
   if (fail) {
     console.log(`\nFailures:`);
     for (const r of results.filter(x => /ACCEPTED|stored differently|rejected|TRANSPORT|wrong reason|no warning/.test(x.verdict)))
