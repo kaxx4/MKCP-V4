@@ -30,10 +30,12 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { safePush } from "../src/services/safePush.js";
 import { isSandbox } from "../src/services/tallyRole.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 import { escapeXml as esc, readTag } from "../src/services/xml.js";
 import type { VoucherPayload } from "../src/types.js";
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
+guardScriptWrites("verify-pay-p1"); // #104: the shared gate (sandbox role AND a local Tally); isSandbox() alone is not counted as one since 5-Nov-2026
 if (!isSandbox()) { console.error("REFUSED — MKCP_TALLY_ROLE is not 'sandbox'."); process.exit(2); }
 if (!/^https?:\/\/(localhost|127\.0\.0\.1):9000\/?$/i.test(U)) { console.error(`REFUSED — TALLY_URL is ${U}.`); process.exit(2); }
 

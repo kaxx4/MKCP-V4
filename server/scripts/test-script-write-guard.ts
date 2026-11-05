@@ -135,9 +135,9 @@ function views(src: string): { code: string; text: string } {
  * destructuring. Read on the CODE view (strings blanked), so text inside a
  * string can neither create an alias nor hide one (third review, 5-Nov-2026).
  */
-const IMPORT_STMT = /\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?(?:\{[^}]*\}|\*\s*as\s+[\w$]+|[\w$]+)\s*from\s*["'`][^"'`\n]*["'`]/g;
-const REEXPORT_STMT = /\bexport\s+(?:type\s+)?(?:\{([^}]*)\}|\*(?:\s*as\s+[\w$]+)?)\s*from\s*["'`][^"'`\n]*["'`]/g;
-const DESTRUCTURE_STMT = /\{([^}]*)\}\s*=\s*(?:await\s+)?(?:import|require)\s*\(/g;
+const IMPORT_STMT = /\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?(?:\{[^{}]*\}|\*\s*as\s+[\w$]+|[\w$]+)\s*from\s*["'`][^"'`\n]*["'`]/g;
+const REEXPORT_STMT = /\bexport\s+(?:type\s+)?(?:\{([^{}]*)\}|\*(?:\s*as\s+[\w$]+)?)\s*from\s*["'`][^"'`\n]*["'`]/g;
+const DESTRUCTURE_STMT = /\{([^{}]*)\}\s*=\s*(?:await\s+)?(?:import|require)\s*\(/g;
 
 /** Local names a write or gate function is bound to (`import { safePush as send }`, `const { pushBulk: pb } = await import(...)` or `require(...)`). */
 function aliases(code: string, names: string[]): string[] {
@@ -148,13 +148,42 @@ function aliases(code: string, names: string[]): string[] {
       if (m.length === 2 && names.includes(m[0].trim()) && /^[\w$]+$/.test(m[1].trim())) out.push(m[1].trim());
     }
   };
-  for (const m of code.matchAll(/\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^}]*)\}/g)) add(m[1], /\s+as\s+/);
+  for (const m of code.matchAll(/\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^{}]*)\}/g)) add(m[1], /\s+as\s+/);
   for (const m of code.matchAll(DESTRUCTURE_STMT)) add(m[1], /\s*:\s*/);
   return out;
 }
 
 /** Escape a name for use inside a RegExp source. */
-const reName = (n: string) => n.replace(/\$/g, "\$");
+const reName = (n: string) => n.replace(/\$/g, "\\$");
+
+/** The module each gate must come from. A same-named function from anywhere else is not the gate. */
+const GATE_MODULES: Record<string, RegExp> = {
+  guardScriptWrites: /(^|\/)scriptWriteGuard(\.[jt]s)?$/,
+  assertScriptWriteAllowed: /(^|\/)scriptWriteGuard(\.[jt]s)?$/,
+  assertSandboxTarget: /(^|\/)guardrails\/sandbox(\.[jt]s)?$|^\.\/sandbox(\.[jt]s)?$/,
+  installMock: /(^|\/)tallyMock(\.[jt]s)?$/,
+};
+/**
+ * Local names bound to a real gate: `import { g as h } from "<gate module>"` or
+ * `const { g: h } = await import("<gate module>")`. The binding is found on the
+ * CODE view and the module path is read from the original source at the same
+ * place (both views keep every offset), so a binding written inside a string
+ * does not count (review of 5-Nov-2026).
+ */
+function boundGates(src: string, code: string): string[] {
+  const out: string[] = [];
+  const spec = (at: number) => { const q = src[at]; const end = src.indexOf(q, at + 1); return end < 0 ? "" : src.slice(at + 1, end); };
+  const take = (list: string, sep: RegExp, from: string) => {
+    for (const part of list.split(",")) {
+      const bits = part.trim().replace(/^type\s+/, "").split(sep).map((x) => x.trim());
+      const orig = bits[0], local = bits[1] ?? bits[0];
+      if (GATE_MODULES[orig]?.test(from) && /^[\w$]+$/.test(local)) out.push(local);
+    }
+  };
+  for (const m of code.matchAll(/\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^{}]*)\}\s*from\s*(?=["'`])/g)) take(m[1], /\s+as\s+/, spec(m.index! + m[0].length));
+  for (const m of code.matchAll(/\{([^{}]*)\}\s*=\s*(?:await\s+)?(?:import|require)\s*\(\s*(?=["'`])/g)) take(m[1], /\s*:\s*/, spec(m.index! + m[0].length));
+  return out;
+}
 
 /**
  * Names a lib file hands a write helper out under: `export { safePush as send } from`,
@@ -195,15 +224,20 @@ function gateState(src: string, extraWrites: string[] = []): GateState {
      gate counts as the first write. */
   const writeNames = [...new Set([...WRITE_NAMES, ...extraWrites, ...aliases(s, [...WRITE_NAMES, ...extraWrites])])];
   const WRITE_REF = new RegExp(String.raw`(?<![\w$])(${writeNames.map(reName).join("|")})(?![\w$])`);
-  /* A gate is a CALL of the real gate: not a method on some object
-     (`x.isSandbox()`), not a declaration, and not a name the file declares
-     itself (`function guardScriptWrites(){}`, `const guardScriptWrites = ...`). */
-  const gateNames = [...GATE_NAMES, ...aliases(s, GATE_NAMES), "isSandbox"]
+  /* A gate is a CALL of the real gate: bound from its own module (boundGates),
+     not a method on some object, not a declaration, and not a name the file
+     declares itself (`function guardScriptWrites(){}`). `isSandbox()` is not a
+     gate at all: it only reads the role, and a script can ignore its answer. */
+  const gateNames = boundGates(src, s)
     .filter((n) => !new RegExp(String.raw`(?:\bfunction\s*\*?\s*|\b(?:const|let|var|class)\s+)${reName(n)}(?![\w$])`).test(s));
   const GATE = gateNames.length
     ? new RegExp(String.raw`(?<![\w$.])(?<!\bfunction\s*\*?\s*)(${gateNames.map(reName).join("|")})\s*(?:\?\.\s*)?\(`)
     : /(?!)/;
-  const call = used.search(WRITE_REF);
+  /* `svc["safePush"](...)`: the name sits in a string, so it is looked for on
+     the text view, inside brackets only. */
+  const BRACKET_REF = new RegExp(String.raw`\[\s*(["'\x60])(${writeNames.map(reName).join("|")})\1\s*\]`);
+  const refs = [used.search(WRITE_REF), v.text.search(BRACKET_REF)].filter((x) => x >= 0);
+  const call = refs.length ? Math.min(...refs) : -1;
   const post = s.search(RAW_POST);
   const mark = v.text.search(WRITE_MARK);
   let first = call;
@@ -279,6 +313,8 @@ ok("plant: a gate imported from some other module is not a gate",
 ok("plant: a gate never imported at all is not a gate", gateState(`guardScriptWrites("x");\nawait safePush(U, co, p);`) === "ungated");
 ok("plant: a gate from the real module, by dynamic import, passes",
   gateState(`const { guardScriptWrites: g } = await import("../src/services/scriptWriteGuard.js");\ng("x");\nawait safePush(U, co, p);`) === "gated");
+ok("plant: a gate destructured from its module inside a function body passes",
+  gateState(`export async function run() {\n  const { installMock } = await import("../../src/services/tallyMock.js");\n  const { safePush: s } = await import("../../src/services/safePush.js");\n  installMock(t);\n  await s(U, co, p);\n}`) === "gated");
 ok("plant: m[\"safePush\"](...) is a write", gateState(`await svc["safePush"](U, co, p);`) === "ungated");
 ok("plant: an alias written inside a string is not an alias",
   gateState(`const s = "import { guardScriptWrites as gate } from 'x'";\ngate("x");\nawait safePush(U, co, p);`) === "ungated");

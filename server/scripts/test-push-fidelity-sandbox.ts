@@ -54,12 +54,14 @@ import { guardVoucher } from "../src/services/pushGuard.js";
 import { safePush } from "../src/services/safePush.js";
 import { buildCollection, blocksOf, tagOf, onDate } from "../src/services/tallyRequest.js";
 import { isSandbox } from "../src/services/tallyRole.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 import type { VoucherPayload } from "../src/types.js";
 import { resolveWebDir } from "./guardrails/lib.js";
 
 // ── 1. Refuse anything but the sandbox ──────────────────────────────────────
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";
+guardScriptWrites("test-push-fidelity-sandbox"); // #104: the shared gate (sandbox role AND a local Tally); isSandbox() alone is not counted as one since 5-Nov-2026
 if (!isSandbox()) {
   console.error("\n  REFUSED — MKCP_TALLY_ROLE is not 'sandbox'. This harness writes vouchers; it never runs against the real books.\n");
   process.exit(2);

@@ -43,11 +43,13 @@ import { loadMasters, registrationOn, gstRateFor } from "../src/services/tallyMa
 import { guardVoucher } from "../src/services/pushGuard.js";
 import { safePush } from "../src/services/safePush.js";
 import { isSandbox } from "../src/services/tallyRole.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 import type { VoucherPayload } from "../src/types.js";
 // Supplier ledger in the sandbox company; override with MKCP_SANDBOX_SUPPLIER_RX (regex, end-anchored).
 const SUPPLIER_RX = new RegExp(process.env.MKCP_SANDBOX_SUPPLIER_RX ?? "PARTY 114 CYCLES$", "i");
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
+guardScriptWrites("verify-push-date"); // #104: the shared gate (sandbox role AND a local Tally); isSandbox() alone is not counted as one since 5-Nov-2026
 if (!isSandbox()) { console.error("REFUSED — MKCP_TALLY_ROLE is not 'sandbox'."); process.exit(2); }
 if (!/^https?:\/\/(localhost|127\.0\.0\.1):9000\/?$/i.test(U)) { console.error(`REFUSED — TALLY_URL is ${U}.`); process.exit(2); }
 
