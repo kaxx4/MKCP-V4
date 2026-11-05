@@ -35,10 +35,15 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { esc, blocksOf, tagOf } from "../src/services/tallyRequest.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
-guardScriptWrites("find-stranded-test-vouchers"); // #104: writes only on a sandbox role against a local Tally
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const DO = process.argv.includes("--delete");
+/* Only run the CLI when invoked directly, not when imported for a census. */
+const INVOKED_DIRECTLY = (process.argv[1] ?? "").includes("find-stranded-test-vouchers");
+/* The gate covers the one write, --delete, and nothing else (task 0-2, T-1).
+   At top level it also refused the census import, so the read-only verifier
+   tally-verify-all.ts refused on a primary machine before its preflight. */
+if (INVOKED_DIRECTLY && DO) guardScriptWrites("find-stranded-test-vouchers"); // #104: --delete writes only on a sandbox role against a local Tally
 
 /**
  * What marks a voucher as ours-and-disposable.
@@ -152,9 +157,6 @@ export async function census(company: string): Promise<Set<string>> {
   const all = await pull(company);
   return new Set(all.filter(isOurVoucher).map((v) => `${v.date}|${v.type}|${v.number}`));
 }
-
-/* Only run the CLI when invoked directly, not when imported for a census. */
-const INVOKED_DIRECTLY = (process.argv[1] ?? "").includes("find-stranded-test-vouchers");
 
 /* `if (…) void (async …)()`, NOT `… && await (async …)()`. The await form
    typechecks cleanly and then fails at RUNTIME — esbuild emits CJS here and

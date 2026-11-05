@@ -51,10 +51,11 @@ import { safePush } from "../src/services/safePush.js";
 import { esc, blocksOf, tagOf } from "../src/services/tallyRequest.js";
 import type { VoucherPayload } from "../src/types.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
-guardScriptWrites("fidelity-vs-native"); // #104: writes only on a sandbox role against a local Tally
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
+/* Only --push writes; the profile reads and must work on any machine (task 0-2, T-3). */
+if (PUSH) guardScriptWrites("fidelity-vs-native"); // #104: --push writes only on a sandbox role against a local Tally
 const TYPE = process.argv.find((a) => !a.startsWith("--") && a !== process.argv[0] && a !== process.argv[1]) ?? "SALES";
 const TODAY = new Date().toISOString().slice(0, 10);
 const TAG = `MKCP-FID${Date.now().toString().slice(-5)}`;

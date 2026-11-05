@@ -23,10 +23,11 @@ import { convertCompanies } from "../src/converters/convert.js";
 import { DEFAULT_TALLY_COMPANY } from "../src/config/company.js";
 import { configCompanyKey } from "../src/services/mirrorPanel.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
-guardScriptWrites("roundtrip-verify"); // #104: writes only on a sandbox role against a local Tally
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
+/* Only --push writes; the dry run reads and must work on any machine (task 0-2, T-3). */
+if (PUSH) guardScriptWrites("roundtrip-verify"); // #104: --push writes only on a sandbox role against a local Tally
 const TAG = `RT${Date.now().toString().slice(-6)}`;
 
 /**

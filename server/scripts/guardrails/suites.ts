@@ -23,9 +23,11 @@ export const OFFLINE: string[][] = [
   // Local line (1-Oct-2026), joined at the merge: XML helper, Money-entry read-back, push-date guard, cash buyer.
   ["test-xml-hardening.ts"], ["test-pay-p1.ts"], ["test-push-date-guard.ts"], ["test-cash-buyer-converter.ts"],
   ["test-refresh-listener-reconnect.ts"], ["test-report-schedule.ts"],
+  // Rebuild task 0-2 (5-Nov-2026): read modes must not refuse on a primary machine.
+  ["test-read-modes-on-primary.ts"],
 ];
 export const LIVE: string[][] = [
-  ["test-push-guard.ts", "--push"], ["test-edge-cases.ts"], ["test-push-fidelity-sandbox.ts", "--push"],
+  ["test-push-guard.ts", "--live", "--push"], ["test-edge-cases.ts"], ["test-push-fidelity-sandbox.ts", "--push"],
 ];
 
 /** Returns the number of failing scripts. */
