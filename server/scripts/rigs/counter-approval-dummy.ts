@@ -142,9 +142,14 @@ type JobRow = { id: string; state: string; error: string | null; payload: Vouche
       sweep.status === 0 && left.length === 0, `journals deleted ${jDeleted}, sweep exit ${sweep.status}, left ${left.length}${left.length ? `: ${left.join(", ")}` : ""}`);
     const props = before.map((j) => j?.proposal_id).filter(Boolean) as string[];
     const d1 = await c.from("erp_jobs").delete().in("id", ids).eq("is_test", true);
+    // A proposal's submit request points at it, so the request goes first (the
+    // fence deletes requests only by request_id; read them by proposal first).
+    const rq = await c.from("erp_proposal_requests").select("request_id").in("proposal_id", props).eq("is_test", true);
+    const reqIds = ((rq.data ?? []) as { request_id: string }[]).map((r) => r.request_id);
+    const d0 = reqIds.length ? await c.from("erp_proposal_requests").delete().in("request_id", reqIds).eq("is_test", true) : { error: null };
     const d2 = await c.from("erp_proposals").delete().in("id", props).eq("is_test", true);
-    step("this run's jobs and proposals are deleted (the tombstones and series rows are removed by the operator: the laptop cannot)",
-      !d1.error && !d2.error, [d1.error?.message, d2.error?.message].filter(Boolean).join("; "));
+    step("this run's jobs, requests and proposals are deleted (the tombstones and series rows are removed by the operator: the laptop cannot)",
+      !rq.error && !d0.error && !d1.error && !d2.error, [rq.error?.message, d0.error?.message, d1.error?.message, d2.error?.message].filter(Boolean).join("; "));
     const report = { rig: "counter-approval-dummy", day, stamp: STAMP, jobs: ids, provenance: prov, steps,
       passed: steps.filter((s) => s.ok).length, failed: steps.filter((s) => !s.ok).length, sweepTail: (sweep.stdout ?? "").split("\n").slice(-6) };
     if (OUT) { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify(report, null, 2)); }
