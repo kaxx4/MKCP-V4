@@ -9,7 +9,7 @@
  * scrubbed with a keyed hash), step by step in erp_sync_runs. Then:
  *   - the mirror holds exactly what Tally counts for those days;
  *   - the same full sync again changes nothing;
- *   - a forced empty busy day (the rig's own stand-in for Tally answering an
+ *   - a forced empty day (the rig's own stand-in for Tally answering an
  *     empty collection) is refused by the per-day floor, the mirror unchanged
  *     and the read kept; a plain re-read then swaps with nothing changed;
  *   - an incremental with nothing changed reads nothing and keeps the mark;
@@ -137,15 +137,20 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
     step("the same full sync again changes nothing", runs.full2.state === "swapped" && sw(runs.full2).inserted === 0 && sw(runs.full2).changed === 0 && sw(runs.full2).pruned === 0 && sw(runs.full2).unchanged === n1,
       JSON.stringify({ ...sw(runs.full2), changed_keys: undefined }));
 
-    // 3. a forced empty busy day: the per-day floor refuses the run
-    const emptyBusy: MirrorTally = { ...tally, vouchersOn: async (d) => (d === busy ? [] : tally.vouchersOn(d)) };
-    runs.full3 = await runMirrorSync({ store, tally: emptyBusy, kind: "full", scope });
+    // 3. a forced empty day: the per-day floor refuses the run. The day is one
+    //    the whole-scope floor would let through (under 20 percent of the
+    //    window, 5 or more vouchers), so only the per-day floor can catch it.
+    const forced = eachDay(win.from, win.to).filter((d) => perDay[d] >= 5 && perDay[d] < 0.2 * win.count).sort((a, b) => perDay[b] - perDay[a])[0];
+    if (!forced) throw new Error("no day in the window that only the per-day floor would catch");
+    const emptyDay: MirrorTally = { ...tally, vouchersOn: async (d) => (d === forced ? [] : tally.vouchersOn(d)) };
+    runs.full3 = await runMirrorSync({ store, tally: emptyDay, kind: "full", scope });
     const { count: kept3 } = await c.from("erp_mirror_stage").select("key", { count: "exact", head: true }).eq("run_id", runs.full3.run_id!).eq("is_test", true);
-    const day3 = (sw(runs.full3).days ?? []).find((d: any) => d.day === busy);
-    counts.forcedEmptyDay = { day: busy, mirror: perDay[busy], scopeFloor: sw(runs.full3).floor, staged: sw(runs.full3).staged, kept: kept3 };
-    step("a busy day forced empty is refused by the per-day floor; the mirror is unchanged and the read kept in staging",
-      runs.full3.state === "refused" && day3?.read === 0 && day3?.mirror === perDay[busy] && (await mirrorCount()) === n1 && kept3 === n1 - perDay[busy],
-      `${busy}: mirror ${day3?.mirror}, read ${day3?.read}; reason ${sw(runs.full3).reason}; scope ${sw(runs.full3).staged} of ${sw(runs.full3).mirror} (floor ${sw(runs.full3).floor}); kept ${kept3}`);
+    const day3 = (sw(runs.full3).days ?? []).find((d: any) => d.day === forced);
+    counts.forcedEmptyDay = { day: forced, mirror: perDay[forced], reason: sw(runs.full3).reason, scopeStaged: sw(runs.full3).staged, scopeFloor: sw(runs.full3).floor, kept: kept3 };
+    step("review H2: a day forced empty is refused by the per-day floor alone (the whole scope passes); the mirror is unchanged and the read kept",
+      runs.full3.state === "refused" && sw(runs.full3).reason === "day_below_floor" && sw(runs.full3).staged >= sw(runs.full3).floor
+        && day3?.read === 0 && day3?.mirror === perDay[forced] && (await mirrorCount()) === n1 && kept3 === n1 - perDay[forced],
+      `${forced}: mirror ${day3?.mirror}, read ${day3?.read}; reason ${sw(runs.full3).reason}; scope ${sw(runs.full3).staged} of ${sw(runs.full3).mirror} passes its floor of ${sw(runs.full3).floor}; kept ${kept3}`);
     runs.full4 = await runMirrorSync({ store, tally, kind: "full", scope });
     step("a refused run is simply read again: the re-read swaps with nothing changed", runs.full4.state === "swapped" && sw(runs.full4).inserted === 0 && sw(runs.full4).changed === 0 && sw(runs.full4).pruned === 0,
       JSON.stringify({ ...sw(runs.full4), changed_keys: undefined }));
