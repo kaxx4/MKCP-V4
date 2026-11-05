@@ -76,6 +76,7 @@ export type JournalEntry =
   | { kind: "reply"; jobId: string; outcome: JobOutcome; stage: string; masterId: string | null;
       bookedNumber: string | null; errors: string[]; differences: string[]; at: string }
   | { kind: "reply-lost"; jobId: string; error: string; at: string }
+  | { kind: "read-failed"; jobId: string; error: string; at: string }
   | { kind: "finished"; jobId: string; state: string; by: string; at: string }
   | { kind: "finish-pending"; jobId: string; state: string; error: string; at: string };
 
@@ -98,6 +99,10 @@ export class Journal {
     return readFileSync(this.path, "utf8").split("\n").filter(Boolean).flatMap((l) => {
       try { return [JSON.parse(l) as JournalEntry]; } catch { return []; }
     });
+  }
+  /** How many read-backs of a job have failed to reach Tally (review L4). */
+  readFailures(jobId: string): number {
+    return this.entries().filter((e) => e.kind === "read-failed" && e.jobId === jobId).length;
   }
   /** The last reply journalled for a job, if Tally answered. */
   lastReply(jobId: string): Extract<JournalEntry, { kind: "reply" }> | null {
@@ -124,15 +129,19 @@ export function looksLikeTallyMessage(err: string): boolean {
 const ms = (iso: string) => new Date(iso).getTime();
 
 // ── Reading Tally to settle ───────────────────────────────────────────────────
+/** Voucher types compared as Tally does: the queue says "Sales", the master is "SALES" (review H1, 6-Nov-2026). */
+export const sameVoucherType = (a: string | undefined, b: string | undefined): boolean =>
+  (a ?? "").trim().toUpperCase() === (b ?? "").trim().toUpperCase();
+
 /**
  * The vouchers in Tally that match a payload on type, date, number, party and
  * amount. Tally never returns REMOTEID on a read (file 18 section 2.1), so this
- * is the identity. The day's read is filtered here; the request names the date.
+ * is the identity. The day's read is filtered in the request by date, type and number.
  */
 export async function findInTally(post: (xml: string) => Promise<string>, company: string, p: VoucherPayload): Promise<{ masterId: string }[]> {
   const xml = await post(vouchersOnDateXml(company, p.date, { voucherType: p.voucherType, voucherNumber: p.voucherNumber || undefined }));
   return [...xml.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0])
-    .filter((v) => readTag(v, "VOUCHERTYPENAME") === p.voucherType
+    .filter((v) => sameVoucherType(readTag(v, "VOUCHERTYPENAME"), p.voucherType)
       && (!p.voucherNumber || readTag(v, "VOUCHERNUMBER") === p.voucherNumber)
       && (!p.partyLedgerName || readTag(v, "PARTYLEDGERNAME") === p.partyLedgerName)
       && diffStored(p, v).length === 0)
@@ -162,6 +171,8 @@ export interface ErpJobAgentOpts {
   renewEveryMs?: number;
   maxSkewMs?: number;
   finishTries?: number;
+  /** Failed Tally reads of one job before it is finished uncertain (review L4). */
+  readTries?: number;
   wait?: (ms: number) => Promise<void>;
   now?: () => number;
   /** Is Tally answering normally? Used to clear "Tally may be showing a message" (D5). */
@@ -186,7 +197,7 @@ export class ErpJobAgent {
   constructor(opts: ErpJobAgentOpts) {
     this.nonce = opts.nonce ?? randomUUID();
     this.o = {
-      leaseSeconds: 90, jobLeaseSeconds: 120, renewEveryMs: 30_000, maxSkewMs: 60_000, finishTries: 6,
+      leaseSeconds: 90, jobLeaseSeconds: 120, renewEveryMs: 30_000, maxSkewMs: 60_000, finishTries: 6, readTries: 3,
       wait: (t: number) => new Promise<void>((r) => setTimeout(r, t)), now: () => Date.now(),
       refuse: (job: ErpJob, company: string) => (job.is_test
         ? testJobRefusal({ company, payload: job.payload, label: String(job.payload.label ?? "") })
@@ -278,7 +289,22 @@ export class ErpJobAgent {
     try {
       found = await this.o.find(this.o.company, job.payload);
     } catch (e) {
-      const how = `Tally could not be read (${(e as Error).message}); left for the next run`;
+      const msg = (e as Error).message;
+      this.journalOrStop({ kind: "read-failed", jobId: job.id, error: msg, at: new Date().toISOString() });
+      if (this.o.journal.readFailures(job.id) < this.o.readTries) {
+        return { state: "uncertain", how: `Tally could not be read (${msg}); left for the next run` };
+      }
+      // L4: after readTries failed reads, stop re-reading: uncertain, finished, a person decides.
+      const how = `Tally could not be read ${this.o.readTries} times (${msg}); a person must check it`;
+      await this.finishWithRetry(job, "uncertain", { result: { settled: "read-back", readFailures: this.o.readTries }, error: `This may already be in the books: ${how}` });
+      return { state: "uncertain", how };
+    }
+    /* M3 (review, 6-Nov-2026): with no voucher number, one match on date, type,
+       party and amount may be a different voucher (a hand-typed twin), so a read
+       never settles it as succeeded. It stays uncertain for a person. */
+    if (!job.payload.voucherNumber && found.length > 0) {
+      const how = `it carries no voucher number; ${found.length} voucher(s) in Tally match on date, type, party and amount, and a read cannot tell which is this one`;
+      await this.finishWithRetry(job, "uncertain", { result: { settled: "read-back", matches: found.length, no_number: true }, error: `This may already be in the books: ${how}` });
       return { state: "uncertain", how };
     }
     if (found.length === 1) {
@@ -293,15 +319,37 @@ export class ErpJobAgent {
     return { state: "uncertain", how };
   }
 
-  /** One round: heartbeat, settle, claim, book one at a time. */
+  private running = false;
+  /** Jobs this boot holds right now, renewed together from claim time (review L2). */
+  private open = new Set<string>();
+
+  /** One round: heartbeat, settle, claim, book one at a time. One round at a time (review L5). */
   async runOnce(limit = 1): Promise<RunReport> {
-    const report: RunReport = { held: false, settled: [], results: [] };
-    report.held = await this.heartbeat();
-    if (!report.held) { report.stopped = this.status.red.join("; "); return report; }
-    report.settled = await this.settleOwn();
-    const jobs = await this.o.queue.claim(this.nonce, limit, this.o.jobLeaseSeconds);
-    for (const job of jobs) report.results.push(await this.processJob(job));
-    return report;
+    if (this.running) return { held: false, stopped: "a run is already in progress on this boot", settled: [], results: [] };
+    this.running = true;
+    /* L1 and L2: while a round runs, renew the queue lease and every job this boot
+       holds on the 30 s timer, from the claim on, so a slow Tally or a long list
+       never lets the lease or a job lapse between steps. */
+    const renew = setInterval(() => {
+      void this.o.queue.takeLease(this.nonce, this.o.leaseSeconds, { nonce: this.nonce, renewal: true }).catch(() => {});
+      for (const id of this.open) void this.o.queue.renew(this.nonce, id, this.o.jobLeaseSeconds).catch(() => {});
+    }, this.o.renewEveryMs);
+    try {
+      const report: RunReport = { held: false, settled: [], results: [] };
+      report.held = await this.heartbeat();
+      if (!report.held) { report.stopped = this.status.red.join("; "); return report; }
+      report.settled = await this.settleOwn();
+      const jobs = await this.o.queue.claim(this.nonce, limit, this.o.jobLeaseSeconds);
+      for (const job of jobs) this.open.add(job.id);
+      for (const job of jobs) {
+        try { report.results.push(await this.processJob(job)); } finally { this.open.delete(job.id); }
+      }
+      return report;
+    } finally {
+      clearInterval(renew);
+      this.open.clear();
+      this.running = false;
+    }
   }
 
   async processJob(job: ErpJob): Promise<RunReport["results"][number]> {
@@ -319,7 +367,7 @@ export class ErpJobAgent {
       let found: { masterId: string }[] | null = null;
       try { found = await this.o.find(this.o.company, job.payload); } catch { found = null; }
       if (found === null || found.length > 0) {
-        const one = found?.length === 1;
+        const one = found?.length === 1 && !!job.payload.voucherNumber; // M3: no number, never settled by a read
         const state: JobOutcome = one ? "succeeded" : "uncertain";
         const detail = found === null ? "Tally could not be read before the resend; not pushed"
           : one ? "the earlier attempt is already in the books; settled without pushing again"
@@ -328,7 +376,9 @@ export class ErpJobAgent {
         return { id: job.id, key, outcome: state, detail, masterId: one ? found![0].masterId : null };
       }
     }
-    const renew = setInterval(() => { void this.o.queue.renew(this.nonce, job.id, this.o.jobLeaseSeconds).catch(() => {}); }, this.o.renewEveryMs);
+    // Called on its own (not from runOnce), the job is renewed here; runOnce's timer covers it otherwise.
+    const renew = this.open.has(job.id) ? null
+      : setInterval(() => { void this.o.queue.renew(this.nonce, job.id, this.o.jobLeaseSeconds).catch(() => {}); }, this.o.renewEveryMs);
     try {
       const m = await this.o.queue.markSent(this.nonce, job.id, this.o.company);
       if (!m.ok) {
@@ -363,7 +413,7 @@ export class ErpJobAgent {
       });
       return { id: job.id, key, outcome, detail, masterId: res.voucherId };
     } finally {
-      clearInterval(renew);
+      if (renew) clearInterval(renew);
     }
   }
 }

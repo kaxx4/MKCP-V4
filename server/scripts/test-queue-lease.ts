@@ -10,7 +10,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ErpJobAgent, Journal, bookedNumberOf, looksLikeTallyMessage, type JournalEntry } from "../src/services/erpJobAgent.js";
+import { ErpJobAgent, Journal, bookedNumberOf, looksLikeTallyMessage, sameVoucherType, type JournalEntry } from "../src/services/erpJobAgent.js";
 import type { SafePushResult } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
 import { memErpQueue } from "./rigs/lib/memErpQueue.js";
@@ -224,7 +224,67 @@ function agentFor(m: ReturnType<typeof memErpQueue>, sim: SimTally, j = journal(
     ok("a real ERP job is never pushed from the sandbox", m.rows.get(id)!.state === "failed" && sim.calls === 0);
   }
 
+  // review M3: a job with no voucher number is never settled succeeded from a read
+  {
+    const m = memErpQueue(); const sim = new SimTally();
+    const id = m.add(pl(20));
+    const a = agentFor(m, sim, journal(), {
+      push: async (_c, p) => { delete (p as { voucherNumber?: string }).voucherNumber; throw new Error("socket hang up"); },
+      find: async () => [{ masterId: "M1" }],
+    });
+    const r = await a.runOnce(1);
+    ok("M3 no number and one match on date, type, party and amount: uncertain, not succeeded",
+      m.rows.get(id)!.state === "uncertain" && r.results[0]?.outcome === "uncertain", r.results[0]?.detail);
+  }
+
+  // review L4: a read-back that keeps failing stops after readTries and ends uncertain
+  {
+    const m = memErpQueue(); const sim = new SimTally();
+    const id = m.add(pl(21));
+    let reads = 0;
+    const j = journal();
+    const mk = () => agentFor(m, sim, j, {
+      push: async () => { throw new Error("socket hang up"); },
+      find: async () => { reads++; throw new Error("Tally timeout"); },
+      readTries: 3,
+    });
+    const a = mk();
+    await a.runOnce(1);
+    const after1 = m.rows.get(id)!.state;
+    await a.runOnce(1);
+    const after2 = m.rows.get(id)!.state;
+    await a.runOnce(1);
+    const after3 = m.rows.get(id)!.state;
+    await a.runOnce(1);
+    ok("L4 a failed read leaves the job sent for the next run, twice", after1 === "sent" && after2 === "sent", `${after1}, ${after2}`);
+    ok("L4 the third failed read finishes it uncertain, and nothing reads it again", after3 === "uncertain" && reads === 3, `${after3}, reads ${reads}`);
+  }
+
+  // review L5: one round at a time on one boot
+  {
+    const m = memErpQueue(); const sim = new SimTally();
+    m.add(pl(22)); m.add(pl(23));
+    sim.next = ["slow:200"];
+    const a = agentFor(m, sim);
+    const [x, y] = await Promise.all([a.runOnce(1), a.runOnce(1)]);
+    ok("L5 a second round on the same boot while one runs is refused, not run beside it",
+      x.results.length === 1 && y.results.length === 0 && /already in progress/.test(y.stopped ?? ""), y.stopped);
+  }
+
+  // review L1 and L2: the queue lease and every claimed job are renewed from claim time
+  {
+    const m = memErpQueue({ secondMs: 10 }); const sim = new SimTally();
+    const ids = [m.add(pl(24)), m.add(pl(25)), m.add(pl(26))];
+    sim.next = ["slow:1500", "slow:1500", "slow:1500"];
+    const a = agentFor(m, sim, journal(), { jobLeaseSeconds: 30, renewEveryMs: 100, leaseSeconds: 30 });
+    const r = await a.runOnce(3);
+    ok("L1 L2 three slow jobs in one round: the lease and jobs 2 and 3 never lapse; all succeed once",
+      ids.every((i) => m.rows.get(i)!.state === "succeeded") && r.results.length === 3 && sim.doubled().length === 0,
+      ids.map((i) => m.rows.get(i)!.state).join(","));
+  }
+
   // pure helpers
+  ok("H1 voucher types compare as Tally does: Sales is SALES", sameVoucherType("Sales", "SALES") && sameVoucherType(" sales ", "SALES") && !sameVoucherType("Sales", "Purchase"));
   ok("renumber: the booked number is read from safePush's warning", bookedNumberOf({ ok: true, stage: "done", voucherId: "1", errors: [], differences: [],
     warnings: ['"ZZTEST/1" was already taken in Tally, so this voucher was numbered "ZZTEST/2" instead. Re-sync to see it.'] }, pl(1)) === "ZZTEST/2");
   ok("a timeout looks like Tally showing a message", looksLikeTallyMessage("Tally request timed out after 180000 ms"));

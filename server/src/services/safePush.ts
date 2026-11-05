@@ -115,7 +115,9 @@ const signed = (a: number, dr: boolean) => r2(dr ? -Math.abs(a) : Math.abs(a));
  * 180 s timeout. Filtering on the voucher type only removes wrong candidates:
  * a voucher of another type is never this one, yet the number and narration
  * matches below did not check the type before, so this also stops a Receipt
- * being taken for a Payment with the same number. The number is filtered only by a
+ * being taken for a Payment with the same number (so the number match now
+ * also requires the type). Tally's string `=` ignores case (proved on the dummy,
+ * 6-Nov-2026: "Sales" finds the SALES master's vouchers). The number is filtered only by a
  * caller that matches by number alone (the ERP agent's read-back), never by
  * the verify step here, whose narration and money fallbacks need the
  * vouchers without the number.
@@ -123,8 +125,8 @@ const signed = (a: number, dr: boolean) => r2(dr ? -Math.abs(a) : Math.abs(a));
 export function vouchersOnDateXml(company: string, isoDate: string, only?: { voucherType?: string; voucherNumber?: string }): string {
   const stamp = tallyDateInt(isoDate);
   const extra = [
-    only?.voucherType ? ` AND $VoucherTypeName = ${tdlString(only.voucherType)}` : "",
-    only?.voucherNumber ? ` AND $VoucherNumber = ${tdlString(only.voucherNumber)}` : "",
+    only?.voucherType ? ` AND ($VoucherTypeName = ${tdlString(only.voucherType)})` : "",
+    only?.voucherNumber ? ` AND ($VoucherNumber = ${tdlString(only.voucherNumber)})` : "",
   ].join("");
   return `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkVerify</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
@@ -147,7 +149,7 @@ export function vouchersOnDateXml(company: string, isoDate: string, only?: { vou
 <NATIVEMETHOD>GSTRegistrationType</NATIVEMETHOD>
 <FILTER>MkVerifyDate</FILTER>
 </COLLECTION>
-<SYSTEM TYPE="Formulae" NAME="MkVerifyDate">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${stamp}${extra}</SYSTEM>
+<SYSTEM TYPE="Formulae" NAME="MkVerifyDate">(($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${stamp})${extra}</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 }
 
@@ -368,6 +370,17 @@ export async function safePush(
     return { ok: false, stage: "guard", voucherId: null, errors: [`Generated XML is malformed: ${wellFormed}`], warnings: guard.warnings, differences: [] };
   }
 
+  /* The read-back request is built BEFORE the push (review M1, 6-Nov-2026):
+     building it can refuse (a double quote cannot go in a TDL string), and a
+     refusal after Tally has created the voucher would leave it booked and
+     unverified. */
+  let verifyXml: string;
+  try {
+    verifyXml = vouchersOnDateXml(company, payload.date, { voucherType: payload.voucherType });
+  } catch (e) {
+    return { ok: false, stage: "guard", voucherId: null, errors: [`The read-back request could not be built, so nothing was sent: ${(e as Error).message}`], warnings: guard.warnings, differences: [] };
+  }
+
   // ── 3. Push ───────────────────────────────────────────────────────────────
   // Every write goes through the gate: one at a time, and refused outright if
   // a previous request left Tally behind a dialog. Two concurrent requests on a
@@ -518,7 +531,7 @@ export async function safePush(
 
   // ── 4. Read it back ───────────────────────────────────────────────────────
   const book: string = await withTally(tallyUrl, `verify ${payload.voucherNumber ?? ""}`,
-    () => tallyPost(tallyUrl, vouchersOnDateXml(company, payload.date, { voucherType: payload.voucherType }), 180_000, true) as Promise<string>);
+    () => tallyPost(tallyUrl, verifyXml, 180_000, true) as Promise<string>);
   const vouchers = [...book.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map(m => m[0]);
   // Match on voucher number first. Journal is configured with numbering "None"
   // in this company, so Tally stores no number at all however good the one we
@@ -567,7 +580,8 @@ export async function safePush(
        the other voucher's figures as this one's. */
     const byMoney = vouchers.filter(
       (x) =>
-        fld(x, "VOUCHERTYPENAME") === payload.voucherType &&
+        // Case-free, as Tally compares types: the payload says "Sales", the master "SALES" (review H1; this predates task 1-3).
+        fld(x, "VOUCHERTYPENAME").trim().toUpperCase() === (payload.voucherType ?? "").trim().toUpperCase() &&
         fld(x, "PARTYLEDGERNAME") === payload.partyLedgerName &&
         diffStored(payload, x).length === 0,
     );

@@ -74,6 +74,32 @@ export const NUMBER_PATTERNS: RegExp[] = [
   /^PROBE[-/]/i,
   /^FID[-/]/i,
 ];
+/**
+ * Report only, never deleted (task 1-3 review, 6-Nov-2026): number shapes older
+ * scripts used that the sweep and the patterns above do not match. They are
+ * listed so a person can decide; `--delete` never acts on them, because these
+ * prefixes are short enough that a real voucher could share one.
+ */
+export const REPORT_ONLY_PATTERNS: { shape: string; re: RegExp }[] = [
+  { shape: "CD<digits>/ or -", re: /^CD\d+[/-]/i },
+  { shape: "VB<digits>/ or -", re: /^VB\d+[/-]/i },
+  { shape: "VT<digits>/ or -", re: /^VT\d+[/-]/i },
+  { shape: "SIM<digits>/ or -", re: /^SIM\d*[/-]/i },
+  { shape: "AD<digits>/ or -", re: /^AD\d+[/-]/i },
+  { shape: "CANC<digits>/ or -", re: /^CANC\d*[/-]/i },
+  { shape: "CAP<digits>/ or -", re: /^CAP\d*[/-]/i },
+  { shape: "G<digits>/ or -", re: /^G\d+[/-]/i },
+  { shape: "SAFE<digits>/ or -", re: /^SAFE\d*[/-]/i },
+  { shape: "GUARD/", re: /^GUARD\//i },
+  { shape: "GUARDONLY-", re: /^GUARDONLY-/i },
+  { shape: "DBG-1", re: /^DBG-1$/i },
+  { shape: "FILEDGATE-1", re: /^FILEDGATE-1$/i },
+  { shape: "MKCP-TEST-", re: /^MKCP-TEST-/i },
+  { shape: "ZZTEST<digits>-", re: /^ZZTEST\d*-/i },
+];
+export const reportOnlyShape = (number: string): string | null =>
+  REPORT_ONLY_PATTERNS.find((p) => p.re.test(number))?.shape ?? null;
+
 export const NARRATION_MARKS = [
   "delete if this survives", "round-trip harness", "roundtrip harness",
   "probe. delete", "harness. delete",
@@ -173,6 +199,14 @@ if (INVOKED_DIRECTLY) void (async () => {
   const suspect = all.filter(isOurVoucher);
 
   console.log(`  ${all.length} vouchers scanned · ${suspect.length} look like ours\n`);
+
+  // Report only: older harness shapes the sweep cannot see. Never deleted from here.
+  const older = all.filter((v) => !isOurVoucher(v) && reportOnlyShape(v.number));
+  console.log(`  ${older.length} more match an older harness shape the sweep does not cover (listed, never deleted):`);
+  for (const v of older.sort((a, b) => a.date.localeCompare(b.date))) {
+    console.log(`     ${v.date.padEnd(12)} ${v.type.padEnd(18)} ${v.number.padEnd(22)} [${reportOnlyShape(v.number)}]${v.cancelled ? "  [cancelled]" : ""}`);
+  }
+  console.log();
   if (!suspect.length) { console.log(`  Nothing stranded. Books are clean.\n`); return; }
 
   suspect.sort((a, b) => a.date.localeCompare(b.date));
