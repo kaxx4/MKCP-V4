@@ -29,6 +29,11 @@
  * twice as of one date and must agree, and their sum per primary group must
  * match Tally's own Trial Balance for the loaded period (D-C.2, counts only
  * in the output); the job is linked on the AlterID read after the push (M3).
+ * Review 1-5 item 7: single ledgers from three or more primary groups are
+ * compared to the paise with Tally's own Trial Balance for the loaded start
+ * to balance_as_of (the detailed Trial Balance, and a group's line where it
+ * holds one ledger with a balance), because the undated ledger read may
+ * follow the period on Tally's screen rather than the company's year.
  * Everything is swept and every test row deleted. The tally_* tables are
  * never read or written. Every request to Tally goes through tallyPost, which
  * checks the practice company's GUID before sending anything.
@@ -50,10 +55,11 @@ import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/s
 import { practiceCompany, practiceGuid } from "../../src/services/tallyRole.js";
 import { safePush } from "../../src/services/safePush.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams } from "../../src/services/erpJobAgent.js";
-import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, ledgerPeriod, parseBalance, assertParsedCollection, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
+import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, ledgerPeriod, parseBalance, assertParsedCollection, indiaToday, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
 import { buildCollectionXml } from "../../src/services/xmlBuilder.js";
 import { txt as tallyText, arr as tallyList } from "../../src/converters/convert.js";
-import { fetchReport, REPORTS } from "../../src/services/tallyReports.js";
+import { fetchReport, parseReport, REPORTS } from "../../src/services/tallyReports.js";
+import { escapeXml, tallyDate as xmlTallyDate } from "../../src/services/xml.js";
 import { rigPayload } from "./lib/simTally.js";
 import { isSweepVoucher } from "../lib/testVoucherMatch.js";
 import type { VoucherPayload } from "../../src/types.js";
@@ -70,7 +76,7 @@ const stamp = Date.now().toString().slice(-6);           // digits only: the swe
 const companyKey = `ZZTEST-CHECKS-${stamp}`;
 const store = supabaseMirrorStore(c, machine, key, companyKey, true);
 const tally = tallyMirrorReads(TALLY_URL, company);
-const post = (url: string, xml: string) => tallyPost(url, xml, 180_000, true) as Promise<string>;
+const post = (url: string, xml: string, timeoutMs = 180_000) => tallyPost(url, xml, timeoutMs, true) as Promise<string>;
 const journal = join(tmpdir(), `mirror-checks-dummy-${stamp}.jsonl`);
 const sweepScript = join(dirname(process.argv[1]), "..", "sweep-test-vouchers.ts");
 const tsxCli = join(dirname(process.argv[1]), "..", "..", "node_modules", "tsx", "dist", "cli.mjs");
@@ -170,6 +176,48 @@ function pickWindow(byDay: Record<string, number>) {
     step("D-C.2: two ledger reads with no period give the same figures", sameTwice && readA.length === full.ledgers, `${readA.length} and ${readB.length} ledgers as of ${asOf}`);
     step("D-C.2: the ledgers' closing balances summed per primary group match Tally's Trial Balance for the loaded period",
       groups.length > 0 && matched === groups.length, `${matched} of ${groups.length} primary groups match (${sign}); the Trial Balance has ${tb.rows.length} rows`);
+
+    /* Review 1-5 item 7 (D-1-5.41): StartingFrom and EndingAt are the
+       company's year, but the undated ledger read may follow the period on
+       Tally's screen instead. So single ledgers are compared too, to the
+       paise, against Tally's own Trial Balance for the loaded start to
+       balance_as_of: the detailed Trial Balance (EXPLODEFLAG, a report, not a
+       ledger collection), and, for a primary group with only one ledger
+       holding a balance, that group's line in the plain Trial Balance. At
+       least three ledgers from three primary groups must be compared, and
+       every one compared must match. In memory only; counts in the output. */
+    const factor = same >= flipped ? 1 : -1;
+    const tbDetailXml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>Trial Balance</ID></HEADER>
+<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${escapeXml(company!)}</SVCURRENTCOMPANY><SVFROMDATE>${xmlTallyDate(period.from)}</SVFROMDATE><SVTODATE>${xmlTallyDate(period.to)}</SVTODATE><EXPLODEFLAG>Yes</EXPLODEFLAG></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
+    const tbDetailRaw = await post(TALLY_URL, tbDetailXml, 180_000);
+    if (/<LINEERROR>/i.test(tbDetailRaw)) throw new Error("the detailed Trial Balance came back with a Tally error");
+    const tbDetail = new Map<string, number>(parseReport(REPORTS.find((r) => r.key === "trial-balance")!, tbDetailRaw)
+      .map((r) => [String(r.name ?? "").trim(), Math.round(((Number(r.debit) || 0) + (Number(r.credit) || 0)) * 100) / 100]));
+    const ledgerFig = new Map<string, { group: string; fig: number }>();
+    for (const l of readA) if (!parentOf.has(l.name)) ledgerFig.set(l.name, { group: primary(l.parent), fig: parseBalance(l.closingbalance) ?? 0 });
+    const compared = new Map<string, { group: string; ok: boolean; via: string }>();
+    for (const [name, { group, fig }] of ledgerFig) {
+      if (fig !== 0 && tbDetail.has(name)) compared.set(name, { group, ok: Math.abs(factor * tbDetail.get(name)! - fig) < 0.005, via: "detailed" });
+    }
+    for (const [g] of groups) {
+      const holders = [...ledgerFig].filter(([, x]) => x.group === g && x.fig !== 0);
+      if (holders.length === 1 && !compared.has(holders[0][0]) && tbNet.has(g)) {
+        compared.set(holders[0][0], { group: g, ok: Math.abs(factor * tbNet.get(g)! - holders[0][1].fig) < 0.005, via: "only ledger of its group" });
+      }
+    }
+    const cmp = [...compared.values()];
+    const groupsCompared = new Set(cmp.map((x) => x.group)).size;
+    const today = indiaToday();
+    const vouchersAfterToday = Object.entries(top.byDay).filter(([d]) => d > today && d <= asOf!).reduce((s, [, n]) => s + n, 0);
+    counts.ledgerProof = { asOf, period, today, ledgersCompared: cmp.length, matched: cmp.filter((x) => x.ok).length, differ: cmp.filter((x) => !x.ok).length,
+      primaryGroupsCompared: groupsCompared, viaDetailed: cmp.filter((x) => x.via === "detailed").length, viaOnlyLedger: cmp.filter((x) => x.via !== "detailed").length,
+      detailedTrialBalanceRows: tbDetail.size, vouchersAfterTodayUpToAsOf: vouchersAfterToday,
+      tellsYearEndFromToday: asOf! > today && vouchersAfterToday > 0 };
+    step("review 1-5 item 7: single ledgers' closing figures from three or more primary groups equal Tally's own Trial Balance for the loaded start to balance_as_of, to the paise",
+      cmp.length >= 3 && groupsCompared >= 3 && cmp.every((x) => x.ok),
+      `${cmp.filter((x) => x.ok).length} of ${cmp.length} ledgers match across ${groupsCompared} primary groups (${cmp.filter((x) => x.via === "detailed").length} from the detailed Trial Balance); `
+        + (asOf! > today ? (vouchersAfterToday > 0 ? `${vouchersAfterToday} vouchers fall after today and up to ${asOf}, so a match means the year end, not the screen's date` : `no voucher falls after today and up to ${asOf}, so this cannot tell the year end from today`) : `as of ${asOf}, today ${today}`));
 
     // 2. the nightly check right after
     const dc0 = runs.check0 = await runDayCheck({ store, tally });
