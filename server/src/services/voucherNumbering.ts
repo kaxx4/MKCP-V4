@@ -171,11 +171,75 @@ export async function takenNumbersOrThrow(
 <FILTER>MkNumsF</FILTER></COLLECTION>
 <SYSTEM TYPE="Formulae" NAME="MkNumsF">$VoucherTypeName = ${tdlString(voucherType)}</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
-  const res = (await post(tallyUrl, xml, 180_000, true)) as string;
-  if (typeof res !== "string") throw new Error("Tally's answer was not text");
+  const res = assertCollectionReply(await post(tallyUrl, xml, 180_000, true));
   return [...res.matchAll(/<VOUCHERNUMBER>([^<]*)<\/VOUCHERNUMBER>/gi)]
     .map((m) => decodeXmlEntities(m[1]).trim())
     .filter(Boolean);
+}
+
+/**
+ * Review M3 (1-4): an answer counts as a list only when it IS a collection
+ * reply. Before, any text was read as a list, so an error reply held no
+ * numbers and read as "every number is free". Throws on a reply that is not
+ * text, names an error (LINEERROR, an error RESPONSE, STATUS 0), or lacks the
+ * collection envelope (<DATA> and <COLLECTION>). An empty but valid reply
+ * (the envelope with no vouchers) is an empty list.
+ *
+ * What this cannot catch (P7): Tally answers a request for a company it does
+ * not have with a valid, empty collection (measured 13-Sep-2026, web
+ * domain/company.ts). The agent's open-company GUID check before any claim is
+ * what covers that.
+ */
+export function assertCollectionReply(res: unknown): string {
+  if (typeof res !== "string") throw new Error("Tally's answer was not text");
+  const lineError = /<LINEERROR>([\s\S]*?)<\/LINEERROR>/i.exec(res)?.[1];
+  if (lineError !== undefined) throw new Error(`Tally reported an error: ${decodeXmlEntities(lineError).trim() || "(no text)"}`);
+  if (/<STATUS>\s*0\s*<\/STATUS>/i.test(res)) throw new Error("Tally answered STATUS 0 (the request failed)");
+  const response = /<RESPONSE>([\s\S]*?)<\/RESPONSE>/i.exec(res)?.[1];
+  if (response !== undefined && !/<COLLECTION\b/i.test(res)) throw new Error(`Tally answered with an error: ${decodeXmlEntities(response).trim() || "(no text)"}`);
+  if (!/<DATA\b/i.test(res) || !/<COLLECTION\b/i.test(res)) throw new Error("Tally's answer has no collection in it, so it is not a list of numbers");
+  return res;
+}
+
+/**
+ * Every voucher of one type with its number, party and date (task 1-4 review
+ * H1): Purchase and Debit Note numbers are the supplier's, so a number is
+ * taken only for the same party in the same year. The same filtered request
+ * as above, with two more stored fields (no `*`, no new type). A failed or
+ * error-shaped read THROWS.
+ */
+export async function takenVouchersOrThrow(
+  tallyUrl: string,
+  company: string,
+  voucherType: string,
+  post: (url: string, xml: string, timeoutMs: number, raw: boolean) => Promise<unknown> = defaultPost,
+): Promise<Array<{ number: string; party: string | null; date: string | null }>> {
+  const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkBills</ID></HEADER>
+<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
+<TDL><TDLMESSAGE><COLLECTION NAME="MkBills" ISMODIFY="No"><TYPE>Voucher</TYPE>
+<NATIVEMETHOD>VoucherNumber</NATIVEMETHOD><NATIVEMETHOD>VoucherTypeName</NATIVEMETHOD>
+<NATIVEMETHOD>PartyLedgerName</NATIVEMETHOD><NATIVEMETHOD>Date</NATIVEMETHOD>
+<FILTER>MkBillsF</FILTER></COLLECTION>
+<SYSTEM TYPE="Formulae" NAME="MkBillsF">$VoucherTypeName = ${tdlString(voucherType)}</SYSTEM>
+</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+  return parseTakenVouchers(assertCollectionReply(await post(tallyUrl, xml, 180_000, true)));
+}
+
+/** The vouchers in a collection reply (pure, for the offline tests). */
+export function parseTakenVouchers(res: string): Array<{ number: string; party: string | null; date: string | null }> {
+  const field = (block: string, tag: string) => {
+    const m = new RegExp(`<${tag}\\b[^>]*>([^<]*)</${tag}>`, "i").exec(block);
+    return m ? decodeXmlEntities(m[1]).trim() : null;
+  };
+  return [...res.matchAll(/<VOUCHER\b[^>]*>([\s\S]*?)<\/VOUCHER>/gi)].map((m) => {
+    const d = field(m[1], "DATE");
+    return {
+      number: field(m[1], "VOUCHERNUMBER") ?? "",
+      party: field(m[1], "PARTYLEDGERNAME") || null,
+      date: d && /^\d{8}$/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : null,
+    };
+  }).filter((v) => v.number);
 }
 
 /* Imported lazily so this module stays pure for its tests — they must not need

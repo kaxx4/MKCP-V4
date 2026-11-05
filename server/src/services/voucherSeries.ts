@@ -75,3 +75,67 @@ export function isErpSeriesNumber(number: string, voucherType: string, date?: st
   const fy = financialYearOf(date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : indiaDateOf());
   return seriesCounter(number, d.template, fy) !== null;
 }
+
+/**
+ * Are two voucher numbers the same voucher number, for this type and year?
+ * Review L2 (1-4): the same text, ignoring spaces at the ends and letter case;
+ * or, where the type has a counter series, the same counter, so
+ * "ERP-05/26-27" is counter 5 and padding or case can never slip past.
+ * The database twin is `erp_same_voucher_number` (migration 0115); both run
+ * the `sameNumber` cases in contracts/voucher-series.json.
+ */
+export function sameVoucherNumber(a: string | null | undefined, b: string | null | undefined, voucherType: string, fy: string): boolean {
+  const x = String(a ?? "").trim().toUpperCase(), y = String(b ?? "").trim().toUpperCase();
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const d = seriesDefaultFor(voucherType);
+  if (!d) return false;
+  const t = d.template.toUpperCase();
+  const cx = seriesCounter(x, t, fy), cy = seriesCounter(y, t, fy);
+  return cx !== null && cx === cy;
+}
+
+/**
+ * Types whose number is the SUPPLIER's, not ours (review H1, file 18 section
+ * 2.1): one bill number may belong to many suppliers, so a number is "taken"
+ * only for the same party in the same financial year. Live, 5-Nov-2026: 16
+ * Purchase or Debit Note numbers repeat across 34 vouchers this year.
+ */
+const PARTY_KEYED = new Set(["purchase", "debit note"]);
+export function isPartyKeyedType(voucherType: string): boolean {
+  return PARTY_KEYED.has(String(voucherType ?? "").trim().toLowerCase());
+}
+
+/** One voucher Tally holds: its number, and for party-keyed types its party and date (YYYY-MM-DD). */
+export interface TakenVoucher { number: string; party?: string | null; date?: string | null }
+
+const partyKey = (s: string | null | undefined) => String(s ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+
+/**
+ * Is this Create's number already used in Tally? Returns the number found, or
+ * null when it is free or the type is not checked.
+ * - A type the counter numbers (the series table): the same number in the
+ *   payload's financial year, by `sameVoucherNumber`.
+ * - Purchase and Debit Note: the same party, the same number (text, any case)
+ *   and the same financial year. A row with no party or no date counts as a
+ *   match: what cannot be told apart is treated as taken, never as free.
+ * - Any other type: not checked here (it is not ours to number).
+ */
+export function numberTakenBy(
+  p: { voucherType: string; voucherNumber?: string | null; partyLedgerName?: string | null; date?: string | null },
+  taken: ReadonlyArray<string | TakenVoucher>,
+): string | null {
+  const number = String(p.voucherNumber ?? "").trim();
+  if (!number) return null;
+  const fy = financialYearOf(p.date && /^\d{4}-\d{2}-\d{2}$/.test(p.date) ? p.date : indiaDateOf());
+  const rows = taken.map((t) => (typeof t === "string" ? { number: t } : t));
+  if (isPartyKeyedType(p.voucherType)) {
+    const party = partyKey(p.partyLedgerName);
+    const hit = rows.find((t) => String(t.number ?? "").trim().toUpperCase() === number.toUpperCase()
+      && (!t.party || !party || partyKey(t.party) === party)
+      && (!t.date || !/^\d{4}-\d{2}-\d{2}$/.test(t.date) || financialYearOf(t.date) === fy));
+    return hit ? hit.number : null;
+  }
+  if (!seriesDefaultFor(p.voucherType)) return null;
+  return rows.find((t) => sameVoucherNumber(t.number, number, p.voucherType, fy))?.number ?? null;
+}

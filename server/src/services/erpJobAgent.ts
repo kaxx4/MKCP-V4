@@ -30,11 +30,12 @@
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { safePush, vouchersOnDateXml, diffStored, type SafePushResult } from "./safePush.js";
+import { safePush, vouchersOnDateXml, diffStored, numberTakenError, type SafePushResult } from "./safePush.js";
 import { readTag } from "./xml.js";
 import { testJobRefusal, outcomeOf, type TestOutcome } from "./erpTestQueueAgent.js";
 import type { VoucherPayload } from "../types.js";
-import { takenNumbersOrThrow } from "./voucherNumbering.js";
+import { takenNumbersOrThrow, takenVouchersOrThrow } from "./voucherNumbering.js";
+import { seriesDefaultFor, isPartyKeyedType, numberTakenBy, type TakenVoucher } from "./voucherSeries.js";
 
 export interface ErpJob {
   id: string;
@@ -185,7 +186,7 @@ export interface ErpJobAgentOpts {
    * THROW, never return an empty list. `tallySeams` supplies it; without it the
    * check is skipped (the offline tests, whose fake Tally has no numbers).
    */
-  taken?: (company: string, voucherType: string) => Promise<string[]>;
+  taken?: (company: string, voucherType: string) => Promise<Array<string | TakenVoucher>>;
 }
 
 export interface RunReport {
@@ -359,21 +360,29 @@ export class ErpJobAgent {
     }
   }
 
-  /** Why this job's number may not be pushed, or null. Only a Create that carries a number is checked. */
-  private async numberTakenInTally(job: ErpJob): Promise<string | null> {
+  /**
+   * Why this job's number may not be pushed, or null. Only a Create that
+   * carries a number is checked, and only for a type the counter numbers (the
+   * series table) or a party-keyed type (Purchase, Debit Note: the same
+   * supplier, number and year). Review H1: supplier bill numbers repeat, so a
+   * plain number match would refuse a second supplier's genuine bill.
+   */
+  private async numberTakenInTally(job: ErpJob): Promise<{ reason: string; taken: boolean } | null> {
     const p = job.payload;
     const number = String(p.voucherNumber ?? "").trim();
     if (!this.o.taken || (p.action ?? "Create") !== "Create" || !number) return null;
-    let list: string[];
+    if (!seriesDefaultFor(p.voucherType) && !isPartyKeyedType(p.voucherType)) return null;
+    let list: Array<string | TakenVoucher>;
     try {
       list = await this.o.taken(this.o.company, p.voucherType);
     } catch (e) {
-      return `Not sent: Tally's ${p.voucherType} numbers could not be read to check ${number} is free (${(e as Error).message}). Nothing is in the books; send it again when Tally answers.`;
+      return { taken: false, reason: `Not sent: Tally's ${p.voucherType} numbers could not be read to check ${number} is free (${(e as Error).message}). Nothing is in the books; send it again when Tally answers.` };
     }
-    const want = number.toLowerCase();
-    return list.some((n) => n.trim().toLowerCase() === want)
-      ? `Not sent: ${p.voucherType} number ${number} is already used in Tally. Pushing it would overwrite that voucher. Nothing is in the books from this job.`
-      : null;
+    const hit = numberTakenBy(p, list);
+    if (hit === null) return null;
+    return { taken: true, reason: isPartyKeyedType(p.voucherType)
+      ? `Not sent: ${p.voucherType} bill ${number} from ${p.partyLedgerName} is already in Tally this year (as ${hit}). Nothing is in the books from this job.`
+      : `Not sent: ${p.voucherType} number ${number} is already used in Tally (as ${hit}). Pushing it would overwrite that voucher. Nothing is in the books from this job.` };
   }
 
   async processJob(job: ErpJob): Promise<RunReport["results"][number]> {
@@ -407,9 +416,12 @@ export class ErpJobAgent {
        "could not look" is never "free". */
     const blocked = this.o.taken ? await this.numberTakenInTally(job) : null;
     if (blocked) {
-      this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: blocked, at: new Date().toISOString() });
-      await this.finishWithRetry(job, "failed", { error: blocked, result: { stage: "guard", number_check: true } });
-      return { id: job.id, key, outcome: "failed", detail: blocked };
+      this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: blocked.reason, at: new Date().toISOString() });
+      /* number_taken tells a resend (migration 0115) to take a fresh number;
+         number_unread means nothing was learned, and a resend keeps it. */
+      await this.finishWithRetry(job, "failed", { error: blocked.reason,
+        result: { stage: "guard", number_check: true, ...(blocked.taken ? { number_taken: true, number: job.payload.voucherNumber } : { number_unread: true }) } });
+      return { id: job.id, key, outcome: "failed", detail: blocked.reason };
     }
     // Called on its own (not from runOnce), the job is renewed here; runOnce's timer covers it otherwise.
     const renew = this.open.has(job.id) ? null
@@ -443,7 +455,9 @@ export class ErpJobAgent {
         : res.errors.join("; ") || "push failed";
       await this.finishWithRetry(job, outcome, {
         masterId: res.voucherId, bookedNumber,
-        result: { stage: res.stage, warnings: res.warnings, differences: res.differences, errors: res.errors },
+        result: { stage: res.stage, warnings: res.warnings, differences: res.differences, errors: res.errors,
+          /* Tally itself said the number exists (an override push is never renumbered). */
+          ...(outcome === "failed" && numberTakenError(res.errors) ? { number_taken: true, number: job.payload.voucherNumber } : {}) },
         error: outcome === "succeeded" ? null : detail,
       });
       return { id: job.id, key, outcome, detail, masterId: res.voucherId };
@@ -453,6 +467,16 @@ export class ErpJobAgent {
   }
 }
 
+/**
+ * An ERP job's number on a type the counter numbers is pinned (numberOverride)
+ * so safePush never renumbers it; every other payload is sent as it is
+ * (review H1). Journal is left out: this company's Tally keeps no number on one.
+ */
+export function withCounterOverride(p: VoucherPayload): VoucherPayload {
+  return p.voucherNumber?.trim() && seriesDefaultFor(p.voucherType) && p.voucherType.trim().toLowerCase() !== "journal"
+    ? { ...p, numberOverride: true } : p;
+}
+
 /** The default Tally seams for a real run. */
 export function tallySeams(tallyUrl: string, post: (url: string, xml: string) => Promise<string>) {
   return {
@@ -460,13 +484,17 @@ export function tallySeams(tallyUrl: string, post: (url: string, xml: string) =>
        REMOTEID is built from it. safePush must never quietly swap in "the next
        free number" (its recovery for app-suggested numbers): the voucher would
        land under a number the counter never issued. Marked as an override, a
-       taken number is refused and reported instead. Not for a Journal: Tally
+       taken number is refused and reported instead. Only for a type the
+       counter numbers (review H1): a Purchase or Debit Note carries the
+       supplier's number, which is not ours to pin. Not for a Journal: Tally
        stores no number on one here (numbering "None"), and an override is
        verified by number only, so it could never be confirmed. */
-    push: (company: string, p: VoucherPayload) => safePush(tallyUrl, company,
-      p.voucherNumber?.trim() && p.voucherType.trim().toLowerCase() !== "journal" ? { ...p, numberOverride: true } : p),
+    push: (company: string, p: VoucherPayload) => safePush(tallyUrl, company, withCounterOverride(p)),
     find: (company: string, p: VoucherPayload) => findInTally((xml) => post(tallyUrl, xml), company, p),
-    taken: (company: string, voucherType: string) => takenNumbersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x)),
+    /* Party-keyed types read the party and date too; counter types the numbers only. */
+    taken: (company: string, voucherType: string): Promise<Array<string | TakenVoucher>> => isPartyKeyedType(voucherType)
+      ? takenVouchersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x))
+      : takenNumbersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x)),
   };
 }
 

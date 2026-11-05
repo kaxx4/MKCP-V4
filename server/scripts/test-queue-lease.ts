@@ -310,6 +310,37 @@ function agentFor(m: ReturnType<typeof memErpQueue>, sim: SimTally, j = journal(
     ok("1-4 an Alter is not number-checked (it addresses its own voucher)", m.rows.get(alter)!.state !== "failed" || !/numbers could not be read/.test(String(m.rows.get(alter)!.error)));
   }
 
+  // 1-4 review H1: supplier bill numbers repeat; M2: the result says why a number was refused
+  {
+    const m = memErpQueue(); const sim = new SimTally();
+    const bill = (n: number, party: string, number: string) => ({ ...pl(n), voucherType: "Purchase", voucherNumber: number, partyLedgerName: party,
+      remoteId: `MKCP|Purchase|${party}~${number}|2026-27` } as VoucherPayload & { label: string });
+    const tallyBills = { Purchase: [{ number: "ZZTEST41/B", party: "ZZ TEST SUPPLIER A", date: day }] };
+    const b1 = m.add(bill(41, "ZZ TEST SUPPLIER B", "ZZTEST41/B"));
+    const b2 = m.add(bill(42, "ZZ TEST SUPPLIER C", "ZZTEST41/B"));
+    const b3 = m.add(bill(43, "ZZ TEST SUPPLIER A", "ZZTEST41/B"));
+    const credit = m.add({ ...pl(44), voucherType: "Credit Note", voucherNumber: "ZZTEST44/1" } as VoucherPayload & { label: string });
+    const contra = m.add(pl(45));
+    const unread = m.add(pl(46));
+    let asked: string[] = [];
+    const a = agentFor(m, sim, journal(), { taken: async (_c, t) => {
+      asked.push(t);
+      if (t === "Contra" && asked.filter((x) => x === "Contra").length === 2) throw new Error("simulated: Tally did not answer");
+      return t === "Contra" ? [String(pl(45).voucherNumber)] : (tallyBills as Record<string, Array<{ number: string; party: string; date: string }>>)[t] ?? [];
+    } });
+    await a.runOnce(6);
+    const st = (id: string) => m.rows.get(id)!;
+    ok("H1 two suppliers sharing one bill number with a third: both new bills pass", st(b1).state === "succeeded" && st(b2).state === "succeeded",
+      `${st(b1).state} ${st(b1).error ?? ""} / ${st(b2).state} ${st(b2).error ?? ""}`);
+    ok("H1 the same supplier repeating its own bill number is refused before sent", st(b3).state === "failed" && /from ZZ TEST SUPPLIER A is already in Tally/.test(String(st(b3).error))
+      && !sim.books.has(String(bill(43, "ZZ TEST SUPPLIER A", "ZZTEST41/B").remoteId)), String(st(b3).error));
+    ok("H1 a type the ERP never numbers is not number-checked (Tally is not asked)", st(credit).state === "succeeded" && !asked.includes("Credit Note"), asked.join(","));
+    ok("M2 a refusal for a taken number says number_taken, so a resend takes a fresh one",
+      (st(contra).result as Record<string, unknown> | null)?.number_taken === true && (st(contra).result as Record<string, unknown>)?.number === pl(45).voucherNumber);
+    ok("M2 a refusal because Tally could not be read says number_unread, not number_taken",
+      (st(unread).result as Record<string, unknown> | null)?.number_unread === true && (st(unread).result as Record<string, unknown>)?.number_taken === undefined, JSON.stringify(st(unread).result));
+  }
+
   // pure helpers
   ok("H1 voucher types compare as Tally does: Sales is SALES", sameVoucherType("Sales", "SALES") && sameVoucherType(" sales ", "SALES") && !sameVoucherType("Sales", "Purchase"));
   ok("renumber: the booked number is read from safePush's warning", bookedNumberOf({ ok: true, stage: "done", voucherId: "1", errors: [], differences: [],

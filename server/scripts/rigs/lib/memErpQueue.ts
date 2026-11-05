@@ -7,7 +7,7 @@
  */
 import type { ErpJob, ErpQueue, LeaseInfo } from "../../../src/services/erpJobAgent.js";
 
-export interface MemRow extends ErpJob { lease_until: number | null; remote_id: string | null; error?: string | null; master_id: string | null; booked_number?: string | null }
+export interface MemRow extends ErpJob { lease_until: number | null; remote_id: string | null; error?: string | null; master_id: string | null; booked_number?: string | null; result?: unknown }
 
 export function memErpQueue(opts: { machine?: string; secondMs?: number; clockOffsetMs?: number } = {}) {
   const machine = opts.machine ?? "ZZTEST-mem";
@@ -68,6 +68,8 @@ export function memErpQueue(opts: { machine?: string; secondMs?: number; clockOf
       if (!(r.state === "claimed" || (r.state === "sent" && st !== "queued"))) return false;
       r.state = st; r.master_id = f.masterId ?? r.master_id; r.booked_number = f.bookedNumber ?? r.booked_number;
       r.error = f.error ?? null; r.lease_until = null;
+      /* as erp_finish_job: result = coalesce(p_result, result) */
+      if (f.result !== undefined && f.result !== null) r.result = f.result;
       if (st === "queued") r.claimed_by = null;
       return true;
     },

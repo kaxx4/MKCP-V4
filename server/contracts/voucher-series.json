@@ -1,5 +1,5 @@
 {
-  "about": "Task 1-4: the one voucher-number rule, run by three twins. The database (erp_series_format, erp_series_counter, erp_fy_of, erp_india_date in migration 0113, through supabase/live-tests/1-4_counter.sql), the web app (src/engine/push/voucherSeries.ts) and the sync agent (server/src/services/voucherSeries.ts; a byte copy of this file lives at server/contracts/voucher-series.json). A template uses {N} for the counter and {FY} for the year as 26-27. Change a case here and all three must change with it.",
+  "about": "Task 1-4: the one voucher-number rule, run by three twins. The database (erp_series_format, erp_series_counter, erp_fy_of, erp_india_date in migration 0113, through supabase/live-tests/1-4_counter.sql), the web app (src/engine/push/voucherSeries.ts) and the sync agent (server/src/services/voucherSeries.ts; a byte copy of this file lives at server/contracts/voucher-series.json). A template uses {N} for the counter and {FY} for the year as 26-27. Change a case here and all three must change with it. Review fixes (migration 0115): sameNumber is run by erp_same_voucher_number and both TypeScript twins (sameVoucherNumber); companyKey is run by erp_company_key and the web app's configCompanyKey (domain/company.ts), the key that survives the 1-April rename.",
   "format": [
     { "template": "{FY}/{N}", "fy": "2026-27", "n": 678, "width": 4, "number": "26-27/0678" },
     { "template": "{FY}/{N}", "fy": "2026-27", "n": 12345, "width": 4, "number": "26-27/12345" },
@@ -32,5 +32,25 @@
     { "at": "2027-03-31T18:29:00Z", "ist": "31-Mar 23:59", "date": "2027-03-31", "fy": "2026-27" },
     { "at": "2027-03-31T18:31:00Z", "ist": "1-Apr 00:01", "date": "2027-04-01", "fy": "2027-28" },
     { "at": "2027-03-31T23:59:00Z", "ist": "1-Apr 05:29", "date": "2027-04-01", "fy": "2027-28" }
+  ],
+  "sameNumber": [
+    { "a": "ERP-05/26-27", "b": "ERP-5/26-27", "type": "Payment", "fy": "2026-27", "same": true },
+    { "a": "erp-5/26-27", "b": "ERP-5/26-27", "type": "Contra", "fy": "2026-27", "same": true },
+    { "a": " ERP-5/26-27 ", "b": "ERP-5/26-27", "type": "Receipt", "fy": "2026-27", "same": true },
+    { "a": "ERP-5/26-27", "b": "ERP-6/26-27", "type": "Payment", "fy": "2026-27", "same": false },
+    { "a": "ERP-5/26-27", "b": "ERP-5/27-28", "type": "Payment", "fy": "2026-27", "same": false },
+    { "a": "26-27/0903", "b": "26-27/903", "type": "Sales", "fy": "2026-27", "same": true },
+    { "a": "26-27/0903", "b": "25-26/0903", "type": "Sales", "fy": "2026-27", "same": false },
+    { "a": "1853/26-27", "b": "1853/26-27", "type": "Payment", "fy": "2026-27", "same": true },
+    { "a": "chq-12", "b": "CHQ-12", "type": "Payment", "fy": "2026-27", "same": true },
+    { "a": "CRN/1460", "b": "CRN/01460", "type": "Purchase", "fy": "2026-27", "same": false },
+    { "a": "", "b": "", "type": "Payment", "fy": "2026-27", "same": false }
+  ],
+  "companyKey": [
+    { "name": "ZZ TEST CO - (from 1-Apr-26)", "key": "ZZ TEST CO" },
+    { "name": "ZZ TEST CO - (from 1-Apr-27)", "key": "ZZ TEST CO" },
+    { "name": "  ZZ TEST CO  ", "key": "ZZ TEST CO" },
+    { "name": "ZZ TEST CO -(from 01-APR-2026)", "key": "ZZ TEST CO" },
+    { "name": "ZZTEST", "key": "ZZTEST" }
   ]
 }
