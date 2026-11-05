@@ -95,6 +95,15 @@ export const ERP_TEST_RPCS: readonly string[] = [
   /* Task 1-4 (migration 0114): test numbers only. The database checks the
      sandbox key, a ZZTEST company key and a test series. */
   "erp_take_test_voucher_number",
+  /* Task 1-5 (migration 0116): the ERP mirror sync. The database lets the
+     sandbox key sync only a ZZTEST company key, as test rows, into the ERP's
+     own erp_mirror_rows; the tally_* mirror is never reachable from here. */
+  "erp_sync_run_start", "erp_sync_run_step", "erp_sync_stage", "erp_sync_swap",
+  "erp_sync_run_fail", "erp_sync_test_cleanup",
+];
+/** ERP mirror tables the sandbox may read (GET only, only is_test rows), task 1-5. */
+export const ERP_TEST_READ_TABLES: readonly string[] = [
+  "erp_sync_runs", "erp_sync_run_steps", "erp_sync_marks", "erp_mirror_stage", "erp_mirror_rows",
 ];
 /** ERP tables the sandbox may read (only is_test rows) and clean up (only rows it names). */
 export const ERP_TEST_ROW_TABLES: readonly string[] = ["erp_jobs", "erp_proposal_requests", "erp_proposals"];
@@ -136,6 +145,11 @@ export function erpTestFence(url: string, method: string, projectUrl: string): s
     if (m === "DELETE") return /^in\.\([^()*%]+\)$|^eq\.[^,()*%]+$/.test(u.searchParams.get(t === "erp_proposal_requests" ? "request_id" : "id") ?? "") ? null
       : `refused: a delete on ${t} must name its rows by id`;
     return `refused: ${m} on ${t}; jobs change only through the queue functions`;
+  }
+  if (t && ERP_TEST_READ_TABLES.includes(t)) {
+    if (u.searchParams.get("is_test") !== "eq.true") return `refused: the sandbox reads only is_test rows of ${t}`;
+    if (m === "GET" || m === "HEAD") return null;
+    return `refused: ${m} on ${t}; the mirror sync changes only through its functions`;
   }
   return `refused: ${path} is outside the ERP test queue. The sandbox laptop reaches nothing else.`;
 }
