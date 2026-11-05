@@ -17,6 +17,8 @@ import {
   U, MARK, company, vouchersOnDayXml, objects, fld, flds, block, blocks,
   check, report, remember,
 } from "./harness.js";
+import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+guardScriptWrites("fidelity/case-cash-buyer");   // 0-1: this case always pushes to Tally; refuse unless sandbox + loopback
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const N = `${MARK}/CASH${Date.now().toString().slice(-5)}`;

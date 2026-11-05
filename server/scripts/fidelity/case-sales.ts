@@ -26,6 +26,8 @@ import {
   U, MARK, company, vouchersOnDayXml, objects, fld, flds, block,
   check, checkNum, report, remember,
 } from "./harness.js";
+import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+guardScriptWrites("fidelity/case-sales");   // 0-1: this case always pushes to Tally; refuse unless sandbox + loopback
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const tag = Date.now().toString().slice(-5);

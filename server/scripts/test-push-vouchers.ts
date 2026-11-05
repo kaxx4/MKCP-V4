@@ -23,11 +23,13 @@ import { MASTER_COLLECTIONS } from "../src/config/collections.js";
 import { pushVoucherToTally } from "../src/services/voucherPusher.js";
 import { loadMasters } from "../src/services/tallyMasters.js";
 import type { VoucherPayload } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 
 const rawArgs = process.argv.slice(2);
 const PUSH = rawArgs.includes("--push");
+if (PUSH) guardScriptWrites("test-push-vouchers");   // 0-1: refuse a write before any Tally contact unless sandbox + loopback
 const companyFlagIdx = rawArgs.indexOf("--company");
 const COMPANY_OVERRIDE = companyFlagIdx >= 0 ? rawArgs[companyFlagIdx + 1] : undefined;
 const typesArg = rawArgs.find(a => !a.startsWith("--") && a !== COMPANY_OVERRIDE);

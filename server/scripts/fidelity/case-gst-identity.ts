@@ -19,6 +19,8 @@ import { pushVoucherToTally } from "../../src/services/voucherPusher.js";
 import { loadMasters } from "../../src/services/tallyMasters.js";
 import type { VoucherPayload } from "../../src/types.js";
 import { U, MARK, company, vouchersOnDayXml, objects, fld, check, report, remember } from "./harness.js";
+import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
+guardScriptWrites("fidelity/case-gst-identity");   // 0-1: this case always pushes to Tally; refuse unless sandbox + loopback
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const STAMP = Date.now().toString().slice(-5);

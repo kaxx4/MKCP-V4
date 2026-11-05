@@ -10,9 +10,11 @@ import { loadOpenBills, allocateFIFO, billsForParty, receivableBills, payableBil
 import { buildBulkVoucher, pushBulk, type BulkRow } from "../src/services/bulkEntry.js";
 import { loadMasters } from "../src/services/tallyMasters.js";
 import { guardVoucher } from "../src/services/pushGuard.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
+if (PUSH) guardScriptWrites("test-bulk-entry");   // 0-1: refuse a write before any Tally contact unless sandbox + loopback
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail = "") {

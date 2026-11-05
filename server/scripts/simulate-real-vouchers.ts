@@ -21,10 +21,12 @@ import { convertCompanies } from "../src/converters/convert.js";
 import { pushVoucherToTally, buildVoucherImportXml } from "../src/services/voucherPusher.js";
 import { loadMasters } from "../src/services/tallyMasters.js";
 import type { VoucherPayload, LedgerEntry, InventoryEntry } from "../src/types.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const args = process.argv.slice(2);
 const PUSH = args.includes("--push");
+if (PUSH) guardScriptWrites("simulate-real-vouchers");   // 0-1: refuse a write before any Tally contact unless sandbox + loopback
 const ONLY = args.filter(a => !a.startsWith("--")).flatMap(a => a.split(",")).map(s => s.trim().toLowerCase());
 
 const TAG = `SIM${Date.now().toString().slice(-6)}`;

@@ -14,10 +14,12 @@ import { config } from "dotenv";
 
 const here = dirname(fileURLToPath(import.meta.url));
 config({ path: join(here, "..", ".env") });
+guardScriptWrites("probe-readback-query");   // 0-1: this script always writes; refuse unless sandbox + loopback
 
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { createLedger, deleteLedger } from "../src/services/masterPusher.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const NAME = `ZZRB ${Date.now().toString().slice(-6)}`;

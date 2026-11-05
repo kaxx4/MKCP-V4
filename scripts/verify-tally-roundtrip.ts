@@ -29,6 +29,7 @@ import { buildVoucherImportXml, parseImportResponse } from "../server/src/servic
 import { tallyPost } from "../server/src/tally.js";
 import { checkedRequest } from "../server/src/services/tallyRequest.js";
 import type { VoucherPayload } from "../server/src/types.js";
+import { guardScriptWrites } from "../server/src/services/scriptWriteGuard.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 config({ path: join(here, "..", "server", ".env") });
@@ -36,6 +37,7 @@ config({ path: join(here, "..", "server", ".env") });
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";
 const DO_WRITES = process.argv.includes("--write");
+if (DO_WRITES) guardScriptWrites("verify-tally-roundtrip");   // 0-1: refuse a write before any Tally contact unless sandbox + loopback
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
