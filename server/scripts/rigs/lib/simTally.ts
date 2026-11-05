@@ -9,6 +9,7 @@
  *   drop-before       the call fails before Tally saw it; nothing booked
  *   drop-after-accept Tally booked it, then the reply was lost
  *   differ            booked, read back different
+ *   created-not-found booked, Tally said CREATED, the read-back did not find it
  *   slow:<ms>         booked after a delay
  * Pure in-process. P7: this proves the queue logic, not Tally's own behaviour;
  * that half is the dummy run (`test-queue-e2e.ts`).
@@ -16,7 +17,7 @@
 import type { SafePushResult } from "../../../src/services/safePush.js";
 import type { VoucherPayload } from "../../../src/types.js";
 
-export type Fault = "none" | "refuse" | "drop-before" | "drop-after-accept" | "differ" | `slow:${number}`;
+export type Fault = "none" | "refuse" | "drop-before" | "drop-after-accept" | "differ" | "created-not-found" | `slow:${number}`;
 
 export class SimTally {
   books = new Map<string, number>();
@@ -37,6 +38,7 @@ export class SimTally {
       case "drop-before": throw new Error("simulated: connection refused before send");
       case "drop-after-accept": book(); throw new Error("simulated: socket closed after Tally accepted");
       case "differ": book(); return { ...ok, ok: false, stage: "verify", differences: ["simulated: amount stored differently"] };
+      case "created-not-found": book(); return { ...ok, ok: false, stage: "verify", errors: ["simulated: Tally reported the voucher created but it could not be found on read-back"], differences: [] };
       default: book(); return ok;
     }
   };

@@ -18,7 +18,8 @@
  * Outcomes follow the plan's queue words (file 06 section 7): `succeeded` when the
  * read-back matches, `readback_differs` when Tally stored something else,
  * `failed` when the guard or Tally refused (nothing booked), `uncertain` when the
- * call threw after `sent` (Tally may hold it; never retried by itself).
+ * call threw after `sent`, or Tally said created but the read-back could not
+ * find it (Tally may hold it; never retried by itself).
  * Task 1-3 builds the full agent (lease renewal, journal, settling); this is
  * the smallest path that proves the test queue end to end.
  */
@@ -65,10 +66,18 @@ export function testJobRefusal(job: Pick<TestJob, "company" | "payload" | "label
   return null;
 }
 
-/** Pure: the outcome word for a safePush result. */
+/**
+ * Pure: the outcome word for a safePush result.
+ * `failed` means "nothing was booked, safe to send again", so it is given only
+ * when safePush stopped before or at the push itself (stage guard or push).
+ * Stage `verify` means Tally said it created the voucher but the read-back did
+ * not confirm it: the voucher may well be in the books, so the job is
+ * `uncertain` and never resent by itself (coordinator review M2, 5-Nov-2026).
+ */
 export function outcomeOf(res: SafePushResult): TestOutcome {
   if (res.ok) return "succeeded";
   if (res.differences.length) return "readback_differs";
+  if (res.stage === "verify" || res.stage === "done") return "uncertain";
   return "failed";
 }
 

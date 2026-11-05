@@ -20,6 +20,7 @@ const SCENARIOS: Scenario[] = [
   { name: "Tally refuses", tally: "refuse", expectState: "failed", expectBooked: 0, rule: "a verdict is never retried by itself" },
   { name: "connection fails before send", tally: "drop-before", expectState: "uncertain", expectBooked: 0, rule: "no reply after sent: uncertain, never retried by itself (conservative)" },
   { name: "Tally accepted, reply lost", tally: "drop-after-accept", expectState: "uncertain", expectBooked: 1, rule: "uncertain, booked once, never pushed again" },
+  { name: "created, but not found on read-back", tally: "created-not-found", expectState: "uncertain", expectBooked: 1, rule: "M2: may be in the books, so uncertain, never failed, never resent" },
   { name: "read-back differs", tally: "differ", expectState: "readback_differs", expectBooked: 1, rule: "never retried by itself" },
   { name: "Tally slower than the lease", tally: "slow:1500", expectState: "succeeded", expectBooked: 1, rule: "a sent job is never reclaimed while slow" },
   { name: "queue update for the outcome fails once", queueFault: "finish-fails-once", expectState: "succeeded", expectBooked: 1, rule: "H-7: retry every database update until it lands" },

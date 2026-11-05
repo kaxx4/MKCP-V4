@@ -93,7 +93,8 @@ export const ERP_TEST_TABLE = "erp_push_queue_test";
 /**
  * Pure: may the test-queue client send this request? Null when allowed, else the refusal.
  * Allowed: POST to /rest/v1/rpc/<one of ERP_TEST_RPCS>; GET or DELETE on
- * /rest/v1/erp_push_queue_test, a DELETE only with `is_test=eq.true` in the query.
+ * /rest/v1/erp_push_queue_test, a DELETE only with `is_test=eq.true` and a filter
+ * naming its own rows (`testDeleteNamesItsRows`).
  * The host must be the configured project's host.
  */
 export function erpTestFence(url: string, method: string, projectUrl: string): string | null {
@@ -110,11 +111,29 @@ export function erpTestFence(url: string, method: string, projectUrl: string): s
   }
   if (path === `/rest/v1/${ERP_TEST_TABLE}`) {
     if (m === "GET" || m === "HEAD") return null;
-    if (m === "DELETE") return u.searchParams.get("is_test") === "eq.true" ? null
-      : "refused: a delete on the test queue must filter is_test=eq.true";
+    if (m === "DELETE") {
+      if (u.searchParams.get("is_test") !== "eq.true") return "refused: a delete on the test queue must filter is_test=eq.true";
+      return testDeleteNamesItsRows(u.searchParams) ? null
+        : "refused: a delete on the test queue must also name its own rows (id, or idempotency_key equal to one key or starting with a run's own prefix), so one cleanup never removes another run's rows";
+    }
     return `refused: ${m} on ${ERP_TEST_TABLE}; writes go through its functions`;
   }
   return `refused: ${path} is outside the ERP test queue. The sandbox laptop reaches nothing else.`;
+}
+
+/**
+ * Pure: does a DELETE's query name the rows of one run? (coordinator review L6)
+ * Accepted: `id=eq.<x>`, `id=in.(<x,...>)`, `idempotency_key=eq.<key>` or
+ * `in.(...)`, or `idempotency_key=like.<prefix>*` where the prefix is a run's
+ * own (ZZTEST plus at least 6 more characters), never the bare ZZTEST mark.
+ */
+export function testDeleteNamesItsRows(q: URLSearchParams): boolean {
+  const id = q.get("id") ?? "";
+  if (/^eq\.[^,()*%]+$/.test(id) || /^in\.\([^()*%]+\)$/.test(id)) return true;
+  const key = q.get("idempotency_key") ?? "";
+  if (/^eq\.ZZTEST[^*%]*$/.test(key) || /^in\.\(ZZTEST[^()*%]*\)$/.test(key)) return true;
+  const like = /^like\.(ZZTEST[^*%]*)[*%]$/.exec(key);
+  return !!like && like[1].length >= 12;
 }
 
 /** Why the test-queue client is unavailable on this machine, or null when it may be built. */

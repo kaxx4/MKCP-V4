@@ -58,6 +58,12 @@ const SANDBOX_ON = {
   ok("allows GET on the test table", f("/rest/v1/erp_push_queue_test?id=eq.1", "GET") === null);
   ok("allows DELETE on the test table with is_test=eq.true", f("/rest/v1/erp_push_queue_test?id=in.(1)&is_test=eq.true", "DELETE") === null);
   ok("refuses DELETE without the is_test filter", f("/rest/v1/erp_push_queue_test?id=in.(1)", "DELETE") !== null);
+  ok("L6: refuses a DELETE filtered only by is_test (would wipe other runs)", f("/rest/v1/erp_push_queue_test?is_test=eq.true", "DELETE") !== null);
+  ok("L6: allows a DELETE naming one id", f("/rest/v1/erp_push_queue_test?id=eq.7f0c&is_test=eq.true", "DELETE") === null);
+  ok("L6: allows a DELETE naming one idempotency key", f("/rest/v1/erp_push_queue_test?idempotency_key=eq.ZZTEST-E2E-1&is_test=eq.true", "DELETE") === null);
+  ok("L6: allows a DELETE on a run's own key prefix", f("/rest/v1/erp_push_queue_test?idempotency_key=like.ZZTEST-R3-1730000000*&is_test=eq.true", "DELETE") === null);
+  ok("L6: refuses a DELETE on the bare ZZTEST prefix", f("/rest/v1/erp_push_queue_test?idempotency_key=like.ZZTEST*&is_test=eq.true", "DELETE") !== null);
+  ok("L6: refuses a DELETE with a wildcard id", f("/rest/v1/erp_push_queue_test?id=like.*&is_test=eq.true", "DELETE") !== null);
   ok("refuses PATCH and POST on the test table (functions only)", f("/rest/v1/erp_push_queue_test", "PATCH") !== null && f("/rest/v1/erp_push_queue_test", "POST") !== null);
 
   H("WHO MAY BUILD THE CLIENT");
@@ -114,6 +120,8 @@ const SANDBOX_ON = {
   ok("outcome: read back and matched is succeeded", outcomeOf(base) === "succeeded");
   ok("outcome: a difference is readback_differs", outcomeOf({ ...base, ok: false, stage: "verify", differences: ["amount"] }) === "readback_differs");
   ok("outcome: a refusal is failed", outcomeOf({ ...base, ok: false, stage: "guard", errors: ["no"] }) === "failed");
+  ok("M2: created but not found on read-back is uncertain, never failed", outcomeOf({ ...base, ok: false, stage: "verify", errors: ["not found on read-back"] }) === "uncertain");
+  ok("outcome: Tally refused at the push is failed", outcomeOf({ ...base, ok: false, stage: "push", errors: ["LINEERROR"] }) === "failed");
 
   H("THE CLAIM PATH (memory queue, stub push)");
   await withEnv(SANDBOX_ON, async () => {
