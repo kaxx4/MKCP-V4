@@ -11,7 +11,7 @@
  *
  * Writes only on a sandbox role against a local Tally (guardScriptWrites).
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
@@ -21,6 +21,7 @@ import { safePush } from "../src/services/safePush.js";
 import { createLedger, deleteLedger, createStockItem, deleteStockItem } from "../src/services/masterPusher.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 import { gstinCheckDigit } from "../src/services/gstIdentity.js";
+import { bulkKept, removalDate, removalOk, type BulkRecord } from "./lib/bulkInvoice.js";
 import type { VoucherPayload } from "../src/types.js";
 guardScriptWrites("test-batch04-dummy"); // #104
 
@@ -53,6 +54,8 @@ const counts = (r: string) => `CREATED=${fld(r, "CREATED")} ALTERED=${fld(r, "AL
 type Step = { step: string; note?: string; requestXml?: string; responseXml?: string; voucher?: string | null };
 const verdicts: { test: string; pass: boolean; summary: string }[] = [];
 let COMPANY = "";
+/** Set when the bulk invoice is left in place; written to summary.json for --remove-stamp. */
+let bulkRecord: BulkRecord | null = null;
 
 async function post(xml: string, ms = 120_000): Promise<string> { return (await tallyPost(U, xml, ms, true)) as string; }
 
@@ -76,10 +79,11 @@ async function readVoucher(number: string): Promise<string | null> {
 }
 const countByNumber = (v: string | null) => (v ? (v.match(/<VOUCHERNUMBER>/g) ?? []).length : 0);
 
-async function deleteVoucher(type: string, number: string, remoteId: string): Promise<string> {
+/** `date` (YYYYMMDD) is the voucher's own date: Tally finds what to delete by REMOTEID and DATE. */
+async function deleteVoucher(type: string, number: string, remoteId: string, date = DAY): Promise<string> {
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Import</TALLYREQUEST><TYPE>Data</TYPE><ID>Vouchers</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${esc(COMPANY)}</SVCURRENTCOMPANY></STATICVARIABLES></DESC>
-<DATA><TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="${esc(remoteId)}" VCHTYPE="${esc(type)}" ACTION="Delete"><DATE>${DAY}</DATE><VOUCHERTYPENAME>${esc(type)}</VOUCHERTYPENAME><VOUCHERNUMBER>${esc(number)}</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
+<DATA><TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="${esc(remoteId)}" VCHTYPE="${esc(type)}" ACTION="Delete"><DATE>${date}</DATE><VOUCHERTYPENAME>${esc(type)}</VOUCHERTYPENAME><VOUCHERNUMBER>${esc(number)}</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
   return post(xml, 60_000);
 }
 
@@ -221,10 +225,16 @@ async function bulk(m: TallyMasters) {
   steps.push({ step: "create ONE B2B invoice and LEAVE it for a person to look at in Tally's e-invoice list", requestXml: req, responseXml: res,
     note: `safePush ok=${r.ok} stage=${r.stage}${r.errors.length ? ` errors=${r.errors.join(" | ")}` : ""}${r.differences.length ? ` differences=${r.differences.join(" | ")}` : ""} ${res ? counts(res) : ""}`, voucher: v });
   steps.push({ step: "state", note: `IRN on the saved voucher: "${v ? fld(v, "IRN") : ""}" (empty means Tally has not marked it as sent)` });
+  /* Review of 0-7 (5-Nov-2026): anything past the guard was SENT, so it may be
+     in the books even when safePush says ok:false. Only a guard refusal is
+     known to have stored nothing; everything else is LEFT IN PLACE. */
+  const kept = bulkKept(r, !!v);
+  if (kept) bulkRecord = { stamp: STAMP, number: N, date: DAY };
   save("4-bulk-send-pickup", steps, r.ok && !!v,
     r.ok && v ? `invoice ${N} left in the books for a person to check whether Tally's bulk e-invoice list shows it. NEVER press send. Remove afterwards with --remove-stamp=${STAMP}.`
-      : `invoice ${N} was NOT stored (${r.errors[0] ?? "not found on read-back"}); its party and item are removed.`);
-  return r.ok && !!v;
+      : kept ? `invoice ${N} was SENT but did not verify (${r.errors[0] ?? "not found on read-back"}); it may be in the books, so it and its party and item are left in place. Remove with --remove-stamp=${STAMP}.`
+      : `invoice ${N} was refused before sending (${r.errors[0] ?? "guard"}); nothing was stored.`);
+  return kept;
 }
 
 // ── 7. Sixty pushes in a row ──────────────────────────────────────────────────
@@ -254,15 +264,27 @@ async function batch60() {
 }
 
 (async () => {
-  COMPANY = convertCompanies(await tallyPost(U, HEALTH_XML, 10_000))[0]!.name;
+  /* The removal's date is settled before any Tally contact: refused with no
+     request sent when it cannot be known. */
+  let when: ReturnType<typeof removalDate> | null = null;
   if (REMOVE !== undefined) {
+    const sumPath = join(OUT, "summary.json");
+    const summary = existsSync(sumPath) ? JSON.parse(readFileSync(sumPath, "utf8")) : null;
+    when = removalDate(process.argv, summary, STAMP);
+    if ("error" in when) { console.error(`REFUSED: ${when.error}`); process.exit(2); }
+  }
+  COMPANY = convertCompanies(await tallyPost(U, HEALTH_XML, 10_000))[0]!.name;
+  if (REMOVE !== undefined && when && "date" in when) {
     const N = `ZZTEST/BULK${STAMP}`;
-    const dv = await deleteVoucher("Sales", N, `MKCP|Sales|${N}|2026-27`);
-    console.log(`\n  invoice ${N}: ${counts(dv)}`);
+    const dv = await deleteVoucher("Sales", N, `MKCP|Sales|${N}|2026-27`, when.date);
+    const deleted = parseInt(fld(dv, "DELETED") || "0", 10) || 0;
+    console.log(`\n  invoice ${N} dated ${when.date}: ${counts(dv)}`);
     const di = await deleteStockItem(U, COMPANY, ITEM);
     const dl = await deleteLedger(U, COMPANY, PARTY);
     console.log(`  test item "${ITEM}" removed: ${di.ok}  test party "${PARTY}" removed: ${dl.ok}`);
-    process.exit(di.ok && dl.ok ? 0 : 1);
+    const done = removalOk(deleted, di.ok, dl.ok);
+    if (!deleted) console.log(`  the invoice was NOT deleted: check the date, then sweep by what is in the books`);
+    process.exit(done ? 0 : 1);
   }
   console.log(`\n  company "${COMPANY}"  tests: ${ONLY.join(", ")}  evidence: ${OUT}\n`);
   const lg = await createLedger(U, COMPANY, { name: PARTY, parent: "SUNDRY DEBTORS", state: "West Bengal", gstin: FAKE_GSTIN, address: ["ZZ TEST STREET", "ZZ TEST CITY"], pincode: "700001" });
@@ -280,7 +302,7 @@ async function batch60() {
     if (ONLY.includes("bulk")) keptBulk = await bulk(m);
     if (ONLY.includes("batch60")) await batch60();
   } finally {
-    // The bulk invoice stays on purpose; the party and item stay with it.
+    // A bulk invoice that may be in the books stays, and its party and item with it.
     if (!keptBulk) {
       const di = await deleteStockItem(U, COMPANY, ITEM);
       const dl = await deleteLedger(U, COMPANY, PARTY);
@@ -289,5 +311,5 @@ async function batch60() {
       console.log(`\n  LEFT IN PLACE for the bulk-send check: party "${PARTY}", item "${ITEM}", invoice ZZTEST/BULK${STAMP}. Remove with --remove-stamp=${STAMP}.`);
     }
   }
-  writeFileSync(join(OUT, "summary.json"), JSON.stringify({ stamp: STAMP, company: COMPANY, verdicts }, null, 2));
+  writeFileSync(join(OUT, "summary.json"), JSON.stringify({ stamp: STAMP, company: COMPANY, bulk: bulkRecord, verdicts }, null, 2));
 })().catch((e) => { console.error("ERR:", e); process.exit(1); });
