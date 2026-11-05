@@ -296,7 +296,40 @@ function dig(obj: any, ...paths: string[][]): any {
   return null;
 }
 
-export function convertStockGroups(parsed: any): { tallymessage: any[] } {
+/**
+ * G7 for the master converters (T-6, rebuild task 0-3, 5-Nov-2026).
+ *
+ * A converter used to return a bare array, so "Tally sent no objects" and
+ * "Tally sent objects and I could not read one of them" both came out as a
+ * clean zero. That is the edge-case catalogue's cmpinfo-only and
+ * attributes-stripped blind spots. Each master converter now says which:
+ *  - empty-from-tally: no object node under DATA. The CMPINFO preamble sits
+ *    under DESC, so its count tags (<LEDGER>205</LEDGER>) are never counted;
+ *  - parser-failed: object nodes arrived and none had a readable name
+ *    (attributes stripped, so NAME="..." is gone). Logged as an error;
+ *  - partial: some nodes had no name and were skipped;
+ *  - rows: every node read.
+ * Additive: callers that read .tallymessage are unchanged.
+ */
+export type ReadFact = "rows" | "empty-from-tally" | "parser-failed" | "partial";
+export interface ConvertRead { objects: number; rows: number; fact: ReadFact; note: string }
+
+export function readFact(kind: string, objects: number, rows: number): ConvertRead {
+  if (objects === 0) return { objects, rows, fact: "empty-from-tally", note: `Tally sent no <${kind}> objects. The answer was empty, not unread.` };
+  if (rows === 0) {
+    const note = `Tally sent ${objects} <${kind}> object(s) and none could be read (no name). A PARSER failure, not an empty company.`;
+    console.error(`[convert] ${note}`);
+    return { objects, rows, fact: "parser-failed", note };
+  }
+  if (rows < objects) return { objects, rows, fact: "partial", note: `${rows} of ${objects} <${kind}> object(s) read; ${objects - rows} had no name.` };
+  return { objects, rows, fact: "rows", note: `${rows} <${kind}> object(s) read.` };
+}
+
+function withRead<T extends { tallymessage: any[] }>(kind: string, objects: number, out: T): T & { read: ConvertRead } {
+  return { ...out, read: readFact(kind, objects, out.tallymessage.length) };
+}
+
+export function convertStockGroups(parsed: any): { tallymessage: any[]; read: ConvertRead } {
   const root = dig(parsed,
     ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
     ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
@@ -307,7 +340,7 @@ export function convertStockGroups(parsed: any): { tallymessage: any[] } {
   const groups = arr(root?.STOCKGROUP ?? root?.["STOCKGROUP.LIST"]);
   console.log(`[convert] Stock groups: ${groups.length}`);
 
-  return {
+  return withRead("STOCKGROUP", groups.length, {
     tallymessage: groups.map((g: any) => {
       const name = g["@_NAME"] || txt(g.NAME);
       if (!name) return null;
@@ -319,10 +352,10 @@ export function convertStockGroups(parsed: any): { tallymessage: any[] } {
         guid: txt(g.GUID),
       };
     }).filter(Boolean),
-  };
+  });
 }
 
-export function convertUnits(parsed: any): { tallymessage: any[] } {
+export function convertUnits(parsed: any): { tallymessage: any[]; read: ConvertRead } {
   const root = dig(parsed,
     ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
     ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
@@ -333,7 +366,7 @@ export function convertUnits(parsed: any): { tallymessage: any[] } {
   const units = arr(root?.UNIT ?? root?.["UNIT.LIST"]);
   console.log(`[convert] Units: ${units.length}`);
 
-  return {
+  return withRead("UNIT", units.length, {
     tallymessage: units.map((u: any) => {
       const name = u["@_NAME"] || txt(u.NAME);
       if (!name) return null;
@@ -349,10 +382,10 @@ export function convertUnits(parsed: any): { tallymessage: any[] } {
         guid: txt(u.GUID),
       };
     }).filter(Boolean),
-  };
+  });
 }
 
-export function convertGodowns(parsed: any): { tallymessage: any[] } {
+export function convertGodowns(parsed: any): { tallymessage: any[]; read: ConvertRead } {
   const root = dig(parsed,
     ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
     ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
@@ -361,7 +394,7 @@ export function convertGodowns(parsed: any): { tallymessage: any[] } {
   );
   const godowns = arr(root?.GODOWN ?? root?.["GODOWN.LIST"]);
   console.log(`[convert] Godowns: ${godowns.length}`);
-  return {
+  return withRead("GODOWN", godowns.length, {
     tallymessage: godowns.map((g: any) => {
       const name = g["@_NAME"] || txt(g.NAME);
       if (!name) return null;
@@ -373,10 +406,10 @@ export function convertGodowns(parsed: any): { tallymessage: any[] } {
         guid: txt(g.GUID),
       };
     }).filter(Boolean),
-  };
+  });
 }
 
-export function convertCostCentres(parsed: any): { tallymessage: any[] } {
+export function convertCostCentres(parsed: any): { tallymessage: any[]; read: ConvertRead } {
   const root = dig(parsed,
     ["ENVELOPE", "BODY", "DATA", "COLLECTION"],
     ["ENVELOPE", "BODY", "DATA", "TALLYMESSAGE"],
@@ -385,7 +418,7 @@ export function convertCostCentres(parsed: any): { tallymessage: any[] } {
   );
   const centres = arr(root?.COSTCENTRE ?? root?.["COSTCENTRE.LIST"]);
   console.log(`[convert] Cost Centres: ${centres.length}`);
-  return {
+  return withRead("COSTCENTRE", centres.length, {
     tallymessage: centres.map((c: any) => {
       const name = c["@_NAME"] || txt(c.NAME);
       if (!name) return null;
@@ -397,10 +430,10 @@ export function convertCostCentres(parsed: any): { tallymessage: any[] } {
         guid: txt(c.GUID),
       };
     }).filter(Boolean),
-  };
+  });
 }
 
-export function convertStockItems(parsed: any): { tallymessage: any[] } {
+export function convertStockItems(parsed: any): { tallymessage: any[]; read: ConvertRead } {
   // Tally "All Stock Items" collection response:
   //   ENVELOPE.BODY.DATA.COLLECTION.STOCKITEM[]  or  ENVELOPE.BODY.DATA.TALLYMESSAGE.STOCKITEM[]
   const root = dig(parsed,
@@ -422,7 +455,7 @@ export function convertStockItems(parsed: any): { tallymessage: any[] } {
     console.log(`[convert] Stock groups found: ${groups.size} (${[...groups].slice(0, 10).join(", ")}${groups.size > 10 ? "..." : ""})`);
   }
 
-  return {
+  return withRead("STOCKITEM", items.length, {
     tallymessage: items.map((si: any) => {
       const name = si["@_NAME"] || txt(si.NAME);
       if (!name) return null;
@@ -498,10 +531,10 @@ export function convertStockItems(parsed: any): { tallymessage: any[] } {
         guid: txt(si.GUID),
       };
     }).filter(Boolean),
-  };
+  });
 }
 
-export function convertLedgers(parsed: any): { tallymessage: any[] } {
+export function convertLedgers(parsed: any): { tallymessage: any[]; read: ConvertRead } {
   // "List of Ledgers" collection response:
   //   ENVELOPE.BODY.DATA.COLLECTION.LEDGER[]  or  ENVELOPE.BODY.DATA.TALLYMESSAGE.LEDGER[]
   const root = dig(parsed,
@@ -514,7 +547,7 @@ export function convertLedgers(parsed: any): { tallymessage: any[] } {
   const ledgers = arr(root?.LEDGER ?? root?.["LEDGER.LIST"]);
   console.log(`[convert] Ledgers: ${ledgers.length}`);
 
-  return {
+  return withRead("LEDGER", ledgers.length, {
     tallymessage: ledgers.map((l: any) => {
       const name = l["@_NAME"] || txt(l.NAME);
       if (!name) return null;
@@ -561,7 +594,7 @@ export function convertLedgers(parsed: any): { tallymessage: any[] } {
         email: txt(l.EMAIL),
       };
     }).filter(Boolean),
-  };
+  });
 }
 
 
