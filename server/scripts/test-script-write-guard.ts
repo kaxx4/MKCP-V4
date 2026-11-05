@@ -212,7 +212,7 @@ const blankAll = (s: string, re: RegExp) => s.replace(re, (m) => m.replace(/[^\r
 
 type GateState = "not-a-writer" | "gated" | "ungated" | "gate-after-write";
 /** Where the first write sits, and whether a gate call comes before it. */
-function gateState(src: string, extraWrites: string[] = []): GateState {
+function gateState(src: string, extraWrites: string[] = [], file: string = PLANT_FILE): GateState {
   const v = views(src);
   const s = v.code;
   /* The code with binding statements blanked: a name that is only imported,
@@ -252,6 +252,9 @@ function gateState(src: string, extraWrites: string[] = []): GateState {
 }
 
 // The classifier itself, on planted sources (so a broken pattern fails here, not silently).
+/** Where a planted source pretends to live, so its relative imports resolve like a real script's. */
+const PLANT_FILE = join(serverRoot, "scripts", "plant.ts");
+const PLANT_GUARDRAILS = join(serverRoot, "scripts", "guardrails", "plant.ts");
 /** The real gate's import. A gate counts only when bound from scriptWriteGuard (review of 5-Nov-2026). */
 const GI = `import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";\n`;
 ok("plant: a pushVoucherToTally with no gate is ungated", gateState(`const r = await pushVoucherToTally(U, co, p, m);`) === "ungated");
@@ -314,7 +317,15 @@ ok("plant: a gate never imported at all is not a gate", gateState(`guardScriptWr
 ok("plant: a gate from the real module, by dynamic import, passes",
   gateState(`const { guardScriptWrites: g } = await import("../src/services/scriptWriteGuard.js");\ng("x");\nawait safePush(U, co, p);`) === "gated");
 ok("plant: a gate destructured from its module inside a function body passes",
-  gateState(`export async function run() {\n  const { installMock } = await import("../../src/services/tallyMock.js");\n  const { safePush: s } = await import("../../src/services/safePush.js");\n  installMock(t);\n  await s(U, co, p);\n}`) === "gated");
+  gateState(`export async function run() {\n  const { installMock } = await import("../../src/services/tallyMock.js");\n  const { safePush: s } = await import("../../src/services/safePush.js");\n  installMock(t);\n  await s(U, co, p);\n}`, [], PLANT_GUARDRAILS) === "gated");
+ok("plant: a same-named local no-op in a scriptWriteGuard file of its own is not the gate",
+  gateState(`import { guardScriptWrites } from "./lib/scriptWriteGuard.js";\nguardScriptWrites("x");\nawait safePush(U, co, p);`) === "ungated");
+ok("plant: the real module named from the wrong folder depth is not the gate",
+  gateState(`import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";\nguardScriptWrites("x");\nawait safePush(U, co, p);`) === "ungated");
+ok("plant: the real module from a guardrails/ file passes",
+  gateState(`import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";\nguardScriptWrites("x");\nawait safePush(U, co, p);`, [], PLANT_GUARDRAILS) === "gated");
+ok("plant: a sandbox.js that is not guardrails/sandbox is not the gate",
+  gateState(`import { assertSandboxTarget } from "./sandbox.js";\nassertSandboxTarget();\nawait safePush(U, co, p);`) === "ungated");
 ok("plant: m[\"safePush\"](...) is a write", gateState(`await svc["safePush"](U, co, p);`) === "ungated");
 ok("plant: an alias written inside a string is not an alias",
   gateState(`const s = "import { guardScriptWrites as gate } from 'x'";\ngate("x");\nawait safePush(U, co, p);`) === "ungated");
