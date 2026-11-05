@@ -143,9 +143,13 @@ function aliases(text: string, names: string[]): string[] {
   return out;
 }
 
+/** Names a lib file re-exports a write helper under (not yet followed). */
+function reexportedWriters(_src: string): string[] { return []; }
+const SCAN_EXT = /\.(ts|mts|mjs|js)$/;
+
 type GateState = "not-a-writer" | "gated" | "ungated" | "gate-after-write";
 /** Where the first write sits, and whether a gate call comes before it. */
-function gateState(src: string): GateState {
+function gateState(src: string, extraWrites: string[] = []): GateState {
   const v = views(src);
   const s = v.code;
   const WRITE_CALL = callOf([...WRITE_NAMES, ...aliases(v.text, WRITE_NAMES)]);
@@ -193,6 +197,30 @@ ok("plant: a renamed destructured dynamic import still counts", gateState(`const
 ok("plant: an aliased gate before the write passes", gateState(`import { guardScriptWrites as gate } from "../src/services/scriptWriteGuard.js";\ngate("x");\nawait safePush(U, co, p);`) === "gated");
 ok("plant: an import line naming a writer is not itself a write", gateState(`import { safePush } from "../src/services/safePush.js";`) === "not-a-writer");
 ok("plant: a read-only script is not a writer", gateState(`await tallyPost(U, buildCollectionXml(def, co));`) === "not-a-writer");
+// Third review, 5-Nov-2026: a write that is not a plain `name(` call, and gates that are not the real gate.
+ok("plant: a write helper passed as a value is a write", gateState(`await Promise.all(rows.map(pushVoucherToTally));`) === "ungated");
+ok("plant: a write helper assigned to a local is a write", gateState(`const send = safePush;\nawait send(U, co, p);`) === "ungated");
+ok("plant: an optional call ?.( is a write", gateState(`await safePush?.(U, co, p);`) === "ungated");
+ok("plant: .call( .apply( .bind( are writes",
+  [`await safePush.call(null, U, co, p);`, `await safePush.apply(null, [U, co, p]);`, `const f = safePush.bind(null, U);\nawait f(co, p);`]
+    .every((s) => gateState(s) === "ungated"));
+ok("plant: a write helper re-exported under a new name in a lib file is a write",
+  gateState(`import { send } from "./lib/push.js";\nawait send(U, co, p);`,
+    reexportedWriters(`export { safePush as send } from "../../src/services/safePush.js";`)) === "ungated");
+ok("plant: a renamed require destructuring is a write", gateState(`const { safePush: s } = require("../src/services/safePush.js");\nawait s(U, co, p);`) === "ungated");
+ok("plant: a destructured import before the gate is not itself a write",
+  gateState(`const { pushBulk: pb } = await import("../src/services/bulkEntry.js");\nguardScriptWrites("x");\nawait pb(U, co, "receipt", rows);`) === "gated");
+ok("plant: a helper passed as a value after the gate passes", gateState(`guardScriptWrites("x");\nawait Promise.all(rows.map(pushVoucherToTally));`) === "gated");
+ok("plant: a raw fetch of a Delete to the Tally port is ungated",
+  gateState(`const x = '<VOUCHER ACTION="Delete">';\nawait fetch("http://localhost:9000", { method: "POST", body: x });`) === "ungated");
+ok("plant: a raw http.request of an Import envelope is ungated",
+  gateState("const x = `<TALLYREQUEST>Import</TALLYREQUEST>`;\nconst req = http.request({ port: 9000, method: \"POST\" }); req.end(x);") === "ungated");
+ok("plant: .cjs .cts .tsx .jsx files are scanned", ["a.cjs", "a.cts", "a.tsx", "a.jsx", "a.ts", "a.mjs"].every((f) => SCAN_EXT.test(f)));
+ok("plant: a local function named like the gate is not a gate", gateState(`function guardScriptWrites() {}\nguardScriptWrites("x");\nawait safePush(U, co, p);`) === "ungated");
+ok("plant: a local const named like the gate is not a gate", gateState(`const guardScriptWrites = () => {};\nguardScriptWrites("x");\nawait safePush(U, co, p);`) === "ungated");
+ok("plant: a method x.isSandbox() is not a gate", gateState(`if (cfg.isSandbox()) log("ok");\nawait safePush(U, co, p);`) === "ungated");
+ok("plant: an alias written inside a string is not an alias",
+  gateState(`const s = "import { guardScriptWrites as gate } from 'x'";\ngate("x");\nawait safePush(U, co, p);`) === "ungated");
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const n of readdirSync(dir)) {
