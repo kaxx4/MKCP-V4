@@ -1,8 +1,9 @@
 /**
- * JOB: the ERP mirror sync (rebuild task 1-5, first half, 5-Nov-2026).
+ * JOB: the ERP mirror sync (rebuild task 1-5, first half, 5-Nov-2026; review
+ * fixes 6-Nov-2026, migration 0118).
  *
  * Reads vouchers from Tally into a staging table, then asks the database to
- * swap them into the mirror in one transaction (migration 0116). Every run and
+ * swap them into the mirror in one transaction (migrations 0116 to 0118). Every run and
  * every step is written to `erp_sync_runs` / `erp_sync_run_steps`. The
  * high-water mark (the highest voucher AlterID the mirror is known to hold) is
  * kept per company, so an incremental run reads only what changed since.
@@ -11,7 +12,7 @@
  * Today's sync (`syncOrchestrator.ts`, `supabaseSync.ts`, the tally_* tables)
  * is unchanged and does not import this file. Nothing in `index.ts` starts it,
  * so the office agent runs exactly as before. The database refuses every
- * machine but the sandbox laptop until go-live (`erp_control` live_claims),
+ * machine but the sandbox laptop until go-live (`erp_sync_control` live_mirror),
  * and the sandbox only for a ZZTEST company key, as test rows, into the ERP's
  * own `erp_mirror_rows`. The swap into the tally_* tables is a go-live step.
  *
@@ -23,15 +24,25 @@
  *   <COLLECTION> envelope. A failed read fails the run and the mark stays.
  * - The mark candidate is Tally's highest AlterID read BEFORE the first voucher
  *   read, so a voucher changed while the run reads is above it and is read
- *   again next time (D-1-5.4). The mark follows Tally DOWN when the newest
- *   voucher is deleted (Tally's highest falls; migration 0117, D-1-5.9), and
- *   an incremental reads above the lower of the mark and Tally's highest.
- * - Keys are Tally's GUID; a voucher with no GUID is counted and left out,
- *   never given a made-up key (G5).
- * - Test runs from the dummy company store names one way only (D-1-5.5): the
- *   dummy is an old copy of the real books.
+ *   again next time (D-1-5.4).
+ * - When Tally's highest is BELOW the mark (a restore, a reload, or the newest
+ *   voucher deleted), nothing can be above Tally's own highest, so an
+ *   incremental would read nothing and lose what changed. It is refused before
+ *   any voucher read ("needs a full run"); the database records that a full
+ *   run is due, and only a full run may lower the mark (0118, D-1-5.12).
+ * - A read that cannot be trusted fails the run instead of reaching the swap:
+ *   a voucher with no GUID (never a made-up key, G5), a date that did not
+ *   parse, a full day's read holding another day's voucher, an empty ledger
+ *   placeholder line, or an accounting voucher with no ledger lines (Tally's
+ *   empty .LIST placeholders in big pulls). A voucher with no lines has no
+ *   ledger total (null, never 0).
+ * - Test runs (the store says so; the caller cannot turn it off) store names
+ *   only as `ZZ TEST <kind> <keyed hash>`: the hash is keyed with a secret
+ *   derived from this machine's key, so a list of real names cannot be hashed
+ *   to reverse it (D-1-5.5, review M3). The database refuses any other name on
+ *   a test row.
  */
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CollectionDef } from "../types.js";
 import { tallyPost } from "../tally.js";
@@ -72,7 +83,7 @@ export interface MirrorRow {
   voucher_type: string | null;
   voucher_number: string | null;
   party: string | null;
-  ledger_total: number;
+  ledger_total: number | null;
   is_cancelled: boolean;
   is_optional: boolean;
   row: Record<string, unknown>;
@@ -87,21 +98,52 @@ const money = (s: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** One-way stand-in for a name from the dummy company. ZZ TEST names are kept as they are. */
-export function scrubName(kind: string, name: string | null | undefined): string | null {
+/**
+ * One-way stand-in for a name from the dummy company, keyed with `salt` (a
+ * secret), so it cannot be reversed by hashing a list of names. A name that
+ * already starts with "ZZ TEST" is kept as it is.
+ */
+export function scrubName(kind: string, name: string | null | undefined, salt: string): string | null {
   const s = (name ?? "").trim();
   if (!s) return null;
-  if (/^ZZ\s?TEST\b/i.test(s)) return s;
-  return `ZZ TEST ${kind} ${createHash("sha256").update(s.toUpperCase()).digest("hex").slice(0, 8)}`;
+  if (/^ZZ TEST\b/.test(s)) return s;
+  if (!salt) throw new Error("refused: scrubbing a name needs this machine's secret salt");
+  return `ZZ TEST ${kind} ${createHmac("sha256", salt).update(s.toUpperCase()).digest("hex").slice(0, 10)}`;
+}
+
+/** The salt for test-run names: derived from this machine's ERP key, never stored. */
+export function scrubSaltFrom(machineKey: string): string {
+  if (!machineKey) throw new Error("refused: no machine key, so test names cannot be scrubbed");
+  return createHmac("sha256", machineKey).update("erp-mirror-scrub-v1").digest("hex");
+}
+
+/** Voucher types that always carry ledger lines (inventory-only types such as orders and notes do not). */
+const ACCOUNTING_TYPE = /^(sales|purchase|receipt|payment|contra|journal|credit note|debit note)\b/i;
+const NOT_ACCOUNTING = /order|delivery|receipt note|rejection|memo|stock|physical/i;
+export const isAccountingType = (t: string | null) => !!t && ACCOUNTING_TYPE.test(t) && !NOT_ACCOUNTING.test(t);
+
+/**
+ * Pure: why this converted voucher cannot be trusted as read, or null. An
+ * empty placeholder line (no ledger name) is what Tally sends for a big pull
+ * it truncated; an accounting voucher with no lines at all is the same failure.
+ */
+export function voucherProblem(v: any): string | null {
+  if (!String(v?.guid ?? "").trim()) return "no GUID";
+  if (!isoOf(v?.date)) return "a date that did not parse";
+  const lines = Array.isArray(v.allledgerentries) ? v.allledgerentries : [];
+  if (lines.some((e: any) => !String(e?.ledgername ?? "").trim())) return "an empty ledger line (a placeholder)";
+  const type = String(v.vouchertypename ?? "").trim() || null;
+  if (v.iscancelled !== true && lines.length === 0 && isAccountingType(type)) return `no ledger lines on a ${type}`;
+  return null;
 }
 
 /** Pure: one converted voucher (convertVouchers output) to a staging row, or null when it has no GUID. */
-export function mirrorRowFrom(v: any, opts: { scrub: boolean }): MirrorRow | null {
+export function mirrorRowFrom(v: any, opts: { scrub: false } | { scrub: true; salt: string }): MirrorRow | null {
   const key = String(v?.guid ?? "").trim();
   if (!key) return null;
-  const lines = Array.isArray(v.allledgerentries) ? v.allledgerentries : [];
+  const lines = (Array.isArray(v.allledgerentries) ? v.allledgerentries : []).filter((e: any) => String(e?.ledgername ?? "").trim());
   const total = lines.reduce((s: number, e: any) => s + Math.abs(money(e.amount)), 0) / 2;
-  const name = (kind: string, s: string) => (opts.scrub ? scrubName(kind, s) : (s || "").trim() || null);
+  const name = (kind: string, s: string) => (opts.scrub ? scrubName(kind, s, opts.salt) : (s || "").trim() || null);
   const narration = String(v.narration ?? "");
   return {
     key,
@@ -111,12 +153,13 @@ export function mirrorRowFrom(v: any, opts: { scrub: boolean }): MirrorRow | nul
     voucher_type: String(v.vouchertypename ?? "").trim() || null,
     voucher_number: String(v.vouchernumber ?? "").trim() || null,
     party: name("PARTY", String(v.partyledgername ?? "")),
-    ledger_total: Math.round(total * 100) / 100,
+    ledger_total: lines.length ? Math.round(total * 100) / 100 : null,
     is_cancelled: v.iscancelled === true,
     is_optional: v.isoptional === true,
     row: {
-      narration: opts.scrub ? (/ZZ\s?TEST/i.test(narration) ? narration : null) : narration || null,
+      narration: opts.scrub ? (/ZZ ?TEST/i.test(narration) ? narration : null) : narration || null,
       reference: opts.scrub ? null : (v.reference || null),
+      ...(lines.length ? {} : { no_ledger_lines: true }),
       effective_date: isoOf(v.effectivedate),
       ledgers: lines.map((e: any) => ({ ledger: name("LEDGER", String(e.ledgername ?? "")), amount: money(e.amount), debit: e.isdeemedpositive === true })),
     },
@@ -135,9 +178,9 @@ export function eachDay(from: string, to: string): string[] {
 // ── The two seams ───────────────────────────────────────────────────────────
 
 export interface MirrorTally {
-  /** Tally's highest voucher AlterID now, the latest voucher date and the voucher count. */
-  highest(): Promise<{ alterId: number; latestDate: string | null; count: number }>;
-  /** Converted vouchers dated on one day. */
+  /** Tally's highest voucher AlterID now, the latest voucher date, the voucher count and the count per day. */
+  highest(): Promise<{ alterId: number; latestDate: string | null; count: number; byDay: Record<string, number> }>;
+  /** Converted vouchers Tally returns for a one-day filter (the caller checks each is of that day). */
   vouchersOn(day: string): Promise<any[]>;
   /** Converted vouchers whose AlterID is above `mark` (any date). */
   changedSince(mark: number): Promise<any[]>;
@@ -150,10 +193,14 @@ export interface SwapResult {
 }
 
 export interface MirrorStore {
+  /** Test rows: names are always scrubbed (the caller cannot turn it off). */
+  readonly isTest: boolean;
+  /** The secret salt for scrubbing; required when isTest. */
+  readonly scrubSalt: string | null;
   start(kind: "full" | "incremental", scope?: { from: string; to: string }): Promise<{ run_id: string; scope_from: string; scope_to: string; mark: number | null }>;
   step(run: string, step: string, state: "ok" | "failed" | "info", rows?: number | null, ms?: number | null, detail?: unknown): Promise<void>;
   stage(run: string, rows: MirrorRow[]): Promise<number>;
-  swap(run: string, markCandidate: number, floorPct?: number): Promise<SwapResult>;
+  swap(run: string, markCandidate: number): Promise<SwapResult>;
   fail(run: string, error: string): Promise<void>;
 }
 
@@ -175,16 +222,18 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
       const parsed = assertParsedCollection(await post(tallyUrl, buildChangedVoucherXml(ERP_MIRROR_MARK_DEF, company, 0), ERP_MIRROR_MARK_DEF.timeout, false), "the AlterID read");
       const list = convertVouchers(parsed).tallymessage;
       let alterId = 0, latest: string | null = null;
+      const byDay: Record<string, number> = {};
       for (const v of list) {
         if (Number(v.alterid) > alterId) alterId = Number(v.alterid);
         const d = isoOf(v.date);
+        if (d) byDay[d] = (byDay[d] ?? 0) + 1;
         if (d && (!latest || d > latest)) latest = d;
       }
-      return { alterId, latestDate: latest, count: list.length };
+      return { alterId, latestDate: latest, count: list.length, byDay };
     },
     async vouchersOn(day: string) {
       const parsed = assertParsedCollection(await post(tallyUrl, buildCollectionXml(ERP_MIRROR_VOUCHER_DEF, company, day, day), ERP_MIRROR_VOUCHER_DEF.timeout, false), `the read of ${day}`);
-      return convertVouchers(parsed).tallymessage.filter((v) => isoOf(v.date) === day);
+      return convertVouchers(parsed).tallymessage;
     },
     async changedSince(mark: number) {
       const parsed = assertParsedCollection(await post(tallyUrl, buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, company, mark), ERP_MIRROR_VOUCHER_DEF.timeout, false), `the read above AlterID ${mark}`);
@@ -193,18 +242,21 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
   };
 }
 
-/** The database half, through the ERP functions of migration 0116. Every error throws. */
+/** The database half, through the ERP functions of migrations 0116 to 0118. Every error throws. */
 export function supabaseMirrorStore(c: SupabaseClient, machine: string, key: string, companyKey: string, isTest: boolean): MirrorStore {
+  const scrubSalt = isTest ? scrubSaltFrom(key) : null;
   const call = async (fn: string, args: Record<string, unknown>) => {
     const { data, error } = await c.rpc(fn, { p_machine: machine, p_key: key, ...args });
     if (error) throw new Error(`${fn}: ${error.message}`);
     return data;
   };
   return {
+    isTest,
+    scrubSalt,
     start: async (kind, scope) => call("erp_sync_run_start", { p_company_key: companyKey, p_kind: kind, p_scope_from: scope?.from ?? null, p_scope_to: scope?.to ?? null, p_is_test: isTest }),
     step: async (run, step, state, rows, ms, detail) => { await call("erp_sync_run_step", { p_run: run, p_step: step, p_state: state, p_rows: rows ?? null, p_ms: ms ?? null, p_detail: detail ?? null }); },
     stage: async (run, rows) => Number(await call("erp_sync_stage", { p_run: run, p_rows: rows })),
-    swap: async (run, mark, floorPct) => call("erp_sync_swap", { p_run: run, p_mark_candidate: mark, ...(floorPct === undefined ? {} : { p_floor_pct: floorPct }) }),
+    swap: async (run, mark) => call("erp_sync_swap", { p_run: run, p_mark_candidate: mark }),
     fail: async (run, error) => { await call("erp_sync_run_fail", { p_run: run, p_error: error }); },
   };
 }
@@ -227,16 +279,19 @@ const STAGE_BATCH = 500;
 
 /**
  * One run. Full: every day of the scope, one read per day. Incremental: one
- * read of everything above the mark. Then stage and swap. Any failure fails
- * the run in the database (the mark does not move) and is returned, never
- * swallowed into "nothing changed".
+ * read of everything above the mark, refused before reading when Tally's
+ * highest is below the mark. Then stage and swap. Any failure fails the run in
+ * the database (the mark does not move) and is returned, never swallowed into
+ * "nothing changed". Test runs always scrub names (the store decides).
  */
 export async function runMirrorSync(opts: {
   store: MirrorStore; tally: MirrorTally; kind: "full" | "incremental";
-  scope?: { from: string; to: string }; scrub: boolean; floorPct?: number;
+  scope?: { from: string; to: string };
   log?: (line: string) => void;
 }): Promise<MirrorSyncReport> {
-  const { store, tally, kind, scrub } = opts;
+  const { store, tally, kind } = opts;
+  if (store.isTest && !store.scrubSalt) throw new Error("refused: a test run must scrub names, and the store has no salt");
+  const scrubOpts = store.isTest ? { scrub: true as const, salt: store.scrubSalt! } : { scrub: false as const };
   const log = opts.log ?? ((l: string) => console.log(`[erpMirror] ${l}`));
   const report: MirrorSyncReport = { run_id: null, kind, state: "failed", scope: null, markCandidate: null, read: 0, staged: 0, noGuid: 0, swap: null, error: null, tallyReads: 0 };
   const run = await store.start(kind, opts.scope);
@@ -251,11 +306,19 @@ export async function runMirrorSync(opts: {
       buffer = buffer.slice(STAGE_BATCH);
     }
   };
-  const take = (list: any[]) => {
+  /* Every voucher of a read is checked before any is kept: one bad voucher
+     fails the run (G7: a read we cannot trust is not "fewer vouchers"). */
+  const take = (list: any[], what: string, day: string | null) => {
     report.read += list.length;
+    const problems: string[] = [];
     for (const v of list) {
-      const r = mirrorRowFrom(v, { scrub });
-      if (r) buffer.push(r); else report.noGuid++;
+      const p = voucherProblem(v) ?? (day && isoOf(v?.date) !== day ? `dated ${isoOf(v?.date)}, not ${day}` : null);
+      if (p) { if (p === "no GUID") report.noGuid++; problems.push(p); continue; }
+      buffer.push(mirrorRowFrom(v, scrubOpts)!);
+    }
+    if (problems.length) {
+      const counts = [...new Set(problems)].map((p) => `${problems.filter((x) => x === p).length} with ${p}`).join("; ");
+      throw new Error(`refused: ${what} returned vouchers that cannot be trusted as read (${counts}), so the run fails and nothing is swapped`);
     }
   };
   try {
@@ -267,24 +330,33 @@ export async function runMirrorSync(opts: {
       for (const day of eachDay(run.scope_from, run.scope_to)) {
         const [list, ms] = await timed(() => tally.vouchersOn(day));
         report.tallyReads++;
-        take(list);
+        take(list, `the read of ${day}`, day);
         await store.step(run.run_id, `read ${day}`, "ok", list.length, ms, null);
         if (buffer.length >= STAGE_BATCH) await flush();
       }
+    } else if (run.mark !== null && top.alterId < run.mark) {
+      /* H1 (0118, D-1-5.12): nothing can be above Tally's own highest, so a
+         read above either number would miss what changed. No voucher is read;
+         the swap records the refusal and that a full run is due. */
+      await store.step(run.run_id, `Tally's highest AlterID ${top.alterId} is below the mark ${run.mark}: needs a full run, nothing read`, "info", null, null,
+        { mark: run.mark, tally_highest: top.alterId });
+      const res = await store.swap(run.run_id, top.alterId);
+      if (res.state !== "refused" || res.reason !== "needs_full_run") throw new Error(`the database did not refuse an incremental below the mark (${JSON.stringify(res)})`);
+      report.swap = res;
+      report.state = "refused";
+      await store.step(run.run_id, "refused: needs_full_run", "failed", null, null, res);
+      log(`${kind} run ${run.run_id}: refused, needs a full run (Tally ${top.alterId}, mark ${run.mark})`);
+      return report;
     } else {
-      /* Above the LOWER of the mark and Tally's highest now (0117, D-1-5.9): when
-         the newest voucher is deleted, Tally's highest falls, and a number it
-         hands out again would sit below the old mark. */
-      const from = Math.min(run.mark ?? 0, top.alterId);
+      const from = run.mark ?? 0;
       const [list, ms] = await timed(() => tally.changedSince(from));
       report.tallyReads++;
-      take(list);
-      await store.step(run.run_id, `read every voucher above AlterID ${from}`, "ok", list.length, ms,
-        from < (run.mark ?? 0) ? { alter_id_fell_from: run.mark, to: top.alterId } : null);
+      take(list, `the read above AlterID ${from}`, null);
+      await store.step(run.run_id, `read every voucher above AlterID ${from}`, "ok", list.length, ms, null);
     }
     await flush();
-    await store.step(run.run_id, "staged", "ok", report.staged, null, report.noGuid ? { left_out_no_guid: report.noGuid } : null);
-    const [res, msS] = await timed(() => store.swap(run.run_id, top.alterId, opts.floorPct));
+    await store.step(run.run_id, "staged", "ok", report.staged, null, null);
+    const [res, msS] = await timed(() => store.swap(run.run_id, top.alterId));
     report.swap = res;
     report.state = res.state;
     await store.step(run.run_id, res.state === "swapped" ? "swapped into the mirror" : `refused: ${res.reason}`, res.state === "swapped" ? "ok" : "failed", null, msS, res);
