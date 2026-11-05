@@ -60,7 +60,7 @@ if (ids.length !== 3 || !/^\d+$/.test(STAMP)) { console.error("usage: --jobs <co
 const c = erpTestQueueClient();
 const machine = agentMachineId(), key = agentMachineKey();
 const q = supabaseErpQueue(c, machine, key);
-const post = (url: string, xml: string) => tallyPost(url, xml, 180_000, true) as Promise<string>;
+const post = (url: string, xml: string, timeoutMs = 180_000) => tallyPost(url, xml, timeoutMs, true) as Promise<string>;
 const seams = tallySeams(TALLY_URL, post);
 
 function provenance() {

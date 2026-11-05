@@ -10,7 +10,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ErpJobAgent, Journal, bookedNumberOf, looksLikeTallyMessage, sameVoucherType, stampXml, alterIdAfterPush, type JournalEntry } from "../src/services/erpJobAgent.js";
+import { ErpJobAgent, Journal, bookedNumberOf, looksLikeTallyMessage, sameVoucherType, stampXml, alterIdAfterPush, tallySeams, STAMP_TIMEOUT_MS, type JournalEntry } from "../src/services/erpJobAgent.js";
 import type { SafePushResult } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
 import { memErpQueue } from "./rigs/lib/memErpQueue.js";
@@ -359,6 +359,30 @@ function agentFor(m: ReturnType<typeof memErpQueue>, sim: SimTally, j = journal(
     const reply = "<ENVELOPE><VOUCHER><MASTERID>7</MASTERID><ALTERID>91</ALTERID></VOUCHER><VOUCHER><MASTERID>8</MASTERID><ALTERID>92</ALTERID></VOUCHER></ENVELOPE>";
     ok("M3 the stamp is the AlterID of the one voucher with the push's MASTERID, else nothing",
       (await alterIdAfterPush(async () => reply, "ZZ CO", pl(1), "8")) === 92 && (await alterIdAfterPush(async () => reply, "ZZ CO", pl(1), "9")) === null);
+  }
+
+  // task 1-5 review item 3: the stamp read's timeout counts like a push's, and it has its own short timeout
+  {
+    const m = memErpQueue(); const sim = new SimTally();
+    const s1 = m.add(pl(72)), s2 = m.add(pl(73));
+    let pushes = 0;
+    const a = agentFor(m, sim, journal(), {
+      push: async (c, p) => { if (++pushes === 2) throw new Error("Tally request timed out after 180000 ms"); return sim.push("sim", c, p); },
+      find: async () => [],
+      stamp: async () => { throw new Error("Tally request timed out after 60000 ms"); },
+      probe: async () => false,
+    });
+    await a.runOnce(1);
+    ok("item 3: one stamp read timing out after a good push does not pause the queue on its own", !a.status.tallyMayShowMessage && m.rows.get(s1)!.state === "succeeded");
+    await a.runOnce(1);
+    ok("item 3: a stamp read that timed out and then a push that timed out: Tally may be showing a message, the queue pauses",
+      a.status.tallyMayShowMessage && m.rows.get(s2)!.state === "uncertain");
+    const paused = await a.runOnce(1);
+    ok("item 3: paused until Tally answers normally", !paused.held && a.status.red.some((x) => x.includes("may be showing a message")));
+    const seen: Array<number | undefined> = [];
+    const seams = tallySeams("http://127.0.0.1:9", async (_u, _x, t) => { seen.push(t); return "<ENVELOPE></ENVELOPE>"; });
+    await seams.stamp("ZZ CO", pl(1), "8");
+    ok("item 3: the stamp read goes to Tally with its own short timeout (60 s, a push has 180 s)", seen.length === 1 && seen[0] === STAMP_TIMEOUT_MS && STAMP_TIMEOUT_MS === 60_000, JSON.stringify(seen));
   }
 
   // pure helpers

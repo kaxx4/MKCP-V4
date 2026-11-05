@@ -39,7 +39,7 @@ if (!company) { console.error("MKCP_PRACTICE_COMPANY is not set"); process.exit(
 const c = erpTestQueueClient();
 const machine = agentMachineId(), key = agentMachineKey();
 const q = supabaseErpQueue(c, machine, key);
-const post = (url: string, xml: string) => tallyPost(url, xml, 180_000, true) as Promise<string>;
+const post = (url: string, xml: string, timeoutMs = 180_000) => tallyPost(url, xml, timeoutMs, true) as Promise<string>;
 const seams = tallySeams(TALLY_URL, post);
 const LABEL = "ZZ TEST 1-4 counter";
 

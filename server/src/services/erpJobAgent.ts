@@ -179,9 +179,17 @@ export function stampXml(company: string, isoDate: string, voucherType: string, 
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 }
 
+/**
+ * How long the stamp read may take (review 1-5 item 3, D-1-5.39). Shorter than
+ * a push's 180 s, so a Tally showing a message is noticed sooner, and above the
+ * 5 to 50 s a date-filtered read takes on the dummy (Tally scans every voucher
+ * for one, measured 5-Nov-2026).
+ */
+export const STAMP_TIMEOUT_MS = 60_000;
+
 /** The AlterID of the one voucher with this MASTERID in the stamp read, or null when it is not exactly one. */
-export async function alterIdAfterPush(post: (xml: string) => Promise<string>, company: string, p: VoucherPayload, masterId: string): Promise<number | null> {
-  const xml = await post(stampXml(company, p.date, p.voucherType, p.voucherNumber || undefined));
+export async function alterIdAfterPush(post: (xml: string, timeoutMs: number) => Promise<string>, company: string, p: VoucherPayload, masterId: string): Promise<number | null> {
+  const xml = await post(stampXml(company, p.date, p.voucherType, p.voucherNumber || undefined), STAMP_TIMEOUT_MS);
   const hits = [...xml.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0])
     .filter((v) => readTag(v, "MASTERID") === String(masterId));
   if (hits.length !== 1) return null;
@@ -258,6 +266,11 @@ export class ErpJobAgent {
       ...opts,
     } as any;
     this.journalOrStop({ kind: "boot", nonce: this.nonce, at: new Date().toISOString() });
+  }
+
+  /** Two Tally requests in a row that time out (a push or the stamp read after it): Tally may be showing a message (D5). */
+  private noteTallyError(msg: string): void {
+    if (looksLikeTallyMessage(msg) && ++this.timeouts >= 2) this.status.tallyMayShowMessage = true;
   }
 
   private journalOrStop(e: JournalEntry): void {
@@ -485,7 +498,7 @@ export class ErpJobAgent {
       } catch (e) {
         const msg = (e as Error).message;
         this.journalOrStop({ kind: "reply-lost", jobId: job.id, error: msg, at: new Date().toISOString() });
-        if (looksLikeTallyMessage(msg) && ++this.timeouts >= 2) this.status.tallyMayShowMessage = true;
+        this.noteTallyError(msg);
         const s = await this.readBack(job);
         return { id: job.id, key, outcome: s.state, detail: `no reply from Tally (${msg}); ${s.how}`, masterId: s.masterId };
       }
@@ -496,7 +509,10 @@ export class ErpJobAgent {
       /* M3: the A6 baseline, read once the push is in. A failed read is noted and never fails the job. */
       let alterId: number | null = null, stampError: string | null = null;
       if (outcome === "succeeded" && res.voucherId && this.o.stamp) {
-        try { alterId = await this.o.stamp(this.o.company, job.payload, res.voucherId); } catch (e) { stampError = (e as Error).message.slice(0, 200); }
+        /* Review 1-5 item 3: a stamp read that times out counts towards
+           "Tally may be showing a message", the same as a push that does. */
+        try { alterId = await this.o.stamp(this.o.company, job.payload, res.voucherId); this.timeouts = 0; }
+        catch (e) { const msg = (e as Error).message; stampError = msg.slice(0, 200); this.noteTallyError(msg); }
       }
       const detail = outcome === "succeeded" ? (bookedNumber && bookedNumber !== job.payload.voucherNumber
         ? `booked as ${bookedNumber} (renumbered); tell the Checker` : "read back and matched")
@@ -529,7 +545,7 @@ export function withCounterOverride(p: VoucherPayload): VoucherPayload {
 }
 
 /** The default Tally seams for a real run. */
-export function tallySeams(tallyUrl: string, post: (url: string, xml: string) => Promise<string>) {
+export function tallySeams(tallyUrl: string, post: (url: string, xml: string, timeoutMs?: number) => Promise<string>) {
   return {
     /* 1-4: an ERP job's number came from the counter and is tombstoned, and its
        REMOTEID is built from it. safePush must never quietly swap in "the next
@@ -542,7 +558,7 @@ export function tallySeams(tallyUrl: string, post: (url: string, xml: string) =>
        verified by number only, so it could never be confirmed. */
     push: (company: string, p: VoucherPayload) => safePush(tallyUrl, company, withCounterOverride(p)),
     find: (company: string, p: VoucherPayload) => findInTally((xml) => post(tallyUrl, xml), company, p),
-    stamp: (company: string, p: VoucherPayload, masterId: string) => alterIdAfterPush((xml) => post(tallyUrl, xml), company, p, masterId),
+    stamp: (company: string, p: VoucherPayload, masterId: string) => alterIdAfterPush((xml, t) => post(tallyUrl, xml, t), company, p, masterId),
     /* Party-keyed types read the party and date too; counter types the numbers only. */
     taken: (company: string, voucherType: string): Promise<Array<string | TakenVoucher>> => isPartyKeyedType(voucherType)
       ? takenVouchersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x))
