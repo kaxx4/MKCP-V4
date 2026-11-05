@@ -23,8 +23,8 @@
  * Task 1-3 builds the full agent (lease renewal, journal, settling); this is
  * the smallest path that proves the test queue end to end.
  */
-import os from "node:os";
 import { safePush, type SafePushResult } from "./safePush.js";
+import { agentMachineId, agentMachineKey } from "./supabaseClient.js";
 import { isSandbox, practiceCompany } from "./tallyRole.js";
 import type { VoucherPayload } from "../types.js";
 
@@ -49,8 +49,9 @@ export interface TestQueue {
   }): Promise<boolean>;
 }
 
-/** Identity: the machine, not the process (file 03 1-3 item 4). */
-export const TEST_AGENT_ID = `${os.hostname()}#erp-test`;
+/** Identity: the machine, not the process (file 03 1-3 item 4). The database
+ *  checks that it starts with the machine id the key belongs to (0109). */
+export const TEST_AGENT_ID = `${agentMachineId()}#erp-test`;
 
 /** Pure: why this job must not be pushed from here, or null. */
 export function testJobRefusal(job: Pick<TestJob, "company" | "payload" | "label">, env = process.env): string | null {
@@ -138,8 +139,9 @@ export function supabaseTestQueue(c: { rpc: (fn: string, args: Record<string, un
     return data as T;
   };
   return {
-    claim: (agent, limit, lease) => call<TestJob[]>("claim_erp_test_jobs", { p_agent: agent, p_limit: limit, p_lease_seconds: lease }),
-    markSent: (id, agent) => call<boolean>("mark_erp_test_job_sent", { p_id: id, p_agent: agent }),
+    claim: (agent, limit, lease) => call<TestJob[]>("claim_erp_test_jobs", {
+      p_machine: agentMachineId(), p_key: agentMachineKey(), p_agent: agent, p_limit: limit, p_lease_seconds: lease }),
+    markSent: (id, agent) => call<boolean>("mark_erp_test_job_sent", { p_id: id, p_agent: agent, p_machine: agentMachineId(), p_key: agentMachineKey() }),
     finish: (id, agent, state, f) => call<boolean>("finish_erp_test_job", {
       p_id: id, p_agent: agent, p_state: state, p_master_id: f.masterId ?? null,
       p_voucher_number: f.voucherNumber ?? null, p_result: f.result ?? null, p_error: f.error ?? null,

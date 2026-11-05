@@ -38,7 +38,7 @@ const PROJECT = "https://abcdefghijklmnopqrst.supabase.co";
 const SANDBOX_ON = {
   MKCP_TALLY_ROLE: "sandbox", MKCP_ERP_TEST_QUEUE: "on", MKCP_PRACTICE_COMPANY: "ZZ PRACTICE CO",
   MKCP_PRACTICE_COMPANY_GUID: "00000000-0000-0000-0000-000000000000", SUPABASE_URL: PROJECT,
-  SUPABASE_SERVICE_KEY: "not-a-real-key", MKCP_OFFLINE: undefined,
+  SUPABASE_SERVICE_KEY: "not-a-real-key", MKCP_OFFLINE: undefined, MKCP_ERP_AGENT_KEY: "not-a-real-machine-key",
 };
 
 (async () => {
@@ -72,6 +72,13 @@ const SANDBOX_ON = {
   ok("a sandbox without the switch is refused", /MKCP_ERP_TEST_QUEUE/.test(erpTestQueueRefusal({ ...SANDBOX_ON, MKCP_ERP_TEST_QUEUE: undefined }) ?? ""));
   ok("a sandbox without the practice GUID is refused", erpTestQueueRefusal({ ...SANDBOX_ON, MKCP_PRACTICE_COMPANY_GUID: "" }) !== null);
   ok("sandbox, switch on, practice company set: allowed", erpTestQueueRefusal(SANDBOX_ON) === null);
+  ok("1-3: a sandbox without its machine key is refused", /MKCP_ERP_AGENT_KEY/.test(erpTestQueueRefusal({ ...SANDBOX_ON, MKCP_ERP_AGENT_KEY: "" }) ?? ""));
+  ok("1-3: the sandbox may read is_test ERP jobs", f("/rest/v1/erp_jobs?is_test=eq.true&select=id,state", "GET") === null);
+  ok("1-3: a read of ERP jobs without is_test is refused", f("/rest/v1/erp_jobs?select=id", "GET") !== null);
+  ok("1-3: the sandbox may delete its named is_test proposals", f("/rest/v1/erp_proposals?id=in.(a,b)&is_test=eq.true", "DELETE") === null);
+  ok("1-3: a delete of ERP rows by is_test alone is refused", f("/rest/v1/erp_jobs?is_test=eq.true", "DELETE") !== null);
+  ok("1-3: a write to ERP jobs other than through the functions is refused", f("/rest/v1/erp_jobs?id=eq.a&is_test=eq.true", "PATCH") !== null);
+  ok("1-3: main's push_queue is still refused", f("/rest/v1/push_queue?select=id", "GET") !== null);
 
   H("THE PRODUCTION WRITE PATH STAYS SHUT");
   await withEnv(SANDBOX_ON, () => {

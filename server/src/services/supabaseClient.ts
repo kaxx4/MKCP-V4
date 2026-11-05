@@ -27,6 +27,7 @@
  * copy of the company has no business writing to shared state, and the two
  * settings would otherwise have to be kept in step by hand.
  */
+import os from "node:os";
 import { createClient, type SupabaseClient, type SupabaseClientOptions } from "@supabase/supabase-js";
 import { isSandbox } from "./tallyRole.js";
 
@@ -86,7 +87,14 @@ export function supabaseClient(options?: SupabaseClientOptions<"public">): Supab
 export const ERP_TEST_RPCS: readonly string[] = [
   "enqueue_erp_test_job", "claim_erp_test_jobs", "renew_erp_test_job",
   "mark_erp_test_job_sent", "finish_erp_test_job", "cancel_erp_test_job", "erp_stale_test_rows",
+  /* Task 1-3: the ERP queue's agent calls (migration 0109). Each one checks the
+     machine's own key in the database, and a sandbox key reaches only ZZ TEST
+     jobs, so this list is a second fence, not the only one (review M3). */
+  "erp_agent_take_lease", "claim_erp_jobs", "erp_renew_job", "erp_mark_job_sent",
+  "erp_finish_job", "erp_my_open_jobs", "erp_enqueue_test_job",
 ];
+/** ERP tables the sandbox may read (only is_test rows) and clean up (only rows it names). */
+export const ERP_TEST_ROW_TABLES: readonly string[] = ["erp_jobs", "erp_proposal_requests", "erp_proposals"];
 /** The only table it may name directly, for reading a job and deleting its own test rows. */
 export const ERP_TEST_TABLE = "erp_push_queue_test";
 
@@ -118,6 +126,14 @@ export function erpTestFence(url: string, method: string, projectUrl: string): s
     }
     return `refused: ${m} on ${ERP_TEST_TABLE}; writes go through its functions`;
   }
+  const t = /^\/rest\/v1\/([a-z_]+)$/.exec(path)?.[1];
+  if (t && ERP_TEST_ROW_TABLES.includes(t)) {
+    if (u.searchParams.get("is_test") !== "eq.true") return `refused: the sandbox reads and removes only is_test rows of ${t}`;
+    if (m === "GET" || m === "HEAD") return null;
+    if (m === "DELETE") return /^in\.\([^()*%]+\)$|^eq\.[^,()*%]+$/.test(u.searchParams.get("id") ?? "") ? null
+      : `refused: a delete on ${t} must name its rows by id`;
+    return `refused: ${m} on ${t}; jobs change only through the queue functions`;
+  }
   return `refused: ${path} is outside the ERP test queue. The sandbox laptop reaches nothing else.`;
 }
 
@@ -148,7 +164,26 @@ export function erpTestQueueRefusal(env: Record<string, string | undefined> = pr
     return "refused: the practice company name and GUID must both be set, so pushes can only reach the dummy.";
   }
   if (!env.SUPABASE_SERVICE_KEY) return "refused: SUPABASE_SERVICE_KEY is not set.";
+  if (!(env.MKCP_ERP_AGENT_KEY ?? "").trim()) {
+    return "refused: MKCP_ERP_AGENT_KEY is not set. The database refuses the test queue without this machine's registered key (task 1-3).";
+  }
   return null;
+}
+
+/**
+ * This machine's id on the ERP queue (the database names a claim by machine and
+ * boot). MKCP_AGENT_MACHINE_ID wins; otherwise the host name, made safe.
+ */
+export function agentMachineId(env: Record<string, string | undefined> = process.env): string {
+  const raw = (env.MKCP_AGENT_MACHINE_ID ?? "").trim() || os.hostname();
+  return raw.replace(/[^A-Za-z0-9_.-]/g, "-").slice(0, 64);
+}
+
+/** This machine's ERP queue key, or a thrown refusal (never logged, never sent anywhere but the database). */
+export function agentMachineKey(env: Record<string, string | undefined> = process.env): string {
+  const k = (env.MKCP_ERP_AGENT_KEY ?? "").trim();
+  if (!k) throw new Error("MKCP_ERP_AGENT_KEY is not set: this machine cannot work the ERP queue");
+  return k;
 }
 
 /** A Supabase client that can reach only the ERP test queue, or a thrown refusal. */
