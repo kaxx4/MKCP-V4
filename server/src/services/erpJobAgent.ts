@@ -129,7 +129,7 @@ export function looksLikeTallyMessage(err: string): boolean {
 const ms = (iso: string) => new Date(iso).getTime();
 
 // ── Reading Tally to settle ───────────────────────────────────────────────────
-/** Voucher types compared as Tally does: the queue says "Sales", the master is "SALES" (review H1, 6-Nov-2026). */
+/** Voucher types compared as Tally does: the queue says "Sales", the master is "SALES" (review H1, 5-Nov-2026). */
 export const sameVoucherType = (a: string | undefined, b: string | undefined): boolean =>
   (a ?? "").trim().toUpperCase() === (b ?? "").trim().toUpperCase();
 
@@ -299,7 +299,7 @@ export class ErpJobAgent {
       await this.finishWithRetry(job, "uncertain", { result: { settled: "read-back", readFailures: this.o.readTries }, error: `This may already be in the books: ${how}` });
       return { state: "uncertain", how };
     }
-    /* M3 (review, 6-Nov-2026): with no voucher number, one match on date, type,
+    /* M3 (review, 5-Nov-2026): with no voucher number, one match on date, type,
        party and amount may be a different voucher (a hand-typed twin), so a read
        never settles it as succeeded. It stays uncertain for a person. */
     if (!job.payload.voucherNumber && found.length > 0) {

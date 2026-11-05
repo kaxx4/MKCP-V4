@@ -4,7 +4,7 @@
  * wrapper that fails the database call), one scenario at a time, and records
  * what the claim path did. A scenario's "expect" is the plan's rule (file 06
  * section 7, file 16 H-7); a miss is a finding for task 1-3, not hidden.
- * Since the 1-3 review (M4, 6-Nov-2026) every fault also runs through the ERP
+ * Since the 1-3 review (M4, 5-Nov-2026) every fault also runs through the ERP
  * queue agent (`services/erpJobAgent.ts`) on the in-memory queue with 0109's
  * rules: boot A runs once, its lease runs out, boot B of the same machine runs
  * once and settles what A left. Those rows are under `erpAgent` in the report.

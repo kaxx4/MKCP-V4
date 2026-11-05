@@ -5,7 +5,7 @@
  * replays real Tally answers through the mock transport in `tallyMock.ts`).
  * Mock half: 20 ZZ TEST jobs through the ERP test-queue claim path, in memory,
  * against the simulated Tally; every job must book exactly once. Since the 1-3
- * review (M4, 6-Nov-2026) the same 20 jobs also run through the ERP queue agent
+ * review (M4, 5-Nov-2026) the same 20 jobs also run through the ERP queue agent
  * (`services/erpJobAgent.ts`) on the in-memory queue with 0109's rules, two boots.
  *
  *   npx tsx scripts/rigs/r1-replay-and-mock.ts --out <file.json>

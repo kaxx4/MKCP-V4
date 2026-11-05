@@ -117,7 +117,7 @@ const signed = (a: number, dr: boolean) => r2(dr ? -Math.abs(a) : Math.abs(a));
  * matches below did not check the type before, so this also stops a Receipt
  * being taken for a Payment with the same number (so the number match now
  * also requires the type). Tally's string `=` ignores case (proved on the dummy,
- * 6-Nov-2026: "Sales" finds the SALES master's vouchers). The number is filtered only by a
+ * 5-Nov-2026: "Sales" finds the SALES master's vouchers). The number is filtered only by a
  * caller that matches by number alone (the ERP agent's read-back), never by
  * the verify step here, whose narration and money fallbacks need the
  * vouchers without the number.
@@ -370,7 +370,7 @@ export async function safePush(
     return { ok: false, stage: "guard", voucherId: null, errors: [`Generated XML is malformed: ${wellFormed}`], warnings: guard.warnings, differences: [] };
   }
 
-  /* The read-back request is built BEFORE the push (review M1, 6-Nov-2026):
+  /* The read-back request is built BEFORE the push (review M1, 5-Nov-2026):
      building it can refuse (a double quote cannot go in a TDL string), and a
      refusal after Tally has created the voucher would leave it booked and
      unverified. */

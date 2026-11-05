@@ -75,7 +75,7 @@ export const NUMBER_PATTERNS: RegExp[] = [
   /^FID[-/]/i,
 ];
 /**
- * Report only, never deleted (task 1-3 review, 6-Nov-2026): number shapes older
+ * Report only, never deleted (task 1-3 review, 5-Nov-2026): number shapes older
  * scripts used that the sweep and the patterns above do not match. They are
  * listed so a person can decide; `--delete` never acts on them, because these
  * prefixes are short enough that a real voucher could share one.

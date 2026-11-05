@@ -173,7 +173,7 @@ export function erpTestQueueRefusal(env: Record<string, string | undefined> = pr
 /**
  * This machine's id on the ERP queue (the database names a claim by machine and
  * boot). Set MKCP_AGENT_MACHINE_ID to a neutral name such as `sandbox-laptop-1`
- * or `office-pc-1`, never the Windows host name (review L6, 6-Nov-2026). Unset,
+ * or `office-pc-1`, never the Windows host name (review L6, 5-Nov-2026). Unset,
  * it is `unnamed-machine`, which no database row registers, so the queue refuses it.
  *
  * The key (MKCP_ERP_AGENT_KEY) is 32 random bytes as hex, made on the machine
