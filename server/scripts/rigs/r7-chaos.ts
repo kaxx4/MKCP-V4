@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Rig R7: chaos schedule (task 1-0). Offline. Three agents drain 30 ZZ TEST jobs
  * from one in-memory queue while a timed schedule switches Tally faults on and
  * off and kills and restarts agents. Counts, at the end: jobs booked twice
