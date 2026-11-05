@@ -104,6 +104,8 @@ export const ERP_TEST_RPCS: readonly string[] = [
      one-day re-pulls and the job-to-mirror check. The same machine and
      ZZTEST company-key checks apply in the database. */
   "erp_sync_stage_ledgers", "erp_sync_check_days", "erp_sync_repull_start", "erp_job_mirror_check",
+  /* Task 1-5 review (migration 0120): the planner's weekly clock, read only. */
+  "erp_sync_last_full_run",
 ];
 /** ERP mirror tables the sandbox may read (GET only, only is_test rows), task 1-5. */
 export const ERP_TEST_READ_TABLES: readonly string[] = [

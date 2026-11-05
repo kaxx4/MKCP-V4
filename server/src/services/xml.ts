@@ -247,7 +247,12 @@ function readText(inner: string): string {
  *   "995.24/PC"             → 995.24
  *   "₹ 1,23,456"            → 123456
  */
-export function parseTallyAmount(raw: unknown): number | null {
+export function parseTallyAmount(raw: unknown, opts?: { strict?: boolean }): number | null {
+  /* strict (task 1-5 review M6, 6-Nov-2026): for a field that holds only an
+     amount, such as a ledger's ClosingBalance. Anything after the number but
+     a Dr or Cr, or text with no number in it, throws instead of reading as a
+     number or as nothing (G7). */
+  const strict = opts?.strict === true;
   if (raw === null || raw === undefined) return null;
   let s = String(raw).replace(/[ \s]+/g, " ").trim();
   if (!s) return null;
@@ -255,11 +260,15 @@ export function parseTallyAmount(raw: unknown): number | null {
   if (/^\(\s*-\s*\)/.test(s)) { neg = true; s = s.replace(/^\(\s*-\s*\)\s*/, ""); }
   s = s.replace(/^(?:₹|Rs\.?|INR)\s*/i, "");
   const m = /^([+-]?)\s*(\d[\d,]*(?:\.\d+)?|\.\d+)/.exec(s);
-  if (!m) return null;
+  if (!m) {
+    if (strict) throw new Error(`not an amount (${String(raw).slice(0, 20)})`);
+    return null;
+  }
   let n = parseFloat(m[2].replace(/,/g, ""));
   if (!Number.isFinite(n)) return null;
   if (m[1] === "-") neg = !neg;
   const rest = s.slice(m[0].length).trim();
+  if (strict && rest && !/^(Dr|Cr)\.?$/i.test(rest)) throw new Error(`an amount with text after it (${String(raw).slice(0, 20)})`);
   if (/^Dr\b/i.test(rest)) neg = true;
   else if (/^Cr\b/i.test(rest)) neg = false;
   n = neg ? -n : n;

@@ -54,13 +54,27 @@
  *   voucher's GUID, and the database compares key, date and AlterID with the
  *   mirror. Each day that differs queues a one-day re-pull (kind "repull"),
  *   which keeps the mark. planMirrorWork says what to run next.
+ *
+ * -- Review fixes (6-Nov-2026, migration 0120) -----------------------------
+ * - The ledgers are read with SVFROMDATE (the year's 1 April) and SVTODATE
+ *   (today, India time), and every row carries that balance_as_of date (M2).
+ * - A balance Tally leaves empty is 0, as Tally shows it and today's
+ *   converter writes it; the row says closing_balance_sent false (M1). A
+ *   balance with text after the number fails the run (parseTallyAmount,
+ *   strict, M6).
+ * - A one-day run (every re-pull) is judged by the database's per-day rule
+ *   only, and trusts a small day's count only because the "read <day>" step
+ *   is written after every voucher of that read passed its checks (H1).
+ * - lastFullRun is the planner's weekly clock: the last full run that was not
+ *   a re-pull (M4).
  */
 import { createHmac } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CollectionDef } from "../types.js";
 import { tallyPost } from "../tally.js";
 import { buildCollectionXml, buildChangedVoucherXml } from "./xmlBuilder.js";
-import { convertVouchers } from "../converters/convert.js";
+import { convertVouchers, txt as tallyText, arr as tallyList } from "../converters/convert.js";
+import { parseTallyAmount, tallyDate } from "./xml.js";
 
 /** The ERP mirror's voucher fields for this half: header, identity, ledger lines (for totals). */
 export const ERP_MIRROR_VOUCHER_DEF: CollectionDef = {
@@ -109,6 +123,8 @@ export interface MirrorLedgerRow {
   alter_id: number | null;
   master_id: number | null;
   row: Record<string, unknown>;
+  /** The date Tally was asked for (SVTODATE), YYYY-MM-DD (0120 M2). */
+  balance_as_of: string;
 }
 
 /** One ledger as Tally sent it (strings), before it is checked. */
@@ -207,14 +223,26 @@ export function mirrorRowFrom(v: any, opts: { scrub: false } | { scrub: true; sa
 
 /**
  * Pure: a ledger balance as Tally writes it ("-1234.50", Tally's own sign,
- * negative is debit). Empty means Tally sent none (null, never 0); anything
- * else that is not a plain number throws, so it can never read as 0 (G7).
+ * negative is debit), through the one amount reader, parseTallyAmount, in its
+ * strict mode (0120 M6): text after the number, other than Dr or Cr, throws,
+ * so it can never be read as a number it is not (G7). Empty means Tally sent
+ * none: null here; the row stores 0 and says so (ledgerRowFrom, M1).
  */
 export function parseBalance(s: unknown): number | null {
-  const t = String(s ?? "").trim().replace(/,/g, "");
-  if (!t) return null;
-  if (!/^-?\d+(\.\d+)?$/.test(t)) throw new Error(`a ledger balance that does not parse (${t.slice(0, 20)})`);
-  return Math.round(parseFloat(t) * 100) / 100;
+  const n = parseTallyAmount(s, { strict: true });
+  return n === null ? null : Math.round(n * 100) / 100;
+}
+
+/** Today in India, YYYY-MM-DD (never the UTC date). */
+export function indiaToday(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
+/** The period the ledger balances are read for (0120 M2): the financial year's 1 April to `asOf`. */
+export function ledgerPeriod(asOf: string): { from: string; to: string } {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) throw new Error(`refused: ${asOf} is not a YYYY-MM-DD date`);
+  const y = Number(asOf.slice(0, 4)), mth = Number(asOf.slice(5, 7));
+  return { from: `${mth >= 4 ? y : y - 1}-04-01`, to: asOf };
 }
 
 /** Pure: why this ledger cannot be trusted as read, or null. */
@@ -226,29 +254,34 @@ export function ledgerProblem(l: TallyLedger): string | null {
 }
 
 /** Pure: one checked ledger to a staging row. Test runs store names only as stand-ins. */
-export function ledgerRowFrom(l: TallyLedger, opts: { scrub: false } | { scrub: true; salt: string }): MirrorLedgerRow {
+export function ledgerRowFrom(l: TallyLedger, opts: { scrub: false } | { scrub: true; salt: string }, asOf: string): MirrorLedgerRow {
   const name = (kind: string, s: string) => (opts.scrub ? scrubName(kind, s, opts.salt) : (s || "").trim() || null);
+  const closing = parseBalance(l.closingbalance), opening = parseBalance(l.openingbalance);
   return {
     key: String(l.guid).trim(),
     name: name("LEDGER", l.name)!,
     parent: name("GROUP", l.parent),
-    closing_balance: parseBalance(l.closingbalance),
-    opening_balance: parseBalance(l.openingbalance),
+    /* 0120 M1 (coordinator ruling, 6-Nov-2026): Tally leaves a nil balance
+       empty and shows it as nil, today's converter writes it as 0 (convert.ts
+       openingbalance) and live tally_ledgers holds 0, so 0 it is. The row
+       keeps the marker. */
+    closing_balance: closing ?? 0,
+    opening_balance: opening ?? 0,
     alter_id: Number(l.alterid) || null,
     master_id: Number(l.masterid) || null,
-    row: { closing_balance_sent: String(l.closingbalance ?? "").trim() !== "" },
+    row: { closing_balance_sent: closing !== null, opening_balance_sent: opening !== null },
+    balance_as_of: asOf,
   };
 }
 
 /** Pure: the ledgers out of a parsed Ledger collection reply (the shape convertLedgers reads). */
 export function ledgersFromParsed(parsed: any): TallyLedger[] {
-  const txt = (v: any): string => v == null ? "" : typeof v === "object" ? String(v["#text"] ?? "") : String(v);
+  /* The converter's own field readers (0120 M6): typed values, the &#4;
+     prefix Tally puts on group names, one element or a list. */
   const col = parsed?.ENVELOPE?.BODY?.DATA?.COLLECTION;
-  const raw = col?.LEDGER ?? col?.["LEDGER.LIST"];
-  const list = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
-  return list.map((l: any) => ({
-    guid: txt(l?.GUID).trim(), name: (txt(l?.["@_NAME"]) || txt(l?.NAME)).trim(), parent: txt(l?.PARENT).trim(),
-    closingbalance: txt(l?.CLOSINGBALANCE), openingbalance: txt(l?.OPENINGBALANCE), alterid: txt(l?.ALTERID), masterid: txt(l?.MASTERID),
+  return tallyList(col?.LEDGER ?? col?.["LEDGER.LIST"]).map((l: any) => ({
+    guid: tallyText(l?.GUID).trim(), name: (tallyText(l?.["@_NAME"]) || tallyText(l?.NAME)).trim(), parent: tallyText(l?.PARENT).trim(),
+    closingbalance: tallyText(l?.CLOSINGBALANCE), openingbalance: tallyText(l?.OPENINGBALANCE), alterid: tallyText(l?.ALTERID), masterid: tallyText(l?.MASTERID),
   }));
 }
 
@@ -271,8 +304,8 @@ export interface MirrorTally {
   vouchersOn(day: string): Promise<any[]>;
   /** Converted vouchers whose AlterID is above `mark` (any date). */
   changedSince(mark: number): Promise<any[]>;
-  /** Every ledger master with its closing balance (one request). */
-  ledgers(): Promise<TallyLedger[]>;
+  /** Every ledger master with its closing balance as of `asOf` (one request, SVFROMDATE and SVTODATE). */
+  ledgers(asOf: string): Promise<TallyLedger[]>;
 }
 
 /** One voucher as the nightly check sends it: key, ISO date, AlterID (raw; the database checks each). */
@@ -300,6 +333,8 @@ export interface MirrorStore {
   repullStart(): Promise<{ run_id: string; scope_from: string; scope_to: string; mark: number | null; repull_id?: string } | null>;
   /** The nightly key compare (A11): the database compares and queues the re-pulls. */
   checkDays(tallyHighest: number, vouchers: DayCheckVoucher[]): Promise<Record<string, any>>;
+  /** The last swapped full run that was not a re-pull, the planner's weekly clock (0120 M4). */
+  lastFullRun(): Promise<{ run_id: string; finished_at: string } | null>;
 }
 
 /** Throws unless the parsed reply is a collection (an error envelope is never "empty"). */
@@ -341,8 +376,10 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
       const parsed = assertParsedCollection(await post(tallyUrl, buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, company, mark), ERP_MIRROR_VOUCHER_DEF.timeout, false), `the read above AlterID ${mark}`);
       return convertVouchers(parsed).tallymessage;
     },
-    async ledgers() {
-      const parsed = assertParsedCollection(await post(tallyUrl, buildCollectionXml(ERP_MIRROR_LEDGER_DEF, company), ERP_MIRROR_LEDGER_DEF.timeout, false), "the ledger read");
+    async ledgers(asOf: string) {
+      const p = ledgerPeriod(asOf);
+      const xml = buildCollectionXml(ERP_MIRROR_LEDGER_DEF, company, undefined, undefined, { SVFROMDATE: tallyDate(p.from), SVTODATE: tallyDate(p.to) });
+      const parsed = assertParsedCollection(await post(tallyUrl, xml, ERP_MIRROR_LEDGER_DEF.timeout, false), "the ledger read");
       return ledgersFromParsed(parsed);
     },
   };
@@ -367,6 +404,7 @@ export function supabaseMirrorStore(c: SupabaseClient, machine: string, key: str
     stageLedgers: async (run, rows) => Number(await call("erp_sync_stage_ledgers", { p_run: run, p_rows: rows })),
     repullStart: async () => (await call("erp_sync_repull_start", { p_company_key: companyKey, p_is_test: isTest })) ?? null,
     checkDays: async (tallyHighest, vouchers) => call("erp_sync_check_days", { p_company_key: companyKey, p_is_test: isTest, p_tally_highest: tallyHighest, p_vouchers: vouchers }),
+    lastFullRun: async () => (await call("erp_sync_last_full_run", { p_company_key: companyKey, p_is_test: isTest })) ?? null,
   };
 }
 
@@ -384,6 +422,8 @@ export interface MirrorSyncReport {
   tallyReads: number;
   /** Ledgers staged with the run (null when none were read). */
   ledgers: number | null;
+  /** The date the ledger balances were read for (null when none were read). */
+  ledgersAsOf: string | null;
 }
 
 const STAGE_BATCH = 500;
@@ -400,6 +440,8 @@ export async function runMirrorSync(opts: {
   scope?: { from: string; to: string };
   /** Read the ledger masters with the run (default yes). */
   ledgers?: boolean;
+  /** The date to read the balances for (default today in India). */
+  ledgersAsOf?: string;
   log?: (line: string) => void;
 }): Promise<MirrorSyncReport> {
   return (await runMirror({ ...opts }))!;
@@ -414,13 +456,14 @@ async function runMirror(opts: {
   store: MirrorStore; tally: MirrorTally; kind: "full" | "incremental" | "repull";
   scope?: { from: string; to: string };
   ledgers?: boolean;
+  ledgersAsOf?: string;
   log?: (line: string) => void;
 }): Promise<MirrorSyncReport | null> {
   const { store, tally, kind } = opts;
   if (store.isTest && !store.scrubSalt) throw new Error("refused: a test run must scrub names, and the store has no salt");
   const scrubOpts = store.isTest ? { scrub: true as const, salt: store.scrubSalt! } : { scrub: false as const };
   const log = opts.log ?? ((l: string) => console.log(`[erpMirror] ${l}`));
-  const report: MirrorSyncReport = { run_id: null, kind, state: "failed", scope: null, markCandidate: null, read: 0, staged: 0, noGuid: 0, swap: null, error: null, tallyReads: 0, ledgers: null };
+  const report: MirrorSyncReport = { run_id: null, kind, state: "failed", scope: null, markCandidate: null, read: 0, staged: 0, noGuid: 0, swap: null, error: null, tallyReads: 0, ledgers: null, ledgersAsOf: null };
   const run = kind === "repull" ? await store.repullStart() : await store.start(kind, opts.scope);
   if (!run) return null;
   const readLedgers = kind !== "repull" && opts.ledgers !== false;
@@ -488,7 +531,9 @@ async function runMirror(opts: {
     if (readLedgers) {
       /* M-6: the ledgers and their closing balances, one request, checked
          before any is kept. An empty list is never "no ledgers". */
-      const [list, msL] = await timed(() => tally.ledgers());
+      const asOf = opts.ledgersAsOf ?? indiaToday();
+      ledgerPeriod(asOf);   // a bad date refuses before Tally is asked
+      const [list, msL] = await timed(() => tally.ledgers(asOf));
       report.tallyReads++;
       if (!list.length) throw new Error("refused: the ledger read came back empty, which is not a list of ledgers, so the run fails and nothing is swapped");
       const problems = list.map(ledgerProblem).filter((p): p is string => !!p);
@@ -496,12 +541,13 @@ async function runMirror(opts: {
         const counts = [...new Set(problems)].map((p) => `${problems.filter((x) => x === p).length} with ${p}`).join("; ");
         throw new Error(`refused: the ledger read returned ledgers that cannot be trusted as read (${counts}), so the run fails and nothing is swapped`);
       }
-      const rows = list.map((l) => ledgerRowFrom(l, scrubOpts));
+      const rows = list.map((l) => ledgerRowFrom(l, scrubOpts, asOf));
       let n = 0;
       for (let i = 0; i < rows.length; i += STAGE_BATCH) n = await store.stageLedgers(run.run_id, rows.slice(i, i + STAGE_BATCH));
       report.ledgers = n;
+      report.ledgersAsOf = asOf;
       await store.step(run.run_id, "read and staged the ledgers with their closing balances", "ok", n, msL,
-        { with_closing_balance: rows.filter((r) => r.closing_balance !== null).length });
+        { balance_as_of: asOf, closing_balance_sent: rows.filter((r) => r.row.closing_balance_sent).length });
     }
     const [res, msS] = await timed(() => store.swap(run.run_id, top.alterId));
     report.swap = res;

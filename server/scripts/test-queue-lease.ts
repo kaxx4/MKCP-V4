@@ -10,7 +10,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ErpJobAgent, Journal, bookedNumberOf, looksLikeTallyMessage, sameVoucherType, type JournalEntry } from "../src/services/erpJobAgent.js";
+import { ErpJobAgent, Journal, bookedNumberOf, looksLikeTallyMessage, sameVoucherType, stampXml, alterIdAfterPush, type JournalEntry } from "../src/services/erpJobAgent.js";
 import type { SafePushResult } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
 import { memErpQueue } from "./rigs/lib/memErpQueue.js";
@@ -339,6 +339,26 @@ function agentFor(m: ReturnType<typeof memErpQueue>, sim: SimTally, j = journal(
       (st(contra).result as Record<string, unknown> | null)?.number_taken === true && (st(contra).result as Record<string, unknown>)?.number === pl(45).voucherNumber);
     ok("M2 a refusal because Tally could not be read says number_unread, not number_taken",
       (st(unread).result as Record<string, unknown> | null)?.number_unread === true && (st(unread).result as Record<string, unknown>)?.number_taken === undefined, JSON.stringify(st(unread).result));
+  }
+
+  // task 1-5 review M3: the AlterID read right after a push is the A6 baseline
+  {
+    const m = memErpQueue(); const sim = new SimTally();
+    const id1 = m.add(pl(70)); const id2 = m.add(pl(71));
+    let n = 0;
+    const a = agentFor(m, sim, journal(), { stamp: async () => { n++; if (n === 2) throw new Error("ZZ TEST stamp read failed"); return 358700 + n; } });
+    await a.runOnce(2);
+    const r1 = m.rows.get(id1)!.result as Record<string, unknown> | null, r2 = m.rows.get(id2)!.result as Record<string, unknown> | null;
+    ok("M3 the AlterID read right after the push goes to the queue as result.alter_id", m.rows.get(id1)!.state === "succeeded" && r1?.alter_id === 358701, JSON.stringify(r1));
+    ok("M3 a failed stamp read never fails the job; it is noted, and the mirror's first sighting is the fallback",
+      m.rows.get(id2)!.state === "succeeded" && r2?.alter_id === undefined && /stamp read failed/.test(String(r2?.alter_id_unread ?? "")), JSON.stringify(r2));
+    const x = stampXml("ZZ CO", "2026-04-10", "Contra", "ZZTEST1/1");
+    ok("M3 the stamp read has an <ID>, names its fields with no *, and is filtered by date, type and number inside Tally",
+      x.includes("<ID>MkStamp</ID>") && x.includes('<COLLECTION NAME="MkStamp"') && x.includes(">AlterID<") && x.includes(">MasterId<")
+        && !/<NATIVEMETHOD>[^<]*\*/.test(x) && x.includes("= 20260410") && x.includes("$VoucherTypeName") && x.includes("$VoucherNumber") && x.includes("<SVCURRENTCOMPANY>ZZ CO<"));
+    const reply = "<ENVELOPE><VOUCHER><MASTERID>7</MASTERID><ALTERID>91</ALTERID></VOUCHER><VOUCHER><MASTERID>8</MASTERID><ALTERID>92</ALTERID></VOUCHER></ENVELOPE>";
+    ok("M3 the stamp is the AlterID of the one voucher with the push's MASTERID, else nothing",
+      (await alterIdAfterPush(async () => reply, "ZZ CO", pl(1), "8")) === 92 && (await alterIdAfterPush(async () => reply, "ZZ CO", pl(1), "9")) === null);
   }
 
   // pure helpers

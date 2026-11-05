@@ -22,6 +22,13 @@
  *      queues one re-pull of it (A11);
  *   6. the re-pull prunes the swept voucher, keeps the mark, and the job is
  *      flagged vanished_from_tally (A7); the check is clean again.
+ * Review of batch 1 (migration 0120, 6-Nov-2026): the Contra goes on the
+ * window's smallest day, so step 6 is a small-day re-pull (under 5 vouchers)
+ * that prunes only from a checked read (H1); an empty balance is stored as 0
+ * and every ledger row carries its as-of date (M1, M2); the ledgers are read
+ * twice as of one date and must agree, and their sum per primary group must
+ * match Tally's own Trial Balance for that date (M2, counts only in the
+ * output); the job is linked on the AlterID read after the push (M3).
  * Everything is swept and every test row deleted. The tally_* tables are
  * never read or written. Every request to Tally goes through tallyPost, which
  * checks the practice company's GUID before sending anything.
@@ -43,7 +50,10 @@ import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/s
 import { practiceCompany, practiceGuid } from "../../src/services/tallyRole.js";
 import { safePush } from "../../src/services/safePush.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams } from "../../src/services/erpJobAgent.js";
-import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
+import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, indiaToday, ledgerPeriod, parseBalance, assertParsedCollection, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
+import { buildCollectionXml } from "../../src/services/xmlBuilder.js";
+import { txt as tallyText, arr as tallyList } from "../../src/converters/convert.js";
+import { fetchReport, REPORTS } from "../../src/services/tallyReports.js";
 import { rigPayload } from "./lib/simTally.js";
 import { isSweepVoucher } from "../lib/testVoucherMatch.js";
 import type { VoucherPayload } from "../../src/types.js";
@@ -110,15 +120,18 @@ function pickWindow(byDay: Record<string, number>) {
     if (!win) throw new Error("no short window of days with 20 to 200 vouchers and a day of 6 or more");
     const scope = { from: win.from, to: win.to };
     const busy = eachDay(win.from, win.to).sort((a, b) => (top.byDay[b] ?? 0) - (top.byDay[a] ?? 0))[0];
+    /* 0120 H1: the job goes on the window's smallest day, so the re-pull of step 6 is a small-day re-pull. */
+    const jobDay = eachDay(win.from, win.to).sort((a, b) => (top.byDay[a] ?? 0) - (top.byDay[b] ?? 0))[0];
+    const smallDay = (top.byDay[jobDay] ?? 0) + 1 < 5;
     const outside = eachDay(win.to, "2027-03-31")[1];   // the day after the window, inside the year
-    counts.tally = { vouchers: top.count, highestAlterId: top.alterId, keysRead: top.vouchers?.length, window: win, busiestDay: busy, busiestCount: top.byDay[busy], outsideDay: outside };
+    counts.tally = { vouchers: top.count, highestAlterId: top.alterId, keysRead: top.vouchers?.length, window: win, busiestDay: busy, busiestCount: top.byDay[busy], jobDay, jobDayCount: top.byDay[jobDay] ?? 0, smallDay, outsideDay: outside };
     step("picked a short window (Tally's own count per day, read first, with every voucher's key)", !!outside && (top.vouchers?.length ?? 0) === top.count && top.vouchers!.every((v) => v.k && v.d && v.a),
       `${win.days} days ${win.from} to ${win.to}: ${win.count} vouchers; busiest ${busy} with ${top.byDay[busy]}; Tally holds ${top.count}, highest AlterID ${top.alterId}; every one of ${top.vouchers?.length} keys read`);
 
     // 1. a full run with the ledgers
     const full = runs.full = await runMirrorSync({ store, tally, kind: "full", scope });
     const { count: nRows } = await c.from("erp_mirror_rows").select("key", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
-    const { data: leds } = await c.from("erp_mirror_ledgers").select("name,parent,closing_balance,row").eq("company_key", companyKey).eq("is_test", true).limit(5000);
+    const { data: leds } = await c.from("erp_mirror_ledgers").select("name,parent,closing_balance,row,balance_as_of").eq("company_key", companyKey).eq("is_test", true).limit(5000);
     const withBal = (leds ?? []).filter((l: any) => l.closing_balance !== null);
     const sumBal = Math.round(withBal.reduce((s: number, l: any) => s + Number(l.closing_balance), 0) * 100) / 100;
     counts.ledgers = { read: full.ledgers, inMirror: (leds ?? []).length, withClosingBalance: withBal.length, sentNone: (leds ?? []).filter((l: any) => l.row?.closing_balance_sent === false).length, sumOfClosingBalances: sumBal };
@@ -127,6 +140,36 @@ function pickWindow(byDay: Record<string, number>) {
       (full.ledgers ?? 0) > 0 && (leds ?? []).length === full.ledgers && withBal.length > 0,
       `${full.ledgers} ledgers read, ${(leds ?? []).length} in the mirror, ${withBal.length} with a closing balance, sum ${sumBal}`);
     step("ledger and group names from the dummy are stored only as ZZ TEST stand-ins", (leds ?? []).every((l: any) => /^ZZ TEST\b/.test(l.name) && (!l.parent || /^ZZ TEST\b/.test(l.parent))));
+    const asOf = full.ledgersAsOf;
+    const empties = (leds ?? []).filter((l: any) => l.row?.closing_balance_sent === false);
+    step("0120 M1 and M2: every ledger row carries the as-of date Tally was asked for (today in India), and a balance Tally left empty is stored as 0, marked as not sent",
+      asOf === indiaToday() && (leds ?? []).every((l: any) => l.balance_as_of === asOf) && empties.every((l: any) => Number(l.closing_balance) === 0),
+      `as of ${asOf}; ${empties.length} empty balances stored as ${[...new Set(empties.map((l: any) => Number(l.closing_balance)))].join(",") || "none"}`);
+
+    // 0120 M2: the same figures twice, and the same figures as Tally's Trial Balance, as of one date (in memory, counts only)
+    const readA = await tally.ledgers(asOf!), readB = await tally.ledgers(asOf!);
+    const figs = (rs: typeof readA) => new Map(rs.map((l) => [l.guid, parseBalance(l.closingbalance) ?? 0]));
+    const fa = figs(readA), fb = figs(readB);
+    const sameTwice = fa.size === fb.size && [...fa].every(([g, v]) => fb.get(g) === v);
+    const groupDef = { name: "erpRigGroups", tallyCollection: "Group", metadataType: "Group", category: "master", fetch: ["Name", "Parent"], timeout: 120_000, parallel: false } as any;
+    const period = ledgerPeriod(asOf!);
+    const gParsed = assertParsedCollection(await post(TALLY_URL, buildCollectionXml(groupDef, company!)), "the group read");
+    const gcol = gParsed?.ENVELOPE?.BODY?.DATA?.COLLECTION;
+    const parentOf = new Map<string, string>(tallyList(gcol?.GROUP ?? gcol?.["GROUP.LIST"]).map((g: any) => [(tallyText(g?.["@_NAME"]) || tallyText(g?.NAME)).trim(), tallyText(g?.PARENT).trim()]));
+    const primary = (g: string) => { let x = g; for (let i = 0; i < 50 && parentOf.get(x) && parentOf.get(x) !== "Primary"; i++) x = parentOf.get(x)!; return x; };
+    const sums = new Map<string, number>();
+    for (const l of readA) { const k = primary(l.parent); sums.set(k, Math.round(((sums.get(k) ?? 0) + (parseBalance(l.closingbalance) ?? 0)) * 100) / 100); }
+    const tb = await fetchReport(TALLY_URL, company!, REPORTS.find((r) => r.key === "trial-balance")!, period);
+    const tbNet = new Map<string, number>(tb.rows.map((r) => [String(r.name ?? "").trim(), Math.round(((Number(r.debit) || 0) + (Number(r.credit) || 0)) * 100) / 100]));
+    const groups = [...sums].filter(([, v]) => v !== 0);
+    const same = groups.filter(([g, v]) => tbNet.has(g) && Math.abs(tbNet.get(g)! - v) < 0.01).length;
+    const flipped = groups.filter(([g, v]) => tbNet.has(g) && Math.abs(tbNet.get(g)! + v) < 0.01).length;
+    const matched = Math.max(same, flipped), sign = same >= flipped ? "the sign as Tally keeps it" : "the opposite sign";
+    counts.balanceProof = { asOf, period, ledgersReadA: readA.length, ledgersReadB: readB.length, sameTwice, groupsRead: parentOf.size,
+      primaryGroupsWithBalance: groups.length, trialBalanceRows: tb.rows.length, matchedTrialBalance: matched, sign, unmatched: groups.length - matched };
+    step("0120 M2: two ledger reads as of one date give the same figures", sameTwice && readA.length === full.ledgers, `${readA.length} and ${readB.length} ledgers as of ${asOf}`);
+    step("0120 M2: the ledgers' closing balances summed per primary group match Tally's Trial Balance for the same date",
+      groups.length > 0 && matched === groups.length, `${matched} of ${groups.length} primary groups match (${sign}); the Trial Balance has ${tb.rows.length} rows`);
 
     // 2. the nightly check right after
     const dc0 = runs.check0 = await runDayCheck({ store, tally });
@@ -134,13 +177,13 @@ function pickWindow(byDay: Record<string, number>) {
       JSON.stringify({ ...dc0.result, days: undefined }));
 
     // 3. one ZZTEST Contra through the ERP test queue
-    const p1 = { ...rigPayload(stamp, 1, busy), label: "ZZ TEST 1-5 checks" } as VoucherPayload;
+    const p1 = { ...rigPayload(stamp, 1, jobDay), label: "ZZ TEST 1-5 checks" } as VoucherPayload;
     if (!isSweepVoucher({ number: p1.voucherNumber ?? "", narration: p1.narration ?? "" }, "ZZTEST")) throw new Error("refused: not a shape the sweep can remove");
     const request = `ZZTEST-M${stamp}-1`;
     const { data: enq, error: ee } = await c.rpc("erp_enqueue_test_job", { p_machine: machine, p_key: key, p_payload: p1, p_request_id: request });
     if (ee) throw new Error(`enqueue: ${ee.message}`);
     made.push({ job: enq.job_id, proposal: enq.proposal_id, request });
-    pushedDays.add(busy);
+    pushedDays.add(jobDay);
     const agent = new ErpJobAgent({ queue: supabaseErpQueue(c, machine, key), journal: new Journal(journal), company: company!, ...tallySeams(TALLY_URL, post), leaseSeconds: 30, jobLeaseSeconds: 120 });
     let held = false;
     for (let i = 0; i < 20 && !held; i++) { held = await agent.heartbeat(); if (!held) await new Promise((r) => setTimeout(r, 3000)); }
@@ -152,6 +195,11 @@ function pickWindow(byDay: Record<string, number>) {
     step("the incremental reads it and the database links the job to its one mirror row (D-1-5.2)",
       inc1.state === "swapped" && inc1.read === 1 && sw(inc1).jobs?.linked === 1 && jc1.mapped_one === 1 && jc1.mapped_none.length === 0 && jc1.shared_create_master_ids.length === 0,
       `read ${inc1.read}, jobs ${JSON.stringify(sw(inc1).jobs)}, check ${JSON.stringify({ ...jc1 })}`);
+    const { data: link } = await c.from("erp_record_links").select("baseline_source,alter_id_seen").eq("is_test", true).eq("job_id", enq.job_id).maybeSingle();
+    const { data: jobAt } = await c.from("erp_jobs").select("alter_id_at_push,succeeded_at,result").eq("is_test", true).eq("id", enq.job_id).single();
+    step("0120 M3 and L4: the job records the AlterID read right after the push and when it succeeded, and the link takes that AlterID as its baseline",
+      (link as any)?.baseline_source === "push" && Number((jobAt as any)?.alter_id_at_push) > 0 && Number((link as any)?.alter_id_seen) === Number((jobAt as any)?.alter_id_at_push) && !!(jobAt as any)?.succeeded_at,
+      `baseline ${(link as any)?.baseline_source} at ${(link as any)?.alter_id_seen}; pushed at ${(jobAt as any)?.alter_id_at_push}${(jobAt as any)?.result?.alter_id_unread ? `; unread: ${(jobAt as any).result.alter_id_unread}` : ""}`);
 
     // 4. the Contra changed directly in the dummy (a hand edit)
     const edited = await safePush(TALLY_URL, company!, { ...p1, action: "Alter", narration: `ZZTEST${stamp} rig, changed in Tally` } as VoucherPayload);
@@ -162,7 +210,7 @@ function pickWindow(byDay: Record<string, number>) {
       `alter ${edited.ok ? "ok" : edited.errors[0]}; read ${inc2.read}; ${JSON.stringify(f2.map((f) => ({ kind: f.kind, detail: f.detail })))}`);
 
     // 5. swept from the dummy; a second Contra outside the window lifts Tally's highest above the mark again
-    const s1 = sweep(busy);
+    const s1 = sweep(jobDay);
     const p2 = { ...rigPayload(stamp, 2, outside), label: "ZZ TEST 1-5 checks" } as VoucherPayload;
     pushedDays.add(outside);
     const pr2 = await safePush(TALLY_URL, company!, p2);
@@ -171,19 +219,19 @@ function pickWindow(byDay: Record<string, number>) {
     const { data: q } = await c.from("erp_sync_repulls").select("day,state").eq("company_key", companyKey).eq("is_test", true);
     const dayRow = (dc1.result?.days ?? [])[0] ?? {};
     counts.check1 = { tallyHighest: dc1.tallyHighest, mark: m5?.alter_id, result: { ...dc1.result } };
-    step("A11: after the sweep the nightly check finds exactly the busiest day differing (one gone from Tally) and queues one re-pull of it",
+    step("A11: after the sweep the nightly check finds exactly the job's day differing (one gone from Tally) and queues one re-pull of it",
       s1.status === 0 && pr2.ok && (dc1.tallyHighest ?? 0) > (m5?.alter_id ?? Infinity) && dc1.state === "gaps" && dc1.result?.days_differing === 1 && dc1.result?.repulls_queued === 1
-        && dayRow.day === busy && dayRow.gone_from_tally === 1 && (q ?? []).length === 1 && (q ?? [])[0].day === busy && (q ?? [])[0].state === "queued",
+        && dayRow.day === jobDay && dayRow.gone_from_tally === 1 && (q ?? []).length === 1 && (q ?? [])[0].day === jobDay && (q ?? [])[0].state === "queued",
       `sweep exit ${s1.status}; second Contra ${pr2.ok ? "in" : pr2.errors[0]}; Tally ${dc1.tallyHighest} above the mark ${m5?.alter_id}; ${JSON.stringify(dayRow)}`);
 
     // 6. the re-pull
     const rp = runs.repull = await runRepull({ store, tally });
     const m6 = await mark();
     const f6 = await flags(enq.job_id);
-    step("A7: the one-day re-pull prunes the swept voucher, keeps the mark and its days, and the job is flagged vanished_from_tally",
+    step(`A7${smallDay ? " and 0120 H1" : ""}: the one-day re-pull of ${smallDay ? `a small day (${(top.byDay[jobDay] ?? 0) + 1} in the mirror before the sweep)` : "the job's day"} prunes the swept voucher from a checked read, keeps the mark and its days, and the job is flagged vanished_from_tally`,
       rp?.state === "swapped" && sw(rp).repull === true && sw(rp).pruned === 1 && sw(rp).jobs?.vanished_from_tally === 1 && rp?.ledgers === null
-        && m6?.alter_id === m5?.alter_id && m6?.scope_from === scope.from && m6?.scope_to === scope.to && f6.some((f) => f.kind === "vanished_from_tally" && !f.resolved_at),
-      `pruned ${sw(rp).pruned}, mark ${m5?.alter_id} to ${m6?.alter_id}, jobs ${JSON.stringify(sw(rp).jobs)}`);
+        && m6?.alter_id === m5?.alter_id && m6?.scope_from === scope.from && m6?.scope_to === scope.to && f6.some((f) => f.kind === "vanished_from_tally" && !f.resolved_at) && sw(rp).kind === "repull",
+      `kind ${sw(rp).kind}, pruned ${sw(rp).pruned}, mark ${m5?.alter_id} to ${m6?.alter_id}, jobs ${JSON.stringify(sw(rp).jobs)}`);
     const dc2 = runs.check2 = await runDayCheck({ store, tally });
     const jc2 = await jobCheck();
     step("the nightly check is clean again (the second Contra is outside the window and above the mark), and the job maps to no row",

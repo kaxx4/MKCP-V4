@@ -31,7 +31,7 @@ import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, 
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { safePush, vouchersOnDateXml, diffStored, numberTakenError, type SafePushResult } from "./safePush.js";
-import { readTag } from "./xml.js";
+import { readTag, escapeXml, tdlString, tallyDateInt } from "./xml.js";
 import { testJobRefusal, outcomeOf, type TestOutcome } from "./erpTestQueueAgent.js";
 import type { VoucherPayload } from "../types.js";
 import { takenNumbersOrThrow, takenVouchersOrThrow } from "./voucherNumbering.js";
@@ -150,6 +150,45 @@ export async function findInTally(post: (xml: string) => Promise<string>, compan
     .map((v) => ({ masterId: readTag(v, "MASTERID") }));
 }
 
+/**
+ * The read right after a push that gives the A6 baseline (task 1-5 review M3,
+ * 6-Nov-2026): the voucher's AlterID as Tally holds it once our push landed.
+ * safePush's read-back (MkVerify) returns MASTERID and GUID but not ALTERID
+ * unless asked (probed on the dummy 6-Nov-2026: 11 of 11 vouchers with a
+ * MASTERID, 0 with an ALTERID, G7), and that request is shared with today's
+ * push agent, so the ERP asks in its own request. Filtered inside Tally by
+ * date and type (and number when there is one).
+ */
+export function stampXml(company: string, isoDate: string, voucherType: string, voucherNumber?: string): string {
+  const stamp = tallyDateInt(isoDate);
+  const extra = [
+    ` AND ($VoucherTypeName = ${tdlString(voucherType)})`,
+    voucherNumber ? ` AND ($VoucherNumber = ${tdlString(voucherNumber)})` : "",
+  ].join("");
+  return `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkStamp</ID></HEADER>
+<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
+<TDL><TDLMESSAGE>
+<COLLECTION NAME="MkStamp" ISMODIFY="No">
+<TYPE>Voucher</TYPE>
+<NATIVEMETHOD>Date</NATIVEMETHOD><NATIVEMETHOD>VoucherNumber</NATIVEMETHOD><NATIVEMETHOD>VoucherTypeName</NATIVEMETHOD>
+<NATIVEMETHOD>MasterId</NATIVEMETHOD><NATIVEMETHOD>AlterID</NATIVEMETHOD><NATIVEMETHOD>Guid</NATIVEMETHOD>
+<FILTER>MkStampDate</FILTER>
+</COLLECTION>
+<SYSTEM TYPE="Formulae" NAME="MkStampDate">(($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${stamp})${extra}</SYSTEM>
+</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+}
+
+/** The AlterID of the one voucher with this MASTERID in the stamp read, or null when it is not exactly one. */
+export async function alterIdAfterPush(post: (xml: string) => Promise<string>, company: string, p: VoucherPayload, masterId: string): Promise<number | null> {
+  const xml = await post(stampXml(company, p.date, p.voucherType, p.voucherNumber || undefined));
+  const hits = [...xml.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0])
+    .filter((v) => readTag(v, "MASTERID") === String(masterId));
+  if (hits.length !== 1) return null;
+  const a = readTag(hits[0], "ALTERID");
+  return /^\d{1,18}$/.test(a) && Number(a) > 0 ? Number(a) : null;
+}
+
 // ── The agent ─────────────────────────────────────────────────────────────────
 export interface AgentStatus {
   red: string[];
@@ -187,6 +226,12 @@ export interface ErpJobAgentOpts {
    * check is skipped (the offline tests, whose fake Tally has no numbers).
    */
   taken?: (company: string, voucherType: string) => Promise<Array<string | TakenVoucher>>;
+  /**
+   * Task 1-5 review M3: the voucher's AlterID right after a push that
+   * succeeded, sent to erp_finish_job as result.alter_id (the A6 baseline).
+   * Null or a failed read leaves the baseline to the mirror's first sighting.
+   */
+  stamp?: (company: string, payload: VoucherPayload, masterId: string) => Promise<number | null>;
 }
 
 export interface RunReport {
@@ -199,7 +244,7 @@ export interface RunReport {
 export class ErpJobAgent {
   readonly nonce: string;
   readonly status: AgentStatus = { red: [], holder: null, lastHeartbeat: null, skewMs: null, tallyMayShowMessage: false };
-  private o: Required<Omit<ErpJobAgentOpts, "nonce" | "refuse" | "probe" | "taken">> & { refuse: NonNullable<ErpJobAgentOpts["refuse"]>; probe?: ErpJobAgentOpts["probe"]; taken?: ErpJobAgentOpts["taken"] };
+  private o: Required<Omit<ErpJobAgentOpts, "nonce" | "refuse" | "probe" | "taken" | "stamp">> & { refuse: NonNullable<ErpJobAgentOpts["refuse"]>; probe?: ErpJobAgentOpts["probe"]; taken?: ErpJobAgentOpts["taken"]; stamp?: ErpJobAgentOpts["stamp"] };
   private timeouts = 0;
 
   constructor(opts: ErpJobAgentOpts) {
@@ -448,6 +493,11 @@ export class ErpJobAgent {
       const bookedNumber = bookedNumberOf(res, job.payload);
       this.journalOrStop({ kind: "reply", jobId: job.id, outcome, stage: res.stage, masterId: res.voucherId, bookedNumber,
         errors: res.errors, differences: res.differences, at: new Date().toISOString() });
+      /* M3: the A6 baseline, read once the push is in. A failed read is noted and never fails the job. */
+      let alterId: number | null = null, stampError: string | null = null;
+      if (outcome === "succeeded" && res.voucherId && this.o.stamp) {
+        try { alterId = await this.o.stamp(this.o.company, job.payload, res.voucherId); } catch (e) { stampError = (e as Error).message.slice(0, 200); }
+      }
       const detail = outcome === "succeeded" ? (bookedNumber && bookedNumber !== job.payload.voucherNumber
         ? `booked as ${bookedNumber} (renumbered); tell the Checker` : "read back and matched")
         : outcome === "readback_differs" ? `stored differently: ${res.differences.join("; ")}`
@@ -456,6 +506,7 @@ export class ErpJobAgent {
       await this.finishWithRetry(job, outcome, {
         masterId: res.voucherId, bookedNumber,
         result: { stage: res.stage, warnings: res.warnings, differences: res.differences, errors: res.errors,
+          ...(alterId !== null ? { alter_id: alterId } : {}), ...(stampError ? { alter_id_unread: stampError } : {}),
           /* Tally itself said the number exists (an override push is never renumbered). */
           ...(outcome === "failed" && numberTakenError(res.errors) ? { number_taken: true, number: job.payload.voucherNumber } : {}) },
         error: outcome === "succeeded" ? null : detail,
@@ -491,6 +542,7 @@ export function tallySeams(tallyUrl: string, post: (url: string, xml: string) =>
        verified by number only, so it could never be confirmed. */
     push: (company: string, p: VoucherPayload) => safePush(tallyUrl, company, withCounterOverride(p)),
     find: (company: string, p: VoucherPayload) => findInTally((xml) => post(tallyUrl, xml), company, p),
+    stamp: (company: string, p: VoucherPayload, masterId: string) => alterIdAfterPush((xml) => post(tallyUrl, xml), company, p, masterId),
     /* Party-keyed types read the party and date too; counter types the numbers only. */
     taken: (company: string, voucherType: string): Promise<Array<string | TakenVoucher>> => isPartyKeyedType(voucherType)
       ? takenVouchersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x))

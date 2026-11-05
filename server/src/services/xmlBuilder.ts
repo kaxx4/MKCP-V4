@@ -24,9 +24,17 @@ export function buildCollectionXml(
   def: CollectionDef,
   company: string,
   fromDate?: string,
-  toDate?: string
+  toDate?: string,
+  /** Extra static variables, for example SVFROMDATE and SVTODATE on a master
+   *  read whose balances depend on the period (task 1-5 review M2). Absent:
+   *  the request is exactly as before. */
+  statics?: Record<string, string>
 ): string {
   assertKnownType(def.tallyCollection);   // an unknown TYPE raises a modal that kills the port
+  const staticLines = Object.entries(statics ?? {}).map(([k, v]) => {
+    if (!/^SV[A-Z]+$/.test(k)) throw new Error(`refused: ${k} is not a plain static variable name`);
+    return `\n<${k}>${esc(v)}</${k}>`;
+  }).join("");
   const colId = `MKCP_${def.tallyCollection}`;
 
   const fetchLines = def.fetch?.map(f => `<NATIVEMETHOD>${esc(f)}</NATIVEMETHOD>`).join("\n") ?? "";
@@ -53,7 +61,7 @@ export function buildCollectionXml(
 <DESC>
 <STATICVARIABLES>
 <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>
+<SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY>${staticLines}
 </STATICVARIABLES>
 <TDL>
 <TDLMESSAGE>

@@ -4,7 +4,7 @@
 // transactionParser.ts expects: { metadata: { type: "Voucher" }, date, vouchertypename, ... }
 // ─────────────────────────────────────────────────────────────────────
 
-function arr(v: any): any[] {
+export function arr(v: any): any[] {
   if (!v) return [];
   if (Array.isArray(v)) return v;
   return [v];
@@ -18,7 +18,7 @@ function arr(v: any): any[] {
  *   { "@_TYPE": "Rate" }  ← empty value
  * This function extracts the #text and strips the &#4; control char prefix.
  */
-function txt(v: any, fallback = ""): string {
+export function txt(v: any, fallback = ""): string {
   if (v === null || v === undefined) return fallback;
   if (typeof v === "string") return stripCtrl(v) || fallback;
   if (typeof v === "number" || typeof v === "boolean") return String(v);
