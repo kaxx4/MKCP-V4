@@ -197,10 +197,15 @@ async function eway(m: TallyMasters) {
 async function bulk(m: TallyMasters) {
   const steps: Step[] = [];
   const N = `ZZTEST/BULK${STAMP}`, rid = `MKCP|Sales|${N}|2026-27`;
-  const req = buildVoucherImportXml(COMPANY, sales("Sales", N, rid, m), m);
-  const res = await post(req);
+  /* 0-7 C13 (5-Nov-2026): through safePush, so pushGuard and the read-back run
+     on this invoice like on every real push (iron rule 1); it was a raw post. */
+  const before = await readVoucher(N);
+  steps.push({ step: "before: number not in the books", voucher: before });
+  const r = await safePush(U, COMPANY, sales("Sales", N, rid, m));
+  const req = r.requestXml ?? "", res = r.responseXml ?? "";
   const v = await readVoucher(N);
-  steps.push({ step: "create ONE B2B invoice and LEAVE it for a person to look at in Tally's e-invoice list", requestXml: req, responseXml: res, note: counts(res), voucher: v });
+  steps.push({ step: "create ONE B2B invoice and LEAVE it for a person to look at in Tally's e-invoice list", requestXml: req, responseXml: res,
+    note: `safePush ok=${r.ok} stage=${r.stage}${r.errors.length ? ` errors=${r.errors.join(" | ")}` : ""}${r.differences.length ? ` differences=${r.differences.join(" | ")}` : ""} ${res ? counts(res) : ""}`, voucher: v });
   steps.push({ step: "state", note: `IRN on the saved voucher: "${v ? fld(v, "IRN") : ""}" (empty means Tally has not marked it as sent)` });
   save("4-bulk-send-pickup", steps, !!v, `invoice ${N} left in the books for a person to check whether Tally's bulk e-invoice list shows it. NEVER press send. Remove with sweep afterwards.`);
 }
