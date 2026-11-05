@@ -4,7 +4,7 @@
 
 Nicknamed **sync agent**. Companion repo: kaxx4/MKCPWEB, nicknamed **web app**. Both read and write one Supabase project (`vmkytsytxlofjyeotmgb`). This repo is the only code on both sides of the TallyPrime boundary, so most hard rules live here.
 
-**Before large work read:** the rebuild hand-off package. It is a local folder on the owner's laptop (`MKCP\handoff\`, next to the `Live-Sync` checkouts), it is **not in this repo**, and nothing from it is ever committed or quoted here: start with its `00-START-HERE.md`, then the target architecture (file 14) and decision logic (file 13). Then `ARCHITECTURE.md` and `server/scripts/README.md` in this repo. Long-form Tally reference: Brain vault `07_Systems/Contracts/Talking to Tally — Push and Pull From Zero.md`.
+**Before large work read:** the rebuild hand-off package. It is a local folder on the owner's laptop (`MKCP\handoff\`, next to the `Live-Sync` checkouts), it is **not in this repo**, and nothing from it is ever committed or quoted here: start with its `00-START-HERE.md`, then the target architecture (file 14) and decision logic (file 13). Then `ARCHITECTURE.md` and the Scripts section below. Long-form Tally reference: Brain vault `07_Systems/Contracts/Talking to Tally — Push and Pull From Zero.md`.
 
 ## What runs here
 
@@ -101,7 +101,7 @@ AGENT_ALLOWED_ORIGINS=https://your-dashboard.example  # comma list, optional
 
 ## Scripts
 
-`server/scripts/` holds about 150 scripts; the name prefix says what each does. `test-*` asserts and exits non-zero on a failure; `probe-*` settles one field question; `explore-*` answers "what will Tally give us"; `verify-*` and `roundtrip-verify.ts` drive real writes and clean up after themselves (sandbox and dummy company only, through the write guard); `check-*`, `audit-*`, `dump-*` read and report. Prefer extending one to writing a new one; `server/scripts/README.md` lists them.
+`server/scripts/` holds about 150 scripts; the name prefix says what each does. `test-*` asserts and exits non-zero on a failure; `probe-*` settles one field question; `explore-*` answers "what will Tally give us"; `verify-*` and `roundtrip-verify.ts` drive real writes and clean up after themselves (sandbox and dummy company only, through the write guard); `check-*`, `audit-*`, `dump-*` read and report. Prefer extending one to writing a new one. There is no index file: each script says what it does in its own header comment, and `ls server/scripts` grouped by prefix is the list.
 
 `server/data/tally-log.jsonl` is the exception log: one row per interaction, with the full request and response XML kept for failures only (P8: persist the evidence of failure, not of success).
 
@@ -119,7 +119,7 @@ G1 one definition per concept. G5 identity from creation. G7 "returned nothing",
 | What Tally returned | `server/data/tally-log.jsonl` |
 | May this machine write | `tallyRole.ts`, `supabaseClient.ts` |
 | Would this voucher file wrong | `gstrExceptions.ts` |
-| Which script does what | `server/scripts/README.md` |
+| Which script does what | the Scripts section above, then the script's own header comment |
 | Why a rule exists | the hand-off package (files 07 and 13) and the rebuild decisions log, both local folders on the owner's laptop, not in this repo |
 
 ## Docs worth reading before large changes
@@ -127,5 +127,4 @@ G1 one definition per concept. G5 identity from creation. G7 "returned nothing",
 - `ARCHITECTURE.md`: process layout and the sync loop.
 - `TALLY_SYNC_GUIDE.md` and `TALLY_LIVE_SETUP.md`: operator-facing setup.
 - `ENGINE_FORMULAS_FOR_WEB.md`: the figures the web app re-derives (stale on discounts; the web CLAUDE.md says which).
-- `server/scripts/README.md`: what each script does.
 - The Brain vault (`Digital Directory\MKCP Brain`), especially `07_Systems/Contracts/Talking to Tally — Push and Pull From Zero.md`, the long-form version of the Tally section above. Update it after substantive work.
