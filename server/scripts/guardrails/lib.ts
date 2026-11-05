@@ -444,5 +444,20 @@ export function resolveWebDir(): string {
   const root = join(here, "..", "..", "..", "..");
   const cands = process.env.MKCP_WEB_DIR ? [resolve(process.env.MKCP_WEB_DIR)]
     : [join(root, "MKCP MOB2", "web-dashboard"), join(root, "MKCPWEB", "web-dashboard")];
-  return cands.find((c) => existsSync(c)) ?? cands[0];
+  const found = cands.find((c) => existsSync(c));
+  if (found) return found;
+  /* From a worktree under Live-Sync\wt\<lane> the sibling guess lands on a
+     folder that does not exist, and a spawn there fails with a bare ENOENT.
+     Say what to do instead (0-1 review, 5-Nov-2026). Non-fatal: callers that
+     degrade gracefully (the guardrails mark a check unverified) still can. */
+  if (!warnedWebDir) {
+    warnedWebDir = true;
+    console.error(`
+  The web app was not found at ${cands.join(" or ")}.
+  Set MKCP_WEB_DIR to its web-dashboard folder, for example
+    MKCP_WEB_DIR=C:/.../Live-Sync/wt/erp-rebuild-web/web-dashboard
+`);
+  }
+  return cands[0];
 }
+let warnedWebDir = false;

@@ -14,6 +14,7 @@ import { tallyPost, HEALTH_XML, resetListingCache } from "../src/tally.js";
 import { companyRefusal } from "../src/services/tallyRole.js";
 import { installMock, uninstallMock } from "../src/services/tallyMock.js";
 import { withTally, resetGate, gateState, TallyUnavailableError } from "../src/services/tallyGate.js";
+import { isDrainTestNumber } from "./lib/testVoucherMatch.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (name: string) => readFileSync(join(here, name), "utf-8");
@@ -35,9 +36,11 @@ async function main(): Promise<void> {
 
   console.log("\n  #102  the drain watcher treats only CLAUDE-TEST numbers as tests");
   const drain = read("watch-agent-drain.ts");
-  const prefixes = /TEST_PREFIXES\s*=\s*\[([^\]]*)\]/.exec(drain)?.[1] ?? "";
-  check("test prefixes include CLAUDE-TEST", /"CLAUDE-TEST"/.test(prefixes));
-  check("test prefixes do not include MKCP-", !/"MKCP-"/.test(prefixes));
+  /* The prefix list moved to lib/testVoucherMatch.ts (#102), so check the behaviour, not a source line. */
+  check("the drain watcher uses the shared matcher", /isDrainTestNumber\(/.test(drain));
+  check("test prefixes include CLAUDE-TEST", isDrainTestNumber("CLAUDE-TEST-1"));
+  check("test prefixes do not include MKCP-", !isDrainTestNumber("MKCP-01"));
+  check("the drain watcher is gated", /guardScriptWrites\("watch-agent-drain"\)/.test(drain));
 
   console.log("\n  #103  the sweep refuses a real MKCP- prefix");
   const sweep = read("sweep-test-vouchers.ts");

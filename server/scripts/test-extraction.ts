@@ -17,9 +17,11 @@ import { resolveName, resolveInvoice, resolvePayerFromNarration, type ExtractedI
 import { loadOpenBills, receivableBills, billsForParty } from "../src/services/billSettlement.js";
 import { planFromBankRows, pushBankPlan } from "../src/services/bankToReceipts.js";
 import { guardVoucher } from "../src/services/pushGuard.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
+if (PUSH) guardScriptWrites("test-extraction"); // #104: --push books a bank row through pushBankPlan -> safePush; sandbox + local Tally only
 const STAMP = Date.now().toString().slice(-8);
 
 let pass = 0, fail = 0;

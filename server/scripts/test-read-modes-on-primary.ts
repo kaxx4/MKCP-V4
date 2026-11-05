@@ -40,6 +40,14 @@ function child(args: string[]): Run {
   return { code: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 const refused = (r: Run) => /REFUSED \(/.test(r.out);
+/**
+ * A positive sign the script got PAST the gate: it sent its first read (the
+ * `[tally] → List of Companies` log line from tallyPost) and that read failed
+ * on the dead port. "Exit code is not 2" alone would let a crash on import, or
+ * a typo that throws first, pass as "did not refuse" (0-1 review, 5-Nov-2026).
+ */
+const reachedTally = (r: Run) =>
+  !refused(r) && /\[tally\] → List of Companies/.test(r.out) && r.out.includes(`Cannot connect to Tally at ${DEAD}`) && r.code === 1;
 const tail = (r: Run) => `exit ${r.code}: ${r.out.replace(/\s+/g, " ").trim().slice(0, 200)}`;
 
 /** Load a module the way tally-verify-all does, and nothing else. */
@@ -59,29 +67,29 @@ ok("tsx is installed where the child expects it", existsSync(TSX), TSX);
 }
 {
   const r = child(["scripts/find-stranded-test-vouchers.ts"]);
-  ok("find-stranded list mode (no --delete) does not refuse", !refused(r) && r.code !== 2, tail(r));
+  ok("find-stranded list mode (no --delete) gets past the gate to its first Tally read", reachedTally(r), tail(r));
 }
 {
   const r = child(["scripts/find-stranded-test-vouchers.ts", "--delete"]);
-  ok("find-stranded --delete still refuses on primary (exit 2)", refused(r) && r.code === 2, tail(r));
+  ok("find-stranded --delete still refuses on primary (exit 2, no Tally contact)", refused(r) && r.code === 2 && !r.out.includes("[tally] →"), tail(r));
 }
 
 // ── T-3: dry-run and profile-only modes ────────────────────────────────────
 {
   const r = child(["scripts/roundtrip-verify.ts"]);
-  ok("roundtrip-verify dry run (no --push) does not refuse", !refused(r) && r.code !== 2, tail(r));
+  ok("roundtrip-verify dry run (no --push) gets past the gate to its first Tally read", reachedTally(r), tail(r));
 }
 {
   const r = child(["scripts/roundtrip-verify.ts", "--push"]);
-  ok("roundtrip-verify --push still refuses on primary (exit 2)", refused(r) && r.code === 2, tail(r));
+  ok("roundtrip-verify --push still refuses on primary (exit 2, no Tally contact)", refused(r) && r.code === 2 && !r.out.includes("[tally] →"), tail(r));
 }
 {
   const r = child(["scripts/fidelity-vs-native.ts", "SALES"]);
-  ok("fidelity-vs-native profile only (no --push) does not refuse", !refused(r) && r.code !== 2, tail(r));
+  ok("fidelity-vs-native profile only (no --push) gets past the gate to its first Tally read", reachedTally(r), tail(r));
 }
 {
   const r = child(["scripts/fidelity-vs-native.ts", "SALES", "--push"]);
-  ok("fidelity-vs-native --push still refuses on primary (exit 2)", refused(r) && r.code === 2, tail(r));
+  ok("fidelity-vs-native --push still refuses on primary (exit 2, no Tally contact)", refused(r) && r.code === 2 && !r.out.includes("[tally] →"), tail(r));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed\n`);

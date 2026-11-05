@@ -32,6 +32,10 @@ import { createClient } from "@supabase/supabase-js";
 import { startPushAgent, getPushAgentStatus } from "../src/services/pushAgent.js";
 import type { VoucherPayload } from "../src/types.js";
 import { isDrainTestNumber } from "./lib/testVoucherMatch.js";
+import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+/* startPushAgent posts every row it claims, so this always writes (0-1 review,
+   5-Nov-2026). On a primary machine those rows would land in the real books. */
+guardScriptWrites("watch-agent-drain"); // #104: writes only on a sandbox role against a local Tally
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";

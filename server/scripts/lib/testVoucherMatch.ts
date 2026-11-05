@@ -12,7 +12,7 @@
  */
 
 /** Prefixes the push-agent drain may treat as test numbers. */
-const DRAIN_TEST_PREFIXES = ["ZZTEST", "RPLY-", "VERIFY-", "SMOKE-", "DEMO-"];
+const DRAIN_TEST_PREFIXES = ["ZZTEST", "CLAUDE-TEST", "RPLY-", "VERIFY-", "SMOKE-", "DEMO-"];
 
 /**
  * True when a pending queue row's voucher number is a harness test number.

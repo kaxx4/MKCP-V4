@@ -24,6 +24,7 @@ expect("ZZTEST/CN12345 is a harness test voucher", isDrainTestNumber("ZZTEST/CN1
 expect("ZZTEST-7 is a harness test voucher", isDrainTestNumber("ZZTEST-7"), true);
 expect("RPLY-3 is a harness test voucher", isDrainTestNumber("RPLY-3"), true);
 expect("VERIFY-01 is a harness test voucher", isDrainTestNumber("VERIFY-01"), true);
+expect("CLAUDE-TEST-1 is a harness test voucher", isDrainTestNumber("CLAUDE-TEST-1"), true);
 // Real supplier bills that must NOT count as test
 expect("MKCP-05 (PARTY 154 ENTERPRISE bill) is NOT a test voucher", isDrainTestNumber("MKCP-05"), false);
 expect("MKCP-01 (PARTY 154 ENTERPRISE bill) is NOT a test voucher", isDrainTestNumber("MKCP-01"), false);
