@@ -127,13 +127,30 @@ const addDays = (iso: string, n: number) => { const d = new Date(`${iso}T00:00:0
       }
     } catch (e) { left = [`read failed: ${(e as Error).message}`]; }
     step("swept from the dummy: none of this run's numbers is left", !!sweep && sweep.status === 0 && left.length === 0, `sweep exit ${sweep?.status}, left ${left.length}`);
+    let sweep2: ReturnType<typeof spawnSync> | null = null;
     try {
-      if (pushed && runs.inc1?.state === "swapped") {
+      if (pushed && runs.inc1?.state === "swapped" && sweep?.status === 0) {
+        // 0117: deleting the newest voucher makes Tally's highest AlterID fall; the mark follows it down
+        const markBefore = (await mark())?.alter_id ?? 0;
         runs.inc2 = await runMirrorSync({ store, tally, kind: "incremental", scrub: true });
-        step("after the delete, the incremental sees nothing (a deletion carries no AlterID; the weekly full compare finds it, A7)", runs.inc2.state === "swapped" && runs.inc2.read === 0, `read ${runs.inc2.read}`);
+        step("after the delete, Tally's highest AlterID fell and the mark follows it down; the incremental reads nothing (a deletion carries no AlterID, A7)",
+          runs.inc2.state === "swapped" && runs.inc2.read === 0 && sw(runs.inc2).alter_id_fell === true && (await mark())?.alter_id === runs.inc2.markCandidate && (runs.inc2.markCandidate ?? 0) < markBefore,
+          `mark ${markBefore} to ${(await mark())?.alter_id}, read ${runs.inc2.read}`);
+        // a second voucher after the delete: the incremental must find it, whatever number Tally gives it
+        const second = { ...rigPayload(stamp, 2, day), label: "ZZ TEST 1-5 mirror" } as VoucherPayload;
+        const pr2 = await safePush(TALLY_URL, company!, second);
+        runs.inc3 = await runMirrorSync({ store, tally, kind: "incremental", scrub: true });
+        const { data: got2 } = await c.from("erp_mirror_rows").select("alter_id").eq("company_key", companyKey).eq("is_test", true).eq("voucher_number", second.voucherNumber!);
+        const a2 = (got2 ?? [])[0]?.alter_id as number | undefined;
+        step("a voucher made after the delete is picked up by the next incremental", pr2.ok && runs.inc3.state === "swapped" && runs.inc3.read === 1 && a2 !== undefined,
+          `its AlterID ${a2}; the deleted voucher had ${markBefore}: Tally ${a2 !== undefined && a2 <= markBefore ? "REUSED a number at or below the old mark" : "did not reuse the number"}`);
+        sweep2 = spawnSync(process.execPath, [tsx, join(dirname(process.argv[1]), "..", "sweep-test-vouchers.ts"), "ZZTEST", day, "--yes"], { encoding: "utf8", env: process.env });
+        const raw2 = await post(vouchersOnDateXml(company!, day, { voucherType: "Contra" }));
+        const left2 = [...raw2.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => readTag(m[0], "VOUCHERNUMBER")).filter((n) => n.startsWith(`ZZTEST${stamp}/`));
+        step("swept again: none of this run's numbers is left", sweep2.status === 0 && left2.length === 0, `sweep exit ${sweep2.status}, left ${left2.length}`);
         const m = await mark();
         runs.full3 = await runMirrorSync({ store, tally, kind: "full", scope: { from: m!.scope_from, to: m!.scope_to }, scrub: true });
-        step("the next full sync prunes the deleted voucher", runs.full3.state === "swapped" && sw(runs.full3).pruned === 1 && sw(runs.full3).inserted === 0,
+        step("the next full sync prunes both deleted vouchers, and the mirror is back to where it began", runs.full3.state === "swapped" && sw(runs.full3).pruned === 2 && sw(runs.full3).inserted === 0,
           `pruned ${sw(runs.full3).pruned}, mirror ${await mirrorCount()}`);
       }
     } catch (e) { step("the after-sweep syncs finished without an error", false, (e as Error).message); }

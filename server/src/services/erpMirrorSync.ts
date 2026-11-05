@@ -23,7 +23,9 @@
  *   <COLLECTION> envelope. A failed read fails the run and the mark stays.
  * - The mark candidate is Tally's highest AlterID read BEFORE the first voucher
  *   read, so a voucher changed while the run reads is above it and is read
- *   again next time (D-1-5.4).
+ *   again next time (D-1-5.4). The mark follows Tally DOWN when the newest
+ *   voucher is deleted (Tally's highest falls; migration 0117, D-1-5.9), and
+ *   an incremental reads above the lower of the mark and Tally's highest.
  * - Keys are Tally's GUID; a voucher with no GUID is counted and left out,
  *   never given a made-up key (G5).
  * - Test runs from the dummy company store names one way only (D-1-5.5): the
@@ -270,10 +272,15 @@ export async function runMirrorSync(opts: {
         if (buffer.length >= STAGE_BATCH) await flush();
       }
     } else {
-      const [list, ms] = await timed(() => tally.changedSince(run.mark ?? 0));
+      /* Above the LOWER of the mark and Tally's highest now (0117, D-1-5.9): when
+         the newest voucher is deleted, Tally's highest falls, and a number it
+         hands out again would sit below the old mark. */
+      const from = Math.min(run.mark ?? 0, top.alterId);
+      const [list, ms] = await timed(() => tally.changedSince(from));
       report.tallyReads++;
       take(list);
-      await store.step(run.run_id, `read every voucher above AlterID ${run.mark}`, "ok", list.length, ms, null);
+      await store.step(run.run_id, `read every voucher above AlterID ${from}`, "ok", list.length, ms,
+        from < (run.mark ?? 0) ? { alter_id_fell_from: run.mark, to: top.alterId } : null);
     }
     await flush();
     await store.step(run.run_id, "staged", "ok", report.staged, null, report.noGuid ? { left_out_no_guid: report.noGuid } : null);

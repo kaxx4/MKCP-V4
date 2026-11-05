@@ -119,6 +119,11 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("it reads above the run's mark, after reading Tally's highest", t.calls.join(",") === "highest,changed 50");
   ok("the swap gets Tally's highest (130)", s.swapArgs?.mark === 130 && rep.state === "swapped" && s.staged.length === 1);
 
+  s = fakeStore({ mark: 150 }); t = fakeTally({}, { highest: 130, changed: [voucher("D", "20261104", 131)] });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental", scrub: true });
+  ok("Tally's highest fell below the mark (newest voucher deleted): it reads above the lower one, and the swap gets it (130)",
+    t.calls.join(",") === "highest,changed 130" && s.swapArgs?.mark === 130, t.calls.join(","));
+
   H("FAILURES");
   s = fakeStore(); t = fakeTally(days, { failOn: "day 2026-11-02" });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-03" }, scrub: true });
