@@ -273,12 +273,29 @@ export function ledgerPeriod(asOf: string): { from: string; to: string } {
   return { from: `${mth >= 4 ? y : y - 1}-04-01`, to: asOf };
 }
 
-/** A date as Tally's Company object gives it (YYYYMMDD, or already ISO) to ISO, or null. */
+const MONTH_NUMBER: Record<string, string> = {
+  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06", jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+};
+
+/**
+ * A date as Tally's Company object gives it to ISO, or null. Accepted, and
+ * nothing else: YYYYMMDD (what a collection sends), YYYY-MM-DD, and
+ * D-Mon-YYYY or DD-Mon-YYYY (how Tally prints a date for people). A two-digit
+ * year (1-Apr-26) is refused: Tally prints one in reports, but no collection
+ * read has been seen to send one, so it is not guessed (review 1-5 item 2,
+ * D-1-5.38). A date that is not on the calendar is null too; null fails closed.
+ */
 export function tallyDateToIso(raw: unknown): string | null {
   const s = String(raw ?? "").trim();
-  const m = /^(\d{4})-?(\d{2})-?(\d{2})$/.exec(s);
-  if (!m) return null;
-  const iso = `${m[1]}-${m[2]}-${m[3]}`;
+  let iso: string | null = null;
+  const num = /^(\d{4})(\d{2})(\d{2})$/.exec(s) ?? /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (num) iso = `${num[1]}-${num[2]}-${num[3]}`;
+  else {
+    const mon = /^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/.exec(s);
+    const mm = mon ? MONTH_NUMBER[mon[2].toLowerCase()] : undefined;
+    if (mon && mm) iso = `${mon[3]}-${mm}-${mon[1].padStart(2, "0")}`;
+  }
+  if (!iso) return null;
   const d = new Date(`${iso}T00:00:00Z`);
   return Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== iso ? null : iso;
 }
@@ -314,9 +331,14 @@ export function ledgerProblem(l: TallyLedger): string | null {
   return null;
 }
 
-/** Pure: one checked ledger to a staging row. Test runs store names only as stand-ins. */
+/**
+ * Pure: one checked ledger to a staging row. Test runs store names only as
+ * stand-ins. The judged period is required (review 1-5 item 4): without it a
+ * row could never say its balance is for an unexpected period.
+ */
 export function ledgerRowFrom(l: TallyLedger, opts: { scrub: false } | { scrub: true; salt: string }, asOf: string,
-  period?: { from: string | null; unexpected: boolean; why: string | null }): MirrorLedgerRow {
+  period: { from: string | null; unexpected: boolean; why: string | null }): MirrorLedgerRow {
+  if (!period || typeof period.unexpected !== "boolean") throw new Error("refused: a ledger row needs the judged loaded period, so its balance can say whether it is the year to date");
   const name = (kind: string, s: string) => (opts.scrub ? scrubName(kind, s, opts.salt) : (s || "").trim() || null);
   const closing = parseBalance(l.closingbalance), opening = parseBalance(l.openingbalance);
   return {
@@ -331,8 +353,8 @@ export function ledgerRowFrom(l: TallyLedger, opts: { scrub: false } | { scrub: 
     opening_balance: opening ?? 0,
     alter_id: Number(l.alterid) || null,
     master_id: Number(l.masterid) || null,
-    row: { closing_balance_sent: closing !== null, opening_balance_sent: opening !== null, balance_period_unexpected: period?.unexpected ?? false,
-      ...(period?.unexpected ? { loaded_from: period.from, loaded_to: asOf, why: period.why } : {}) },
+    row: { closing_balance_sent: closing !== null, opening_balance_sent: opening !== null, balance_period_unexpected: period.unexpected,
+      ...(period.unexpected ? { loaded_from: period.from, loaded_to: asOf, why: period.why } : {}) },
     balance_as_of: asOf,
   };
 }
@@ -431,6 +453,9 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
         /* Tally never gives an AlterID of 0, and the converter turns a missing one into 0: so 0 is "missing". */
         vouchers.push({ k: String(v.guid ?? "").trim(), d, a: /^\d+$/.test(a) && Number(a) > 0 ? Number(a) : null });
       }
+      /* Review 1-5 item 5: vouchers with no AlterID on any of them is a read
+         that did not work (G7), not a mark of 0 to read everything above. */
+      if (list.length > 0 && !(alterId > 0)) throw new Error(`refused: the AlterID read returned ${list.length} vouchers and no AlterID on any of them, so there is no mark; nothing is read or swapped`);
       return { alterId, latestDate: latest, count: list.length, byDay, vouchers };
     },
     async vouchersOn(day: string) {
@@ -572,6 +597,12 @@ async function runMirror(opts: {
       for (const day of eachDay(run.scope_from, run.scope_to)) {
         const [list, ms] = await timed(() => tally.vouchersOn(day));
         report.tallyReads++;
+        /* Review 1-5 item 1 (D-1-5.37): an empty or short reply never means
+           "nothing there". The AlterID read just before counted this day's
+           vouchers; a day read with fewer refuses the run before the day can
+           be pruned. More is fine (vouchers made since). */
+        const counted = top.byDay[day] ?? 0;
+        if (list.length < counted) throw new Error(`refused: the read of ${day} returned ${list.length} vouchers, but Tally's AlterID read just before counted ${counted} on that day; a short reply is not "fewer vouchers", so the run fails and nothing is swapped`);
         take(list, `the read of ${day}`, day);
         await store.step(run.run_id, `read ${day}`, "ok", list.length, ms, null);
         if (buffer.length >= STAGE_BATCH) await flush();

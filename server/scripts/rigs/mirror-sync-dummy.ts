@@ -10,8 +10,11 @@
  *   - the mirror holds exactly what Tally counts for those days;
  *   - the same full sync again changes nothing;
  *   - a forced empty day (the rig's own stand-in for Tally answering an
- *     empty collection) is refused by the per-day floor, the mirror unchanged
- *     and the read kept; a plain re-read then swaps with nothing changed;
+ *     empty collection) is refused by the agent, because the AlterID read
+ *     just before counted that day's vouchers (review 1-5 item 1); with the
+ *     AlterID read made to lose the day too, it is refused by the database's
+ *     per-day floor, the mirror unchanged and the read kept; a plain re-read
+ *     then swaps with nothing changed;
  *   - an incremental with nothing changed reads nothing and keeps the mark;
  *   - one ZZTEST Contra is put in the dummy on the busiest day, and the
  *     incremental picks up exactly that voucher;
@@ -142,8 +145,18 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
     //    window, 5 or more vouchers), so only the per-day floor can catch it.
     const forced = eachDay(win.from, win.to).filter((d) => perDay[d] >= 5 && perDay[d] < 0.2 * win.count).sort((a, b) => perDay[b] - perDay[a])[0];
     if (!forced) throw new Error("no day in the window that only the per-day floor would catch");
+    /* Review 1-5 item 1: the agent itself refuses a day read shorter than the
+       AlterID read's count for that day, before the database is asked. */
     const emptyDay: MirrorTally = { ...tally, vouchersOn: async (d) => (d === forced ? [] : tally.vouchersOn(d)) };
-    runs.full3 = await runMirrorSync({ store, tally: emptyDay, kind: "full", scope });
+    runs.full3a = await runMirrorSync({ store, tally: emptyDay, kind: "full", scope });
+    const { count: kept3a } = await c.from("erp_mirror_stage").select("key", { count: "exact", head: true }).eq("run_id", runs.full3a.run_id!).eq("is_test", true);
+    step("review 1-5 item 1: a day forced empty while Tally's AlterID read counts its vouchers is refused by the agent, naming the day and both counts; nothing swapped",
+      runs.full3a.state === "failed" && runs.full3a.swap === null && new RegExp(`read of ${forced} returned 0 vouchers.*counted ${perDay[forced]}`).test(runs.full3a.error ?? "") && (await mirrorCount()) === n1,
+      `${runs.full3a.error ?? ""}; staged ${kept3a ?? 0}`);
+    /* The database's own per-day floor, behind it: the AlterID read is made to
+       lose the day too (a stand-in for both reads coming back short). */
+    const emptyBoth: MirrorTally = { ...emptyDay, highest: async () => { const h = await tally.highest(); return { ...h, byDay: { ...h.byDay, [forced]: 0 } }; } };
+    runs.full3 = await runMirrorSync({ store, tally: emptyBoth, kind: "full", scope });
     const { count: kept3 } = await c.from("erp_mirror_stage").select("key", { count: "exact", head: true }).eq("run_id", runs.full3.run_id!).eq("is_test", true);
     const day3 = (sw(runs.full3).days ?? []).find((d: any) => d.day === forced);
     counts.forcedEmptyDay = { day: forced, mirror: perDay[forced], reason: sw(runs.full3).reason, scopeStaged: sw(runs.full3).staged, scopeFloor: sw(runs.full3).floor, kept: kept3 };
