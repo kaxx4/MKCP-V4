@@ -9,7 +9,7 @@
  *
  *   npx tsx server/scripts/test-test-voucher-match.ts
  */
-import { isDrainTestNumber, isSweepVoucher, sweepPrefixAllowed } from "./lib/testVoucherMatch.js";
+import { isDrainTestNumber, isSweepVoucher, sweepPrefixAllowed, storedCopyOf, harnessMustRemove } from "./lib/testVoucherMatch.js";
 
 let pass = 0, fail = 0;
 
@@ -58,6 +58,30 @@ expect("ZZTEST number is NOT swept under the GSTV prefix",
   isSweepVoucher({ number: "ZZTEST/CN1", narration: "ZZTEST x" }, "GSTV"), false);
 expect("number matching but narration empty is NOT swept",
   isSweepVoucher({ number: "ZZTEST/CN1", narration: "" }, "ZZTEST"), false);
+
+console.log("\ntest-edge-cases --push: which of its own vouchers the sweep cannot see");
+// Third review, 5-Nov-2026: the empty-narration purchase and the Journals (stored
+// with no number) were left behind by the sweep and needed a one-off delete.
+const day = [
+  { number: "ZZTEST0080504/17", narration: "", type: "Purchase" },
+  { number: "", narration: "ZZTEST0080504 Journal 38", type: "Journal" },
+  { number: "ZZTEST0080504/5", narration: "ZZTEST0080504 edge case", type: "Purchase" },
+  { number: "ZZTEST0080504/6", narration: "ZZTEST0080504 edge case", type: "Purchase" },
+  { number: "26-27/0679", narration: "AS PER BILL", type: "Sales" },
+];
+const sentEmpty = { voucherType: "Purchase", voucherNumber: "ZZTEST0080504/17", narration: "" };
+const sentJournal = { voucherType: "Journal", voucherNumber: "ZZTEST0080504/T38", narration: "ZZTEST0080504 Journal 38" };
+const sentPlain = { voucherType: "Purchase", voucherNumber: "ZZTEST0080504/5", narration: "ZZTEST0080504 edge case" };
+const sentGone = { voucherType: "Purchase", voucherNumber: "ZZTEST0080504/99", narration: "ZZTEST0080504 edge case" };
+expect("the stored copy is found by its number", storedCopyOf(sentEmpty, day)?.number === "ZZTEST0080504/17", true);
+expect("a voucher stored with no number is found by a narration only it carries", storedCopyOf(sentJournal, day)?.type === "Journal", true);
+expect("a shared narration never stands in for a missing number", storedCopyOf(sentGone, day) === undefined, true);
+expect("an empty-narration purchase must be removed by the harness itself", harnessMustRemove(sentEmpty, storedCopyOf(sentEmpty, day), "ZZTEST"), true);
+expect("a Journal stored with no number must be removed by the harness itself", harnessMustRemove(sentJournal, storedCopyOf(sentJournal, day), "ZZTEST"), true);
+expect("a voucher the sweep can see is left to the sweep", harnessMustRemove(sentPlain, storedCopyOf(sentPlain, day), "ZZTEST"), false);
+expect("nothing stored, nothing to remove", harnessMustRemove(sentGone, undefined, "ZZTEST"), false);
+expect("a sent voucher without the harness mark in its number is never removed",
+  harnessMustRemove({ voucherType: "Sales", voucherNumber: "26-27/0679", narration: "" }, day[4], "ZZTEST"), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
