@@ -47,9 +47,34 @@ export function remoteIdFor(input: {
   voucherNumber: string;
   /** YYYY-MM-DD. Only the financial year is used, so re-dating within one keeps identity. */
   date?: string;
+  /**
+   * Task 1-4: the `erp_jobs` id, used only when there is no number. Before 1-4
+   * an unnumbered voucher got `MKCP|Journal|2026-27`, the same id for every one
+   * of them, so the second ALTERED the first in Tally.
+   */
+  jobId?: string;
 }): string {
   const fy = input.date ? financialYearOf(input.date) : "";
-  return ["MKCP", clean(input.voucherType), clean(input.voucherNumber), fy]
+  const jobKey = clean(input.jobId ?? "") ? `job-${clean(input.jobId ?? "")}` : "";
+  const key = clean(input.voucherNumber) || jobKey;
+  /* 1-4: never an id with nothing unique after the type. An empty id is
+     refused by the guard as "no remoteId"; a shared one silently overwrites. */
+  if (!key) return "";
+  return ["MKCP", clean(input.voucherType), key, fy]
     .filter(Boolean)
     .join("|");
+}
+
+/**
+ * Does this REMOTEID name ONE voucher? Ours (`MKCP|<type>|...`) needs a part
+ * after the type that is not just the financial year; any other spelling needs
+ * to be non-empty. pushGuard refuses a Create that fails this (file 18 row 1-4).
+ * Same rule as the web app's engine/push/remoteId.ts.
+ */
+export function remoteIdHasUniquePart(remoteId: string | null | undefined): boolean {
+  const id = String(remoteId ?? "").trim();
+  if (!id) return false;
+  const parts = id.split("|");
+  if (parts[0] !== "MKCP") return true;
+  return parts.slice(2).some((p) => p.trim() !== "" && !/^\d{4}-\d{2}$/.test(p.trim()));
 }

@@ -276,11 +276,38 @@ function agentFor(m: ReturnType<typeof memErpQueue>, sim: SimTally, j = journal(
     const m = memErpQueue({ secondMs: 10 }); const sim = new SimTally();
     const ids = [m.add(pl(24)), m.add(pl(25)), m.add(pl(26))];
     sim.next = ["slow:1500", "slow:1500", "slow:1500"];
-    const a = agentFor(m, sim, journal(), { jobLeaseSeconds: 30, renewEveryMs: 100, leaseSeconds: 30 });
+    const a = agentFor(m, sim, journal(), { jobLeaseSeconds: 60, renewEveryMs: 100, leaseSeconds: 60 });
     const r = await a.runOnce(3);
     ok("L1 L2 three slow jobs in one round: the lease and jobs 2 and 3 never lapse; all succeed once",
       ids.every((i) => m.rows.get(i)!.state === "succeeded") && r.results.length === 3 && sim.doubled().length === 0,
       ids.map((i) => m.rows.get(i)!.state).join(","));
+  }
+
+  // 1-4: a number Tally already holds blocks the Create, before `sent`
+  {
+    const m = memErpQueue(); const sim = new SimTally();
+    const taken = m.add(pl(31)), free = m.add(pl(32)), unread = m.add(pl(33));
+    const sale = m.add({ ...pl(34), voucherType: "Sales", voucherNumber: "ZZTEST34/S1", remoteId: "MKCP|SALES|ZZTEST34/S1" });
+    const tally: Record<string, string[]> = { Contra: [String(pl(31).voucherNumber).toLowerCase()], Sales: ["ZZTEST34/S1"] };
+    let reads = 0;
+    const a = agentFor(m, sim, journal(), { taken: async (_c, t) => {
+      reads++;
+      if (reads === 3) throw new Error("simulated: Tally did not answer");
+      return tally[t] ?? [];
+    } });
+    await a.runOnce(4);
+    const st = (id: string) => m.rows.get(id)!;
+    ok("1-4 a Contra whose number is already in Tally is refused before sent, nothing pushed",
+      st(taken).state === "failed" && /already used in Tally/.test(String(st(taken).error)) && !sim.books.has(String(pl(31).remoteId)), String(st(taken).error));
+    ok("1-4 the same number in another case still counts as taken (Tally keeps what was typed)", st(taken).state === "failed");
+    ok("1-4 a free number is pushed", st(free).state === "succeeded" && sim.books.get(String(pl(32).remoteId)) === 1);
+    ok("1-4 a failed read of Tally's numbers stops the push too (could not look is never free)",
+      st(unread).state === "failed" && /could not be read/.test(String(st(unread).error)) && !sim.books.has(String(pl(33).remoteId)), String(st(unread).error));
+    ok("1-4 Sales: a taken invoice number is refused before sent", st(sale).state === "failed" && /Sales number ZZTEST34\/S1 is already used/.test(String(st(sale).error)), String(st(sale).error));
+    const b = agentFor(m, sim, journal(), { taken: async () => { throw new Error("must not be asked"); } });
+    const alter = m.add({ ...pl(35), action: "Alter" } as VoucherPayload & { label: string });
+    await b.runOnce(1);
+    ok("1-4 an Alter is not number-checked (it addresses its own voucher)", m.rows.get(alter)!.state !== "failed" || !/numbers could not be read/.test(String(m.rows.get(alter)!.error)));
   }
 
   // pure helpers

@@ -1,0 +1,36 @@
+{
+  "about": "Task 1-4: the one voucher-number rule, run by three twins. The database (erp_series_format, erp_series_counter, erp_fy_of, erp_india_date in migration 0113, through supabase/live-tests/1-4_counter.sql), the web app (src/engine/push/voucherSeries.ts) and the sync agent (server/src/services/voucherSeries.ts; a byte copy of this file lives at server/contracts/voucher-series.json). A template uses {N} for the counter and {FY} for the year as 26-27. Change a case here and all three must change with it.",
+  "format": [
+    { "template": "{FY}/{N}", "fy": "2026-27", "n": 678, "width": 4, "number": "26-27/0678" },
+    { "template": "{FY}/{N}", "fy": "2026-27", "n": 12345, "width": 4, "number": "26-27/12345" },
+    { "template": "ERP-{N}/{FY}", "fy": "2026-27", "n": 1, "width": 1, "number": "ERP-1/26-27" },
+    { "template": "ERP-{N}/{FY}", "fy": "2099-00", "n": 7, "width": 1, "number": "ERP-7/99-00" },
+    { "template": "ZZTEST14{N}/1", "fy": "2026-27", "n": 3, "width": 1, "number": "ZZTEST143/1" }
+  ],
+  "parse": [
+    { "number": "26-27/0678", "template": "{FY}/{N}", "fy": "2026-27", "counter": 678 },
+    { "number": " 26-27/327 ", "template": "{FY}/{N}", "fy": "2026-27", "counter": 327 },
+    { "number": "25-26/0678", "template": "{FY}/{N}", "fy": "2026-27", "counter": null },
+    { "number": "26-27/0678A", "template": "{FY}/{N}", "fy": "2026-27", "counter": null },
+    { "number": "ERP-12/26-27", "template": "ERP-{N}/{FY}", "fy": "2026-27", "counter": 12 },
+    { "number": "1853/26-27", "template": "ERP-{N}/{FY}", "fy": "2026-27", "counter": null },
+    { "number": "ERP-12/26-28", "template": "ERP-{N}/{FY}", "fy": "2026-27", "counter": null },
+    { "number": "erp-12/26-27", "template": "ERP-{N}/{FY}", "fy": "2026-27", "counter": null },
+    { "number": "NEFT RECEIVED", "template": "ERP-{N}/{FY}", "fy": "2026-27", "counter": null },
+    { "number": "", "template": "ERP-{N}/{FY}", "fy": "2026-27", "counter": null },
+    { "number": "ZZTEST143/1", "template": "ZZTEST14{N}/1", "fy": "2026-27", "counter": 3 },
+    { "number": "A.B+(1)", "template": "A.B+({N})", "fy": "2026-27", "counter": 1 },
+    { "number": "AxB+(1)", "template": "A.B+({N})", "fy": "2026-27", "counter": null },
+    { "number": "a\\b[1]", "template": "a\\b[{N}]", "fy": "2026-27", "counter": 1 }
+  ],
+  "financialYear": [
+    { "date": "2026-03-31", "fy": "2025-26" },
+    { "date": "2026-04-01", "fy": "2026-27" },
+    { "date": "2099-12-31", "fy": "2099-00" }
+  ],
+  "indiaDate": [
+    { "at": "2027-03-31T18:29:00Z", "ist": "31-Mar 23:59", "date": "2027-03-31", "fy": "2026-27" },
+    { "at": "2027-03-31T18:31:00Z", "ist": "1-Apr 00:01", "date": "2027-04-01", "fy": "2027-28" },
+    { "at": "2027-03-31T23:59:00Z", "ist": "1-Apr 05:29", "date": "2027-04-01", "fy": "2027-28" }
+  ]
+}

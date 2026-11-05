@@ -92,6 +92,9 @@ export const ERP_TEST_RPCS: readonly string[] = [
      jobs, so this list is a second fence, not the only one (review M3). */
   "erp_agent_take_lease", "claim_erp_jobs", "erp_renew_job", "erp_mark_job_sent",
   "erp_finish_job", "erp_my_open_jobs", "erp_enqueue_test_job", "erp_cancel_test_job",
+  /* Task 1-4 (migration 0114): test numbers only. The database checks the
+     sandbox key, a ZZTEST company key and a test series. */
+  "erp_take_test_voucher_number",
 ];
 /** ERP tables the sandbox may read (only is_test rows) and clean up (only rows it names). */
 export const ERP_TEST_ROW_TABLES: readonly string[] = ["erp_jobs", "erp_proposal_requests", "erp_proposals"];

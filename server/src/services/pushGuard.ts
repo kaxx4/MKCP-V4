@@ -18,6 +18,8 @@ import { type TallyMasters, type MasterLedger, findLedger, findItem, isMiss, gst
 import { partyIdentity } from "./voucherPusher.js";
 import { sameState, codeForState, stateFromGstin, normalizeGstin, isGstinChecksumValid, isCashLikeParty, PIN_RE, HSN_RE } from "./gstIdentity.js";
 import type { OpenBill } from "./billSettlement.js";
+import { remoteIdHasUniquePart } from "./remoteId.js";
+import { isErpSeriesNumber } from "./voucherSeries.js";
 
 export interface GuardResult { ok: boolean; errors: string[]; warnings: string[]; }
 
@@ -299,6 +301,20 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
      and can only be removed by hand. This used to be a warning. (TG-P01) */
   if (action === "Create" && !p.remoteId?.trim()) {
     errors.push("Create refused: no remoteId. A voucher created without one can never be altered, cancelled or deleted from here, and a re-push would duplicate it (G5).");
+  }
+  /* 1-4 (file 18 row 1-4): an id with nothing unique after the type, such as
+     `MKCP|Journal|2026-27`, is shared by every unnumbered voucher of that type,
+     so Tally would ALTER the earlier one instead of creating this one. */
+  if (action === "Create" && p.remoteId?.trim() && !remoteIdHasUniquePart(p.remoteId)) {
+    errors.push(`Create refused: the remoteId "${p.remoteId}" has nothing unique after the voucher type, so it would overwrite an earlier ${p.voucherType} in Tally. Give it a number, or key it on its ERP job.`);
+  }
+  /* 1-4: an ERP-series number (ERP-<n>/<yy-yy>, D-1-4.2) is only ever issued by
+     the counter, which builds the REMOTEID from it. A Create carrying one under
+     another id is a hand-made payload; refuse rather than book an id the
+     counter never issued. */
+  if (action === "Create" && p.voucherNumber?.trim() && p.remoteId?.trim() && isErpSeriesNumber(p.voucherNumber, p.voucherType, p.date)
+      && !p.remoteId.split("|").includes(p.voucherNumber.trim())) {
+    errors.push(`Create refused: ${p.voucherNumber} is an ERP counter number but the remoteId "${p.remoteId}" does not carry it.`);
   }
   // Tally does not auto-number an XML import. (TG-P03)
   if (action === "Create" && NUMBERED.has(p.voucherType.trim().toUpperCase()) && !p.voucherNumber?.trim()) {

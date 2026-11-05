@@ -34,6 +34,7 @@ import { safePush, vouchersOnDateXml, diffStored, type SafePushResult } from "./
 import { readTag } from "./xml.js";
 import { testJobRefusal, outcomeOf, type TestOutcome } from "./erpTestQueueAgent.js";
 import type { VoucherPayload } from "../types.js";
+import { takenNumbersOrThrow } from "./voucherNumbering.js";
 
 export interface ErpJob {
   id: string;
@@ -179,6 +180,12 @@ export interface ErpJobAgentOpts {
   probe?: () => Promise<boolean>;
   /** Refuse a job before Tally (defaults: sandbox test rules for is_test jobs). */
   refuse?: (job: ErpJob, company: string) => string | null;
+  /**
+   * Task 1-4: every number Tally already holds for a type. A failed read must
+   * THROW, never return an empty list. `tallySeams` supplies it; without it the
+   * check is skipped (the offline tests, whose fake Tally has no numbers).
+   */
+  taken?: (company: string, voucherType: string) => Promise<string[]>;
 }
 
 export interface RunReport {
@@ -191,7 +198,7 @@ export interface RunReport {
 export class ErpJobAgent {
   readonly nonce: string;
   readonly status: AgentStatus = { red: [], holder: null, lastHeartbeat: null, skewMs: null, tallyMayShowMessage: false };
-  private o: Required<Omit<ErpJobAgentOpts, "nonce" | "refuse" | "probe">> & { refuse: NonNullable<ErpJobAgentOpts["refuse"]>; probe?: ErpJobAgentOpts["probe"] };
+  private o: Required<Omit<ErpJobAgentOpts, "nonce" | "refuse" | "probe" | "taken">> & { refuse: NonNullable<ErpJobAgentOpts["refuse"]>; probe?: ErpJobAgentOpts["probe"]; taken?: ErpJobAgentOpts["taken"] };
   private timeouts = 0;
 
   constructor(opts: ErpJobAgentOpts) {
@@ -352,6 +359,23 @@ export class ErpJobAgent {
     }
   }
 
+  /** Why this job's number may not be pushed, or null. Only a Create that carries a number is checked. */
+  private async numberTakenInTally(job: ErpJob): Promise<string | null> {
+    const p = job.payload;
+    const number = String(p.voucherNumber ?? "").trim();
+    if (!this.o.taken || (p.action ?? "Create") !== "Create" || !number) return null;
+    let list: string[];
+    try {
+      list = await this.o.taken(this.o.company, p.voucherType);
+    } catch (e) {
+      return `Not sent: Tally's ${p.voucherType} numbers could not be read to check ${number} is free (${(e as Error).message}). Nothing is in the books; send it again when Tally answers.`;
+    }
+    const want = number.toLowerCase();
+    return list.some((n) => n.trim().toLowerCase() === want)
+      ? `Not sent: ${p.voucherType} number ${number} is already used in Tally. Pushing it would overwrite that voucher. Nothing is in the books from this job.`
+      : null;
+  }
+
   async processJob(job: ErpJob): Promise<RunReport["results"][number]> {
     const key = job.idempotency_key;
     const refusal = this.o.refuse(job, this.o.company);
@@ -375,6 +399,17 @@ export class ErpJobAgent {
         await this.finishWithRetry(job, state, { masterId: one ? found![0].masterId : null, result: { resend_check: found?.length ?? null }, error: one ? null : detail });
         return { id: job.id, key, outcome: state, detail, masterId: one ? found![0].masterId : null };
       }
+    }
+    /* 1-4: a number Tally already holds blocks a Create. The REMOTEID is built
+       from the number, so a Create on a taken number would ALTER the voucher
+       already there (the 15-Sep Contra 29 incident). Checked before `sent`, so a
+       refusal leaves nothing in the books. A read that fails stops the push too:
+       "could not look" is never "free". */
+    const blocked = this.o.taken ? await this.numberTakenInTally(job) : null;
+    if (blocked) {
+      this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: blocked, at: new Date().toISOString() });
+      await this.finishWithRetry(job, "failed", { error: blocked, result: { stage: "guard", number_check: true } });
+      return { id: job.id, key, outcome: "failed", detail: blocked };
     }
     // Called on its own (not from runOnce), the job is renewed here; runOnce's timer covers it otherwise.
     const renew = this.open.has(job.id) ? null
@@ -421,8 +456,17 @@ export class ErpJobAgent {
 /** The default Tally seams for a real run. */
 export function tallySeams(tallyUrl: string, post: (url: string, xml: string) => Promise<string>) {
   return {
-    push: (company: string, p: VoucherPayload) => safePush(tallyUrl, company, p),
+    /* 1-4: an ERP job's number came from the counter and is tombstoned, and its
+       REMOTEID is built from it. safePush must never quietly swap in "the next
+       free number" (its recovery for app-suggested numbers): the voucher would
+       land under a number the counter never issued. Marked as an override, a
+       taken number is refused and reported instead. Not for a Journal: Tally
+       stores no number on one here (numbering "None"), and an override is
+       verified by number only, so it could never be confirmed. */
+    push: (company: string, p: VoucherPayload) => safePush(tallyUrl, company,
+      p.voucherNumber?.trim() && p.voucherType.trim().toLowerCase() !== "journal" ? { ...p, numberOverride: true } : p),
     find: (company: string, p: VoucherPayload) => findInTally((xml) => post(tallyUrl, xml), company, p),
+    taken: (company: string, voucherType: string) => takenNumbersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x)),
   };
 }
 

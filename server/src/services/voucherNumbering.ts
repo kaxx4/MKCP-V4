@@ -144,6 +144,25 @@ export async function takenNumbers(
   voucherType: string,
   post: (url: string, xml: string, timeoutMs: number, raw: boolean) => Promise<unknown> = defaultPost,
 ): Promise<string[]> {
+  try {
+    return await takenNumbersOrThrow(tallyUrl, company, voucherType, post);
+  } catch (e) {
+    console.warn(`[numbering] could not list ${voucherType} numbers: ${(e as Error).message}`);
+    return [];
+  }
+}
+
+/**
+ * The same list, but a failed read THROWS (task 1-4). The ERP agent checks the
+ * number of every Create against this before it pushes, and there an empty
+ * list would read as "the number is free" when Tally simply did not answer.
+ */
+export async function takenNumbersOrThrow(
+  tallyUrl: string,
+  company: string,
+  voucherType: string,
+  post: (url: string, xml: string, timeoutMs: number, raw: boolean) => Promise<unknown> = defaultPost,
+): Promise<string[]> {
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkNums</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
@@ -152,15 +171,11 @@ export async function takenNumbers(
 <FILTER>MkNumsF</FILTER></COLLECTION>
 <SYSTEM TYPE="Formulae" NAME="MkNumsF">$VoucherTypeName = ${tdlString(voucherType)}</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
-  try {
-    const res = (await post(tallyUrl, xml, 180_000, true)) as string;
-    return [...res.matchAll(/<VOUCHERNUMBER>([^<]*)<\/VOUCHERNUMBER>/gi)]
-      .map((m) => decodeXmlEntities(m[1]).trim())
-      .filter(Boolean);
-  } catch (e) {
-    console.warn(`[numbering] could not list ${voucherType} numbers: ${(e as Error).message}`);
-    return [];
-  }
+  const res = (await post(tallyUrl, xml, 180_000, true)) as string;
+  if (typeof res !== "string") throw new Error("Tally's answer was not text");
+  return [...res.matchAll(/<VOUCHERNUMBER>([^<]*)<\/VOUCHERNUMBER>/gi)]
+    .map((m) => decodeXmlEntities(m[1]).trim())
+    .filter(Boolean);
 }
 
 /* Imported lazily so this module stays pure for its tests — they must not need
