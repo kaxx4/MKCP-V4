@@ -130,7 +130,7 @@ const ms = (iso: string) => new Date(iso).getTime();
  * is the identity. The day's read is filtered here; the request names the date.
  */
 export async function findInTally(post: (xml: string) => Promise<string>, company: string, p: VoucherPayload): Promise<{ masterId: string }[]> {
-  const xml = await post(vouchersOnDateXml(company, p.date));
+  const xml = await post(vouchersOnDateXml(company, p.date, { voucherType: p.voucherType, voucherNumber: p.voucherNumber || undefined }));
   return [...xml.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0])
     .filter((v) => readTag(v, "VOUCHERTYPENAME") === p.voucherType
       && (!p.voucherNumber || readTag(v, "VOUCHERNUMBER") === p.voucherNumber)

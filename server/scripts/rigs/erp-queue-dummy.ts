@@ -29,6 +29,7 @@ import { practiceCompany } from "../../src/services/tallyRole.js";
 import { safePush } from "../../src/services/safePush.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams, type ErpJob } from "../../src/services/erpJobAgent.js";
 import { rigPayload, indiaToday } from "./lib/simTally.js";
+import { isSweepVoucher } from "../lib/testVoucherMatch.js";
 import type { VoucherPayload } from "../../src/types.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
@@ -72,6 +73,8 @@ if (CHILD) {
 
 async function main() {
   const day = indiaToday();
+  // Digits only: the sweep and the census match ZZTEST<digits>/<n> (testVoucherMatch.ts).
+  // A "Q" here once left 82 rig vouchers in the dummy that the sweep could not see.
   const stamp = Date.now().toString().slice(-6);
   const steps: { step: string; ok: boolean; detail: string; at: string }[] = [];
   const step = (s: string, ok: boolean, detail = "") => {
@@ -79,7 +82,7 @@ async function main() {
     console.log(`  ${ok ? "✓" : "✗"} ${s}${detail ? ` (${detail})` : ""}`);
   };
   const made: { job: string; proposal: string; request: string }[] = [];
-  const payload = (n: number, over: Partial<VoucherPayload> = {}) => ({ ...rigPayload(`Q${stamp}`, n, day), label: "ZZ TEST 1-3 queue", ...over });
+  const payload = (n: number, over: Partial<VoucherPayload> = {}) => ({ ...rigPayload(stamp, n, day), label: "ZZ TEST 1-3 queue", ...over });
   async function enqueue(n: number, over: Partial<VoucherPayload> = {}): Promise<{ id: string; p: VoucherPayload }> {
     const p = payload(n, over);
     const request = `ZZTEST-Q${stamp}-${n}${over.remoteId ? "-dup" : ""}`;
@@ -93,7 +96,8 @@ async function main() {
   const tsx = join(dirname(process.argv[1]), "..", "..", "node_modules", "tsx", "dist", "cli.mjs");
   const child = (mode: string) => spawnSync(process.execPath, [tsx, process.argv[1], "--child", mode, "--journal", JOURNAL], { encoding: "utf8", env: process.env, timeout: 180_000 });
 
-  console.log(`\n  ERP queue on the dummy Tally (${day}, stamp Q${stamp}, ${JOBS} jobs)\n`);
+  console.log(`\n  ERP queue on the dummy Tally (${day}, stamp ${stamp}, ${JOBS} jobs)\n`);
+  { const p1 = payload(1); if (!isSweepVoucher({ number: p1.voucherNumber ?? "", narration: p1.narration ?? "" }, "ZZTEST")) throw new Error(`refused: ${p1.voucherNumber} is not a shape the sweep can remove`); }
   try {
     // M3, live
     const bad = await c.rpc("erp_agent_take_lease", { p_machine: machine, p_key: "not-the-key", p_nonce: "x" });
@@ -116,7 +120,9 @@ async function main() {
     }
     const states = await Promise.all(ids.map(job));
     const good = states.filter((s) => s?.state === "succeeded").length;
-    const counts = await Promise.all(ids.map((_, i) => inTally(payload(i + 1))));
+    // One read at a time: Tally answers in turn, so 60 at once queue past the 180 s timeout.
+    const counts: number[] = [];
+    for (let i = 0; i < ids.length; i++) counts.push(await inTally(payload(i + 1)));
     step(`C19 ${JOBS} jobs, two boots racing: all succeeded`, good === JOBS, `${good}/${JOBS} in ${Math.round((Date.now() - t0) / 1000)} s, boots ${byA}/${byB}`);
     step("C19 each voucher is in Tally exactly once (never double-claimed or double-booked)", counts.every((n) => n === 1), `counts ${[...new Set(counts)].join(",")}`);
     step("C19 one Tally write at a time: only the lease holder worked", byA === 0 || byB === 0);
@@ -184,7 +190,7 @@ async function main() {
     const { data: rest } = await c.from("erp_jobs").select("id").eq("is_test", true).in("id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]);
     step("this run's test rows are deleted", !d1.error && !d2.error && !d3.error && (rest ?? []).length === 0,
       [d1.error?.message, d2.error?.message, d3.error?.message].filter(Boolean).join("; "));
-    const report = { rig: "erp-queue-dummy", day, stamp: `Q${stamp}`, jobs: JOBS, steps, passed: steps.filter((s) => s.ok).length, failed: steps.filter((s) => !s.ok).length,
+    const report = { rig: "erp-queue-dummy", day, stamp, jobs: JOBS, steps, passed: steps.filter((s) => s.ok).length, failed: steps.filter((s) => !s.ok).length,
       sweepTail: (sweep.stdout ?? "").split("\n").slice(-6) };
     if (OUT) { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify(report, null, 2)); }
     console.log(`\n  ${report.passed} passed, ${report.failed} failed`);

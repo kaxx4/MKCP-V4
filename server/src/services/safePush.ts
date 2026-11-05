@@ -79,7 +79,7 @@ export interface SafePushResult {
   pushResult?: PushResult;
 }
 
-import { escapeXml as escXml, readTag, parseTallyAmount, tallyDateInt, decodeXmlEntities } from "./xml.js";
+import { escapeXml as escXml, readTag, parseTallyAmount, tallyDateInt, decodeXmlEntities, tdlString } from "./xml.js";
 
 /* One reader for every field (xml.ts): exact tag, entity-decoded, CDATA-aware. */
 const unesc = decodeXmlEntities;
@@ -109,9 +109,23 @@ const signed = (a: number, dr: boolean) => r2(dr ? -Math.abs(a) : Math.abs(a));
  * the moment the calendar rolled past the date Tally was sitting on. A
  * verification step that can be defeated by a date change is not a verification
  * step.
+ *
+ * `only` narrows the read inside Tally (task 1-3, 5-Nov-2026): a whole day on
+ * the dummy company grew to 960 KB and took up to 190 s per read, past the
+ * 180 s timeout. Filtering on the voucher type only removes wrong candidates:
+ * a voucher of another type is never this one, yet the number and narration
+ * matches below did not check the type before, so this also stops a Receipt
+ * being taken for a Payment with the same number. The number is filtered only by a
+ * caller that matches by number alone (the ERP agent's read-back), never by
+ * the verify step here, whose narration and money fallbacks need the
+ * vouchers without the number.
  */
-export function vouchersOnDateXml(company: string, isoDate: string): string {
+export function vouchersOnDateXml(company: string, isoDate: string, only?: { voucherType?: string; voucherNumber?: string }): string {
   const stamp = tallyDateInt(isoDate);
+  const extra = [
+    only?.voucherType ? ` AND $VoucherTypeName = ${tdlString(only.voucherType)}` : "",
+    only?.voucherNumber ? ` AND $VoucherNumber = ${tdlString(only.voucherNumber)}` : "",
+  ].join("");
   return `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkVerify</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
 <SVCURRENTCOMPANY>${escXml(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
@@ -133,7 +147,7 @@ export function vouchersOnDateXml(company: string, isoDate: string): string {
 <NATIVEMETHOD>GSTRegistrationType</NATIVEMETHOD>
 <FILTER>MkVerifyDate</FILTER>
 </COLLECTION>
-<SYSTEM TYPE="Formulae" NAME="MkVerifyDate">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${stamp}</SYSTEM>
+<SYSTEM TYPE="Formulae" NAME="MkVerifyDate">($$YearOfDate:$Date * 10000 + $$MonthOfDate:$Date * 100 + $$DayOfDate:$Date) = ${stamp}${extra}</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
 }
 
@@ -504,7 +518,7 @@ export async function safePush(
 
   // ── 4. Read it back ───────────────────────────────────────────────────────
   const book: string = await withTally(tallyUrl, `verify ${payload.voucherNumber ?? ""}`,
-    () => tallyPost(tallyUrl, vouchersOnDateXml(company, payload.date), 180_000, true) as Promise<string>);
+    () => tallyPost(tallyUrl, vouchersOnDateXml(company, payload.date, { voucherType: payload.voucherType }), 180_000, true) as Promise<string>);
   const vouchers = [...book.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map(m => m[0]);
   // Match on voucher number first. Journal is configured with numbering "None"
   // in this company, so Tally stores no number at all however good the one we
