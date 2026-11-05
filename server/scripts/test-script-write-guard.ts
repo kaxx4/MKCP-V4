@@ -218,6 +218,8 @@ function gateState(src: string, extraWrites: string[] = []): GateState {
 }
 
 // The classifier itself, on planted sources (so a broken pattern fails here, not silently).
+/** The real gate's import. A gate counts only when bound from scriptWriteGuard (review of 5-Nov-2026). */
+const GI = `import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";\n`;
 ok("plant: a pushVoucherToTally with no gate is ungated", gateState(`const r = await pushVoucherToTally(U, co, p, m);`) === "ungated");
 ok("plant: a pushBulk with no gate is ungated", gateState(`await pushBulk(U, co, "receipt", rows);`) === "ungated");
 ok("plant: a createLedger / deleteLedger with no gate is ungated", gateState(`await createLedger(U, co, l); await deleteLedger(U, co, n);`) === "ungated");
@@ -226,9 +228,9 @@ ok("plant: createStockItem / createUnit / createGodown with no gate are ungated"
 ok("plant: a raw tallyPost of an ACTION=\"Delete\" with no gate is ungated", gateState(`const x = '<VOUCHER ACTION="Delete">'; await tallyPost(U, x);`) === "ungated");
 ok("plant: a raw tallyPost of an Import envelope is ungated", gateState("const x = `<TALLYREQUEST>Import</TALLYREQUEST>`; await tallyPost(U, x);") === "ungated");
 ok("plant: a raw tallyPost of buildVoucherImportXml is ungated", gateState(`await tallyPost(U, buildVoucherImportXml(co, p));`) === "ungated");
-ok("plant: a gate AFTER the first write fails", gateState(`await pushVoucherToTally(U, co, p, m);\nguardScriptWrites("x");`) === "gate-after-write");
+ok("plant: a gate AFTER the first write fails", gateState(GI + `await pushVoucherToTally(U, co, p, m);\nguardScriptWrites("x");`) === "gate-after-write");
 ok("plant: a gate only in a comment does not count", gateState(`// guardScriptWrites("x")\nawait pushBulk(U, co, "receipt", rows);`) === "ungated");
-ok("plant: a gate before the write passes", gateState(`guardScriptWrites("x");\nawait pushVoucherToTally(U, co, p, m);`) === "gated");
+ok("plant: a gate before the write passes", gateState(GI + `guardScriptWrites("x");\nawait pushVoucherToTally(U, co, p, m);`) === "gated");
 // Hardened 5-Nov-2026 after the 0-1 review.
 ok("plant: a pushBankPlan with no gate is ungated", gateState(`const res = await pushBankPlan(U, co, plan);`) === "ungated");
 ok("plant: a startPushAgent with no gate is ungated", gateState(`startPushAgent({ tallyUrl: TALLY });`) === "ungated");
@@ -238,8 +240,8 @@ ok("plant: deleteStockItem / deleteGodown with no gate are ungated",
 ok("plant: a gate inside a string literal does not count", gateState(`const s = "guardScriptWrites('x')";\nawait safePush(U, co, p);`) === "ungated");
 ok("plant: a gate inside template text does not count", gateState("const s = `guardScriptWrites(\"x\")`;\nawait safePush(U, co, p);") === "ungated");
 ok("plant: a comment right after a quote is still a comment", gateState(`log("a")// guardScriptWrites("x")\nawait safePush(U, co, p);`) === "ungated");
-ok("plant: a URL in a string is not a comment", gateState(`const u = "http://localhost:9000"; guardScriptWrites("x");\nawait safePush(u, co, p);`) === "gated");
-ok("plant: a regex with slashes is not a comment", gateState(`const re = /^\\/\\//; guardScriptWrites("x");\nawait safePush(U, co, p);`) === "gated");
+ok("plant: a URL in a string is not a comment", gateState(GI + `const u = "http://localhost:9000"; guardScriptWrites("x");\nawait safePush(u, co, p);`) === "gated");
+ok("plant: a regex with slashes is not a comment", gateState(GI + `const re = /^\\/\\//; guardScriptWrites("x");\nawait safePush(U, co, p);`) === "gated");
 ok("plant: a write inside a template expression counts", gateState("const s = `sent ${await safePush(U, co, p)}`;") === "ungated");
 ok("plant: an aliased import still counts as a write", gateState(`import { safePush as send } from "../src/services/safePush.js";\nawait send(U, co, p);`) === "ungated");
 ok("plant: a renamed destructured dynamic import still counts", gateState(`const { pushBulk: pb } = await import("../src/services/bulkEntry.js");\nawait pb(U, co, "receipt", rows);`) === "ungated");
@@ -258,8 +260,8 @@ ok("plant: a write helper re-exported under a new name in a lib file is a write"
     reexportedWriters(`export { safePush as send } from "../../src/services/safePush.js";`)) === "ungated");
 ok("plant: a renamed require destructuring is a write", gateState(`const { safePush: s } = require("../src/services/safePush.js");\nawait s(U, co, p);`) === "ungated");
 ok("plant: a destructured import before the gate is not itself a write",
-  gateState(`const { pushBulk: pb } = await import("../src/services/bulkEntry.js");\nguardScriptWrites("x");\nawait pb(U, co, "receipt", rows);`) === "gated");
-ok("plant: a helper passed as a value after the gate passes", gateState(`guardScriptWrites("x");\nawait Promise.all(rows.map(pushVoucherToTally));`) === "gated");
+  gateState(GI + `const { pushBulk: pb } = await import("../src/services/bulkEntry.js");\nguardScriptWrites("x");\nawait pb(U, co, "receipt", rows);`) === "gated");
+ok("plant: a helper passed as a value after the gate passes", gateState(GI + `guardScriptWrites("x");\nawait Promise.all(rows.map(pushVoucherToTally));`) === "gated");
 ok("plant: a raw fetch of a Delete to the Tally port is ungated",
   gateState(`const x = '<VOUCHER ACTION="Delete">';\nawait fetch("http://localhost:9000", { method: "POST", body: x });`) === "ungated");
 ok("plant: a raw http.request of an Import envelope is ungated",
@@ -268,6 +270,16 @@ ok("plant: .cjs .cts .tsx .jsx files are scanned", ["a.cjs", "a.cts", "a.tsx", "
 ok("plant: a local function named like the gate is not a gate", gateState(`function guardScriptWrites() {}\nguardScriptWrites("x");\nawait safePush(U, co, p);`) === "ungated");
 ok("plant: a local const named like the gate is not a gate", gateState(`const guardScriptWrites = () => {};\nguardScriptWrites("x");\nawait safePush(U, co, p);`) === "ungated");
 ok("plant: a method x.isSandbox() is not a gate", gateState(`if (cfg.isSandbox()) log("ok");\nawait safePush(U, co, p);`) === "ungated");
+// Review of the third-review fixes, 5-Nov-2026.
+ok("plant: an alias whose name starts with $ still counts as a write",
+  gateState(`import { safePush as $send } from "../src/services/safePush.js";\nawait $send(U, co, p);`) === "ungated");
+ok("plant: a bare if (isSandbox()) is not a gate", gateState(`import { isSandbox } from "../src/services/tallyRole.js";\nif (isSandbox()) log("ok");\nawait safePush(U, co, p);`) === "ungated");
+ok("plant: a gate imported from some other module is not a gate",
+  gateState(`import { guardScriptWrites } from "./lib/noop.js";\nguardScriptWrites("x");\nawait safePush(U, co, p);`) === "ungated");
+ok("plant: a gate never imported at all is not a gate", gateState(`guardScriptWrites("x");\nawait safePush(U, co, p);`) === "ungated");
+ok("plant: a gate from the real module, by dynamic import, passes",
+  gateState(`const { guardScriptWrites: g } = await import("../src/services/scriptWriteGuard.js");\ng("x");\nawait safePush(U, co, p);`) === "gated");
+ok("plant: m[\"safePush\"](...) is a write", gateState(`await svc["safePush"](U, co, p);`) === "ungated");
 ok("plant: an alias written inside a string is not an alias",
   gateState(`const s = "import { guardScriptWrites as gate } from 'x'";\ngate("x");\nawait safePush(U, co, p);`) === "ungated");
 
