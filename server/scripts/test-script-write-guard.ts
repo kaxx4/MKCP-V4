@@ -13,7 +13,7 @@
  *   npx tsx scripts/test-script-write-guard.ts   (scans server/scripts and the repo-root scripts)
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, dirname, sep } from "node:path";
+import { join, relative, dirname, sep, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptWriteVerdict, assertScriptWriteAllowed } from "../src/services/scriptWriteGuard.js";
 import { tallyRole } from "../src/services/tallyRole.js";
@@ -156,13 +156,24 @@ function aliases(code: string, names: string[]): string[] {
 /** Escape a name for use inside a RegExp source. */
 const reName = (n: string) => n.replace(/\$/g, "\\$");
 
-/** The module each gate must come from. A same-named function from anywhere else is not the gate. */
-const GATE_MODULES: Record<string, RegExp> = {
-  guardScriptWrites: /(^|\/)scriptWriteGuard(\.[jt]s)?$/,
-  assertScriptWriteAllowed: /(^|\/)scriptWriteGuard(\.[jt]s)?$/,
-  assertSandboxTarget: /(^|\/)guardrails\/sandbox(\.[jt]s)?$|^\.\/sandbox(\.[jt]s)?$/,
-  installMock: /(^|\/)tallyMock(\.[jt]s)?$/,
+/**
+ * The FILE each gate must come from, pinned to the real path in this repo
+ * (rebuild review, 5-Nov-2026). An import counts only when its specifier,
+ * resolved against the importing file, lands on that file: a same-named
+ * module of one's own (`./lib/scriptWriteGuard.js`), or the real name from the
+ * wrong folder depth, is not the gate.
+ */
+const GATE_FILES: Record<string, string> = {
+  guardScriptWrites: join(serverRoot, "src", "services", "scriptWriteGuard"),
+  assertScriptWriteAllowed: join(serverRoot, "src", "services", "scriptWriteGuard"),
+  assertSandboxTarget: join(serverRoot, "scripts", "guardrails", "sandbox"),
+  installMock: join(serverRoot, "src", "services", "tallyMock"),
 };
+/** A relative specifier resolved against the importing file, extension dropped, for comparison. */
+const resolvedModule = (file: string, specifier: string) =>
+  specifier.startsWith(".") ? resolve(dirname(file), specifier).replace(/\.(?:[cm]?[jt]s|tsx|jsx)$/, "").toLowerCase() : "";
+const isGateFile = (orig: string, file: string, specifier: string) =>
+  !!GATE_FILES[orig] && resolvedModule(file, specifier) === GATE_FILES[orig].toLowerCase();
 /**
  * Local names bound to a real gate: `import { g as h } from "<gate module>"` or
  * `const { g: h } = await import("<gate module>")`. The binding is found on the
@@ -170,14 +181,14 @@ const GATE_MODULES: Record<string, RegExp> = {
  * place (both views keep every offset), so a binding written inside a string
  * does not count (review of 5-Nov-2026).
  */
-function boundGates(src: string, code: string): string[] {
+function boundGates(src: string, code: string, file: string): string[] {
   const out: string[] = [];
   const spec = (at: number) => { const q = src[at]; const end = src.indexOf(q, at + 1); return end < 0 ? "" : src.slice(at + 1, end); };
   const take = (list: string, sep: RegExp, from: string) => {
     for (const part of list.split(",")) {
       const bits = part.trim().replace(/^type\s+/, "").split(sep).map((x) => x.trim());
       const orig = bits[0], local = bits[1] ?? bits[0];
-      if (GATE_MODULES[orig]?.test(from) && /^[\w$]+$/.test(local)) out.push(local);
+      if (isGateFile(orig, file, from) && /^[\w$]+$/.test(local)) out.push(local);
     }
   };
   for (const m of code.matchAll(/\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^{}]*)\}\s*from\s*(?=["'`])/g)) take(m[1], /\s+as\s+/, spec(m.index! + m[0].length));
@@ -228,7 +239,7 @@ function gateState(src: string, extraWrites: string[] = [], file: string = PLANT
      not a method on some object, not a declaration, and not a name the file
      declares itself (`function guardScriptWrites(){}`). `isSandbox()` is not a
      gate at all: it only reads the role, and a script can ignore its answer. */
-  const gateNames = boundGates(src, s)
+  const gateNames = boundGates(src, s, file)
     .filter((n) => !new RegExp(String.raw`(?:\bfunction\s*\*?\s*|\b(?:const|let|var|class)\s+)${reName(n)}(?![\w$])`).test(s));
   const GATE = gateNames.length
     ? new RegExp(String.raw`(?<![\w$.])(?<!\bfunction\s*\*?\s*)(${gateNames.map(reName).join("|")})\s*(?:\?\.\s*)?\(`)
@@ -349,7 +360,7 @@ if (reexported.length) console.log(`  re-exported write helpers followed: ${reex
   for (const f of files) {
     const rel = relative(repoRoot, f).split(sep).join("/");
     if (EXEMPT[rel]) continue;
-    const st = gateState(readFileSync(f, "utf8"), reexported);
+    const st = gateState(readFileSync(f, "utf8"), reexported, f);
     if (st === "not-a-writer") continue;
     writers++;
     if (st === "ungated") ungated.push(rel);
