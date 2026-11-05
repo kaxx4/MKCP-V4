@@ -22,7 +22,8 @@ import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import {
   mirrorRowFrom, scrubName, scrubSaltFrom, voucherProblem, isAccountingType, eachDay, runMirrorSync, assertParsedCollection, tallyMirrorReads,
-  type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult,
+  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_MARK_DEF,
+  type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult, type MirrorLedgerRow, type TallyLedger, type DayCheckVoucher,
 } from "../src/services/erpMirrorSync.js";
 import { erpTestFence, ERP_TEST_RPCS } from "../src/services/supabaseClient.js";
 
@@ -46,9 +47,11 @@ const voucher = (guid: string, date: string, alterid: number, extra: Record<stri
   ...extra,
 });
 
-function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boolean; salt?: string | null } = {}) {
+function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boolean; salt?: string | null; repull?: string | null; check?: Record<string, any> } = {}) {
   const calls: string[] = [];
   const staged: MirrorRow[] = [];
+  const ledgers: MirrorLedgerRow[] = [];
+  let checked: { highest: number; vouchers: DayCheckVoucher[] } | null = null;
   const steps: { step: string; state: string; rows?: number | null }[] = [];
   let swapArgs: { mark: number } | null = null; let failed: string | null = null;
   const store: MirrorStore = {
@@ -63,11 +66,18 @@ function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boo
     async stage(_r, rows) { calls.push(`stage ${rows.length}`); staged.push(...rows); return new Set(staged.map((x) => x.key)).size; },
     async swap(_r, mark) { calls.push("swap"); swapArgs = { mark }; return opts.swap ?? { state: "swapped", inserted: staged.length }; },
     async fail(_r, e) { calls.push("fail"); failed = e; },
+    async stageLedgers(_r, rows) { calls.push(`ledgers ${rows.length}`); ledgers.push(...rows); return ledgers.length; },
+    async repullStart() { calls.push("repull start"); return opts.repull ? { run_id: "R3", scope_from: opts.repull, scope_to: opts.repull, mark: 90, repull_id: "Q1" } : null; },
+    async checkDays(highest, vouchers) { calls.push("check"); checked = { highest, vouchers }; return opts.check ?? { state: "ok", days_differing: 0, repulls_queued: 0 }; },
   };
-  return { store, calls, staged, steps, get swapArgs() { return swapArgs; }, get failed() { return failed; } };
+  return { store, calls, staged, steps, ledgers, get swapArgs() { return swapArgs; }, get failed() { return failed; }, get checked() { return checked; } };
 }
 
-function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failOn?: string; changed?: any[] } = {}) {
+const ledger = (guid: string, name: string, closing = "-1234.50", extra: Partial<TallyLedger> = {}): TallyLedger =>
+  ({ guid, name, parent: "Sundry Debtors", closingbalance: closing, openingbalance: "100.00", alterid: "7", masterid: "70", ...extra });
+const LEDGERS = [ledger("L-1", "REAL LOOKING TRADERS"), ledger("L-2", "Cash", "5000.00"), ledger("L-3", "ZERO LEDGER", "")];
+
+function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failOn?: string; changed?: any[]; ledgers?: TallyLedger[]; vouchers?: DayCheckVoucher[] } = {}) {
   const calls: string[] = [];
   let inFlight = 0, maxInFlight = 0;
   const wrap = async <T>(label: string, fn: () => T): Promise<T> => {
@@ -78,9 +88,10 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
     return fn();
   };
   const tally: MirrorTally = {
-    highest: () => wrap("highest", () => ({ alterId: opts.highest ?? 100, latestDate: "2026-11-05", count: 9, byDay: {} })),
+    highest: () => wrap("highest", () => ({ alterId: opts.highest ?? 100, latestDate: "2026-11-05", count: 9, byDay: {}, vouchers: opts.vouchers ?? [{ k: "A", d: "2026-11-01", a: 90 }] })),
     vouchersOn: (day) => wrap(`day ${day}`, () => byDay[day] ?? []),
     changedSince: (mark) => wrap(`changed ${mark}`, () => opts.changed ?? []),
+    ledgers: () => wrap("ledgers", () => opts.ledgers ?? LEDGERS),
   };
   return { tally, calls, get maxInFlight() { return maxInFlight; } };
 }
@@ -125,12 +136,13 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   const days = { "2026-11-01": [voucher("A", "20261101", 101)], "2026-11-03": [voucher("B", "20261103", 120), voucher("C", "20261103", 121)] };
   let s = fakeStore(), t = fakeTally(days, { highest: 100 });
   let rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-03" } });
-  ok("Tally's highest AlterID is read before any voucher", t.calls[0] === "highest" && t.calls.slice(1).every((c) => c.startsWith("day ")), t.calls.join(", "));
-  ok("one read per day of the scope, in order", t.calls.slice(1).join(",") === "day 2026-11-01,day 2026-11-02,day 2026-11-03");
+  ok("Tally's highest AlterID is read before any voucher", t.calls[0] === "highest" && t.calls.slice(1, -1).every((c) => c.startsWith("day ")), t.calls.join(", "));
+  ok("one read per day of the scope, in order, then the ledgers once (0119)", t.calls.slice(1).join(",") === "day 2026-11-01,day 2026-11-02,day 2026-11-03,ledgers");
   ok("never two Tally requests at once", t.maxInFlight === 1, `max ${t.maxInFlight}`);
   ok("the swap gets the mark read BEFORE the reads (100), not the highest staged (121)", s.swapArgs?.mark === 100 && rep.markCandidate === 100);
-  ok("every step is written: the mark, each day, staged, swapped", s.steps.length === 6 && s.steps.every((x) => x.state === "ok"), s.steps.map((x) => x.step).join(" | "));
-  ok("the report says swapped", rep.state === "swapped" && rep.read === 3 && rep.tallyReads === 4 && s.staged.length === 3);
+  ok("every step is written: the mark, each day, staged, the ledgers, swapped", s.steps.length === 7 && s.steps.every((x) => x.state === "ok"), s.steps.map((x) => x.step).join(" | "));
+  ok("the report says swapped", rep.state === "swapped" && rep.read === 3 && rep.tallyReads === 5 && s.staged.length === 3 && rep.ledgers === 3);
+  ok("0119: the ledgers are staged before the swap", s.calls.indexOf("ledgers 3") >= 0 && s.calls.indexOf("ledgers 3") < s.calls.indexOf("swap"), s.calls.join(","));
   ok("stage comes before swap, swap once", s.calls.indexOf("swap") > s.calls.findIndex((c) => c.startsWith("stage")) && s.calls.filter((c) => c === "swap").length === 1);
   ok("review M3: a test store's rows reach staging scrubbed (the caller has no switch for it)", s.staged.every((r) => /^ZZ TEST\b/.test(r.party ?? "") && (r.row.ledgers as any[]).every((l) => /^ZZ TEST\b/.test(l.ledger))));
   let threwNoSalt = false;
@@ -166,11 +178,11 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   H("AN INCREMENTAL RUN");
   s = fakeStore({ mark: 50 }); t = fakeTally({}, { highest: 130, changed: [voucher("C", "20261104", 125)] });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
-  ok("it reads above the run's mark, after reading Tally's highest", t.calls.join(",") === "highest,changed 50");
+  ok("it reads above the run's mark, after reading Tally's highest, then the ledgers", t.calls.join(",") === "highest,changed 50,ledgers");
   ok("the swap gets Tally's highest (130)", s.swapArgs?.mark === 130 && rep.state === "swapped" && s.staged.length === 1);
   s = fakeStore({ mark: 130 }); t = fakeTally({}, { highest: 130 });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
-  ok("Tally's highest equal to the mark: it reads above the mark, nothing new", t.calls.join(",") === "highest,changed 130" && rep.state === "swapped");
+  ok("Tally's highest equal to the mark: it reads above the mark, nothing new", t.calls.join(",") === "highest,changed 130,ledgers" && rep.state === "swapped");
 
   H("TALLY'S HIGHEST BELOW THE MARK (review H1)");
   s = fakeStore({ mark: 150, swap: { state: "refused", reason: "needs_full_run", mark: 150, candidate: 130 } }); t = fakeTally({}, { highest: 130, changed: [voucher("D", "20261104", 131)] });
@@ -183,7 +195,7 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("if the database swapped anyway, the agent fails the run", rep.state === "failed" && /did not refuse/.test(rep.error ?? ""), rep.error ?? "");
   s = fakeStore({ mark: 150 }); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] }, { highest: 130 });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" } });
-  ok("a full run reads as usual and hands the lower AlterID to the swap (only a full run may lower the mark)", rep.state === "swapped" && s.swapArgs?.mark === 130 && t.calls.join(",") === "highest,day 2026-11-01");
+  ok("a full run reads as usual and hands the lower AlterID to the swap (only a full run may lower the mark)", rep.state === "swapped" && s.swapArgs?.mark === 130 && t.calls.join(",") === "highest,day 2026-11-01,ledgers");
 
   H("FAILURES");
   s = fakeStore(); t = fakeTally(days, { failOn: "day 2026-11-02" });
@@ -210,7 +222,10 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   const reads = tallyMirrorReads("http://localhost:9000", "ZZ PRACTICE CO", async (_u, xml) => { sent.push(xml); return { ENVELOPE: { BODY: { DATA: { COLLECTION: "" } } } }; });
   await reads.highest(); await reads.vouchersOn("2026-11-03"); await reads.changedSince(42);
   ok("every request has an <ID>, names the company, fetches no '*'", sent.length === 3 && sent.every((x) => /<ID>[^<]+<\/ID>/.test(x) && x.includes("<SVCURRENTCOMPANY>ZZ PRACTICE CO<") && !/<NATIVEMETHOD>[^<]*\*/.test(x)));
-  ok("the AlterID read asks for AlterID and Date only, above 0, escaped", /\$AlterID &gt; 0</.test(sent[0]) && (sent[0].match(/<NATIVEMETHOD>/g) ?? []).length === 2);
+  ok("the AlterID read asks for AlterID, Date and Guid only (0119: Guid for the key compare), above 0, escaped", /\$AlterID &gt; 0</.test(sent[0]) && (sent[0].match(/<NATIVEMETHOD>/g) ?? []).length === 3 && sent[0].includes(">Guid<"));
+  await reads.ledgers();
+  ok("0119: the ledger read is one Ledger collection with an <ID>, the company, the named fields and no filter", sent.length === 4 && /<TYPE>Ledger<\/TYPE>/.test(sent[3]) && /<ID>[^<]+<\/ID>/.test(sent[3])
+    && sent[3].includes("<SVCURRENTCOMPANY>ZZ PRACTICE CO<") && sent[3].includes(">ClosingBalance<") && !/<NATIVEMETHOD>[^<]*\*/.test(sent[3]));
   ok("a day read is filtered to that one day inside Tally", sent[1].includes("&gt;= 20261103") && sent[1].includes("&lt;= 20261103"));
   ok("the incremental read is filtered above the mark inside Tally", /\$AlterID &gt; 42</.test(sent[2]));
   ok("the voucher reads ask for the ledger lines but not the inventory or e-way blocks", sent[1].includes(">AllLedgerEntries<") && !sent[1].includes("Inventory") && !sent[1].includes("EWayBill"));
@@ -218,13 +233,84 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   let threw = false; try { await errReads.vouchersOn("2026-11-03"); } catch { threw = true; }
   ok("an error envelope from Tally throws, it is never an empty day", threw);
 
+  H("LEDGERS AND CLOSING BALANCES (0119, M-6)");
+  ok("a balance keeps Tally's sign and paise", parseBalance("-1234.50") === -1234.5 && parseBalance("5000.00") === 5000 && parseBalance("1,20,000.25") === 120000.25);
+  ok("an empty balance is null (Tally sent none), never 0", parseBalance("") === null && parseBalance(undefined) === null);
+  ok("a balance that is not a plain number throws, never reads as 0", ["12,000 Dr", "abc", "1.2.3", "Rs 5"].every((x) => { try { parseBalance(x); return false; } catch { return true; } }));
+  ok("a ledger with no GUID, no name or a bad balance is a problem", ledgerProblem(ledger("", "X")) === "no GUID" && ledgerProblem(ledger("G", "")) === "no name"
+    && ledgerProblem(ledger("G", "X", "12 Dr")) === "a balance that does not parse" && ledgerProblem(ledger("G", "X")) === null);
+  const lr = ledgerRowFrom(ledger("L-1", "REAL LOOKING TRADERS"), { scrub: true, salt: SALT });
+  ok("a test row's ledger and group names are keyed stand-ins; the balance stays", /^ZZ TEST LEDGER [0-9a-f]{10}$/.test(lr.name) && /^ZZ TEST GROUP [0-9a-f]{10}$/.test(lr.parent ?? "")
+    && lr.closing_balance === -1234.5 && lr.opening_balance === 100 && !/REAL LOOKING|Sundry/.test(JSON.stringify(lr)));
+  ok("a ledger Tally sent no balance for says so", ledgerRowFrom(ledger("L-3", "Z", ""), { scrub: false }).row.closing_balance_sent === false);
+  const lp = ledgersFromParsed({ ENVELOPE: { BODY: { DATA: { COLLECTION: { LEDGER: [
+    { "@_NAME": "ZZ TEST A", GUID: "g-a", PARENT: "Cash-in-Hand", CLOSINGBALANCE: { "#text": "-10.00", "@_TYPE": "Amount" }, ALTERID: "5", MASTERID: "9" },
+  ] } } } } });
+  ok("the reply's ledgers are read by name attribute, with the balance's text", lp.length === 1 && lp[0].name === "ZZ TEST A" && lp[0].guid === "g-a" && lp[0].closingbalance === "-10.00" && lp[0].alterid === "5");
+  ok("the ledger read names its fields (G7), with no *", ERP_MIRROR_LEDGER_DEF.fetch!.includes("ClosingBalance") && ERP_MIRROR_LEDGER_DEF.fetch!.includes("Guid") && !ERP_MIRROR_LEDGER_DEF.fetch!.some((f) => f.includes("*")));
+  ok("the AlterID read also fetches the GUID, for the nightly key compare", ERP_MIRROR_MARK_DEF.fetch!.includes("Guid"));
+  for (const [what, list, re] of [
+    ["an empty ledger list", [], /came back empty/],
+    ["a ledger with no GUID", [...LEDGERS, ledger("", "NO KEY")], /1 with no GUID/],
+    ["a ledger balance that does not parse", [ledger("L-9", "X", "1,000 Cr")], /does not parse/],
+  ] as [string, TallyLedger[], RegExp][]) {
+    s = fakeStore(); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] }, { ledgers: list });
+    rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" } });
+    ok(`${what}: the run fails and nothing is swapped`, rep.state === "failed" && re.test(rep.error ?? "") && !s.calls.includes("swap") && s.ledgers.length === 0, rep.error ?? "");
+  }
+  s = fakeStore(); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] }, { ledgers: Array.from({ length: 1100 }, (_, i) => ledger(`L${i}`, `ZZ TEST L ${i}`)) });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" } });
+  ok("1,100 ledgers are staged in calls of at most 500", s.calls.filter((c) => c.startsWith("ledgers")).join(",") === "ledgers 500,ledgers 500,ledgers 100" && rep.ledgers === 1100);
+  s = fakeStore(); t = fakeTally({ "2026-11-01": [voucher("A", "20261101", 101)] });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" }, ledgers: false });
+  ok("a run told not to read ledgers reads none", !t.calls.includes("ledgers") && rep.ledgers === null && rep.state === "swapped");
+
+  H("THE ONE-DAY RE-PULL (0119, A11)");
+  s = fakeStore({ repull: "2026-11-03" }); t = fakeTally({ "2026-11-03": [voucher("B", "20261103", 120)] }, { highest: 130 });
+  const rp = await runRepull({ store: s.store, tally: t.tally });
+  ok("a re-pull reads its one day and never the ledgers", t.calls.join(",") === "highest,day 2026-11-03" && rp?.state === "swapped" && rp.ledgers === null && s.ledgers.length === 0, t.calls.join(","));
+  ok("a re-pull is started by the database's queue, not by the caller's scope", s.calls[0] === "repull start" && rp?.scope?.from === "2026-11-03");
+  s = fakeStore({ repull: "2026-11-03" }); t = fakeTally({ "2026-11-03": [voucher("B", "20261102", 120)] });
+  const rp2 = await runRepull({ store: s.store, tally: t.tally });
+  ok("a re-pull holding another day's voucher fails, as any full read", rp2?.state === "failed" && /not 2026-11-03/.test(rp2.error ?? ""), rp2?.error ?? "");
+  s = fakeStore({ repull: null }); t = fakeTally({});
+  ok("nothing queued: nothing is read", (await runRepull({ store: s.store, tally: t.tally })) === null && t.calls.length === 0);
+
+  H("THE NIGHTLY CHECK (0119, A11)");
+  const vs: DayCheckVoucher[] = [{ k: "A", d: "2026-11-01", a: 90 }, { k: "B", d: "2026-11-03", a: 120 }];
+  s = fakeStore({ check: { state: "gaps", days_differing: 1, repulls_queued: 1 } }); t = fakeTally({}, { highest: 130, vouchers: vs });
+  let dc = await runDayCheck({ store: s.store, tally: t.tally });
+  ok("one cheap read, then the database compares every key with Tally's highest", t.calls.join(",") === "highest" && s.checked?.highest === 130 && s.checked?.vouchers.length === 2 && dc.state === "gaps");
+  s = fakeStore(); t = fakeTally({}, { failOn: "highest" });
+  dc = await runDayCheck({ store: s.store, tally: t.tally });
+  ok("a Tally error is a failed check, never ok, and nothing is compared", dc.state === "failed" && !s.calls.includes("check") && /error window/.test(dc.error ?? ""));
+  s = fakeStore({ check: { nonsense: true } }); t = fakeTally({}, { vouchers: vs });
+  dc = await runDayCheck({ store: s.store, tally: t.tally });
+  ok("an answer from the database that is not ok, gaps or refused is a failed check", dc.state === "failed");
+  const conv = await tallyMirrorReads("http://x", "ZZ CO", async () => ({ ENVELOPE: { BODY: { DATA: { COLLECTION: { VOUCHER: [
+    { GUID: "g1", DATE: "20261101", ALTERID: "11" }, { GUID: "", DATE: "1-Nov", ALTERID: "" },
+  ] } } } } })).highest();
+  ok("the AlterID read keeps every voucher, even an unreadable one, for the database to refuse", conv.vouchers?.length === 2 && conv.vouchers[0].k === "g1" && conv.vouchers[0].d === "2026-11-01" && conv.vouchers[0].a === 11
+    && conv.vouchers[1].k === "" && conv.vouchers[1].d === null && conv.vouchers[1].a === null, JSON.stringify(conv.vouchers));
+
+  H("WHAT RUNS NEXT (0119, A7 weekly full, A11 nightly)");
+  const now = new Date("2026-11-06T20:00:00Z"), ago = (h: number) => new Date(now.getTime() - h * 3_600_000);
+  ok("no mark: a full run, then the check", planMirrorWork({ now, hasMark: false, fullDue: false, lastFullAt: null, lastCheckAt: null, queuedRepulls: 0 }).join(",") === "full,check");
+  ok("a full run due: full", planMirrorWork({ now, hasMark: true, fullDue: true, lastFullAt: ago(2), lastCheckAt: ago(1), queuedRepulls: 0 }).join(",") === "full");
+  ok("the last full run 7 days ago: the weekly full (A7)", planMirrorWork({ now, hasMark: true, fullDue: false, lastFullAt: ago(7 * 24), lastCheckAt: ago(1), queuedRepulls: 0 }).join(",") === "full");
+  ok("otherwise an incremental; the check after 20 hours; queued re-pulls last", planMirrorWork({ now, hasMark: true, fullDue: false, lastFullAt: ago(30), lastCheckAt: ago(21), queuedRepulls: 2 }).join(",") === "incremental,check,repull"
+    && planMirrorWork({ now, hasMark: true, fullDue: false, lastFullAt: ago(30), lastCheckAt: ago(3), queuedRepulls: 0 }).join(",") === "incremental");
+
   H("THE FENCE");
   const P = "https://abcdefghijklmnopqrst.supabase.co";
   const f = (path: string, m = "POST") => erpTestFence(`${P}${path}`, m, P);
-  for (const fn of ["erp_sync_run_start", "erp_sync_run_step", "erp_sync_stage", "erp_sync_swap", "erp_sync_run_fail", "erp_sync_test_cleanup"]) {
+  for (const fn of ["erp_sync_run_start", "erp_sync_run_step", "erp_sync_stage", "erp_sync_swap", "erp_sync_run_fail", "erp_sync_test_cleanup",
+                    "erp_sync_stage_ledgers", "erp_sync_check_days", "erp_sync_repull_start", "erp_job_mirror_check"]) {
     ok(`the sandbox may call ${fn}`, ERP_TEST_RPCS.includes(fn) && f(`/rest/v1/rpc/${fn}`) === null);
   }
-  ok("the two helper functions are not on the list", f("/rest/v1/rpc/erp_sync_actor") !== null && f("/rest/v1/rpc/erp_sync_my_run") !== null);
+  ok("the helper functions are not on the list", ["erp_sync_actor", "erp_sync_my_run", "erp_sync_jobs_of", "erp_sync_reconcile_jobs"].every((fn) => f(`/rest/v1/rpc/${fn}`) !== null));
+  ok("0119: it reads is_test ledgers, flags, checks and re-pulls, and writes none of them", ["erp_mirror_ledgers", "erp_record_flags", "erp_record_links", "erp_sync_day_checks", "erp_sync_repulls"]
+    .every((tb) => f(`/rest/v1/${tb}?select=*&is_test=eq.true`, "GET") === null && f(`/rest/v1/${tb}?select=*`, "GET") !== null && f(`/rest/v1/${tb}?is_test=eq.true`, "POST") !== null));
   ok("it reads is_test mirror rows", f("/rest/v1/erp_mirror_rows?select=*&company_key=eq.ZZTEST-X&is_test=eq.true", "GET") === null);
   ok("it cannot read mirror rows without is_test", f("/rest/v1/erp_mirror_rows?select=*", "GET") !== null);
   ok("it cannot write or delete mirror rows directly", f("/rest/v1/erp_mirror_rows?is_test=eq.true", "POST") !== null && f("/rest/v1/erp_sync_marks?is_test=eq.true", "DELETE") !== null && f("/rest/v1/erp_sync_runs?is_test=eq.true", "PATCH") !== null);

@@ -100,10 +100,15 @@ export const ERP_TEST_RPCS: readonly string[] = [
      own erp_mirror_rows; the tally_* mirror is never reachable from here. */
   "erp_sync_run_start", "erp_sync_run_step", "erp_sync_stage", "erp_sync_swap",
   "erp_sync_run_fail", "erp_sync_test_cleanup",
+  /* Task 1-5, second half (migration 0119): ledgers, the nightly check, the
+     one-day re-pulls and the job-to-mirror check. The same machine and
+     ZZTEST company-key checks apply in the database. */
+  "erp_sync_stage_ledgers", "erp_sync_check_days", "erp_sync_repull_start", "erp_job_mirror_check",
 ];
 /** ERP mirror tables the sandbox may read (GET only, only is_test rows), task 1-5. */
 export const ERP_TEST_READ_TABLES: readonly string[] = [
   "erp_sync_runs", "erp_sync_run_steps", "erp_sync_marks", "erp_mirror_stage", "erp_mirror_rows",
+  "erp_mirror_ledger_stage", "erp_mirror_ledgers", "erp_record_links", "erp_record_flags", "erp_sync_day_checks", "erp_sync_repulls",
 ];
 /** ERP tables the sandbox may read (only is_test rows) and clean up (only rows it names). */
 export const ERP_TEST_ROW_TABLES: readonly string[] = ["erp_jobs", "erp_proposal_requests", "erp_proposals"];

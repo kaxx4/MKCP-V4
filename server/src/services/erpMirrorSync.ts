@@ -41,6 +41,19 @@
  *   derived from this machine's key, so a list of real names cannot be hashed
  *   to reverse it (D-1-5.5, review M3). The database refuses any other name on
  *   a test row.
+ *
+ * -- Second half, first batch (6-Nov-2026, migration 0119) ----------------
+ * - Every full or incremental run also reads the ledger masters (one cheap
+ *   request) with Tally's closing balance into the ERP's own
+ *   erp_mirror_ledgers (M-6). A ledger list that is empty, has a ledger with
+ *   no GUID or name, or a balance that does not parse fails the run; the
+ *   database refuses one under 80 percent of the mirror (D-1-5.20).
+ * - After every swap the database checks each succeeded ERP job against the
+ *   mirror by MASTERID (A6 altered in Tally, A7 vanished, D-1-5.2).
+ * - The nightly check (A11, runDayCheck): the AlterID read also fetches each
+ *   voucher's GUID, and the database compares key, date and AlterID with the
+ *   mirror. Each day that differs queues a one-day re-pull (kind "repull"),
+ *   which keeps the mark. planMirrorWork says what to run next.
  */
 import { createHmac } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -70,10 +83,36 @@ export const ERP_MIRROR_MARK_DEF: CollectionDef = {
   tallyCollection: "Voucher",
   metadataType: "Voucher",
   category: "transaction",
-  fetch: ["AlterID", "Date"],
+  /* Guid too (0119): the nightly check compares the mirror key by key (A11). */
+  fetch: ["AlterID", "Date", "Guid"],
   timeout: 120_000,
   parallel: false,
 };
+
+/** The ledger masters with Tally's closing balance (M-6, 0119). Fields named one by one (G7), no `*`. */
+export const ERP_MIRROR_LEDGER_DEF: CollectionDef = {
+  name: "erpMirrorLedgers",
+  tallyCollection: "Ledger",
+  metadataType: "Ledger",
+  category: "master",
+  fetch: ["Guid", "Name", "Parent", "OpeningBalance", "ClosingBalance", "AlterID", "MasterId"],
+  timeout: 120_000,
+  parallel: false,
+};
+
+export interface MirrorLedgerRow {
+  key: string;
+  name: string;
+  parent: string | null;
+  closing_balance: number | null;
+  opening_balance: number | null;
+  alter_id: number | null;
+  master_id: number | null;
+  row: Record<string, unknown>;
+}
+
+/** One ledger as Tally sent it (strings), before it is checked. */
+export interface TallyLedger { guid: string; name: string; parent: string; closingbalance: string; openingbalance: string; alterid: string; masterid: string }
 
 export interface MirrorRow {
   key: string;
@@ -166,6 +205,53 @@ export function mirrorRowFrom(v: any, opts: { scrub: false } | { scrub: true; sa
   };
 }
 
+/**
+ * Pure: a ledger balance as Tally writes it ("-1234.50", Tally's own sign,
+ * negative is debit). Empty means Tally sent none (null, never 0); anything
+ * else that is not a plain number throws, so it can never read as 0 (G7).
+ */
+export function parseBalance(s: unknown): number | null {
+  const t = String(s ?? "").trim().replace(/,/g, "");
+  if (!t) return null;
+  if (!/^-?\d+(\.\d+)?$/.test(t)) throw new Error(`a ledger balance that does not parse (${t.slice(0, 20)})`);
+  return Math.round(parseFloat(t) * 100) / 100;
+}
+
+/** Pure: why this ledger cannot be trusted as read, or null. */
+export function ledgerProblem(l: TallyLedger): string | null {
+  if (!String(l?.guid ?? "").trim()) return "no GUID";
+  if (!String(l?.name ?? "").trim()) return "no name";
+  try { parseBalance(l.closingbalance); parseBalance(l.openingbalance); } catch { return "a balance that does not parse"; }
+  return null;
+}
+
+/** Pure: one checked ledger to a staging row. Test runs store names only as stand-ins. */
+export function ledgerRowFrom(l: TallyLedger, opts: { scrub: false } | { scrub: true; salt: string }): MirrorLedgerRow {
+  const name = (kind: string, s: string) => (opts.scrub ? scrubName(kind, s, opts.salt) : (s || "").trim() || null);
+  return {
+    key: String(l.guid).trim(),
+    name: name("LEDGER", l.name)!,
+    parent: name("GROUP", l.parent),
+    closing_balance: parseBalance(l.closingbalance),
+    opening_balance: parseBalance(l.openingbalance),
+    alter_id: Number(l.alterid) || null,
+    master_id: Number(l.masterid) || null,
+    row: { closing_balance_sent: String(l.closingbalance ?? "").trim() !== "" },
+  };
+}
+
+/** Pure: the ledgers out of a parsed Ledger collection reply (the shape convertLedgers reads). */
+export function ledgersFromParsed(parsed: any): TallyLedger[] {
+  const txt = (v: any): string => v == null ? "" : typeof v === "object" ? String(v["#text"] ?? "") : String(v);
+  const col = parsed?.ENVELOPE?.BODY?.DATA?.COLLECTION;
+  const raw = col?.LEDGER ?? col?.["LEDGER.LIST"];
+  const list = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  return list.map((l: any) => ({
+    guid: txt(l?.GUID).trim(), name: (txt(l?.["@_NAME"]) || txt(l?.NAME)).trim(), parent: txt(l?.PARENT).trim(),
+    closingbalance: txt(l?.CLOSINGBALANCE), openingbalance: txt(l?.OPENINGBALANCE), alterid: txt(l?.ALTERID), masterid: txt(l?.MASTERID),
+  }));
+}
+
 /** Every ISO day from `from` to `to`, inclusive. */
 export function eachDay(from: string, to: string): string[] {
   const out: string[] = [];
@@ -178,13 +264,19 @@ export function eachDay(from: string, to: string): string[] {
 // ── The two seams ───────────────────────────────────────────────────────────
 
 export interface MirrorTally {
-  /** Tally's highest voucher AlterID now, the latest voucher date, the voucher count and the count per day. */
-  highest(): Promise<{ alterId: number; latestDate: string | null; count: number; byDay: Record<string, number> }>;
+  /** Tally's highest voucher AlterID now, the latest voucher date, the voucher count, the count per day,
+   *  and every voucher's key, date and AlterID for the nightly check (A11). */
+  highest(): Promise<{ alterId: number; latestDate: string | null; count: number; byDay: Record<string, number>; vouchers?: DayCheckVoucher[] }>;
   /** Converted vouchers Tally returns for a one-day filter (the caller checks each is of that day). */
   vouchersOn(day: string): Promise<any[]>;
   /** Converted vouchers whose AlterID is above `mark` (any date). */
   changedSince(mark: number): Promise<any[]>;
+  /** Every ledger master with its closing balance (one request). */
+  ledgers(): Promise<TallyLedger[]>;
 }
+
+/** One voucher as the nightly check sends it: key, ISO date, AlterID (raw; the database checks each). */
+export interface DayCheckVoucher { k: string; d: string | null; a: number | null }
 
 export interface SwapResult {
   state: "swapped" | "refused";
@@ -202,6 +294,12 @@ export interface MirrorStore {
   stage(run: string, rows: MirrorRow[]): Promise<number>;
   swap(run: string, markCandidate: number): Promise<SwapResult>;
   fail(run: string, error: string): Promise<void>;
+  /** Stage ledgers (at most 500 per call); returns the count staged for the run. */
+  stageLedgers(run: string, rows: MirrorLedgerRow[]): Promise<number>;
+  /** Start the oldest queued one-day re-pull, or null when none is queued. */
+  repullStart(): Promise<{ run_id: string; scope_from: string; scope_to: string; mark: number | null; repull_id?: string } | null>;
+  /** The nightly key compare (A11): the database compares and queues the re-pulls. */
+  checkDays(tallyHighest: number, vouchers: DayCheckVoucher[]): Promise<Record<string, any>>;
 }
 
 /** Throws unless the parsed reply is a collection (an error envelope is never "empty"). */
@@ -223,13 +321,17 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
       const list = convertVouchers(parsed).tallymessage;
       let alterId = 0, latest: string | null = null;
       const byDay: Record<string, number> = {};
+      const vouchers: DayCheckVoucher[] = [];
       for (const v of list) {
         if (Number(v.alterid) > alterId) alterId = Number(v.alterid);
         const d = isoOf(v.date);
         if (d) byDay[d] = (byDay[d] ?? 0) + 1;
         if (d && (!latest || d > latest)) latest = d;
+        const a = String(v.alterid ?? "").trim();
+        /* Tally never gives an AlterID of 0, and the converter turns a missing one into 0: so 0 is "missing". */
+        vouchers.push({ k: String(v.guid ?? "").trim(), d, a: /^\d+$/.test(a) && Number(a) > 0 ? Number(a) : null });
       }
-      return { alterId, latestDate: latest, count: list.length, byDay };
+      return { alterId, latestDate: latest, count: list.length, byDay, vouchers };
     },
     async vouchersOn(day: string) {
       const parsed = assertParsedCollection(await post(tallyUrl, buildCollectionXml(ERP_MIRROR_VOUCHER_DEF, company, day, day), ERP_MIRROR_VOUCHER_DEF.timeout, false), `the read of ${day}`);
@@ -238,6 +340,10 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
     async changedSince(mark: number) {
       const parsed = assertParsedCollection(await post(tallyUrl, buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, company, mark), ERP_MIRROR_VOUCHER_DEF.timeout, false), `the read above AlterID ${mark}`);
       return convertVouchers(parsed).tallymessage;
+    },
+    async ledgers() {
+      const parsed = assertParsedCollection(await post(tallyUrl, buildCollectionXml(ERP_MIRROR_LEDGER_DEF, company), ERP_MIRROR_LEDGER_DEF.timeout, false), "the ledger read");
+      return ledgersFromParsed(parsed);
     },
   };
 }
@@ -258,12 +364,15 @@ export function supabaseMirrorStore(c: SupabaseClient, machine: string, key: str
     stage: async (run, rows) => Number(await call("erp_sync_stage", { p_run: run, p_rows: rows })),
     swap: async (run, mark) => call("erp_sync_swap", { p_run: run, p_mark_candidate: mark }),
     fail: async (run, error) => { await call("erp_sync_run_fail", { p_run: run, p_error: error }); },
+    stageLedgers: async (run, rows) => Number(await call("erp_sync_stage_ledgers", { p_run: run, p_rows: rows })),
+    repullStart: async () => (await call("erp_sync_repull_start", { p_company_key: companyKey, p_is_test: isTest })) ?? null,
+    checkDays: async (tallyHighest, vouchers) => call("erp_sync_check_days", { p_company_key: companyKey, p_is_test: isTest, p_tally_highest: tallyHighest, p_vouchers: vouchers }),
   };
 }
 
 export interface MirrorSyncReport {
   run_id: string | null;
-  kind: "full" | "incremental";
+  kind: "full" | "incremental" | "repull";
   state: "swapped" | "refused" | "failed";
   scope: { from: string; to: string } | null;
   markCandidate: number | null;
@@ -273,6 +382,8 @@ export interface MirrorSyncReport {
   swap: SwapResult | null;
   error: string | null;
   tallyReads: number;
+  /** Ledgers staged with the run (null when none were read). */
+  ledgers: number | null;
 }
 
 const STAGE_BATCH = 500;
@@ -287,14 +398,32 @@ const STAGE_BATCH = 500;
 export async function runMirrorSync(opts: {
   store: MirrorStore; tally: MirrorTally; kind: "full" | "incremental";
   scope?: { from: string; to: string };
+  /** Read the ledger masters with the run (default yes). */
+  ledgers?: boolean;
   log?: (line: string) => void;
 }): Promise<MirrorSyncReport> {
+  return (await runMirror({ ...opts }))!;
+}
+
+/** One queued one-day re-pull (A11, 0119): a full read of that day that keeps the mark. Null when none is queued. */
+export async function runRepull(opts: { store: MirrorStore; tally: MirrorTally; log?: (line: string) => void }): Promise<MirrorSyncReport | null> {
+  return runMirror({ ...opts, kind: "repull" });
+}
+
+async function runMirror(opts: {
+  store: MirrorStore; tally: MirrorTally; kind: "full" | "incremental" | "repull";
+  scope?: { from: string; to: string };
+  ledgers?: boolean;
+  log?: (line: string) => void;
+}): Promise<MirrorSyncReport | null> {
   const { store, tally, kind } = opts;
   if (store.isTest && !store.scrubSalt) throw new Error("refused: a test run must scrub names, and the store has no salt");
   const scrubOpts = store.isTest ? { scrub: true as const, salt: store.scrubSalt! } : { scrub: false as const };
   const log = opts.log ?? ((l: string) => console.log(`[erpMirror] ${l}`));
-  const report: MirrorSyncReport = { run_id: null, kind, state: "failed", scope: null, markCandidate: null, read: 0, staged: 0, noGuid: 0, swap: null, error: null, tallyReads: 0 };
-  const run = await store.start(kind, opts.scope);
+  const report: MirrorSyncReport = { run_id: null, kind, state: "failed", scope: null, markCandidate: null, read: 0, staged: 0, noGuid: 0, swap: null, error: null, tallyReads: 0, ledgers: null };
+  const run = kind === "repull" ? await store.repullStart() : await store.start(kind, opts.scope);
+  if (!run) return null;
+  const readLedgers = kind !== "repull" && opts.ledgers !== false;
   report.run_id = run.run_id;
   report.scope = { from: run.scope_from, to: run.scope_to };
   const timed = async <T>(fn: () => Promise<T>): Promise<[T, number]> => { const t0 = Date.now(); const v = await fn(); return [v, Date.now() - t0]; };
@@ -326,7 +455,7 @@ export async function runMirrorSync(opts: {
     report.tallyReads++;
     report.markCandidate = top.alterId;
     await store.step(run.run_id, "read Tally's highest voucher AlterID before reading", "ok", top.count, ms0, { alter_id: top.alterId, latest_date: top.latestDate, mark_before: run.mark });
-    if (kind === "full") {
+    if (kind === "full" || kind === "repull") {
       for (const day of eachDay(run.scope_from, run.scope_to)) {
         const [list, ms] = await timed(() => tally.vouchersOn(day));
         report.tallyReads++;
@@ -356,6 +485,24 @@ export async function runMirrorSync(opts: {
     }
     await flush();
     await store.step(run.run_id, "staged", "ok", report.staged, null, null);
+    if (readLedgers) {
+      /* M-6: the ledgers and their closing balances, one request, checked
+         before any is kept. An empty list is never "no ledgers". */
+      const [list, msL] = await timed(() => tally.ledgers());
+      report.tallyReads++;
+      if (!list.length) throw new Error("refused: the ledger read came back empty, which is not a list of ledgers, so the run fails and nothing is swapped");
+      const problems = list.map(ledgerProblem).filter((p): p is string => !!p);
+      if (problems.length) {
+        const counts = [...new Set(problems)].map((p) => `${problems.filter((x) => x === p).length} with ${p}`).join("; ");
+        throw new Error(`refused: the ledger read returned ledgers that cannot be trusted as read (${counts}), so the run fails and nothing is swapped`);
+      }
+      const rows = list.map((l) => ledgerRowFrom(l, scrubOpts));
+      let n = 0;
+      for (let i = 0; i < rows.length; i += STAGE_BATCH) n = await store.stageLedgers(run.run_id, rows.slice(i, i + STAGE_BATCH));
+      report.ledgers = n;
+      await store.step(run.run_id, "read and staged the ledgers with their closing balances", "ok", n, msL,
+        { with_closing_balance: rows.filter((r) => r.closing_balance !== null).length });
+    }
     const [res, msS] = await timed(() => store.swap(run.run_id, top.alterId));
     report.swap = res;
     report.state = res.state;
@@ -370,4 +517,45 @@ export async function runMirrorSync(opts: {
     try { await store.fail(run.run_id, msg); } catch (e2) { report.error += ` (and the run could not be marked failed: ${(e2 as Error).message})`; }
     return report;
   }
+}
+
+export interface DayCheckReport { state: "ok" | "gaps" | "refused" | "failed"; result: Record<string, any> | null; error: string | null; vouchers: number; tallyHighest: number | null }
+
+/**
+ * The nightly check (A11, 0119): one cheap read of every voucher's key, date
+ * and AlterID, compared with the mirror in the database. Days that differ are
+ * queued there for a one-day re-pull. A failed read is "failed", never "ok".
+ */
+export async function runDayCheck(opts: { store: MirrorStore; tally: MirrorTally; log?: (line: string) => void }): Promise<DayCheckReport> {
+  const log = opts.log ?? ((l: string) => console.log(`[erpMirror] ${l}`));
+  try {
+    const top = await opts.tally.highest();
+    if (!top.vouchers) throw new Error("the AlterID read did not return the vouchers' keys, so there is nothing to compare");
+    const result = await opts.store.checkDays(top.alterId, top.vouchers);
+    const state = (["ok", "gaps", "refused"].includes(result?.state) ? result.state : "failed") as DayCheckReport["state"];
+    log(`day check: ${state} (${JSON.stringify({ ...result, days: undefined })})`);
+    return { state, result, error: state === "failed" ? `the database answered ${JSON.stringify(result)}` : null, vouchers: top.vouchers.length, tallyHighest: top.alterId };
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    log(`day check failed: ${msg}`);
+    return { state: "failed", result: null, error: msg, vouchers: 0, tallyHighest: null };
+  }
+}
+
+export type MirrorWork = "full" | "incremental" | "check" | "repull";
+
+/**
+ * Pure: what the mirror runs next, in order (A7 weekly full, A11 nightly
+ * check). A full run when there is no mark, when one is due, or when the last
+ * full one swapped 7 or more days ago; otherwise an incremental. Then the
+ * nightly check when none ran for 20 hours, then any queued re-pulls. Nothing
+ * in index.ts runs it until go-live.
+ */
+export function planMirrorWork(s: { now: Date; hasMark: boolean; fullDue: boolean; lastFullAt: Date | null; lastCheckAt: Date | null; queuedRepulls: number }): MirrorWork[] {
+  const hours = (d: Date | null) => (d ? (s.now.getTime() - d.getTime()) / 3_600_000 : Infinity);
+  const out: MirrorWork[] = [];
+  out.push(!s.hasMark || s.fullDue || hours(s.lastFullAt) >= 7 * 24 ? "full" : "incremental");
+  if (hours(s.lastCheckAt) >= 20) out.push("check");
+  if (s.queuedRepulls > 0) out.push("repull");
+  return out;
 }
