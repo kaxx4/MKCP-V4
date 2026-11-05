@@ -24,7 +24,10 @@ if (process.argv.includes("--push")) guardScriptWrites("test-edge-cases"); // #1
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const PUSH = process.argv.includes("--push");
-const TAG = `E${Date.now().toString().slice(-7)}`;
+/* 0-3 (5-Nov-2026): the harness mark ZZTEST, so every voucher this writes is
+   found by the sweep and the stranded-voucher census. The old `E<digits>`
+   tag matched neither, so a --push run could only be cleaned up by hand. */
+const TAG = `ZZTEST${Date.now().toString().slice(-7)}`;
 const TODAY = new Date().toISOString().slice(0, 10);
 const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 
@@ -52,7 +55,9 @@ function expectReject(name: string, p: VoucherPayload, m: TallyMasters, mustMent
  * Derived from the voucher number, so a re-run alters rather than duplicates.
  */
 const withId = (p: VoucherPayload): VoucherPayload =>
-  p.remoteId ? p : { ...p, remoteId: `MKCP|TEST|${p.date}|${p.voucherType}|${p.voucherNumber ?? p.narration ?? ""}` };
+  /* A spelling remoteIdGuesses (find-stranded-test-vouchers.ts) knows, so the
+     sweep can address it; the old `MKCP|TEST|date|...` was in no guess list. */
+  p.remoteId ? p : { ...p, remoteId: `MKCP|${p.voucherType}|${p.voucherNumber ?? p.narration ?? ""}` };
 
 /** Must reach Tally, be created, and read back identically. */
 async function expectPush(name: string, p0: VoucherPayload, company: string) {

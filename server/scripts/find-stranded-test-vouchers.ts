@@ -69,6 +69,7 @@ export const NUMBER_PATTERNS: RegExp[] = [
   /^RT\d{5,}\//i,            // RT741351/S
   /^ADOPT\d+\//i,            // ADOPT61309/SUBJECT
   /^ZZTEST\//i,
+  /^ZZTEST\d+\//i,          // ZZTEST1234567/S3 (test-edge-cases since 0-3)
   /^GSTV\d*\//i,
   /^PROBE[-/]/i,
   /^FID[-/]/i,
