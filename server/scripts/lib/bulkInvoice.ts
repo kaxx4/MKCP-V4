@@ -10,8 +10,16 @@
  * safePush returning ok:false does NOT mean nothing was created: anything past
  * the guard stage was sent. Only a guard refusal is known to send nothing.
  */
-export function bulkKept(r: { ok: boolean; stage: string }, foundOnReadBack: boolean): boolean {
+export function bulkKept(r: { ok: boolean; stage: string } | "threw", foundOnReadBack: boolean): boolean {
+  /* A throw (a timeout, a dropped socket) may come after Tally accepted the
+     invoice, so it is kept too (review, 5-Nov-2026). */
+  if (r === "threw") return true;
   return foundOnReadBack || r.stage !== "guard";
+}
+
+/** The exact command that removes what a bulk run left, for the LEFT IN PLACE hint. */
+export function removalCommand(evidenceDir: string, stamp: string, day: string): string {
+  return `cd server && npx tsx --env-file=.env scripts/test-batch04-dummy.ts "${evidenceDir}" --remove-stamp=${stamp} --remove-date=${day}`;
 }
 
 /** What a bulk run records in summary.json so a later removal uses the right date. */
@@ -31,7 +39,24 @@ export function removalDate(argv: readonly string[], summary: unknown, stamp: st
   return { error: `no creation date for stamp ${stamp}: pass --remove-date=YYYYMMDD, or point at the run's evidence folder (its summary.json records it)` };
 }
 
-/** A removal succeeds only when the invoice itself was deleted, and the item and party with it. */
-export function removalOk(invoiceDeleted: number, itemRemoved: boolean, partyRemoved: boolean): boolean {
-  return invoiceDeleted > 0 && itemRemoved && partyRemoved;
+/** What a removal did, and what the read-back afterwards shows. */
+export interface RemovalFacts {
+  invoiceDeleted: number; invoiceStillThere: boolean;
+  itemRemoved: boolean; itemStillThere: boolean;
+  partyRemoved: boolean; partyStillThere: boolean;
 }
+export type RemovalVerdict = "removed" | "already removed" | "failed";
+
+/**
+ * "removed" when this run deleted the invoice and nothing is left; "already
+ * removed" when the invoice was not deleted now but the read-back shows it,
+ * the item and the party absent (a re-run, review 5-Nov-2026); "failed" when
+ * anything is still in the books. Decided by what is in the books, never by
+ * a delete count alone.
+ */
+export function removalVerdict(f: RemovalFacts): RemovalVerdict {
+  if (f.invoiceStillThere || f.itemStillThere || f.partyStillThere) return "failed";
+  return f.invoiceDeleted > 0 ? "removed" : "already removed";
+}
+
+export const removalExit = (v: RemovalVerdict): number => (v === "failed" ? 1 : 0);

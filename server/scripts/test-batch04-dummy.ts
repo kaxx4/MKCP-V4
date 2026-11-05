@@ -21,7 +21,7 @@ import { safePush } from "../src/services/safePush.js";
 import { createLedger, deleteLedger, createStockItem, deleteStockItem } from "../src/services/masterPusher.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 import { gstinCheckDigit } from "../src/services/gstIdentity.js";
-import { bulkKept, removalDate, removalOk, type BulkRecord } from "./lib/bulkInvoice.js";
+import { bulkKept, removalDate, removalVerdict, removalExit, removalCommand, type BulkRecord } from "./lib/bulkInvoice.js";
 import type { VoucherPayload } from "../src/types.js";
 guardScriptWrites("test-batch04-dummy"); // #104
 
@@ -59,9 +59,9 @@ let bulkRecord: BulkRecord | null = null;
 
 async function post(xml: string, ms = 120_000): Promise<string> { return (await tallyPost(U, xml, ms, true)) as string; }
 
-/** The whole voucher (stored fields plus entry lists) for one number on today's date, or null. */
-async function readVoucher(number: string): Promise<string | null> {
-  const stamp = Number(DAY);
+/** The whole voucher (stored fields plus entry lists) for one number on a date (YYYYMMDD, default today), or null. */
+async function readVoucher(number: string, date = DAY): Promise<string | null> {
+  const stamp = Number(date);
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>B04V</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVCURRENTCOMPANY>${esc(COMPANY)}</SVCURRENTCOMPANY></STATICVARIABLES>
 <TDL><TDLMESSAGE><COLLECTION NAME="B04V" ISMODIFY="No"><TYPE>Voucher</TYPE>
@@ -114,6 +114,11 @@ const sales = (type: string, number: string, remoteId: string, m: TallyMasters):
     }],
   } as unknown as VoucherPayload;
 };
+
+/** summary.json: the stamp, the bulk record (for --remove-stamp) and the verdicts so far. Written as soon as a bulk invoice is kept, and again at the end. */
+function writeSummary(): void {
+  writeFileSync(join(OUT, "summary.json"), JSON.stringify({ stamp: STAMP, company: COMPANY, bulk: bulkRecord, verdicts }, null, 2));
+}
 
 const save = (test: string, steps: Step[], pass: boolean, summary: string) => {
   writeFileSync(join(OUT, `${test}.json`), JSON.stringify({ test, company: COMPANY, pass, summary, steps }, null, 2));
@@ -219,21 +224,34 @@ async function bulk(m: TallyMasters) {
      on this invoice like on every real push (iron rule 1); it was a raw post. */
   const before = await readVoucher(N);
   steps.push({ step: "before: number not in the books", voucher: before });
-  const r = await safePush(U, COMPANY, sales("Sales", N, rid, m));
-  const req = r.requestXml ?? "", res = r.responseXml ?? "";
-  const v = await readVoucher(N);
+  /* A throw (a timeout, a dropped socket) may come after Tally accepted the
+     invoice, so it is treated as kept and recorded (review, 5-Nov-2026). */
+  let r: Awaited<ReturnType<typeof safePush>> | "threw";
+  let thrown = "";
+  try { r = await safePush(U, COMPANY, sales("Sales", N, rid, m)); }
+  catch (e) { r = "threw"; thrown = (e as Error).message; }
+  const req = r === "threw" ? "" : r.requestXml ?? "", res = r === "threw" ? "" : r.responseXml ?? "";
+  let v: string | null = null;
+  try { v = await readVoucher(N); } catch (e) { thrown ||= `read-back failed: ${(e as Error).message}`; }
+  const ok = r !== "threw" && r.ok;
+  const why = r === "threw" ? `safePush threw: ${thrown}` : (r.errors[0] ?? "not found on read-back");
   steps.push({ step: "create ONE B2B invoice and LEAVE it for a person to look at in Tally's e-invoice list", requestXml: req, responseXml: res,
-    note: `safePush ok=${r.ok} stage=${r.stage}${r.errors.length ? ` errors=${r.errors.join(" | ")}` : ""}${r.differences.length ? ` differences=${r.differences.join(" | ")}` : ""} ${res ? counts(res) : ""}`, voucher: v });
+    note: r === "threw" ? `safePush THREW: ${thrown}`
+      : `safePush ok=${r.ok} stage=${r.stage}${r.errors.length ? ` errors=${r.errors.join(" | ")}` : ""}${r.differences.length ? ` differences=${r.differences.join(" | ")}` : ""} ${res ? counts(res) : ""}`, voucher: v });
   steps.push({ step: "state", note: `IRN on the saved voucher: "${v ? fld(v, "IRN") : ""}" (empty means Tally has not marked it as sent)` });
   /* Review of 0-7 (5-Nov-2026): anything past the guard was SENT, so it may be
      in the books even when safePush says ok:false. Only a guard refusal is
      known to have stored nothing; everything else is LEFT IN PLACE. */
   const kept = bulkKept(r, !!v);
-  if (kept) bulkRecord = { stamp: STAMP, number: N, date: DAY };
-  save("4-bulk-send-pickup", steps, r.ok && !!v,
-    r.ok && v ? `invoice ${N} left in the books for a person to check whether Tally's bulk e-invoice list shows it. NEVER press send. Remove afterwards with --remove-stamp=${STAMP}.`
-      : kept ? `invoice ${N} was SENT but did not verify (${r.errors[0] ?? "not found on read-back"}); it may be in the books, so it and its party and item are left in place. Remove with --remove-stamp=${STAMP}.`
-      : `invoice ${N} was refused before sending (${r.errors[0] ?? "guard"}); nothing was stored.`);
+  if (kept) {
+    bulkRecord = { stamp: STAMP, number: N, date: DAY };
+    writeSummary(); // straight away, so a crash later cannot lose the removal date
+  }
+  const removeWith = removalCommand(OUT, STAMP, DAY);
+  save("4-bulk-send-pickup", steps, ok && !!v,
+    ok && v ? `invoice ${N} left in the books for a person to check whether Tally's bulk e-invoice list shows it. NEVER press send. Remove afterwards with: ${removeWith}`
+      : kept ? `invoice ${N} was SENT but did not verify (${why}); it may be in the books, so it and its party and item are left in place. Remove with: ${removeWith}`
+      : `invoice ${N} was refused before sending (${why}); nothing was stored.`);
   return kept;
 }
 
@@ -282,9 +300,20 @@ async function batch60() {
     const di = await deleteStockItem(U, COMPANY, ITEM);
     const dl = await deleteLedger(U, COMPANY, PARTY);
     console.log(`  test item "${ITEM}" removed: ${di.ok}  test party "${PARTY}" removed: ${dl.ok}`);
-    const done = removalOk(deleted, di.ok, dl.ok);
-    if (!deleted) console.log(`  the invoice was NOT deleted: check the date, then sweep by what is in the books`);
-    process.exit(done ? 0 : 1);
+    /* Decided by what is in the books afterwards, not by the delete counts
+       (review, 5-Nov-2026): a re-run on an invoice already gone reads it
+       absent and says "already removed". */
+    const after = await readVoucher(N, when.date);
+    invalidateMasters();
+    const mAfter = await loadMasters(U, COMPANY, { force: true });
+    const verdict = removalVerdict({
+      invoiceDeleted: deleted, invoiceStillThere: !!after,
+      itemRemoved: di.ok, itemStillThere: mAfter.items.has(ITEM),
+      partyRemoved: dl.ok, partyStillThere: mAfter.ledgers.has(PARTY),
+    });
+    console.log(`  read-back: invoice ${after ? "STILL THERE" : "absent"}, item ${mAfter.items.has(ITEM) ? "STILL THERE" : "absent"}, party ${mAfter.ledgers.has(PARTY) ? "STILL THERE" : "absent"}  =>  ${verdict}`);
+    if (verdict === "failed") console.log(`  something is still in the books: check the date, then sweep by what is in the books`);
+    process.exit(removalExit(verdict));
   }
   console.log(`\n  company "${COMPANY}"  tests: ${ONLY.join(", ")}  evidence: ${OUT}\n`);
   const lg = await createLedger(U, COMPANY, { name: PARTY, parent: "SUNDRY DEBTORS", state: "West Bengal", gstin: FAKE_GSTIN, address: ["ZZ TEST STREET", "ZZ TEST CITY"], pincode: "700001" });
@@ -308,8 +337,8 @@ async function batch60() {
       const dl = await deleteLedger(U, COMPANY, PARTY);
       console.log(`\n  test item removed: ${di.ok}  test party removed: ${dl.ok}`);
     } else {
-      console.log(`\n  LEFT IN PLACE for the bulk-send check: party "${PARTY}", item "${ITEM}", invoice ZZTEST/BULK${STAMP}. Remove with --remove-stamp=${STAMP}.`);
+      console.log(`\n  LEFT IN PLACE for the bulk-send check: party "${PARTY}", item "${ITEM}", invoice ZZTEST/BULK${STAMP}.\n  Remove with:\n    ${removalCommand(OUT, STAMP, DAY)}`);
     }
   }
-  writeFileSync(join(OUT, "summary.json"), JSON.stringify({ stamp: STAMP, company: COMPANY, bulk: bulkRecord, verdicts }, null, 2));
+  writeSummary();
 })().catch((e) => { console.error("ERR:", e); process.exit(1); });
