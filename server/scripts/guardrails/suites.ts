@@ -25,6 +25,8 @@ export const OFFLINE: string[][] = [
   ["test-refresh-listener-reconnect.ts"], ["test-report-schedule.ts"],
   // Rebuild task 0-2 (5-Nov-2026): read modes must not refuse on a primary machine.
   ["test-read-modes-on-primary.ts"],
+  // Rebuild task 0-7 review (5-Nov-2026): the C13 bulk-invoice harness's decisions, pure.
+  ["test-bulk-invoice-helpers.ts"],
 ];
 export const LIVE: string[][] = [
   ["test-push-guard.ts", "--live", "--push"], ["test-edge-cases.ts"], ["test-push-fidelity-sandbox.ts", "--push"],
