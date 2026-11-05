@@ -149,9 +149,18 @@ const addDays = (iso: string, n: number) => { const d = new Date(`${iso}T00:00:0
         const left2 = [...raw2.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => readTag(m[0], "VOUCHERNUMBER")).filter((n) => n.startsWith(`ZZTEST${stamp}/`));
         step("swept again: none of this run's numbers is left", sweep2.status === 0 && left2.length === 0, `sweep exit ${sweep2.status}, left ${left2.length}`);
         const m = await mark();
+        // A4 on the dummy: this week holds one real voucher, so losing the two test vouchers is a 67 percent drop
+        const inMirror = await mirrorCount();
         runs.full3 = await runMirrorSync({ store, tally, kind: "full", scope: { from: m!.scope_from, to: m!.scope_to }, scrub: true });
-        step("the next full sync prunes both deleted vouchers, and the mirror is back to where it began", runs.full3.state === "swapped" && sw(runs.full3).pruned === 2 && sw(runs.full3).inserted === 0,
-          `pruned ${sw(runs.full3).pruned}, mirror ${await mirrorCount()}`);
+        const { count: keptStaged } = await c.from("erp_mirror_stage").select("key", { count: "exact", head: true }).eq("run_id", runs.full3.run_id!).eq("is_test", true);
+        step("A4 on the dummy: a full read far below what the mirror holds is refused, the mirror is unchanged and the read is kept in staging",
+          runs.full3.state === "refused" && sw(runs.full3).reason === "below_floor" && (await mirrorCount()) === inMirror && (keptStaged ?? 0) === runs.full3.staged,
+          `read ${runs.full3.read}, mirror ${inMirror}, floor ${sw(runs.full3).floor}, kept ${keptStaged}`);
+        // the same read with the floor at 0 stands in for an Owner accepting the drop (that screen is the second half)
+        runs.full4 = await runMirrorSync({ store, tally, kind: "full", scope: { from: m!.scope_from, to: m!.scope_to }, scrub: true, floorPct: 0 });
+        step("with the drop accepted, the full sync prunes both deleted vouchers and the mirror is back to where it began",
+          runs.full4.state === "swapped" && sw(runs.full4).pruned === 2 && sw(runs.full4).inserted === 0 && (await mirrorCount()) === inMirror - 2,
+          `pruned ${sw(runs.full4).pruned}, mirror ${await mirrorCount()}`);
       }
     } catch (e) { step("the after-sweep syncs finished without an error", false, (e as Error).message); }
     const { data: cleaned, error: ce } = await c.rpc("erp_sync_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });
