@@ -52,7 +52,7 @@ export function memErpQueue(opts: { machine?: string; secondMs?: number; clockOf
       }
       if (state.kill) { r.state = "queued"; r.claimed_by = null; return { ok: false, reason: "kill switch" }; }
       const rid = String(r.payload.remoteId ?? "");
-      const other = [...rows.values()].find((o) => o.id !== id && rid && (o.remote_id === rid || String(o.payload.remoteId ?? "") === rid) && o.state !== "queued");
+      const other = [...rows.values()].find((o) => o.id !== id && o.id !== r.resend_of && rid && (o.remote_id === rid || String(o.payload.remoteId ?? "") === rid) && o.state !== "queued");
       if (other) {
         r.state = "failed"; r.error = `Refused before Tally: REMOTEID is on another ERP job (${other.state}). Nothing was sent.`;
         return { ok: false, refused: true, reason: r.error };
@@ -78,9 +78,9 @@ export function memErpQueue(opts: { machine?: string; secondMs?: number; clockOf
 
   return {
     queue: q, rows, state, machine,
-    add(payload: ErpJob["payload"], isTest = true): string {
+    add(payload: ErpJob["payload"], isTest = true, resendOf: string | null = null): string {
       const id = `job-${++n}`;
-      rows.set(id, { id, kind: "contra", idempotency_key: `proposal:${id}:v1`, payload, state: "queued", attempts: 0, is_test: isTest,
+      rows.set(id, { id, kind: "contra", idempotency_key: resendOf ? `resend:${resendOf}` : `proposal:${id}:v1`, payload, state: "queued", attempts: 0, is_test: isTest, resend_of: resendOf,
         claimed_by: null, lease_until: null, remote_id: null, master_id: null });
       return id;
     },

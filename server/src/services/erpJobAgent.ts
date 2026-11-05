@@ -45,6 +45,8 @@ export interface ErpJob {
   is_test: boolean;
   claimed_by?: string | null;
   master_id?: string | null;
+  /** Set on a person's resend (D21): the job this one resends. */
+  resend_of?: string | null;
 }
 
 export interface LeaseInfo {
@@ -310,6 +312,22 @@ export class ErpJobAgent {
       return { id: job.id, key, outcome: "failed", detail: refusal };
     }
     this.journalOrStop({ kind: "claimed", jobId: job.id, key, at: new Date().toISOString() });
+    /* D21: a resend keeps its REMOTEID, so a Create would alter in place if the
+       old one landed. Read Tally first: exactly that voucher found, it is
+       already in the books; more than one, a person decides; none, push. */
+    if (job.resend_of) {
+      let found: { masterId: string }[] | null = null;
+      try { found = await this.o.find(this.o.company, job.payload); } catch { found = null; }
+      if (found === null || found.length > 0) {
+        const one = found?.length === 1;
+        const state: JobOutcome = one ? "succeeded" : "uncertain";
+        const detail = found === null ? "Tally could not be read before the resend; not pushed"
+          : one ? "the earlier attempt is already in the books; settled without pushing again"
+          : `found ${found.length} times in Tally before the resend; not pushed, a person must decide`;
+        await this.finishWithRetry(job, state, { masterId: one ? found![0].masterId : null, result: { resend_check: found?.length ?? null }, error: one ? null : detail });
+        return { id: job.id, key, outcome: state, detail, masterId: one ? found![0].masterId : null };
+      }
+    }
     const renew = setInterval(() => { void this.o.queue.renew(this.nonce, job.id, this.o.jobLeaseSeconds).catch(() => {}); }, this.o.renewEveryMs);
     try {
       const m = await this.o.queue.markSent(this.nonce, job.id, this.o.company);

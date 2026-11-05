@@ -202,6 +202,20 @@ function agentFor(m: ReturnType<typeof memErpQueue>, sim: SimTally, j = journal(
     ok("D5 resumes once Tally answers normally", resumed.held && !a.status.tallyMayShowMessage);
   }
 
+  // D21: a person's resend keeps the REMOTEID; the agent reads Tally first
+  {
+    const m = memErpQueue(); const sim = new SimTally();
+    const old1 = m.add(pl(17)); m.rows.get(old1)!.state = "uncertain";
+    sim.books.set(String(pl(17).remoteId), 1);          // the uncertain one had landed
+    const r1 = m.add(pl(17), true, old1);
+    const old2 = m.add(pl(18)); m.rows.get(old2)!.state = "failed";
+    const r2 = m.add(pl(18), true, old2);                // the failed one had not
+    const a = agentFor(m, sim);
+    await a.runOnce(1); await a.runOnce(1);
+    ok("D21 a resend of a job that landed is settled from Tally without pushing", m.rows.get(r1)!.state === "succeeded" && sim.books.get(String(pl(17).remoteId)) === 1);
+    ok("D21 a resend of a job that did not land is pushed once, same REMOTEID", m.rows.get(r2)!.state === "succeeded" && sim.books.get(String(pl(18).remoteId)) === 1);
+  }
+
   // a real job (not is_test) is refused on the sandbox
   {
     const m = memErpQueue(); const sim = new SimTally();

@@ -91,7 +91,7 @@ export const ERP_TEST_RPCS: readonly string[] = [
      machine's own key in the database, and a sandbox key reaches only ZZ TEST
      jobs, so this list is a second fence, not the only one (review M3). */
   "erp_agent_take_lease", "claim_erp_jobs", "erp_renew_job", "erp_mark_job_sent",
-  "erp_finish_job", "erp_my_open_jobs", "erp_enqueue_test_job",
+  "erp_finish_job", "erp_my_open_jobs", "erp_enqueue_test_job", "erp_cancel_test_job",
 ];
 /** ERP tables the sandbox may read (only is_test rows) and clean up (only rows it names). */
 export const ERP_TEST_ROW_TABLES: readonly string[] = ["erp_jobs", "erp_proposal_requests", "erp_proposals"];
@@ -130,7 +130,7 @@ export function erpTestFence(url: string, method: string, projectUrl: string): s
   if (t && ERP_TEST_ROW_TABLES.includes(t)) {
     if (u.searchParams.get("is_test") !== "eq.true") return `refused: the sandbox reads and removes only is_test rows of ${t}`;
     if (m === "GET" || m === "HEAD") return null;
-    if (m === "DELETE") return /^in\.\([^()*%]+\)$|^eq\.[^,()*%]+$/.test(u.searchParams.get("id") ?? "") ? null
+    if (m === "DELETE") return /^in\.\([^()*%]+\)$|^eq\.[^,()*%]+$/.test(u.searchParams.get(t === "erp_proposal_requests" ? "request_id" : "id") ?? "") ? null
       : `refused: a delete on ${t} must name its rows by id`;
     return `refused: ${m} on ${t}; jobs change only through the queue functions`;
   }
