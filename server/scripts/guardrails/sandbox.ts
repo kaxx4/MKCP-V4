@@ -19,6 +19,7 @@
 import { check, unverified, parseVoucher, checkVoucherShape, tag, isOutward } from "./lib.js";
 import type { VoucherPayload, LedgerEntry } from "../../src/types.js";
 import type { TallyMasters, MasterLedger } from "../../src/services/tallyMasters.js";
+import { assertScriptWriteAllowed } from "../../src/services/scriptWriteGuard.js";
 
 export function assertSandboxTarget(env: Record<string, string | undefined> = process.env): string {
   const role = (env.MKCP_TALLY_ROLE ?? "").trim().toLowerCase();
@@ -46,6 +47,10 @@ export const READ_FIELDS = [
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export async function runSandbox(): Promise<void> {
+  /* The shared #104 gate as well as this file's own: the scan cannot count a
+     gate this file declares itself (third review, 5-Nov-2026). Throws, like
+     assertSandboxTarget, so run.ts reports it. */
+  assertScriptWriteAllowed("guardrails-sandbox");
   const url = assertSandboxTarget();
   const company = process.env.TALLY_COMPANY || "";
   const { tallyPost, HEALTH_XML } = await import("../../src/tally.js");

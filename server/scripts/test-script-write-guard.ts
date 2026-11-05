@@ -62,11 +62,11 @@ const EXEMPT: Record<string, string> = {
 const WRITE_NAMES = ["safePush", "pushVoucherToTally", "pushBulk", "pushBankPlan", "startPushAgent", "drainNow",
   "createLedger", "deleteLedger", "createStockItem", "deleteStockItem", "createUnit", "deleteUnit", "createGodown", "deleteGodown"];
 const GATE_NAMES = ["guardScriptWrites", "assertScriptWriteAllowed", "assertSandboxTarget", "installMock"];
-/** A raw post, which writes only when the file also carries a write marker. */
-const RAW_POST = /\b(tallyPost|tallyPostWithRetry)\s*\(/;
+/** A raw post, which writes only when the file also carries a write marker:
+ *  tallyPost, or a hand-made `fetch(` / `http.request(` / `request(` to the port (third review). */
+const RAW_POST = /(?<![\w$])(tallyPost|tallyPostWithRetry|fetch)\s*(?:\?\.\s*)?\(|\bhttps?\s*\.\s*(?:request|get)\s*\(|(?<![\w$.])request\s*\(/;
 /** Every write verb (Import, and an Alter / Delete / Cancel / Create action), and the Import builders. */
 const WRITE_MARK = /TALLYREQUEST>\s*Import|ACTION\s*=\s*\\?["'`]?\s*(Delete|Alter|Create|Cancel)\b|<ACTION>|\b(buildVoucherImportXml|buildLedgerXml|buildStockItemXml|buildUnitXml|buildGodownXml|buildBulkVoucher)\s*\(/;
-const callOf = (names: string[]) => new RegExp(`(?<![\\w$])(${names.map((n) => n.replace(/\$/g, "\\$")).join("|")})\\s*\\(`);
 
 /**
  * Two views of a source, same length and line breaks as the original:
@@ -129,8 +129,18 @@ function views(src: string): { code: string; text: string } {
   return { code: code.join(""), text: text.join("") };
 }
 
-/** Local names a write or gate function is imported under (`import { safePush as send }`, `const { pushBulk: pb } = await import(...)`). */
-function aliases(text: string, names: string[]): string[] {
+/**
+ * Statements that bind a name without calling it: static imports, re-exports
+ * from another module, and `{ ... } = import(...)` / `require(...)`
+ * destructuring. Read on the CODE view (strings blanked), so text inside a
+ * string can neither create an alias nor hide one (third review, 5-Nov-2026).
+ */
+const IMPORT_STMT = /\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?(?:\{[^}]*\}|\*\s*as\s+[\w$]+|[\w$]+)\s*from\s*["'`][^"'`\n]*["'`]/g;
+const REEXPORT_STMT = /\bexport\s+(?:type\s+)?(?:\{([^}]*)\}|\*(?:\s*as\s+[\w$]+)?)\s*from\s*["'`][^"'`\n]*["'`]/g;
+const DESTRUCTURE_STMT = /\{([^}]*)\}\s*=\s*(?:await\s+)?(?:import|require)\s*\(/g;
+
+/** Local names a write or gate function is bound to (`import { safePush as send }`, `const { pushBulk: pb } = await import(...)` or `require(...)`). */
+function aliases(code: string, names: string[]): string[] {
   const out: string[] = [];
   const add = (list: string, sep: RegExp) => {
     for (const part of list.split(",")) {
@@ -138,23 +148,62 @@ function aliases(text: string, names: string[]): string[] {
       if (m.length === 2 && names.includes(m[0].trim()) && /^[\w$]+$/.test(m[1].trim())) out.push(m[1].trim());
     }
   };
-  for (const m of text.matchAll(/\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^}]*)\}/g)) add(m[1], /\s+as\s+/);
-  for (const m of text.matchAll(/\{([^}]*)\}\s*=\s*(?:await\s+)?import\s*\(/g)) add(m[1], /\s*:\s*/);
+  for (const m of code.matchAll(/\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^}]*)\}/g)) add(m[1], /\s+as\s+/);
+  for (const m of code.matchAll(DESTRUCTURE_STMT)) add(m[1], /\s*:\s*/);
   return out;
 }
 
-/** Names a lib file re-exports a write helper under (not yet followed). */
-function reexportedWriters(_src: string): string[] { return []; }
-const SCAN_EXT = /\.(ts|mts|mjs|js)$/;
+/** Escape a name for use inside a RegExp source. */
+const reName = (n: string) => n.replace(/\$/g, "\$");
+
+/**
+ * Names a lib file hands a write helper out under: `export { safePush as send } from`,
+ * and `export const send = safePush`. Collected over every scanned file first,
+ * then treated as write names everywhere (a name re-exported anywhere counts in
+ * every file, which is stricter than following the import path).
+ */
+function reexportedWriters(src: string): string[] {
+  const code = views(src).code;
+  const out: string[] = [];
+  for (const m of code.matchAll(REEXPORT_STMT)) {
+    for (const part of (m[1] ?? "").split(",")) {
+      const [from, to] = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/).map((x) => x?.trim());
+      if (from && to && WRITE_NAMES.includes(from) && /^[\w$]+$/.test(to)) out.push(to);
+    }
+  }
+  const W = WRITE_NAMES.map(reName).join("|");
+  for (const m of code.matchAll(new RegExp(String.raw`\bexport\s+(?:const|let|var)\s+([\w$]+)\s*=\s*(?:${W})(?![\w$])`, "g"))) out.push(m[1]);
+  return out;
+}
+/** Every source type a script can be written in. */
+const SCAN_EXT = /\.(ts|mts|cts|tsx|js|mjs|cjs|jsx)$/;
+
+/** Blank every match of `re` in `s` (same length, line breaks kept). */
+const blankAll = (s: string, re: RegExp) => s.replace(re, (m) => m.replace(/[^\r\n]/g, " "));
 
 type GateState = "not-a-writer" | "gated" | "ungated" | "gate-after-write";
 /** Where the first write sits, and whether a gate call comes before it. */
 function gateState(src: string, extraWrites: string[] = []): GateState {
   const v = views(src);
   const s = v.code;
-  const WRITE_CALL = callOf([...WRITE_NAMES, ...aliases(v.text, WRITE_NAMES)]);
-  const GATE = new RegExp(`${callOf([...GATE_NAMES, ...aliases(v.text, GATE_NAMES)]).source}|(?<![\\w$])isSandbox\\s*\\(\\s*\\)`);
-  const call = s.search(WRITE_CALL);
+  /* The code with binding statements blanked: a name that is only imported,
+     re-exported or destructured is not used yet. */
+  const used = blankAll(blankAll(blankAll(s, IMPORT_STMT), REEXPORT_STMT), DESTRUCTURE_STMT);
+  /* A write is ANY use of a write helper's name, not only `name(`: passed as a
+     value (`rows.map(pushVoucherToTally)`), assigned (`const send = safePush`),
+     `?.(`, `.call(` / `.apply(` / `.bind(`. Stricter: assigning before the
+     gate counts as the first write. */
+  const writeNames = [...new Set([...WRITE_NAMES, ...extraWrites, ...aliases(s, [...WRITE_NAMES, ...extraWrites])])];
+  const WRITE_REF = new RegExp(String.raw`(?<![\w$])(${writeNames.map(reName).join("|")})(?![\w$])`);
+  /* A gate is a CALL of the real gate: not a method on some object
+     (`x.isSandbox()`), not a declaration, and not a name the file declares
+     itself (`function guardScriptWrites(){}`, `const guardScriptWrites = ...`). */
+  const gateNames = [...GATE_NAMES, ...aliases(s, GATE_NAMES), "isSandbox"]
+    .filter((n) => !new RegExp(String.raw`(?:\bfunction\s*\*?\s*|\b(?:const|let|var|class)\s+)${reName(n)}(?![\w$])`).test(s));
+  const GATE = gateNames.length
+    ? new RegExp(String.raw`(?<![\w$.])(?<!\bfunction\s*\*?\s*)(${gateNames.map(reName).join("|")})\s*(?:\?\.\s*)?\(`)
+    : /(?!)/;
+  const call = used.search(WRITE_REF);
   const post = s.search(RAW_POST);
   const mark = v.text.search(WRITE_MARK);
   let first = call;
@@ -226,18 +275,22 @@ function walk(dir: string, out: string[] = []): string[] {
   for (const n of readdirSync(dir)) {
     if (n === "node_modules" || n === "fixtures") continue;
     const p = join(dir, n);
-    if (statSync(p).isDirectory()) walk(p, out); else if (/\.(ts|mts|mjs|js)$/.test(p)) out.push(p);
+    if (statSync(p).isDirectory()) walk(p, out); else if (SCAN_EXT.test(p)) out.push(p);
   }
   return out;
 }
 const ungated: string[] = [];
 const late: string[] = [];
 let writers = 0;
-for (const dir of [join(serverRoot, "scripts"), join(repoRoot, "scripts")]) {
-  for (const f of walk(dir)) {
+const files = [join(serverRoot, "scripts"), join(repoRoot, "scripts")].flatMap((dir) => walk(dir));
+/* First pass: every name a lib file re-exports a write helper under. */
+const reexported = [...new Set(files.flatMap((f) => reexportedWriters(readFileSync(f, "utf8"))))];
+if (reexported.length) console.log(`  re-exported write helpers followed: ${reexported.join(", ")}`);
+{
+  for (const f of files) {
     const rel = relative(repoRoot, f).split(sep).join("/");
     if (EXEMPT[rel]) continue;
-    const st = gateState(readFileSync(f, "utf8"));
+    const st = gateState(readFileSync(f, "utf8"), reexported);
     if (st === "not-a-writer") continue;
     writers++;
     if (st === "ungated") ungated.push(rel);
