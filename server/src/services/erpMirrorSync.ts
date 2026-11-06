@@ -97,6 +97,9 @@ export const ERP_MIRROR_VOUCHER_DEF: CollectionDef = {
   fetch: [
     "Guid", "Date", "VoucherTypeName", "VoucherNumber", "Reference", "Narration",
     "PartyLedgerName", "IsCancelled", "IsOptional", "EffectiveDate", "AlterID", "MasterId",
+    /* Part 7: who entered it in Tally. The bank instrument number and date ride inside
+       AllLedgerEntries (BANKALLOCATIONS.LIST), so they need no field of their own. */
+    "EnteredBy",
     "AllLedgerEntries",
   ],
   timeout: 180_000,
@@ -121,7 +124,45 @@ export const ERP_MIRROR_LEDGER_DEF: CollectionDef = {
   tallyCollection: "Ledger",
   metadataType: "Ledger",
   category: "master",
-  fetch: ["Guid", "Name", "Parent", "OpeningBalance", "ClosingBalance", "AlterID", "MasterId"],
+  fetch: ["Guid", "Name", "Parent", "OpeningBalance", "ClosingBalance", "AlterID", "MasterId",
+    /* Part 7, each named (G7): phone and mobile, PAN (Tally's income tax number), the GST registration type and bill-wise on. */
+    "LedgerPhone", "LedgerMobile", "IncomeTaxNumber", "GSTRegistrationType", "IsBillWiseOn"],
+  timeout: 120_000,
+  parallel: false,
+};
+
+/**
+ * Part 7: the voucher types with their parent (a custom type's parent says what it behaves as). Probed
+ * and parsed here; not staged anywhere until the go-live swap shape is decided (reports/1-5.md, part 7).
+ */
+export const ERP_MIRROR_VOUCHERTYPE_DEF: CollectionDef = {
+  name: "erpMirrorVoucherTypes",
+  tallyCollection: "VoucherType",
+  metadataType: "Voucher Type",
+  category: "master",
+  fetch: ["Guid", "Name", "Parent", "AlterID", "MasterId"],
+  timeout: 60_000,
+  parallel: false,
+};
+
+/** Part 7: the units with their decimal places (a unit that takes no decimals must never be shown a fraction). Not staged yet. */
+export const ERP_MIRROR_UNIT_DEF: CollectionDef = {
+  name: "erpMirrorUnits",
+  tallyCollection: "Unit",
+  metadataType: "Unit",
+  category: "master",
+  fetch: ["Guid", "Name", "DecimalPlaces", "IsSimpleUnit", "AlterID", "MasterId"],
+  timeout: 60_000,
+  parallel: false,
+};
+
+/** Part 7: the stock items' keys only (GUID, name, AlterID, MasterId). Not staged yet. */
+export const ERP_MIRROR_ITEM_DEF: CollectionDef = {
+  name: "erpMirrorItems",
+  tallyCollection: "StockItem",
+  metadataType: "Stock Item",
+  category: "master",
+  fetch: ["Guid", "Name", "BaseUnits", "AlterID", "MasterId"],
   timeout: 120_000,
   parallel: false,
 };
@@ -166,7 +207,11 @@ export interface MirrorLedgerRow {
 }
 
 /** One ledger as Tally sent it (strings), before it is checked. */
-export interface TallyLedger { guid: string; name: string; parent: string; closingbalance: string; openingbalance: string; alterid: string; masterid: string }
+export interface TallyLedger {
+  guid: string; name: string; parent: string; closingbalance: string; openingbalance: string; alterid: string; masterid: string;
+  /** Part 7. Absent on a ledger the caller built without them; `sent` says which of the five Tally actually sent a tag for (an empty tag counts as sent, a missing one does not). */
+  phone?: string; mobile?: string; pan?: string; gstregistrationtype?: string; isbillwiseon?: string; sent?: boolean;
+}
 
 export interface MirrorRow {
   key: string;
@@ -230,6 +275,22 @@ export function voucherProblem(v: any): string | null {
   return null;
 }
 
+/**
+ * Part 7. Pure: who entered a voucher and its bank instruments, for its mirror row. On a test run the
+ * user name is a one-way stand-in and the instrument number is not stored (its date and how many are);
+ * `extras_sent` is false for a voucher the caller built without them, so "none" and "not read" differ.
+ */
+export function voucherExtraFields(v: any, opts: { scrub: false } | { scrub: true; salt: string }): Record<string, unknown> {
+  const x = v?.erpExtras as { enteredby: string; instruments: { number: string; date: string | null }[] } | undefined;
+  if (!x) return { extras_sent: false };
+  return {
+    extras_sent: true,
+    entered_by: x.enteredby ? (opts.scrub ? scrubName("USER", x.enteredby, opts.salt) : x.enteredby) : null,
+    instrument_count: x.instruments.length,
+    instruments: x.instruments.map((i) => ({ number: opts.scrub ? null : i.number || null, number_present: i.number !== "", date: i.date })),
+  };
+}
+
 /** Pure: one converted voucher (convertVouchers output) to a staging row, or null when it has no GUID. */
 export function mirrorRowFrom(v: any, opts: { scrub: false } | { scrub: true; salt: string }): MirrorRow | null {
   const key = String(v?.guid ?? "").trim();
@@ -254,6 +315,7 @@ export function mirrorRowFrom(v: any, opts: { scrub: false } | { scrub: true; sa
       reference: opts.scrub ? null : (v.reference || null),
       ...(lines.length ? {} : { no_ledger_lines: true }),
       effective_date: isoOf(v.effectivedate),
+      ...voucherExtraFields(v, opts),
       ledgers: lines.map((e: any) => ({ ledger: name("LEDGER", String(e.ledgername ?? "")), amount: money(e.amount), debit: e.isdeemedpositive === true })),
     },
   };
@@ -360,6 +422,40 @@ export function ledgerProblem(l: TallyLedger): string | null {
 }
 
 /**
+ * Part 7. Pure: who entered each voucher and its bank instrument numbers and dates, by GUID, from
+ * the parsed reply the converter also reads (the converter drops them, and it is shared with
+ * today's sync, so they are read here instead). An instrument is read from BANKALLOCATIONS.LIST
+ * under each ledger entry; a block with neither a number nor a date is a placeholder, not an instrument.
+ */
+export function voucherExtrasFromParsed(parsed: any): Map<string, { enteredby: string; instruments: { number: string; date: string | null }[] }> {
+  const data = parsed?.ENVELOPE?.BODY?.DATA;
+  const out = new Map<string, { enteredby: string; instruments: { number: string; date: string | null }[] }>();
+  const vouchers: any[] = [];
+  for (const msg of tallyList(data?.TALLYMESSAGE)) vouchers.push(...tallyList(msg?.VOUCHER ?? msg?.["VOUCHER.LIST"]));
+  vouchers.push(...tallyList(data?.COLLECTION?.VOUCHER ?? data?.COLLECTION?.["VOUCHER.LIST"]));
+  for (const v of vouchers) {
+    const guid = tallyText(v?.GUID).trim() || tallyText(v?.["@_GUID"]).trim();
+    if (!guid) continue;
+    const instruments: { number: string; date: string | null }[] = [];
+    for (const e of [...tallyList(v?.["ALLLEDGERENTRIES.LIST"] ?? v?.ALLLEDGERENTRIES), ...tallyList(v?.["LEDGERENTRIES.LIST"] ?? v?.LEDGERENTRIES)]) {
+      for (const b of tallyList(e?.["BANKALLOCATIONS.LIST"] ?? e?.BANKALLOCATIONS)) {
+        const number = tallyText(b?.INSTRUMENTNUMBER).trim(), date = isoOf(tallyText(b?.INSTRUMENTDATE));
+        if (number || date) instruments.push({ number, date });
+      }
+    }
+    out.set(guid, { enteredby: tallyText(v?.ENTEREDBY).trim(), instruments });
+  }
+  return out;
+}
+
+/** Part 7. Attach the extras to the converted vouchers, by GUID (the converted list is returned as it was, plus `erpExtras`). */
+export function withVoucherExtras(list: any[], parsed: any): any[] {
+  const extras = voucherExtrasFromParsed(parsed);
+  for (const v of list) { const x = extras.get(String(v?.guid ?? "").trim()); if (x) v.erpExtras = x; }
+  return list;
+}
+
+/**
  * Pure: one checked ledger to a staging row. Test runs store names only as
  * stand-ins. The judged period is required (review 1-5 item 4): without it a
  * row could never say its balance is for an unexpected period.
@@ -382,8 +478,32 @@ export function ledgerRowFrom(l: TallyLedger, opts: { scrub: false } | { scrub: 
     alter_id: Number(l.alterid) || null,
     master_id: Number(l.masterid) || null,
     row: { closing_balance_sent: closing !== null, opening_balance_sent: opening !== null, balance_period_unexpected: period.unexpected,
-      ...(period.unexpected ? { loaded_from: period.from, loaded_to: asOf, why: period.why } : {}) },
+      ...(period.unexpected ? { loaded_from: period.from, loaded_to: asOf, why: period.why } : {}),
+      ...ledgerContactFields(l, opts) },
     balance_as_of: asOf,
+  };
+}
+
+const yesNo = (s: unknown): boolean | null => { const t = String(s ?? "").trim().toLowerCase(); return t === "yes" ? true : t === "no" ? false : null; };
+
+/**
+ * Part 7. Pure: the contact and tax fields of one ledger for its mirror row. On a test run
+ * the dummy is an old copy of the real books, so the phone, mobile and PAN themselves are
+ * never stored (only whether each is there, so they can still be counted); the registration
+ * type and bill-wise flag are not personal and are kept. `contact_fields_sent` is false when
+ * Tally sent no tag at all for one of them, so "none" and "not asked" cannot be confused (G7).
+ */
+export function ledgerContactFields(l: TallyLedger, opts: { scrub: false } | { scrub: true; salt: string }): Record<string, unknown> {
+  const t = (s: unknown) => String(s ?? "").trim();
+  const phone = t(l.phone), mobile = t(l.mobile), pan = t(l.pan);
+  return {
+    contact_fields_sent: l.sent === true,
+    has_phone: phone !== "", has_mobile: mobile !== "", has_pan: pan !== "",
+    phone: opts.scrub ? null : phone || null,
+    mobile: opts.scrub ? null : mobile || null,
+    pan: opts.scrub ? null : pan || null,
+    gst_registration_type: t(l.gstregistrationtype) || null,
+    is_billwise_on: yesNo(l.isbillwiseon),
   };
 }
 
@@ -395,6 +515,9 @@ export function ledgersFromParsed(parsed: any): TallyLedger[] {
   return tallyList(col?.LEDGER ?? col?.["LEDGER.LIST"]).map((l: any) => ({
     guid: tallyText(l?.GUID).trim(), name: (tallyText(l?.["@_NAME"]) || tallyText(l?.NAME)).trim(), parent: tallyText(l?.PARENT).trim(),
     closingbalance: tallyText(l?.CLOSINGBALANCE), openingbalance: tallyText(l?.OPENINGBALANCE), alterid: tallyText(l?.ALTERID), masterid: tallyText(l?.MASTERID),
+    phone: tallyText(l?.LEDGERPHONE).trim(), mobile: tallyText(l?.LEDGERMOBILE).trim(), pan: tallyText(l?.INCOMETAXNUMBER).trim(),
+    gstregistrationtype: tallyText(l?.GSTREGISTRATIONTYPE).trim(), isbillwiseon: tallyText(l?.ISBILLWISEON).trim(),
+    sent: ["LEDGERPHONE", "LEDGERMOBILE", "INCOMETAXNUMBER", "GSTREGISTRATIONTYPE", "ISBILLWISEON"].every((k) => l != null && typeof l === "object" && k in l),
   }));
 }
 
@@ -497,12 +620,12 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
     },
     async vouchersOn(day: string) {
       const parsed = assertParsedCollection(await post(tallyUrl, buildCollectionXml(ERP_MIRROR_VOUCHER_DEF, company, day, day), ERP_MIRROR_VOUCHER_DEF.timeout, false), `the read of ${day}`);
-      return convertVouchers(parsed).tallymessage;
+      return withVoucherExtras(convertVouchers(parsed).tallymessage, parsed);
     },
     async changedSince(mark: number, upTo?: number) {
       const what = upTo === undefined ? `the read above AlterID ${mark}` : `the read of AlterIDs ${mark + 1} to ${upTo}`;
       const parsed = assertParsedCollection(await post(tallyUrl, buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, company, mark, upTo), ERP_MIRROR_VOUCHER_DEF.timeout, false), what);
-      return convertVouchers(parsed).tallymessage;
+      return withVoucherExtras(convertVouchers(parsed).tallymessage, parsed);
     },
     async ledgers() {
       /* D-C.2: no period, ever. A dated ledger read hung the dummy Tally (6-Nov-2026). */

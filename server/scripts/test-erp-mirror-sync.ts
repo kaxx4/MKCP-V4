@@ -22,7 +22,7 @@ import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import {
   mirrorRowFrom, scrubName, scrubSaltFrom, voucherProblem, isAccountingType, eachDay, runMirrorSync, assertParsedCollection, tallyMirrorReads,
-  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, applyAcceptedDrops, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_MARK_DEF,
+  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, applyAcceptedDrops, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_VOUCHERTYPE_DEF, ERP_MIRROR_UNIT_DEF, ERP_MIRROR_ITEM_DEF, voucherExtrasFromParsed, voucherExtraFields, ledgerContactFields, ERP_MIRROR_MARK_DEF,
   indiaToday, ledgerPeriod, judgeLoadedPeriod, incrementalRanges, INCREMENTAL_CHUNK, ERP_MIRROR_VOUCHER_DEF, loadedPeriodFromParsed, tallyDateToIso, ERP_MIRROR_COMPANY_DEF,
   type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult, type MirrorLedgerRow, type TallyLedger, type DayCheckVoucher, type AcceptedRun,
 } from "../src/services/erpMirrorSync.js";
@@ -551,6 +551,64 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
     let threw = "";
     try { await applyAcceptedDrops({ store: f4.store, log: () => {} }); } catch (e) { threw = (e as Error).message; }
     ok("an answer that is not a list is a fault, never 'nothing accepted'", /not a list/.test(threw) && !f4.calls.some((c) => c.startsWith("swap")), threw);
+  }
+
+  H("PART 7: THE FULL FETCH LIST (phone, mobile, PAN, registration type, bill-wise, who entered it, instruments)");
+  {
+    const SIX = { scrub: false as const };
+    const SCR = { scrub: true as const, salt: SALT };
+    const named = (d: { fetch?: string[] }, ...want: string[]) => want.every((w) => (d.fetch ?? []).includes(w)) && !(d.fetch ?? []).some((f) => /[*.]/.test(f) || f.trim() === "");
+    ok("the ledger read names phone, mobile, PAN, registration type and bill-wise, one by one", named(ERP_MIRROR_LEDGER_DEF, "LedgerPhone", "LedgerMobile", "IncomeTaxNumber", "GSTRegistrationType", "IsBillWiseOn", "Guid"));
+    ok("the voucher read names who entered it", named(ERP_MIRROR_VOUCHER_DEF, "EnteredBy", "AllLedgerEntries", "Guid"));
+    ok("voucher types (with parent), units (with decimals) and item keys are read with named fields too", named(ERP_MIRROR_VOUCHERTYPE_DEF, "Guid", "Name", "Parent")
+      && named(ERP_MIRROR_UNIT_DEF, "Guid", "Name", "DecimalPlaces") && named(ERP_MIRROR_ITEM_DEF, "Guid", "Name"));
+    for (const d of [ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_VOUCHERTYPE_DEF, ERP_MIRROR_UNIT_DEF, ERP_MIRROR_ITEM_DEF]) {
+      const x = buildCollectionXml(d, "ZZ TEST CO");
+      ok(`${d.name}: the request has an <ID>, names the company, fetches no wildcard and sets no period`,
+        /<ID>[^<]+<\/ID>/.test(x) && x.includes("ZZ TEST CO") && !/\.\*|<FETCH>\s*\*|SVFROMDATE|SVTODATE/.test(x), d.name);
+    }
+    const parsedLedgers = (l: Record<string, unknown>) => ({ ENVELOPE: { BODY: { DATA: { COLLECTION: { LEDGER: [l] } } } } });
+    const L = { GUID: "L-1", NAME: "PARTY 042 CYCLE STORES", PARENT: "Sundry Debtors", CLOSINGBALANCE: "-10.00", OPENINGBALANCE: "0", ALTERID: "5", MASTERID: "50",
+      LEDGERPHONE: "033-5550101", LEDGERMOBILE: "9000000001", INCOMETAXNUMBER: "AAAAA0000A", GSTREGISTRATIONTYPE: "Regular", ISBILLWISEON: "Yes" };
+    const [a] = ledgersFromParsed(parsedLedgers(L));
+    ok("the ledger reader takes all five fields and says Tally sent every tag", a.phone === "033-5550101" && a.mobile === "9000000001" && a.pan === "AAAAA0000A"
+      && a.gstregistrationtype === "Regular" && a.isbillwiseon === "Yes" && a.sent === true, JSON.stringify({ ...a, phone: "..", mobile: "..", pan: ".." }));
+    const [b] = ledgersFromParsed(parsedLedgers({ ...L, LEDGERPHONE: "", LEDGERMOBILE: "", INCOMETAXNUMBER: "" }));
+    ok("an empty tag is 'sent, none': the count of phones does not move and the row still says Tally sent the tags", b.sent === true && ledgerContactFields(b, SIX).has_phone === false && ledgerContactFields(b, SIX).contact_fields_sent === true);
+    const { LEDGERMOBILE: _m, ...noMobile } = L;
+    const [c] = ledgersFromParsed(parsedLedgers(noMobile));
+    ok("a tag Tally did not send at all is 'not read', never 'none': contact_fields_sent is false", c.sent === false && ledgerContactFields(c, SIX).contact_fields_sent === false);
+    const real = ledgerContactFields(a, SIX), scr = ledgerContactFields(a, SCR);
+    ok("a live row keeps the phone, mobile and PAN and counts them", real.phone === "033-5550101" && real.mobile === "9000000001" && real.pan === "AAAAA0000A" && real.has_phone === true && real.has_mobile === true && real.has_pan === true);
+    ok("a test row never stores the phone, mobile or PAN, only that each is there; the registration type and bill-wise are kept",
+      scr.phone === null && scr.mobile === null && scr.pan === null && scr.has_phone === true && scr.has_mobile === true && scr.has_pan === true
+      && scr.gst_registration_type === "Regular" && scr.is_billwise_on === true && !JSON.stringify(scr).match(/5550101|9000000001|AAAAA0000A/));
+    const rowS = ledgerRowFrom(a, SCR, "2026-11-05", { from: "2026-04-01", unexpected: false, why: null });
+    ok("the staged test ledger row carries the counts and none of the numbers", rowS.row.has_pan === true && !JSON.stringify(rowS).match(/5550101|9000000001|AAAAA0000A/));
+    ok("billwise 'No' is false and an unreadable value is null, not false", ledgerContactFields({ ...a, isbillwiseon: "No" }, SIX).is_billwise_on === false && ledgerContactFields({ ...a, isbillwiseon: "" }, SIX).is_billwise_on === null);
+
+    const VCH = (guid: string, extra: Record<string, unknown>) => ({ GUID: guid, DATE: "20261101", ...extra });
+    const parsedV = { ENVELOPE: { BODY: { DATA: { COLLECTION: { VOUCHER: [
+      VCH("V-1", { ENTEREDBY: "USER ONE", "ALLLEDGERENTRIES.LIST": [{ LEDGERNAME: "Bank", "BANKALLOCATIONS.LIST": { INSTRUMENTNUMBER: "UTR0000001", INSTRUMENTDATE: "20261101" } }, { LEDGERNAME: "Party", "BANKALLOCATIONS.LIST": { INSTRUMENTNUMBER: "", INSTRUMENTDATE: "" } }] }),
+      VCH("V-2", { ENTEREDBY: "", "LEDGERENTRIES.LIST": [{ LEDGERNAME: "Sales" }] }),
+    ] } } } } };
+    const ex = voucherExtrasFromParsed(parsedV);
+    ok("who entered it and the bank instrument number and date are read by GUID", ex.get("V-1")?.enteredby === "USER ONE" && ex.get("V-1")?.instruments.length === 1
+      && ex.get("V-1")?.instruments[0].number === "UTR0000001" && ex.get("V-1")?.instruments[0].date === "2026-11-01");
+    ok("an empty bank block is a placeholder, not an instrument, and a voucher with none has an empty list", ex.get("V-2")?.instruments.length === 0 && ex.get("V-2")?.enteredby === "");
+    const mk = (guid: string, scrub: boolean) => mirrorRowFrom({ guid, date: "20261101", alterid: 5, masterid: 6, vouchertypename: "RECEIPT", vouchernumber: "1", allledgerentries: [], erpExtras: ex.get(guid) }, scrub ? SCR : SIX)!;
+    const live1 = mk("V-1", false), test1 = mk("V-1", true);
+    ok("a live row keeps the user and the instrument", live1.row.entered_by === "USER ONE" && live1.row.instrument_count === 1 && (live1.row.instruments as any[])[0].number === "UTR0000001");
+    ok("a test row holds a stand-in for the user and no instrument number, only that one is there", /^ZZ TEST /.test(String(test1.row.entered_by)) && test1.row.instrument_count === 1
+      && (test1.row.instruments as any[])[0].number === null && (test1.row.instruments as any[])[0].number_present === true && !JSON.stringify(test1.row).match(/USER ONE|UTR0000001/));
+    ok("a voucher built without the extras says so, so 'none' is never confused with 'not read'", voucherExtraFields({}, SIX).extras_sent === false && mk("V-2", false).row.extras_sent === true && mk("V-2", false).row.entered_by === null);
+    const store = tallyMirrorReads("http://x", "ZZ CO", async () => ({ ENVELOPE: { BODY: { DATA: { COLLECTION: { VOUCHER: [
+      VCH("V-9", { ALTERID: "9", VOUCHERTYPENAME: "Receipt", ENTEREDBY: "USER ONE", "ALLLEDGERENTRIES.LIST": [{ LEDGERNAME: "Bank", AMOUNT: "10", "BANKALLOCATIONS.LIST": { INSTRUMENTNUMBER: "UTR9", INSTRUMENTDATE: "20261101" } }] }),
+    ] } } } } }));
+    const got = await store.vouchersOn("2026-11-01");
+    ok("the real day read attaches the extras to the converted voucher", got.length === 1 && got[0].erpExtras?.enteredby === "USER ONE" && got[0].erpExtras?.instruments[0].number === "UTR9");
+    const got2 = await store.changedSince(5);
+    ok("and so does the incremental read", got2.length === 1 && got2[0].erpExtras?.instruments.length === 1);
   }
 
   H("THE FENCE");
