@@ -133,7 +133,8 @@ function pickWindow(byDay: Record<string, number>) {
     counts.loadedPeriod = { from: judged.from, to: judged.asOf, unexpected: judged.unexpected, why: judged.why, ledgers: readA.length, vouchers: top.count };
     const groupDef = { name: "erpRigGroups", tallyCollection: "Group", metadataType: "Group", category: "master", fetch: ["Name", "Parent"], timeout: 120_000, parallel: false } as any;
     const period = { from: judged.from ?? ledgerPeriod(asOf!).from, to: asOf! };
-    const gParsed = assertParsedCollection(await post(TALLY_URL, buildCollectionXml(groupDef, company!)), "the group read");
+    /* The parsed reply (rawMode false): the rig's post returns raw text, which is never a collection. Found on the dummy, 6-Nov-2026. */
+    const gParsed = assertParsedCollection(await tallyPost(TALLY_URL, buildCollectionXml(groupDef, company!), 120_000, false), "the group read");
     const gcol = gParsed?.ENVELOPE?.BODY?.DATA?.COLLECTION;
     const parentOf = new Map<string, string>(tallyList(gcol?.GROUP ?? gcol?.["GROUP.LIST"]).map((g: any) => [(tallyText(g?.["@_NAME"]) || tallyText(g?.NAME)).trim(), tallyText(g?.PARENT).trim()]));
     const primary = (g: string) => { let x = g; for (let i = 0; i < 50 && parentOf.get(x) && parentOf.get(x) !== "Primary"; i++) x = parentOf.get(x)!; return x; };
