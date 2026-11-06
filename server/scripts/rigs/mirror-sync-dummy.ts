@@ -135,7 +135,7 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
     step("full sync of the window: swapped, and the mirror holds exactly what Tally counts for those days", runs.full1.state === "swapped" && n1 === runs.full1.read && n1 === win.count,
       `${runs.full1.read} read, ${n1} in the mirror, Tally counts ${win.count}, ${runs.full1.tallyReads} Tally reads${runs.full1.error ? `, ${runs.full1.error}` : ""}`);
     const { data: st1 } = await c.from("erp_sync_run_steps").select("seq,step,state,rows,ms").eq("run_id", runs.full1.run_id!).eq("is_test", true).order("seq");
-    step("the run shows step by step (mark, each day, staged, the ledgers, swapped), each day's rows matching Tally's count", (st1 ?? []).length === win.days + 4 && (st1 ?? []).every((s: any) => s.state === "ok")
+    step("the run shows step by step (mark, each day, staged, the ledgers, swapped, the swap-store copy), each day's rows matching Tally's count", (st1 ?? []).length === win.days + 5 && (st1 ?? []).every((s: any) => s.state === "ok")
       && eachDay(win.from, win.to).every((d) => (st1 ?? []).some((s: any) => s.step === `read ${d}` && s.rows === perDay[d])),
       (st1 ?? []).map((s: any) => `${s.step}: ${s.rows ?? "-"} rows, ${s.ms ?? "-"} ms`).join(" | "));
     const m1 = await mark();
