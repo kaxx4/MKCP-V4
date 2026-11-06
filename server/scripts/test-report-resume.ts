@@ -13,7 +13,7 @@ import "dotenv/config";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ReportRunner, planOrphanReports, reportResumeLog, REPORT_RESUME_MAX, REPORT_STUCK_MS, type RunningReportJob } from "../src/services/reportRunner.js";
+import { ReportRunner, planOrphanReports, reportResumeLog, reportClaimLog, REPORT_RESUME_MAX, REPORT_STUCK_MS, type RunningReportJob } from "../src/services/reportRunner.js";
 import { installMock, uninstallMock } from "../src/services/tallyMock.js";
 
 let passed = 0, failed = 0;
@@ -51,6 +51,8 @@ function memDb(tables: Record<string, any[]>) {
   };
   return { client: { from } as any, writes, tables };
 }
+
+const memClaims = (ids: string[] = []) => { const s = new Set(ids); return { has: (id: string) => s.has(id), add: (id: string) => { s.add(id); }, s }; };
 
 const memResumes = (start: Record<string, number> = {}) => {
   const m = new Map(Object.entries(start));
@@ -111,7 +113,7 @@ const memResumes = (start: Record<string, number> = {}) => {
       tally_report_snapshots: [],
     });
     const resumes = memResumes();
-    const b = new ReportRunner(db.client, "http://127.0.0.1:9", resumes, () => NOW);
+    const b = new ReportRunner(db.client, "http://127.0.0.1:9", resumes, () => NOW, memClaims(["J-KILLED"]));
     await b.drain();
     const job = db.tables.tally_report_jobs.find((r) => r.id === "J-KILLED");
     const snap = db.tables.tally_report_snapshots.find((r) => r.job_id === "J-KILLED");
@@ -124,7 +126,7 @@ const memResumes = (start: Record<string, number> = {}) => {
 
     /* The same report brings boot B down too: boot C finds it running again, and it has had its one resume. */
     const db2 = memDb({ tally_report_jobs: [{ id: "J-LOOP", company, report: "trial-balance", status: "running", started_at: ago(30_000), created_at: ago(90_000) }], tally_report_snapshots: [] });
-    const c = new ReportRunner(db2.client, "http://127.0.0.1:9", memResumes({ "J-LOOP": REPORT_RESUME_MAX }), () => NOW);
+    const c = new ReportRunner(db2.client, "http://127.0.0.1:9", memResumes({ "J-LOOP": REPORT_RESUME_MAX }), () => NOW, memClaims(["J-LOOP"]));
     const before = sent.length;
     await c.drain();
     const j2 = db2.tables.tally_report_jobs[0];
@@ -132,7 +134,7 @@ const memResumes = (start: Record<string, number> = {}) => {
 
     H("THE RUNNER: a result row never written (E6)");
     const db3 = memDb({ tally_report_jobs: [], tally_report_snapshots: [] });
-    const d = new ReportRunner(db3.client, "http://127.0.0.1:9", memResumes(), () => NOW);
+    const d = new ReportRunner(db3.client, "http://127.0.0.1:9", memResumes(), () => NOW, memClaims());
     await d.drain();   // the boot sweep, nothing there
     db3.tables.tally_report_jobs.push({ id: "J-STUCK", company, report: "trial-balance", status: "running", started_at: ago(REPORT_STUCK_MS + 60_000), created_at: ago(REPORT_STUCK_MS + 90_000) });
     db3.tables.tally_report_jobs.push({ id: "J-YOUNG", company, report: "trial-balance", status: "running", started_at: ago(120_000), created_at: ago(130_000) });
@@ -141,6 +143,72 @@ const memResumes = (start: Record<string, number> = {}) => {
     ok("after boot, a job running past the stuck time is closed as an error naming why", st.status === "error" && /No result was written within 20 minutes/.test(st.error) && st.progress === null);
     ok("a younger running job is left alone (it may still be running somewhere)", yg.status === "running");
     ok("an error is never a blank result: no snapshot was written for the stuck job", !db3.tables.tally_report_snapshots.some((r) => r.job_id === "J-STUCK"));
+
+    H("REVIEW 1 (thread 7): a resume that cannot be recorded never stops the queue");
+    const dbR = memDb({
+      tally_report_jobs: [
+        { id: "J-OWN", company, report: "trial-balance", status: "running", started_at: ago(60_000), created_at: ago(80_000) },
+        { id: "J-NEXT", company, report: "trial-balance", status: "pending", created_at: ago(50_000) },
+      ],
+      tally_report_snapshots: [],
+    });
+    const brokenResumes = { count: () => 0, add: () => { throw new Error("EROFS: read-only file system"); } };
+    const r1 = new ReportRunner(dbR.client, "http://127.0.0.1:9", brokenResumes, () => NOW, memClaims(["J-OWN"]));
+    let threw = "";
+    try { await r1.drain(); } catch (e) { threw = (e as Error).message; }
+    const own = dbR.tables.tally_report_jobs.find((r) => r.id === "J-OWN"), nxt = dbR.tables.tally_report_jobs.find((r) => r.id === "J-NEXT");
+    ok("the drain does not throw when the resume cannot be written", threw === "", threw);
+    ok("that job is closed as an error that says why, not asked again", own.status === "error" && /could not record/.test(own.error) && !!own.finished_at, JSON.stringify(own));
+    ok("the pending job behind it still runs to done", nxt.status === "done", nxt.status);
+    const dbS = memDb({ tally_report_jobs: [{ id: "J-AFTER", company, report: "trial-balance", status: "pending", created_at: ago(50_000) }], tally_report_snapshots: [] });
+    const failingSweep = { count: () => { throw new Error("disk gone"); }, add: () => {} };
+    dbS.tables.tally_report_jobs.push({ id: "J-R", company, report: "trial-balance", status: "running", started_at: ago(1000), created_at: ago(90_000) });
+    let t2 = "";
+    try { await new ReportRunner(dbS.client, "http://127.0.0.1:9", failingSweep, () => NOW, memClaims(["J-R"])).drain(); } catch (e) { t2 = (e as Error).message; }
+    ok("even a sweep that throws leaves the queue running", t2 === "" && dbS.tables.tally_report_jobs.find((r) => r.id === "J-AFTER").status === "done", t2);
+
+    H("REVIEW 2 (thread 7): only this machine's own leftovers are asked again; running means on Tally");
+    const dbM = memDb({
+      tally_report_jobs: [
+        { id: "J-OTHER", company, report: "trial-balance", status: "running", started_at: ago(120_000), created_at: ago(150_000) },
+        { id: "J-OTHER-OLD", company, report: "trial-balance", status: "running", started_at: ago(REPORT_STUCK_MS + 60_000), created_at: ago(REPORT_STUCK_MS + 90_000) },
+      ],
+      tally_report_snapshots: [],
+    });
+    const sentBefore = sent.length;
+    const m1 = new ReportRunner(dbM.client, "http://127.0.0.1:9", memResumes(), () => NOW, memClaims());
+    await m1.drain();
+    const o1 = dbM.tables.tally_report_jobs.find((r) => r.id === "J-OTHER"), o2 = dbM.tables.tally_report_jobs.find((r) => r.id === "J-OTHER-OLD");
+    ok("a running job this machine never claimed is left alone at boot (it may be alive on another machine)", o1.status === "running" && sent.length === sentBefore);
+    ok("a running job nobody here claimed that passed the stuck time is still closed", o2.status === "error" && /No result was written within 20 minutes/.test(o2.error));
+    ok("the plan: at boot a job not claimed here is neither resumed nor failed while young",
+      (() => { const pl = planOrphanReports(NOW, true, [{ id: "X", status: "running", started_at: ago(60_000) }], () => 0, null, () => false); return pl.resume.length === 0 && pl.fail.length === 0; })());
+    const cdir = mkdtempSync(join(tmpdir(), "report-claims-"));
+    try {
+      const cl = reportClaimLog(join(cdir, "c.jsonl"));
+      ok("the claim log: nothing yet, then a claim is remembered by a new process", !cl.has("J1") && (cl.add("J1"), reportClaimLog(join(cdir, "c.jsonl")).has("J1")) && !cl.has("J2"));
+      writeFileSync(join(cdir, "bad.jsonl"), "{not json" + String.fromCharCode(10));
+      ok("an unreadable claim log means not mine (left to the stuck rule, never requeued)", !reportClaimLog(join(cdir, "bad.jsonl")).has("J1"));
+    } finally { rmSync(cdir, { recursive: true, force: true }); }
+
+    /* "Running" means on Tally: the first write for a pending job is only a progress line (status untouched, guarded on pending);
+       the claim to running is a separate compare-and-set made inside the Tally gate. */
+    const dbG = memDb({ tally_report_jobs: [{ id: "J-WAIT", company, report: "trial-balance", status: "pending", created_at: ago(5000) }], tally_report_snapshots: [] });
+    const claimsG = memClaims();
+    await new ReportRunner(dbG.client, "http://127.0.0.1:9", memResumes(), () => NOW, claimsG).drain();
+    const wj = dbG.writes.filter((w) => w.table === "tally_report_jobs" && w.op === "update");
+    const first = wj[0], claimW = wj.find((w) => w.patch?.status === "running");
+    ok("the first write for a waiting job is a progress line only: no status, no start, guarded on pending",
+      !!first && first.patch.status === undefined && first.patch.started_at === undefined && /Asking Tally/.test(first.patch.progress ?? "") && first.filters.includes('"status","eq","pending"'), JSON.stringify(first));
+    ok("the claim to running is a separate write, compare-and-set on pending, with the start time", !!claimW && claimW.filters.includes('"status","eq","pending"') && !!claimW.patch.started_at && wj.indexOf(claimW) > 0);
+    const doneG = dbG.tables.tally_report_jobs[0];
+    ok("it ran to done, and the claim is on this machine's log", doneG.status === "done" && claimsG.has("J-WAIT"), JSON.stringify(doneG));
+    const dbT = memDb({ tally_report_jobs: [{ id: "J-TAKEN", company, report: "trial-balance", status: "pending", created_at: ago(5000) }], tally_report_snapshots: [] });
+    const realFrom = dbT.client.from;
+    dbT.client.from = (t: string) => { const b = realFrom(t); const upd = b.update; b.update = (p: any) => { if (p?.status === "running") dbT.tables.tally_report_jobs[0].status = "running"; return upd(p); }; return b; };   // another machine takes it just before this one's claim
+    const before2 = sent.filter((x) => !/List of Companies/i.test(x)).length;
+    await new ReportRunner(dbT.client, "http://127.0.0.1:9", memResumes(), () => NOW, memClaims()).drain();
+    ok("a job another machine took first is not run here, and Tally is not asked", sent.filter((x) => !/List of Companies/i.test(x)).length === before2 && dbT.tables.tally_report_jobs[0].status === "running");
   } finally {
     uninstallMock();
     if (guidBefore === undefined) delete process.env.MKCP_PRACTICE_COMPANY_GUID; else process.env.MKCP_PRACTICE_COMPANY_GUID = guidBefore;

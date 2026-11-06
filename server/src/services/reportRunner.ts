@@ -29,7 +29,7 @@ import { supabaseClient, offlineReason } from "./supabaseClient.js";
 import { withTally } from "./tallyGate.js";
 import { fetchReport, reportByKey, REPORTS } from "./tallyReports.js";
 import { resolveSyncCompany } from "./scheduledSyncs.js";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 // ── The daily refresh ─────────────────────────────────────────────────────
@@ -123,13 +123,19 @@ export interface RunningReportJob { id: string; status: string; started_at: stri
  * resumes left, else failed. Later (the timer), only one running for longer
  * than REPORT_STUCK_MS is failed; a younger one is left alone.
  */
-export function planOrphanReports(now: number, atBoot: boolean, jobs: readonly RunningReportJob[], resumes: (id: string) => number, mine: string | null)
+export function planOrphanReports(now: number, atBoot: boolean, jobs: readonly RunningReportJob[], resumes: (id: string) => number, mine: string | null,
+  claimedHere: (id: string) => boolean = () => true)
   : { resume: string[]; fail: { id: string; why: string }[] } {
   const resume: string[] = [], fail: { id: string; why: string }[] = [];
   for (const j of jobs) {
     if (j.status !== "running" || j.id === mine) continue;
     const started = j.started_at ? Date.parse(j.started_at) : NaN;
-    if (atBoot) {
+    /* Thread 7 review 2: two machines share one Supabase. At boot only a job THIS
+       machine claimed (its own on-disk claim log) is asked again; a "running" job
+       nobody here claimed may be alive on another machine, so it is left alone
+       until it passes the stuck time. "running" now means "on Tally": the claim
+       is made inside the Tally gate, so started_at is when Tally was asked. */
+    if (atBoot && claimedHere(j.id)) {
       const n = resumes(j.id);
       if (n < REPORT_RESUME_MAX) resume.push(j.id);
       else fail.push({ id: j.id, why: `The office PC stopped while this report ran, and it had already been asked again ${n} time(s). Ask for it again when Tally is free.` });
@@ -138,6 +144,29 @@ export function planOrphanReports(now: number, atBoot: boolean, jobs: readonly R
     }
   }
   return { resume, fail };
+}
+
+/**
+ * The jobs this machine claimed, on disk (thread 7 review 2). A job's id is
+ * written when this machine takes it, so a later boot can tell its own
+ * leftovers from a job running on another machine. Unreadable means "not
+ * mine": the job is then left to the stuck rule, never put back in the queue.
+ */
+export function reportClaimLog(path = join(process.cwd(), "server", "data", "report-claims.jsonl")) {
+  const ids = (): Set<string> => {
+    try { return new Set(readFileSync(path, "utf8").split("\n").filter((l) => l.trim()).map((l) => String(JSON.parse(l).id))); }
+    catch { return new Set(); }
+  };
+  return {
+    has(id: string): boolean { return ids().has(id); },
+    add(id: string): void {
+      mkdirSync(dirname(path), { recursive: true });
+      appendFileSync(path, JSON.stringify({ id, at: new Date().toISOString() }) + "\n");
+      /* Kept small: past 64 KB only the newest 200 lines stay. */
+      const text = readFileSync(path, "utf8");
+      if (text.length > 64_000) writeFileSync(path, text.split("\n").filter((l) => l.trim()).slice(-200).join("\n") + "\n");
+    },
+  };
 }
 
 /** The on-disk count of resumes per job (one line per resume). An unreadable file counts as "already resumed": failing a job is safe, looping is not. */
@@ -175,6 +204,7 @@ export class ReportRunner {
     private readonly tallyUrl: string,
     private readonly resumes: { count(id: string): number; add(id: string): void } = reportResumeLog(),
     private readonly now: () => number = Date.now,
+    private readonly claims: { has(id: string): boolean; add(id: string): void } = reportClaimLog(),
   ) {}
 
   /** E3 and E6: settle the "running" jobs this process is not running. A failed read or write is logged; the next drain tries again. */
@@ -184,12 +214,19 @@ export class ReportRunner {
     const { data, error } = await this.client.from("tally_report_jobs").select("id, status, started_at").eq("status", "running");
     if (error) { console.error(`[reports] could not read running jobs: ${error.message}`); return out; }
     const jobs = (data ?? []) as RunningReportJob[];
-    const plan = planOrphanReports(this.now(), atBoot, jobs, (id) => this.resumes.count(id), this.current);
+    const plan = planOrphanReports(this.now(), atBoot, jobs, (id) => this.resumes.count(id), this.current, (id) => this.claims.has(id));
     const startedOf = new Map(jobs.map((j) => [j.id, j.started_at]));
     /* Compare-and-set: still running, still the same start. */
     const cas = (q: any, id: string) => { const at = startedOf.get(id); return at ? q.eq("id", id).eq("status", "running").eq("started_at", at) : q.eq("id", id).eq("status", "running").is("started_at", null); };
     for (const id of plan.resume) {
-      this.resumes.add(id);   // counted before the job can run again
+      try { this.resumes.add(id); }   // counted before the job can run again
+      catch (err) {
+        /* Review 1: a resume that cannot be recorded is not allowed (it could loop). Close the job instead; never throw out of the sweep. */
+        console.error(`[reports] could not record the resume of job ${id}: ${(err as Error).message}`);
+        const { error: e2 } = await cas(this.client.from("tally_report_jobs").update({ status: "error", progress: null, error: "The office PC stopped while this report ran, and it could not record that it was asked again, so it was not asked again. Ask for it again when Tally is free.", finished_at: new Date(this.now()).toISOString() }), id);
+        if (e2) console.error(`[reports] could not close job ${id}: ${e2.message}`); else out.failed.push(id);
+        continue;
+      }
       const { error: e } = await cas(this.client.from("tally_report_jobs").update({ status: "pending", started_at: null, progress: "The office PC stopped while this report ran. It will be asked again." }), id);
       if (e) console.error(`[reports] could not put job ${id} back in the queue: ${e.message}`); else { out.resumed.push(id); this.askedAgain.add(id); }
     }
@@ -207,7 +244,9 @@ export class ReportRunner {
     if (this.busy || this.stopped) return;
     this.busy = true;
     try {
-      await this.sweepOrphans();
+      /* Review 1: a sweep that fails (a read-only disk, a database error) never stops the queue. */
+      try { await this.sweepOrphans(); } catch (e) { console.error(`[reports] sweep failed, the queue goes on: ${(e as Error)?.message ?? e}`); }
+      const tried = new Set<string>();
       for (;;) {
         const { data, error } = await this.client
           .from("tally_report_jobs")
@@ -217,13 +256,23 @@ export class ReportRunner {
           .limit(1);
         if (error) { console.error(`[reports] could not read the queue: ${error.message}`); return; }
         const job = (data ?? [])[0] as ReportJob | undefined;
-        if (!job) return;
+        if (!job || tried.has(job.id)) return;   // a job that cannot be claimed or closed is not asked for again in this pass
+        tried.add(job.id);
         this.current = job.id;
         try { await this.run(job); } finally { this.current = null; }
       }
     } finally {
       this.busy = false;
     }
+  }
+
+  /** Take a pending job at the moment Tally is asked: running, started now. False when another machine took it first. */
+  private async claim(id: string): Promise<boolean> {
+    const { data, error } = await this.client.from("tally_report_jobs").update({ status: "running", started_at: new Date(this.now()).toISOString() }).eq("id", id).eq("status", "pending").select("id");
+    if (error) throw new Error(`could not claim the job: ${error.message}`);
+    const got = (data ?? []).length > 0;
+    if (got) { try { this.claims.add(id); } catch (e) { console.error(`[reports] could not record the claim of job ${id}; it is left to the stuck rule if the agent stops: ${(e as Error).message}`); } }
+    return got;
   }
 
   private async note(id: string, progress: string): Promise<void> {
@@ -248,17 +297,21 @@ export class ReportRunner {
       ? { from: job.from_date, to: job.to_date }
       : defaultPeriod();
 
+    /* Review 2: the job stays "pending" while it waits for the Tally gate (only the
+       progress line changes). It becomes "running" inside the gate, by a
+       compare-and-set on pending, at the moment Tally is asked. */
     await this.client.from("tally_report_jobs").update({
-      status: "running",
-      started_at: new Date().toISOString(),
       progress: (def.slow
         ? `Asking Tally for ${def.label}. This one takes about a minute the first time.`
         : `Asking Tally for ${def.label}…`) + (this.askedAgain.has(job.id) ? " Asked again: the office PC stopped during the first try." : ""),
-    }).eq("id", job.id);
+    }).eq("id", job.id).eq("status", "pending");
 
     try {
-      const result = await withTally(this.tallyUrl, `report ${def.key}`,
-        () => fetchReport(this.tallyUrl, job.company, def, period));
+      const result = await withTally(this.tallyUrl, `report ${def.key}`, async () => {
+        if (!(await this.claim(job.id))) return null;
+        return fetchReport(this.tallyUrl, job.company, def, period);
+      });
+      if (!result) { console.log(`[reports] job ${job.id} was taken by another machine; left to it`); return; }
 
       await this.note(job.id, `Storing ${result.rows.length} rows…`);
 
