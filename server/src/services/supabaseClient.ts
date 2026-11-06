@@ -109,11 +109,15 @@ export const ERP_TEST_RPCS: readonly string[] = [
   /* Task 1-5 (migration 0121): the list of Owner-accepted drops, read only. The
      swap itself is already on this list; the database checks the acceptance. */
   "erp_sync_accepted_runs",
+  /* Task 1-6 (migration 0124): the latency rig. Emit and clean up ZZTEST signals (the database checks the
+     sandbox key and the ZZTEST run name), and the read-only catch-up a screen calls. */
+  "erp_signal_test_emit", "erp_signal_test_cleanup", "erp_signal_catch_up",
 ];
 /** ERP mirror tables the sandbox may read (GET only, only is_test rows), task 1-5. */
 export const ERP_TEST_READ_TABLES: readonly string[] = [
   "erp_sync_runs", "erp_sync_run_steps", "erp_sync_marks", "erp_mirror_stage", "erp_mirror_rows",
   "erp_mirror_ledger_stage", "erp_mirror_ledgers", "erp_record_links", "erp_record_flags", "erp_sync_day_checks", "erp_sync_repulls",
+  "erp_change_signals",
 ];
 /** ERP tables the sandbox may read (only is_test rows) and clean up (only rows it names). */
 export const ERP_TEST_ROW_TABLES: readonly string[] = ["erp_jobs", "erp_proposal_requests", "erp_proposals"];
