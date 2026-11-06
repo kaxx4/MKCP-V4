@@ -209,7 +209,7 @@ export interface MirrorLedgerRow {
 /** One ledger as Tally sent it (strings), before it is checked. */
 export interface TallyLedger {
   guid: string; name: string; parent: string; closingbalance: string; openingbalance: string; alterid: string; masterid: string;
-  /** Part 7. Absent on a ledger the caller built without them; `sent` says which of the five Tally actually sent a tag for (an empty tag counts as sent, a missing one does not). */
+  /** Part 7. Absent on a ledger the caller built without them. Tally sends a contact or tax tag only when it holds a value (dummy, 6-Nov-2026: 75 of 482 ledgers carry a phone tag and 75 are filled), so a missing tag is "none". `sent` is true when this ledger came back with the bill-wise tag, which Tally sends on every ledger (482 of 482): the proof the added fields were served at all. */
   phone?: string; mobile?: string; pan?: string; gstregistrationtype?: string; isbillwiseon?: string; sent?: boolean;
 }
 
@@ -491,7 +491,7 @@ const yesNo = (s: unknown): boolean | null => { const t = String(s ?? "").trim()
  * the dummy is an old copy of the real books, so the phone, mobile and PAN themselves are
  * never stored (only whether each is there, so they can still be counted); the registration
  * type and bill-wise flag are not personal and are kept. `contact_fields_sent` is false when
- * Tally sent no tag at all for one of them, so "none" and "not asked" cannot be confused (G7).
+ * the ledger did not come back with the bill-wise tag Tally sends on every ledger, so "none" and "not served" cannot be confused (G7).
  */
 export function ledgerContactFields(l: TallyLedger, opts: { scrub: false } | { scrub: true; salt: string }): Record<string, unknown> {
   const t = (s: unknown) => String(s ?? "").trim();
@@ -517,7 +517,7 @@ export function ledgersFromParsed(parsed: any): TallyLedger[] {
     closingbalance: tallyText(l?.CLOSINGBALANCE), openingbalance: tallyText(l?.OPENINGBALANCE), alterid: tallyText(l?.ALTERID), masterid: tallyText(l?.MASTERID),
     phone: tallyText(l?.LEDGERPHONE).trim(), mobile: tallyText(l?.LEDGERMOBILE).trim(), pan: tallyText(l?.INCOMETAXNUMBER).trim(),
     gstregistrationtype: tallyText(l?.GSTREGISTRATIONTYPE).trim(), isbillwiseon: tallyText(l?.ISBILLWISEON).trim(),
-    sent: ["LEDGERPHONE", "LEDGERMOBILE", "INCOMETAXNUMBER", "GSTREGISTRATIONTYPE", "ISBILLWISEON"].every((k) => l != null && typeof l === "object" && k in l),
+    sent: l != null && typeof l === "object" && "ISBILLWISEON" in l,
   }));
 }
 
@@ -878,6 +878,8 @@ async function runMirror(opts: {
       }
       if (period.unexpected) log(`ledger read flagged balance_period_unexpected: ${period.why}`);
       if (!list.length) throw new Error("refused: the ledger read came back empty, which is not a list of ledgers, so the run fails and nothing is swapped");
+      /* Part 7 canary: Tally sends the bill-wise tag on every ledger. If not one ledger has it, the added contact and tax fields were not served, and "no phone anywhere" would be a lie. */
+      if (list.every((l) => l.sent === false)) throw new Error(`refused: none of the ${list.length} ledgers came back with the bill-wise tag Tally sends on every ledger, so the added contact and tax fields were not served; the run fails and nothing is swapped`);
       const problems = list.map(ledgerProblem).filter((p): p is string => !!p);
       if (problems.length) {
         const counts = [...new Set(problems)].map((p) => `${problems.filter((x) => x === p).length} with ${p}`).join("; ");

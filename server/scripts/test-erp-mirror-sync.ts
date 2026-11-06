@@ -571,13 +571,25 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
     const L = { GUID: "L-1", NAME: "PARTY 042 CYCLE STORES", PARENT: "Sundry Debtors", CLOSINGBALANCE: "-10.00", OPENINGBALANCE: "0", ALTERID: "5", MASTERID: "50",
       LEDGERPHONE: "033-5550101", LEDGERMOBILE: "9000000001", INCOMETAXNUMBER: "AAAAA0000A", GSTREGISTRATIONTYPE: "Regular", ISBILLWISEON: "Yes" };
     const [a] = ledgersFromParsed(parsedLedgers(L));
-    ok("the ledger reader takes all five fields and says Tally sent every tag", a.phone === "033-5550101" && a.mobile === "9000000001" && a.pan === "AAAAA0000A"
+    ok("the ledger reader takes all five fields and says the fields were served (the bill-wise tag is there)", a.phone === "033-5550101" && a.mobile === "9000000001" && a.pan === "AAAAA0000A"
       && a.gstregistrationtype === "Regular" && a.isbillwiseon === "Yes" && a.sent === true, JSON.stringify({ ...a, phone: "..", mobile: "..", pan: ".." }));
     const [b] = ledgersFromParsed(parsedLedgers({ ...L, LEDGERPHONE: "", LEDGERMOBILE: "", INCOMETAXNUMBER: "" }));
-    ok("an empty tag is 'sent, none': the count of phones does not move and the row still says Tally sent the tags", b.sent === true && ledgerContactFields(b, SIX).has_phone === false && ledgerContactFields(b, SIX).contact_fields_sent === true);
+    ok("an empty tag is 'none': the count of phones does not move and the row still says the fields were served", b.sent === true && ledgerContactFields(b, SIX).has_phone === false && ledgerContactFields(b, SIX).contact_fields_sent === true);
     const { LEDGERMOBILE: _m, ...noMobile } = L;
     const [c] = ledgersFromParsed(parsedLedgers(noMobile));
-    ok("a tag Tally did not send at all is 'not read', never 'none': contact_fields_sent is false", c.sent === false && ledgerContactFields(c, SIX).contact_fields_sent === false);
+    ok("a missing mobile tag is 'none' too (Tally sends a contact tag only when it holds a value), the bill-wise tag proves the fields were served", c.sent === true && ledgerContactFields(c, SIX).has_mobile === false);
+    const { ISBILLWISEON: _b, ...noBillwise } = L;
+    const [d] = ledgersFromParsed(parsedLedgers(noBillwise));
+    ok("a ledger without the bill-wise tag is marked 'not served', never 'none'", d.sent === false && ledgerContactFields(d, SIX).contact_fields_sent === false);
+    {
+      const unserved = tallyMirrorReads("http://x", "ZZ CO", async () => ({ ENVELOPE: { BODY: { DATA: { COLLECTION: { LEDGER: [noBillwise, { ...noBillwise, GUID: "L-2", NAME: "PARTY 043" }] } } } } }));
+      const got = await unserved.ledgers();
+      ok("the real ledger read hands the 'not served' mark through", got.length === 2 && got.every((x) => x.sent === false));
+      const f = fakeStore();
+      const ft = fakeTally({}, { ledgers: got });
+      const rr = await runMirrorSync({ store: f.store, tally: ft.tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" }, today: "2026-11-06", log: () => {} }).catch((e) => ({ state: "threw", error: (e as Error).message }));
+      ok("a run whose ledgers none came back with the bill-wise tag fails and swaps nothing", /bill-wise tag/.test(String((rr as any).error ?? "")) && !f.calls.includes("swap"), String((rr as any).error ?? "").slice(0, 120));
+    }
     const real = ledgerContactFields(a, SIX), scr = ledgerContactFields(a, SCR);
     ok("a live row keeps the phone, mobile and PAN and counts them", real.phone === "033-5550101" && real.mobile === "9000000001" && real.pan === "AAAAA0000A" && real.has_phone === true && real.has_mobile === true && real.has_pan === true);
     ok("a test row never stores the phone, mobile or PAN, only that each is there; the registration type and bill-wise are kept",

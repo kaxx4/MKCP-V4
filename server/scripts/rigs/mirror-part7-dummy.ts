@@ -109,7 +109,10 @@ const countTag = (xml: string, tag: string) => ({
       registrationType: countTag(ledgerXml, "GSTREGISTRATIONTYPE").filled, billwiseOn: [...ledgerXml.matchAll(/<ISBILLWISEON(?:\s[^>]*)?>\s*Yes\s*<\/ISBILLWISEON>/gi)].length,
     };
     const dayXml = await tallyPost(TALLY_URL, buildCollectionXml(ERP_MIRROR_VOUCHER_DEF, company, day[0], day[0]), ERP_MIRROR_VOUCHER_DEF.timeout, true) as string;
-    const beforeV = { vouchers: countTag(dayXml, "VOUCHERTYPENAME").sent, enteredBy: countTag(dayXml, "ENTEREDBY").filled, instrumentNumber: countTag(dayXml, "INSTRUMENTNUMBER").filled };
+    /* Vouchers with at least one bank block that holds an instrument number or date, counted per voucher in the raw reply (not by the parser). */
+    const vouchersRaw = dayXml.split(/<\/VOUCHER>/i).slice(0, -1);
+    const holdsInstrument = (v: string) => [...v.matchAll(/<BANKALLOCATIONS\.LIST\b[\s\S]*?<\/BANKALLOCATIONS\.LIST>/gi)].some((b) => /<INSTRUMENT(?:NUMBER|DATE)(?:\s[^>]*)?>[^<]*\S[^<]*<\/INSTRUMENT(?:NUMBER|DATE)>/i.test(b[0]));
+    const beforeV = { vouchers: vouchersRaw.length, enteredBy: countTag(dayXml, "ENTEREDBY").filled, instrumentVouchers: vouchersRaw.filter(holdsInstrument).length };
     counts.before = { ...before, ...beforeV };
     const q = async (table: string, filters: [string, string][]) => {
       let r = c.from(table).select("key", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
@@ -131,13 +134,14 @@ const countTag = (xml: string, tag: string) => ({
       extrasSent: await q("erp_mirror_rows", [["row->>extras_sent", "true"]]),
     };
     counts.after = { ...after, ...afterV };
-    step("the test mirror holds as many ledgers as Tally sent, and every one says Tally sent all five tags", after.ledgers === before.ledgers && after.sentAll === after.ledgers, `${after.ledgers} in the mirror, ${before.ledgers} in Tally's reply, ${after.sentAll} with all five tags`);
+    const billwiseTags = countTag(ledgerXml, "ISBILLWISEON").sent;
+    step("the test mirror holds as many ledgers as Tally sent, and each says the fields were served (the bill-wise tag Tally sends on every ledger)", after.ledgers === before.ledgers && after.sentAll === billwiseTags && billwiseTags === before.ledgers, `${after.ledgers} in the mirror, ${before.ledgers} in Tally's reply, ${billwiseTags} with the bill-wise tag, ${after.sentAll} marked served`);
     step("phones, mobiles and PANs: the mirror counts the same as Tally's reply", after.phone === before.phone && after.mobile === before.mobile && after.pan === before.pan,
       `phone ${before.phone} to ${after.phone}, mobile ${before.mobile} to ${after.mobile}, PAN ${before.pan} to ${after.pan}`);
     step("registration type and bill-wise: the mirror counts the same as Tally's reply", after.registrationType === before.registrationType && after.billwiseOn === before.billwiseOn,
       `registration type ${before.registrationType} to ${after.registrationType}, bill-wise on ${before.billwiseOn} to ${after.billwiseOn}`);
-    step("the window's vouchers: every one says its extras were read, and users are counted", afterV.vouchers === day[1] && afterV.extrasSent === afterV.vouchers && afterV.enteredBy === beforeV.enteredBy,
-      `${afterV.vouchers} vouchers, ${afterV.extrasSent} with extras read, a user on ${beforeV.enteredBy} in Tally and ${afterV.enteredBy} in the mirror, instruments in Tally ${beforeV.instrumentNumber}, vouchers with one in the mirror ${afterV.instrumentVouchers}`);
+    step("the window's vouchers: every one says its extras were read, and users are counted", afterV.vouchers === day[1] && afterV.extrasSent === afterV.vouchers && afterV.enteredBy === beforeV.enteredBy && afterV.instrumentVouchers === beforeV.instrumentVouchers,
+      `${afterV.vouchers} vouchers, ${afterV.extrasSent} with extras read, a user on ${beforeV.enteredBy} in Tally and ${afterV.enteredBy} in the mirror, vouchers with a bank instrument ${beforeV.instrumentVouchers} in Tally and ${afterV.instrumentVouchers} in the mirror`);
 
     // 5. nothing personal stored: scan the stored rows against the values Tally sent
     const grab = (xml: string, tag: string) => [...xml.matchAll(new RegExp(`<${tag}(?:\\s[^>]*)?>([^<]*\\S[^<]*)</${tag}>`, "g"))].map((m) => m[1].trim());
