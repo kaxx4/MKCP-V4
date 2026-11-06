@@ -147,12 +147,11 @@ function pickWindow(byDay: Record<string, number>) {
     const primary = (g: string) => { let x = g; for (let i = 0; i < 50 && parentOf.get(x) && !isTop(parentOf.get(x)!); i++) x = parentOf.get(x)!; return x; };
     const lineOf = (l: { name: string; parent: string }) => isTop(l.parent) ? l.name : parentOf.has(l.parent) ? primary(l.parent) : "(unresolved parent)";
     const r2 = (n: number) => Math.round(n * 100) / 100;
-    /* Found on the dummy, 6-Nov-2026 (tb2): the report parser leaves XML
-       entities in names ("Loans &amp; Advances (Asset)"), so those lines never
-       matched by name. The rig decodes them; the shared parser is not changed
-       here (it feeds today's report snapshots). */
-    const unent = (x: string) => x.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))).replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-      .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").trim();
+    /* Found on the dummy, 6-Nov-2026 (tb2): the report parser left XML entities
+       in names ("Loans &amp; Advances (Asset)"), so those lines never matched by
+       name. The shared parser now decodes them once (task 1-5, thread 7), so the
+       rig must not decode a second time: it only trims. */
+    const unent = (x: string) => x.trim();
     /* Found on the dummy, 6-Nov-2026 (tb2): the Trial Balance shows Profit &
        Loss A/c at its opening balance (9,574,442.66 = that ledger's opening, to
        the paise); this year's result is already in the income and expense

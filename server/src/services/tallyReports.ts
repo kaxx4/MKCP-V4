@@ -49,7 +49,7 @@
  * different path is two things to disagree (G1).
  */
 import { tallyPost } from "../tally.js";
-import { escapeXml, tallyDate as toTallyYmd, parseTallyAmount } from "./xml.js";
+import { escapeXml, tallyDate as toTallyYmd, parseTallyAmount, decodeXmlEntities } from "./xml.js";
 
 const esc = escapeXml;   // xml.ts (G1)
 
@@ -346,9 +346,12 @@ export function tallyDate(raw: string): string {
   return mm ? `${yy}-${mm}-${m[1].padStart(2, "0")}` : "";
 }
 
+/* Task 1-5 (6-Nov-2026): the text is decoded, once, by the shared reader. It was
+   returned still escaped, so "Profit & Loss A/c" came out as "Profit &amp; Loss
+   A/c" in every report name (found by the mirror rig's Trial Balance part). */
 const leaf = (slice: string, tag: string): string => {
   const m = new RegExp(`<${tag}(?:\\s[^>]*)?>([^<]*)</${tag}>`, "i").exec(slice);
-  return m ? m[1].trim() : "";
+  return m ? decodeXmlEntities(m[1]).trim() : "";
 };
 
 export type ReportRow = Record<string, string | number | null>;

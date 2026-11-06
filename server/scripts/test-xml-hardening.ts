@@ -23,7 +23,7 @@ import { buildVoucherImportXml, parseImportResponse } from "../src/services/vouc
 import { diffStored } from "../src/services/safePush.ts";
 import { buildCollection, tagOf } from "../src/services/tallyRequest.ts";
 import { buildCollectionXml, buildChangedVoucherXml } from "../src/services/xmlBuilder.ts";
-import { money } from "../src/services/tallyReports.ts";
+import { money, parseReport, REPORTS } from "../src/services/tallyReports.ts";
 import { parsePriceList } from "../src/services/tallyPriceList.ts";
 import { convertVouchers, convertLedgers, convertStockItems } from "../src/converters/convert.ts";
 import { tallyPost } from "../src/tally.ts";
@@ -277,6 +277,23 @@ section("FUZZ — malformed responses never throw (5,000 bodies)");
 }
 
 section("tallyPost over a real socket — UTF-16 reply, garbage reply");
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 1-5 (thread 7): a report's text fields are decoded once, so a name with an
+// ampersand reads "Profit & Loss A/c", not "Profit &amp; Loss A/c". Every caller
+// (today's report snapshots, the mirror rig) goes through parseReport.
+section("report parser decodes XML entities in names");
+{
+  const tb = REPORTS.find((r) => r.key === "trial-balance")!;
+  const nameTag = tb.fields.find((f) => f.kind === "text")!.tag;
+  const xml = `<${tb.startTag}><${nameTag}>Profit &amp; Loss A/c</${nameTag}></${tb.startTag}>`
+    + `<${tb.startTag}><${nameTag}>Loans &amp;amp; Advances &lt;x&gt; &#38; &quot;q&quot; &apos;a&apos;</${nameTag}></${tb.startTag}>`;
+  const rows = parseReport(tb, xml);
+  const asName = tb.fields.find((f) => f.kind === "text")!.as;
+  ok("an ampersand in a report name is decoded", rows[0]?.[asName] === "Profit & Loss A/c", String(rows[0]?.[asName]));
+  ok("decoded once: &amp;amp; stays &amp;, and the other references decode", rows[1]?.[asName] === `Loans &amp; Advances <x> & "q" 'a'`, String(rows[1]?.[asName]));
+  ok("every report still parses its own rows (no field lost to the decode)", REPORTS.every((r) => parseReport(r, `<${r.startTag}></${r.startTag}>`).length === 0));
+}
+
 void (async () => {
   const s = `<ENVELOPE><HEADER><VERSION>1</VERSION><STATUS>1</STATUS></HEADER><BODY><DATA><COLLECTION><LEDGER NAME="X"><NAME>অশোক &amp; Co</NAME></LEDGER></COLLECTION></DATA></BODY></ENVELOPE>`;
   let reply: Buffer = Buffer.alloc(0);
