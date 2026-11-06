@@ -406,7 +406,8 @@ export function eachDay(from: string, to: string): string[] {
 export interface MirrorTally {
   /** Tally's highest voucher AlterID now, the latest voucher date, the voucher count, the count per day,
    *  and every voucher's key, date and AlterID for the nightly check (A11). */
-  highest(): Promise<{ alterId: number; latestDate: string | null; count: number; byDay: Record<string, number>; vouchers?: DayCheckVoucher[] }>;
+  highest(): Promise<{ alterId: number; latestDate: string | null; count: number; byDay: Record<string, number>; vouchers?: DayCheckVoucher[];
+    /** Vouchers in the AlterID read whose date could not be read (thread 7 review 6): the latest date is then not known. */ undated?: number }>;
   /** Converted vouchers Tally returns for a one-day filter (the caller checks each is of that day). */
   vouchersOn(day: string): Promise<any[]>;
   /** Converted vouchers whose AlterID is above `mark` (any date). */
@@ -463,12 +464,13 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
     async highest() {
       const parsed = assertParsedCollection(await post(tallyUrl, buildChangedVoucherXml(ERP_MIRROR_MARK_DEF, company, 0), ERP_MIRROR_MARK_DEF.timeout, false), "the AlterID read");
       const list = convertVouchers(parsed).tallymessage;
-      let alterId = 0, latest: string | null = null;
+      let alterId = 0, latest: string | null = null, undated = 0;
       const byDay: Record<string, number> = {};
       const vouchers: DayCheckVoucher[] = [];
       for (const v of list) {
         if (Number(v.alterid) > alterId) alterId = Number(v.alterid);
         const d = isoOf(v.date);
+        if (!d) undated++;
         if (d) byDay[d] = (byDay[d] ?? 0) + 1;
         if (d && (!latest || d > latest)) latest = d;
         const a = String(v.alterid ?? "").trim();
@@ -478,7 +480,7 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
       /* Review 1-5 item 5: vouchers with no AlterID on any of them is a read
          that did not work (G7), not a mark of 0 to read everything above. */
       if (list.length > 0 && !(alterId > 0)) throw new Error(`refused: the AlterID read returned ${list.length} vouchers and no AlterID on any of them, so there is no mark; nothing is read or swapped`);
-      return { alterId, latestDate: latest, count: list.length, byDay, vouchers };
+      return { alterId, latestDate: latest, count: list.length, byDay, vouchers, undated };
     },
     async vouchersOn(day: string) {
       const parsed = assertParsedCollection(await post(tallyUrl, buildCollectionXml(ERP_MIRROR_VOUCHER_DEF, company, day, day), ERP_MIRROR_VOUCHER_DEF.timeout, false), `the read of ${day}`);
@@ -718,6 +720,8 @@ async function runMirror(opts: {
       const loaded = await tally.loadedPeriod();
       report.tallyReads++;
       let period = judgeLoadedPeriod(loaded, opts.today ?? indiaToday(), top.latestDate);
+      /* Thread 7 review 6: a voucher whose date cannot be read is not skipped in silence. The latest voucher date is then not known, so the figures are never taken as the year's. */
+      if (!period.unexpected && (top.undated ?? 0) > 0) period = { ...period, unexpected: true, why: `${top.undated} voucher(s) in the AlterID read have a date that could not be read, so the latest voucher date is not known` };
       const asOf = period.asOf;
       const [list, msL] = await timed(() => tally.ledgers());
       report.tallyReads++;

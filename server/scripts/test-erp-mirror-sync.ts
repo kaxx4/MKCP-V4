@@ -86,7 +86,7 @@ const LEDGERS = [ledger("L-1", "REAL LOOKING TRADERS"), ledger("L-2", "Cash", "5
 const FY_START = ledgerPeriod(indiaToday()).from;
 const FY_NOW = { from: FY_START.replace(/-/g, ""), to: `${Number(FY_START.slice(0, 4)) + 1}0331` };
 const FY_END = `${Number(FY_START.slice(0, 4)) + 1}-03-31`;
-function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failOn?: string; changed?: any[]; ledgers?: TallyLedger[]; vouchers?: DayCheckVoucher[]; period?: { from: string | null; to: string | null; lastVoucher?: string | null } | { from: string | null; to: string | null; lastVoucher?: string | null }[]; counted?: Record<string, number>; latestDate?: string | null; dropFirstTime?: string } = {}) {
+function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failOn?: string; changed?: any[]; ledgers?: TallyLedger[]; vouchers?: DayCheckVoucher[]; period?: { from: string | null; to: string | null; lastVoucher?: string | null } | { from: string | null; to: string | null; lastVoucher?: string | null }[]; counted?: Record<string, number>; latestDate?: string | null; dropFirstTime?: string; undated?: number } = {}) {
   let dropped = false;
   let periodRead = 0;
   const calls: string[] = [];
@@ -100,7 +100,7 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
     return fn();
   };
   const tally: MirrorTally = {
-    highest: () => wrap("highest", () => ({ alterId: opts.highest ?? 100, latestDate: opts.latestDate === undefined ? "2026-11-05" : opts.latestDate, count: 9, byDay: opts.counted ?? {}, vouchers: opts.vouchers ?? [{ k: "A", d: "2026-11-01", a: 90 }] })),
+    highest: () => wrap("highest", () => ({ alterId: opts.highest ?? 100, latestDate: opts.latestDate === undefined ? "2026-11-05" : opts.latestDate, count: 9, byDay: opts.counted ?? {}, undated: opts.undated, vouchers: opts.vouchers ?? [{ k: "A", d: "2026-11-01", a: 90 }] })),
     vouchersOn: (day) => wrap(`day ${day}`, () => byDay[day] ?? []),
     changedSince: (mark, upTo?: number) => wrap(`changed ${mark}${upTo === undefined ? "" : `..${upTo}`}`, () => (opts.changed ?? []).filter((v: any) => upTo === undefined ? (opts.changed!.length < 50 || Number(v.alterid) > mark) : (Number(v.alterid) > mark && Number(v.alterid) <= upTo))
       .filter((v: any) => { if (opts.dropFirstTime && v.guid === opts.dropFirstTime && !dropped) { dropped = true; return false; } return true; })),
@@ -220,6 +220,14 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   s = fakeStore({ mark: 130 }); t = fakeTally({}, { highest: 130 });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
   ok("Tally's highest equal to the mark: it reads above the mark, nothing new", t.calls.join(",") === "highest,changed 130,period,ledgers,period" && rep.state === "swapped");
+
+  H("A VOUCHER WITH A DATE THAT DOES NOT PARSE IN THE ALTERID READ (thread 7 review 6)");
+  s = fakeStore({ mark: 50 }); t = fakeTally({}, { highest: 130, changed: [voucher("C", "20261104", 125)], vouchers: [{ k: "C", d: "2026-11-04", a: 125 }], undated: 1 });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
+  ok("the period is flagged balance_period_unexpected, never judged on a latest date that skipped a voucher", rep.state === "swapped" && rep.ledgerPeriod?.unexpected === true && /date that could not be read/.test(rep.ledgerPeriod?.why ?? ""), JSON.stringify(rep.ledgerPeriod));
+  s = fakeStore({ mark: 50 }); t = fakeTally({}, { highest: 130, changed: [voucher("C", "20261104", 125)], vouchers: [{ k: "C", d: "2026-11-04", a: 125 }], undated: 0 });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
+  ok("with every date read, the period is judged as before", rep.ledgerPeriod?.unexpected === false, JSON.stringify(rep.ledgerPeriod));
 
   H("A BIG INCREMENTAL IN ALTERID RANGES (L3)");
   const ids = Array.from({ length: 450 }, (_, i) => 1001 + i * 2);   // 450 vouchers above the mark 1000, AlterIDs 1001 to 1899
@@ -499,6 +507,8 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ] } } } } })).highest();
   ok("the AlterID read keeps every voucher, even an unreadable one, for the database to refuse", conv.vouchers?.length === 2 && conv.vouchers[0].k === "g1" && conv.vouchers[0].d === "2026-11-01" && conv.vouchers[0].a === 11
     && conv.vouchers[1].k === "" && conv.vouchers[1].d === null && conv.vouchers[1].a === null, JSON.stringify(conv.vouchers));
+
+  ok("the real AlterID read counts the vouchers whose date it could not read (and leaves them out of the latest date)", conv.undated === 1 && conv.latestDate === "2026-11-01", JSON.stringify({ u: conv.undated, l: conv.latestDate }));
 
   H("WHAT RUNS NEXT (0119, A7 weekly full, A11 nightly)");
   const now = new Date("2026-11-06T20:00:00Z"), ago = (h: number) => new Date(now.getTime() - h * 3_600_000);
