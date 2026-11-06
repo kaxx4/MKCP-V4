@@ -56,7 +56,7 @@ import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/s
 import { practiceCompany, practiceGuid } from "../../src/services/tallyRole.js";
 import { safePush } from "../../src/services/safePush.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams } from "../../src/services/erpJobAgent.js";
-import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, ledgerPeriod, parseBalance, assertParsedCollection, indiaToday, judgeLoadedPeriod, tallyDateToIso, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
+import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, ledgerPeriod, parseBalance, assertParsedCollection, indiaToday, judgeLoadedPeriod, tallyDateToIso, incrementalRanges, INCREMENTAL_CHUNK, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
 import { buildCollectionXml } from "../../src/services/xmlBuilder.js";
 import { txt as tallyText, arr as tallyList } from "../../src/converters/convert.js";
 import { fetchReport, parseReport, REPORTS } from "../../src/services/tallyReports.js";
@@ -69,7 +69,7 @@ const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : null; };
 const OUT = arg("--out");
 const PART = arg("--part");
-if (PART !== "checks" && PART !== "tb" && PART !== "period") { console.error("say --part checks (everything but the Trial Balance), --part period (do the undated reads see a voucher dated after the loaded period?) or --part tb (the Trial Balance comparison only, run last)"); process.exit(2); }
+if (PART !== "checks" && PART !== "tb" && PART !== "period" && PART !== "ranges") { console.error("say --part checks (everything but the Trial Balance), --part period (do the undated reads see a voucher dated after the loaded period?) or --part tb (the Trial Balance comparison only, run last)"); process.exit(2); }
 const company = practiceCompany();
 if (!company) { console.error("MKCP_PRACTICE_COMPANY is not set"); process.exit(2); }
 if (!practiceGuid()) { console.error("MKCP_PRACTICE_COMPANY_GUID is not set: the rig will not read a company it cannot identify"); process.exit(2); }
@@ -345,11 +345,36 @@ function pickWindow(byDay: Record<string, number>) {
       `${p0.why ?? "expected"}; ${p2.why ?? "expected"} (ends ${p0.asOf}, ${p2.asOf})`);
   };
 
+  /* L3 (task 1-5): the incremental in AlterID ranges. Read-only: the 450
+     newest vouchers are read once as one "above the mark" request and once in
+     ranges of 200 (the last open-ended), and the two must hold the same
+     vouchers with the same AlterIDs. Nothing is written anywhere. */
+  const rangesProbe = async () => {
+    const top = await tally.highest();
+    const ids = (top.vouchers ?? []).map((v) => v.a).filter((a): a is number => typeof a === "number").sort((x, y) => x - y);
+    if (ids.length < 451) throw new Error(`the dummy holds ${ids.length} vouchers, fewer than the 451 this needs`);
+    const mark = ids[ids.length - 451];
+    const ranges = incrementalRanges(mark, top.alterId, ids, INCREMENTAL_CHUNK);
+    const t1 = Date.now();
+    const one = await tally.changedSince(mark);
+    const msOne = Date.now() - t1;
+    const parts: any[][] = [];
+    const t2 = Date.now();
+    for (const [i, r] of ranges.entries()) parts.push(await (i === ranges.length - 1 ? tally.changedSince(r.above) : tally.changedSince(r.above, r.upTo)));
+    const msParts = Date.now() - t2;
+    const key = (v: any) => `${String(v.guid).trim()}:${v.alterid}`;
+    const a = new Set(one.map(key)), b = new Set(parts.flat().map(key));
+    counts.ranges = { mark, highest: top.alterId, ranges: ranges.map((r) => ({ above: r.above, upTo: r.upTo, counted: r.counted })), perRange: parts.map((x) => x.length), one: one.length, msOne, msParts };
+    step("L3: the range reads hold exactly the vouchers of the single read above the mark, each range its counted size", a.size === 450 && b.size === a.size && [...a].every((k) => b.has(k))
+      && parts.every((x, i) => x.length >= (ranges[i].counted ?? 0)), `${one.length} in one read (${msOne} ms); ${parts.map((x) => x.length).join(" + ")} in ${ranges.length} ranges (${msParts} ms)`);
+  };
+
   console.log(`\n  ERP mirror checks on the dummy Tally (stamp ${stamp}, commit ${prov.commit.slice(0, 8)}, tree ${prov.tree.slice(0, 8)})\n`);
   step("the run uses committed code (no uncommitted change in the agent's src or scripts)", prov.dirtyFiles.length === 0, prov.dirtyFiles.join(", "));
   try {
     if (PART === "tb") { await tbProof(); return; }
     if (PART === "period") { await periodProbe(); return; }
+    if (PART === "ranges") { await rangesProbe(); return; }
     const top = await tally.highest();
     const win = pickWindow(top.byDay);
     if (!win) throw new Error("no short window of days with 20 to 200 vouchers and a day of 6 or more");

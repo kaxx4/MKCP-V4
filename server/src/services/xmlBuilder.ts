@@ -81,12 +81,16 @@ ${filterSystemBlock}
 export function buildChangedVoucherXml(
   def: CollectionDef,
   company: string,
-  sinceAlterId: number
+  sinceAlterId: number,
+  /** Rebuild task 1-5 (L3): an upper bound, inclusive, so a big incremental is read in AlterID ranges. Omitted: no upper bound, as before. */
+  upToAlterId?: number
 ): string {
   assertKnownType(def.tallyCollection);
   const colId = `MKCP_Changed_${def.tallyCollection}`;
   const fetchLines = def.fetch?.map(f => `<NATIVEMETHOD>${esc(f)}</NATIVEMETHOD>`).join("\n") ?? "";
   const since = tdlInt(sinceAlterId || 0);
+  /* Escaped exactly like the lower bound: an unescaped < or > in a filter returns zero rows, no error. */
+  const upper = upToAlterId === undefined ? "" : ` AND $AlterID &lt;= ${tdlInt(upToAlterId)}`;
   return `<ENVELOPE>
 <HEADER>
 <VERSION>1</VERSION>
@@ -107,7 +111,7 @@ export function buildChangedVoucherXml(
 ${fetchLines}
 <FILTER>MKCPAlterFilter</FILTER>
 </COLLECTION>
-<SYSTEM TYPE="Formulae" NAME="MKCPAlterFilter">$AlterID &gt; ${since}</SYSTEM>
+<SYSTEM TYPE="Formulae" NAME="MKCPAlterFilter">$AlterID &gt; ${since}${upper}</SYSTEM>
 </TDLMESSAGE>
 </TDL>
 </DESC>

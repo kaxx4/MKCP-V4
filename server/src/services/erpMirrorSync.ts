@@ -410,7 +410,7 @@ export interface MirrorTally {
   /** Converted vouchers Tally returns for a one-day filter (the caller checks each is of that day). */
   vouchersOn(day: string): Promise<any[]>;
   /** Converted vouchers whose AlterID is above `mark` (any date). */
-  changedSince(mark: number): Promise<any[]>;
+  changedSince(mark: number, upTo?: number): Promise<any[]>;
   /** Every ledger master with its closing balance for the loaded period (one request, no period: D-C.2). */
   ledgers(): Promise<TallyLedger[]>;
   /** The period Tally has loaded for the company (Company StartingFrom and EndingAt), D-C.2. */
@@ -484,8 +484,9 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
       const parsed = assertParsedCollection(await post(tallyUrl, buildCollectionXml(ERP_MIRROR_VOUCHER_DEF, company, day, day), ERP_MIRROR_VOUCHER_DEF.timeout, false), `the read of ${day}`);
       return convertVouchers(parsed).tallymessage;
     },
-    async changedSince(mark: number) {
-      const parsed = assertParsedCollection(await post(tallyUrl, buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, company, mark), ERP_MIRROR_VOUCHER_DEF.timeout, false), `the read above AlterID ${mark}`);
+    async changedSince(mark: number, upTo?: number) {
+      const what = upTo === undefined ? `the read above AlterID ${mark}` : `the read of AlterIDs ${mark + 1} to ${upTo}`;
+      const parsed = assertParsedCollection(await post(tallyUrl, buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, company, mark, upTo), ERP_MIRROR_VOUCHER_DEF.timeout, false), what);
       return convertVouchers(parsed).tallymessage;
     },
     async ledgers() {
@@ -544,6 +545,27 @@ export interface MirrorSyncReport {
 }
 
 const STAGE_BATCH = 500;
+
+/** L3 (task 1-5): vouchers per incremental request at most. The busiest dummy day (245 vouchers with their lines) read in one request in 79 s. */
+export const INCREMENTAL_CHUNK = 200;
+
+/**
+ * Pure (L3): the AlterID ranges (above, upTo] an incremental reads, each
+ * holding at most `size` of the vouchers the AlterID read saw above the mark,
+ * the last ending at Tally's highest. With no per-voucher list (an older
+ * reader) it is one range, as before. Each range also says how many vouchers
+ * the AlterID read counted in it, so a short reply can be refused.
+ */
+export function incrementalRanges(mark: number, highest: number, alterIds: readonly (number | null)[] | undefined, size = INCREMENTAL_CHUNK): { above: number; upTo: number; counted: number | null }[] {
+  if (!(highest > mark)) return [{ above: mark, upTo: highest, counted: alterIds ? 0 : null }];
+  if (!alterIds) return [{ above: mark, upTo: highest, counted: null }];
+  const ids = alterIds.filter((a): a is number => typeof a === "number" && a > mark && a <= highest).sort((x, y) => x - y);
+  const out: { above: number; upTo: number; counted: number | null }[] = [];
+  let above = mark;
+  for (let i = size; i < ids.length; i += size) { out.push({ above, upTo: ids[i - 1], counted: size }); above = ids[i - 1]; }
+  out.push({ above, upTo: highest, counted: ids.length - out.length * size });
+  return out;
+}
 
 /**
  * One run. Full: every day of the scope, one read per day. Incremental: one
@@ -644,10 +666,21 @@ async function runMirror(opts: {
       return report;
     } else {
       const from = run.mark ?? 0;
-      const [list, ms] = await timed(() => tally.changedSince(from));
-      report.tallyReads++;
-      take(list, `the read above AlterID ${from}`, null);
-      await store.step(run.run_id, `read every voucher above AlterID ${from}`, "ok", list.length, ms, null);
+      /* L3: read in AlterID ranges of at most INCREMENTAL_CHUNK vouchers, up to
+         the highest read just before; the last range is open-ended. A range read with fewer
+         vouchers than the AlterID read counted in it refuses the run, like a
+         short day read (D-1-5.37); more is fine. */
+      const ranges = incrementalRanges(from, top.alterId, top.vouchers?.map((v) => v.a));
+      for (const [i, r] of ranges.entries()) {
+        /* The last range has no upper bound (the request as before chunking), so a voucher edited again meanwhile is read, not missed. */
+        const last = i === ranges.length - 1;
+        const [list, ms] = await timed(() => last ? tally.changedSince(r.above) : tally.changedSince(r.above, r.upTo));
+        report.tallyReads++;
+        if (r.counted !== null && list.length < r.counted) throw new Error(`refused: the read of AlterIDs ${r.above + 1} to ${r.upTo} returned ${list.length} vouchers, but Tally's AlterID read just before counted ${r.counted} in that range; a short reply is not "fewer changes", so the run fails and nothing is swapped`);
+        take(list, last ? `the read above AlterID ${r.above}` : `the read of AlterIDs ${r.above + 1} to ${r.upTo}`, null);
+        await store.step(run.run_id, last ? `read every voucher above AlterID ${r.above}` : `read AlterIDs ${r.above + 1} to ${r.upTo}`, "ok", list.length, ms, null);
+        if (buffer.length >= STAGE_BATCH) await flush();
+      }
     }
     await flush();
     await store.step(run.run_id, "staged", "ok", report.staged, null, null);

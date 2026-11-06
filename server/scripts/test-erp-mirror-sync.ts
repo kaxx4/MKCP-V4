@@ -23,12 +23,12 @@ import { createHash } from "node:crypto";
 import {
   mirrorRowFrom, scrubName, scrubSaltFrom, voucherProblem, isAccountingType, eachDay, runMirrorSync, assertParsedCollection, tallyMirrorReads,
   parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_MARK_DEF,
-  indiaToday, ledgerPeriod, judgeLoadedPeriod, loadedPeriodFromParsed, tallyDateToIso, ERP_MIRROR_COMPANY_DEF,
+  indiaToday, ledgerPeriod, judgeLoadedPeriod, incrementalRanges, INCREMENTAL_CHUNK, ERP_MIRROR_VOUCHER_DEF, loadedPeriodFromParsed, tallyDateToIso, ERP_MIRROR_COMPANY_DEF,
   type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult, type MirrorLedgerRow, type TallyLedger, type DayCheckVoucher,
 } from "../src/services/erpMirrorSync.js";
 import { erpTestFence, ERP_TEST_RPCS } from "../src/services/supabaseClient.js";
 import { parseTallyAmount } from "../src/services/xml.js";
-import { buildCollectionXml } from "../src/services/xmlBuilder.js";
+import { buildCollectionXml, buildChangedVoucherXml } from "../src/services/xmlBuilder.js";
 import { installMock, uninstallMock } from "../src/services/tallyMock.js";
 
 let passed = 0, failed = 0;
@@ -101,7 +101,7 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   const tally: MirrorTally = {
     highest: () => wrap("highest", () => ({ alterId: opts.highest ?? 100, latestDate: opts.latestDate === undefined ? "2026-11-05" : opts.latestDate, count: 9, byDay: opts.counted ?? {}, vouchers: opts.vouchers ?? [{ k: "A", d: "2026-11-01", a: 90 }] })),
     vouchersOn: (day) => wrap(`day ${day}`, () => byDay[day] ?? []),
-    changedSince: (mark) => wrap(`changed ${mark}`, () => opts.changed ?? []),
+    changedSince: (mark, upTo?: number) => wrap(`changed ${mark}${upTo === undefined ? "" : `..${upTo}`}`, () => (opts.changed ?? []).filter((v: any) => upTo === undefined ? (opts.changed!.length < 50 || Number(v.alterid) > mark) : (Number(v.alterid) > mark && Number(v.alterid) <= upTo))),
     ledgers: (...a: unknown[]) => { asOf.push(String(a.length)); return wrap("ledgers", () => opts.ledgers ?? LEDGERS); },
     loadedPeriod: () => wrap("period", () => { const p = opts.period ?? FY_NOW; return Array.isArray(p) ? p[Math.min(periodRead++, p.length - 1)] : p; }),
   };
@@ -218,6 +218,27 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   s = fakeStore({ mark: 130 }); t = fakeTally({}, { highest: 130 });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
   ok("Tally's highest equal to the mark: it reads above the mark, nothing new", t.calls.join(",") === "highest,changed 130,period,ledgers,period" && rep.state === "swapped");
+
+  H("A BIG INCREMENTAL IN ALTERID RANGES (L3)");
+  const ids = Array.from({ length: 450 }, (_, i) => 1001 + i * 2);   // 450 vouchers above the mark 1000, AlterIDs 1001 to 1899
+  const rg = incrementalRanges(1000, 1900, [...ids, 900, null], 200);
+  ok("450 changed vouchers make 3 ranges of 200, 200 and 50, back to back, the last ending at Tally's highest",
+    JSON.stringify(rg.map((r) => r.counted)) === "[200,200,50]" && rg[0].above === 1000 && rg[0].upTo === ids[199] && rg[1].above === ids[199] && rg[1].upTo === ids[399] && rg[2].above === ids[399] && rg[2].upTo === 1900, JSON.stringify(rg));
+  ok("nothing above the mark is one range counting 0; no per-voucher list is one range counting nothing (as before)",
+    JSON.stringify(incrementalRanges(1000, 1000, [900])) === JSON.stringify([{ above: 1000, upTo: 1000, counted: 0 }]) && JSON.stringify(incrementalRanges(1000, 1900, undefined)) === JSON.stringify([{ above: 1000, upTo: 1900, counted: null }]));
+  ok("exactly 200 is one range", incrementalRanges(1000, 1900, ids.slice(0, 200), 200).length === 1 && INCREMENTAL_CHUNK === 200);
+  const big = ids.map((a, i) => voucher(`BIG-${i}`, "20261104", a));
+  s = fakeStore({ mark: 1000 }); t = fakeTally({}, { highest: 1900, changed: big, vouchers: ids.map((a, i) => ({ k: `BIG-${i}`, d: "2026-11-04", a })) });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
+  ok("the run reads the three ranges in order, the last open-ended, and stages all 450", rep.state === "swapped" && rep.read === 450
+    && t.calls.filter((x) => x.startsWith("changed")).join(",") === `changed 1000..${ids[199]},changed ${ids[199]}..${ids[399]},changed ${ids[399]}`, t.calls.filter((x) => x.startsWith("changed")).join(","));
+  ok("each range is its own step", s.steps.filter((x) => /^read (AlterIDs|every voucher above)/.test(x.step)).length === 3);
+  s = fakeStore({ mark: 1000 }); t = fakeTally({}, { highest: 1900, changed: big.filter((_, i) => i !== 250), vouchers: ids.map((a, i) => ({ k: `BIG-${i}`, d: "2026-11-04", a })) });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
+  ok("a range read with fewer vouchers than the AlterID read counted refuses the run; nothing is swapped", rep.state === "failed" && /returned 199 vouchers, but Tally's AlterID read just before counted 200/.test(rep.error ?? "") && !s.calls.includes("swap"), rep.error ?? "");
+  const xUp = buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, "ZZ PRACTICE CO", 1000, 1399), xOpen = buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, "ZZ PRACTICE CO", 1000);
+  ok("the range request escapes both bounds; without an upper bound the request is exactly as before chunking",
+    xUp.includes("$AlterID &gt; 1000 AND $AlterID &lt;= 1399</SYSTEM>") && !/<=|>=/.test(xUp.match(/<SYSTEM[^>]*>([^<]*)<\/SYSTEM>/)?.[1] ?? "<=") && xOpen.includes("$AlterID &gt; 1000</SYSTEM>") && !xOpen.includes(" AND "));
 
   H("TALLY'S HIGHEST BELOW THE MARK (review H1)");
   s = fakeStore({ mark: 150, swap: { state: "refused", reason: "needs_full_run", mark: 150, candidate: 130 } }); t = fakeTally({}, { highest: 130, changed: [voucher("D", "20261104", 131)] });
