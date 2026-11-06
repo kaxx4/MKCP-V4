@@ -41,7 +41,8 @@
  * Needs: sandbox role, local Tally with the practice company open, the Tally
  * slot, MKCP_ERP_TEST_QUEUE=on for this one process, this machine's key.
  *
- *   $env:MKCP_ERP_TEST_QUEUE='on'; npx tsx scripts/rigs/mirror-checks-dummy.ts --out <file.json>
+ *   $env:MKCP_ERP_TEST_QUEUE='on'; npx tsx scripts/rigs/mirror-checks-dummy.ts --part checks --out <file.json>
+ *   then, after the sweep and census: ... --part tb --out <file.json>
  */
 import "dotenv/config";
 import { spawnSync } from "node:child_process";
@@ -55,7 +56,7 @@ import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/s
 import { practiceCompany, practiceGuid } from "../../src/services/tallyRole.js";
 import { safePush } from "../../src/services/safePush.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams } from "../../src/services/erpJobAgent.js";
-import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, ledgerPeriod, parseBalance, assertParsedCollection, indiaToday, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
+import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, ledgerPeriod, parseBalance, assertParsedCollection, indiaToday, judgeLoadedPeriod, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
 import { buildCollectionXml } from "../../src/services/xmlBuilder.js";
 import { txt as tallyText, arr as tallyList } from "../../src/converters/convert.js";
 import { fetchReport, parseReport, REPORTS } from "../../src/services/tallyReports.js";
@@ -67,6 +68,8 @@ import type { VoucherPayload } from "../../src/types.js";
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : null; };
 const OUT = arg("--out");
+const PART = arg("--part");
+if (PART !== "checks" && PART !== "tb") { console.error("say --part checks (everything but the Trial Balance) or --part tb (the Trial Balance comparison only, run last)"); process.exit(2); }
 const company = practiceCompany();
 if (!company) { console.error("MKCP_PRACTICE_COMPANY is not set"); process.exit(2); }
 if (!practiceGuid()) { console.error("MKCP_PRACTICE_COMPANY_GUID is not set: the rig will not read a company it cannot identify"); process.exit(2); }
@@ -118,9 +121,82 @@ function pickWindow(byDay: Record<string, number>) {
   const t0 = Date.now();
   const pushedDays = new Set<string>();
 
+  /* Coordinator, 6-Nov-2026: the Trial Balance comparison runs last, on its
+     own (--part tb), after the sweep and the census. It writes nothing to the
+     database. Each report request has 120 s and no retry; a timeout stops the
+     part and nothing more is sent. */
+  const tbProof = async () => {
+    const top = await tally.highest();
+    const judged = judgeLoadedPeriod(await tally.loadedPeriod(), indiaToday());
+    const asOf: string | null = judged.asOf;
+    const readA = await tally.ledgers();
+    counts.loadedPeriod = { from: judged.from, to: judged.asOf, unexpected: judged.unexpected, why: judged.why, ledgers: readA.length, vouchers: top.count };
+    const groupDef = { name: "erpRigGroups", tallyCollection: "Group", metadataType: "Group", category: "master", fetch: ["Name", "Parent"], timeout: 120_000, parallel: false } as any;
+    const period = { from: judged.from ?? ledgerPeriod(asOf!).from, to: asOf! };
+    const gParsed = assertParsedCollection(await post(TALLY_URL, buildCollectionXml(groupDef, company!)), "the group read");
+    const gcol = gParsed?.ENVELOPE?.BODY?.DATA?.COLLECTION;
+    const parentOf = new Map<string, string>(tallyList(gcol?.GROUP ?? gcol?.["GROUP.LIST"]).map((g: any) => [(tallyText(g?.["@_NAME"]) || tallyText(g?.NAME)).trim(), tallyText(g?.PARENT).trim()]));
+    const primary = (g: string) => { let x = g; for (let i = 0; i < 50 && parentOf.get(x) && parentOf.get(x) !== "Primary"; i++) x = parentOf.get(x)!; return x; };
+    const sums = new Map<string, number>();
+    for (const l of readA) { const k = primary(l.parent); sums.set(k, Math.round(((sums.get(k) ?? 0) + (parseBalance(l.closingbalance) ?? 0)) * 100) / 100); }
+    const tb = await fetchReport(TALLY_URL, company!, REPORTS.find((r) => r.key === "trial-balance")!, period, 120_000);   // coordinator: 120 s, no retry
+    const tbNet = new Map<string, number>(tb.rows.map((r) => [String(r.name ?? "").trim(), Math.round(((Number(r.debit) || 0) + (Number(r.credit) || 0)) * 100) / 100]));
+    const groups = [...sums].filter(([, v]) => v !== 0);
+    const same = groups.filter(([g, v]) => tbNet.has(g) && Math.abs(tbNet.get(g)! - v) < 0.01).length;
+    const flipped = groups.filter(([g, v]) => tbNet.has(g) && Math.abs(tbNet.get(g)! + v) < 0.01).length;
+    const matched = Math.max(same, flipped), sign = same >= flipped ? "the sign as Tally keeps it" : "the opposite sign";
+    counts.balanceProof = { asOf, period, ledgersRead: readA.length, groupsRead: parentOf.size,
+      primaryGroupsWithBalance: groups.length, trialBalanceRows: tb.rows.length, matchedTrialBalance: matched, sign, unmatched: groups.length - matched };
+    step("D-C.2: the ledgers' closing balances summed per primary group match Tally's Trial Balance for the loaded period",
+      groups.length > 0 && matched === groups.length, `${matched} of ${groups.length} primary groups match (${sign}); the Trial Balance has ${tb.rows.length} rows`);
+
+    /* Review 1-5 item 7 (D-1-5.41): StartingFrom and EndingAt are the
+       company's year, but the undated ledger read may follow the period on
+       Tally's screen instead. So single ledgers are compared too, to the
+       paise, against Tally's own Trial Balance for the loaded start to
+       balance_as_of: the detailed Trial Balance (EXPLODEFLAG, a report, not a
+       ledger collection), and, for a primary group with only one ledger
+       holding a balance, that group's line in the plain Trial Balance. At
+       least three ledgers from three primary groups must be compared, and
+       every one compared must match. In memory only; counts in the output. */
+    const factor = same >= flipped ? 1 : -1;
+    const tbDetailXml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>Trial Balance</ID></HEADER>
+<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${escapeXml(company!)}</SVCURRENTCOMPANY><SVFROMDATE>${xmlTallyDate(period.from)}</SVFROMDATE><SVTODATE>${xmlTallyDate(period.to)}</SVTODATE><EXPLODEFLAG>Yes</EXPLODEFLAG></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
+    const tbDetailRaw = await post(TALLY_URL, tbDetailXml, 120_000);
+    if (/<LINEERROR>/i.test(tbDetailRaw)) throw new Error("the detailed Trial Balance came back with a Tally error");
+    const tbDetail = new Map<string, number>(parseReport(REPORTS.find((r) => r.key === "trial-balance")!, tbDetailRaw)
+      .map((r) => [String(r.name ?? "").trim(), Math.round(((Number(r.debit) || 0) + (Number(r.credit) || 0)) * 100) / 100]));
+    const ledgerFig = new Map<string, { group: string; fig: number }>();
+    for (const l of readA) if (!parentOf.has(l.name)) ledgerFig.set(l.name, { group: primary(l.parent), fig: parseBalance(l.closingbalance) ?? 0 });
+    const compared = new Map<string, { group: string; ok: boolean; via: string }>();
+    for (const [name, { group, fig }] of ledgerFig) {
+      if (fig !== 0 && tbDetail.has(name)) compared.set(name, { group, ok: Math.abs(factor * tbDetail.get(name)! - fig) < 0.005, via: "detailed" });
+    }
+    for (const [g] of groups) {
+      const holders = [...ledgerFig].filter(([, x]) => x.group === g && x.fig !== 0);
+      if (holders.length === 1 && !compared.has(holders[0][0]) && tbNet.has(g)) {
+        compared.set(holders[0][0], { group: g, ok: Math.abs(factor * tbNet.get(g)! - holders[0][1].fig) < 0.005, via: "only ledger of its group" });
+      }
+    }
+    const cmp = [...compared.values()];
+    const groupsCompared = new Set(cmp.map((x) => x.group)).size;
+    const today = indiaToday();
+    const vouchersAfterToday = Object.entries(top.byDay).filter(([d]) => d > today && d <= asOf!).reduce((s, [, n]) => s + n, 0);
+    counts.ledgerProof = { asOf, period, today, ledgersCompared: cmp.length, matched: cmp.filter((x) => x.ok).length, differ: cmp.filter((x) => !x.ok).length,
+      primaryGroupsCompared: groupsCompared, viaDetailed: cmp.filter((x) => x.via === "detailed").length, viaOnlyLedger: cmp.filter((x) => x.via !== "detailed").length,
+      detailedTrialBalanceRows: tbDetail.size, vouchersAfterTodayUpToAsOf: vouchersAfterToday,
+      tellsYearEndFromToday: asOf! > today && vouchersAfterToday > 0 };
+    step("review 1-5 item 7: single ledgers' closing figures from three or more primary groups equal Tally's own Trial Balance for the loaded start to balance_as_of, to the paise",
+      cmp.length >= 3 && groupsCompared >= 3 && cmp.every((x) => x.ok),
+      `${cmp.filter((x) => x.ok).length} of ${cmp.length} ledgers match across ${groupsCompared} primary groups (${cmp.filter((x) => x.via === "detailed").length} from the detailed Trial Balance); `
+        + (asOf! > today ? (vouchersAfterToday > 0 ? `${vouchersAfterToday} vouchers fall after today and up to ${asOf}, so a match means the year end, not the screen's date` : `no voucher falls after today and up to ${asOf}, so this cannot tell the year end from today`) : `as of ${asOf}, today ${today}`));
+  };
+
   console.log(`\n  ERP mirror checks on the dummy Tally (stamp ${stamp}, commit ${prov.commit.slice(0, 8)}, tree ${prov.tree.slice(0, 8)})\n`);
   step("the run uses committed code (no uncommitted change in the agent's src or scripts)", prov.dirtyFiles.length === 0, prov.dirtyFiles.join(", "));
   try {
+    if (PART === "tb") { await tbProof(); return; }
     const top = await tally.highest();
     const win = pickWindow(top.byDay);
     if (!win) throw new Error("no short window of days with 20 to 200 vouchers and a day of 6 or more");
@@ -152,72 +228,13 @@ function pickWindow(byDay: Record<string, number>) {
       !!asOf && asOf === full.ledgerPeriod?.to && (leds ?? []).every((l: any) => l.balance_as_of === asOf && l.row?.balance_period_unexpected === full.ledgerPeriod?.unexpected) && empties.every((l: any) => Number(l.closing_balance) === 0),
       `as of ${asOf}, loaded from ${full.ledgerPeriod?.from}, ${full.ledgerPeriod?.unexpected ? `flagged balance_period_unexpected: ${full.ledgerPeriod?.why}` : "the year to date"}; ${empties.length} empty balances stored as ${[...new Set(empties.map((l: any) => Number(l.closing_balance)))].join(",") || "none"}`);
 
-    // D-C.2: the same figures twice (no period asked), and the same figures as Tally's Trial Balance for the loaded period (in memory, counts only)
+    // D-C.2: the same figures twice (no period asked). The Trial Balance comparison is --part tb, run last.
     const readA = await tally.ledgers(), readB = await tally.ledgers();
     const figs = (rs: typeof readA) => new Map(rs.map((l) => [l.guid, parseBalance(l.closingbalance) ?? 0]));
     const fa = figs(readA), fb = figs(readB);
     const sameTwice = fa.size === fb.size && [...fa].every(([g, v]) => fb.get(g) === v);
-    const groupDef = { name: "erpRigGroups", tallyCollection: "Group", metadataType: "Group", category: "master", fetch: ["Name", "Parent"], timeout: 120_000, parallel: false } as any;
-    const period = { from: full.ledgerPeriod?.from ?? ledgerPeriod(asOf!).from, to: asOf! };
-    const gParsed = assertParsedCollection(await post(TALLY_URL, buildCollectionXml(groupDef, company!)), "the group read");
-    const gcol = gParsed?.ENVELOPE?.BODY?.DATA?.COLLECTION;
-    const parentOf = new Map<string, string>(tallyList(gcol?.GROUP ?? gcol?.["GROUP.LIST"]).map((g: any) => [(tallyText(g?.["@_NAME"]) || tallyText(g?.NAME)).trim(), tallyText(g?.PARENT).trim()]));
-    const primary = (g: string) => { let x = g; for (let i = 0; i < 50 && parentOf.get(x) && parentOf.get(x) !== "Primary"; i++) x = parentOf.get(x)!; return x; };
-    const sums = new Map<string, number>();
-    for (const l of readA) { const k = primary(l.parent); sums.set(k, Math.round(((sums.get(k) ?? 0) + (parseBalance(l.closingbalance) ?? 0)) * 100) / 100); }
-    const tb = await fetchReport(TALLY_URL, company!, REPORTS.find((r) => r.key === "trial-balance")!, period);
-    const tbNet = new Map<string, number>(tb.rows.map((r) => [String(r.name ?? "").trim(), Math.round(((Number(r.debit) || 0) + (Number(r.credit) || 0)) * 100) / 100]));
-    const groups = [...sums].filter(([, v]) => v !== 0);
-    const same = groups.filter(([g, v]) => tbNet.has(g) && Math.abs(tbNet.get(g)! - v) < 0.01).length;
-    const flipped = groups.filter(([g, v]) => tbNet.has(g) && Math.abs(tbNet.get(g)! + v) < 0.01).length;
-    const matched = Math.max(same, flipped), sign = same >= flipped ? "the sign as Tally keeps it" : "the opposite sign";
-    counts.balanceProof = { asOf, period, ledgersReadA: readA.length, ledgersReadB: readB.length, sameTwice, groupsRead: parentOf.size,
-      primaryGroupsWithBalance: groups.length, trialBalanceRows: tb.rows.length, matchedTrialBalance: matched, sign, unmatched: groups.length - matched };
+    counts.balanceTwice = { asOf, ledgersReadA: readA.length, ledgersReadB: readB.length, sameTwice };
     step("D-C.2: two ledger reads with no period give the same figures", sameTwice && readA.length === full.ledgers, `${readA.length} and ${readB.length} ledgers as of ${asOf}`);
-    step("D-C.2: the ledgers' closing balances summed per primary group match Tally's Trial Balance for the loaded period",
-      groups.length > 0 && matched === groups.length, `${matched} of ${groups.length} primary groups match (${sign}); the Trial Balance has ${tb.rows.length} rows`);
-
-    /* Review 1-5 item 7 (D-1-5.41): StartingFrom and EndingAt are the
-       company's year, but the undated ledger read may follow the period on
-       Tally's screen instead. So single ledgers are compared too, to the
-       paise, against Tally's own Trial Balance for the loaded start to
-       balance_as_of: the detailed Trial Balance (EXPLODEFLAG, a report, not a
-       ledger collection), and, for a primary group with only one ledger
-       holding a balance, that group's line in the plain Trial Balance. At
-       least three ledgers from three primary groups must be compared, and
-       every one compared must match. In memory only; counts in the output. */
-    const factor = same >= flipped ? 1 : -1;
-    const tbDetailXml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>Trial Balance</ID></HEADER>
-<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-<SVCURRENTCOMPANY>${escapeXml(company!)}</SVCURRENTCOMPANY><SVFROMDATE>${xmlTallyDate(period.from)}</SVFROMDATE><SVTODATE>${xmlTallyDate(period.to)}</SVTODATE><EXPLODEFLAG>Yes</EXPLODEFLAG></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
-    const tbDetailRaw = await post(TALLY_URL, tbDetailXml, 180_000);
-    if (/<LINEERROR>/i.test(tbDetailRaw)) throw new Error("the detailed Trial Balance came back with a Tally error");
-    const tbDetail = new Map<string, number>(parseReport(REPORTS.find((r) => r.key === "trial-balance")!, tbDetailRaw)
-      .map((r) => [String(r.name ?? "").trim(), Math.round(((Number(r.debit) || 0) + (Number(r.credit) || 0)) * 100) / 100]));
-    const ledgerFig = new Map<string, { group: string; fig: number }>();
-    for (const l of readA) if (!parentOf.has(l.name)) ledgerFig.set(l.name, { group: primary(l.parent), fig: parseBalance(l.closingbalance) ?? 0 });
-    const compared = new Map<string, { group: string; ok: boolean; via: string }>();
-    for (const [name, { group, fig }] of ledgerFig) {
-      if (fig !== 0 && tbDetail.has(name)) compared.set(name, { group, ok: Math.abs(factor * tbDetail.get(name)! - fig) < 0.005, via: "detailed" });
-    }
-    for (const [g] of groups) {
-      const holders = [...ledgerFig].filter(([, x]) => x.group === g && x.fig !== 0);
-      if (holders.length === 1 && !compared.has(holders[0][0]) && tbNet.has(g)) {
-        compared.set(holders[0][0], { group: g, ok: Math.abs(factor * tbNet.get(g)! - holders[0][1].fig) < 0.005, via: "only ledger of its group" });
-      }
-    }
-    const cmp = [...compared.values()];
-    const groupsCompared = new Set(cmp.map((x) => x.group)).size;
-    const today = indiaToday();
-    const vouchersAfterToday = Object.entries(top.byDay).filter(([d]) => d > today && d <= asOf!).reduce((s, [, n]) => s + n, 0);
-    counts.ledgerProof = { asOf, period, today, ledgersCompared: cmp.length, matched: cmp.filter((x) => x.ok).length, differ: cmp.filter((x) => !x.ok).length,
-      primaryGroupsCompared: groupsCompared, viaDetailed: cmp.filter((x) => x.via === "detailed").length, viaOnlyLedger: cmp.filter((x) => x.via !== "detailed").length,
-      detailedTrialBalanceRows: tbDetail.size, vouchersAfterTodayUpToAsOf: vouchersAfterToday,
-      tellsYearEndFromToday: asOf! > today && vouchersAfterToday > 0 };
-    step("review 1-5 item 7: single ledgers' closing figures from three or more primary groups equal Tally's own Trial Balance for the loaded start to balance_as_of, to the paise",
-      cmp.length >= 3 && groupsCompared >= 3 && cmp.every((x) => x.ok),
-      `${cmp.filter((x) => x.ok).length} of ${cmp.length} ledgers match across ${groupsCompared} primary groups (${cmp.filter((x) => x.via === "detailed").length} from the detailed Trial Balance); `
-        + (asOf! > today ? (vouchersAfterToday > 0 ? `${vouchersAfterToday} vouchers fall after today and up to ${asOf}, so a match means the year end, not the screen's date` : `no voucher falls after today and up to ${asOf}, so this cannot tell the year end from today`) : `as of ${asOf}, today ${today}`));
 
     // 2. the nightly check right after
     const dc0 = runs.check0 = await runDayCheck({ store, tally });
@@ -305,7 +322,7 @@ function pickWindow(byDay: Record<string, number>) {
       `${ce?.message ?? JSON.stringify(cleaned)}; left ${JSON.stringify(left)}, jobs ${jobsLeft}`);
     const brief = (r: any) => r && ("swap" in r ? { run_id: r.run_id, kind: r.kind, state: r.state, read: r.read, ledgers: r.ledgers, tallyReads: r.tallyReads, swap: r.swap ? { ...r.swap, changed_keys: undefined, pruned_keys: undefined } : null, error: r.error }
       : { state: r.state, vouchers: r.vouchers, tallyHighest: r.tallyHighest, result: r.result ? { ...r.result, days: r.result.days } : null, error: r.error });
-    const report = { rig: "mirror-checks-dummy", stamp, companyKey, provenance: prov, minutes: Math.round((Date.now() - t0) / 6000) / 10, counts, steps,
+    const report = { rig: "mirror-checks-dummy", part: PART, stamp, companyKey, provenance: prov, minutes: Math.round((Date.now() - t0) / 6000) / 10, counts, steps,
       runs: Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, brief(r)])), passed: steps.filter((s) => s.ok).length, failed: steps.filter((s) => !s.ok).length };
     if (OUT) { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify(report, null, 2)); }
     console.log(`\n  ${report.passed} passed, ${report.failed} failed (${report.minutes} min)`);
