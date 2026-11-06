@@ -18,6 +18,8 @@
     "!dist/icon.png",
     "public/electron.js",
     "public/preload.js",
+    "public/autoUpdate.js",
+    "public/crashPolicy.js",
     "public/favicon.svg",
     "public/icon.png",
     "public/package.json",
@@ -30,10 +32,12 @@
   ],
   extraResources: [
     {
-      // See electron-builder.json5's matching entry for why ".env" is here.
+      // No ".env" (rebuild task 1-5): it carried the live service-role key into
+      // the test installer. As in electron-builder.json5, the installed app reads
+      // <userData>/.env, provisioned per machine.
       from: "server",
       to: "server",
-      filter: ["dist/**/*", "package.json", "node_modules/**/*", ".env"],
+      filter: ["dist/**/*", "package.json", "node_modules/**/*"],
     },
   ],
   extraMetadata: {
