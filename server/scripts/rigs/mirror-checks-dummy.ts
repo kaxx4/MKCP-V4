@@ -147,10 +147,23 @@ function pickWindow(byDay: Record<string, number>) {
     const primary = (g: string) => { let x = g; for (let i = 0; i < 50 && parentOf.get(x) && !isTop(parentOf.get(x)!); i++) x = parentOf.get(x)!; return x; };
     const lineOf = (l: { name: string; parent: string }) => isTop(l.parent) ? l.name : parentOf.has(l.parent) ? primary(l.parent) : "(unresolved parent)";
     const r2 = (n: number) => Math.round(n * 100) / 100;
+    /* Found on the dummy, 6-Nov-2026 (tb2): the report parser leaves XML
+       entities in names ("Loans &amp; Advances (Asset)"), so those lines never
+       matched by name. The rig decodes them; the shared parser is not changed
+       here (it feeds today's report snapshots). */
+    const unent = (x: string) => x.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))).replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").trim();
+    /* Found on the dummy, 6-Nov-2026 (tb2): the Trial Balance shows Profit &
+       Loss A/c at its opening balance (9,574,442.66 = that ledger's opening, to
+       the paise); this year's result is already in the income and expense
+       lines. So that one line is compared with the ledger's opening. */
+    const PNL = "Profit & Loss A/c";
+    const figureFor = (l: { name: string; parent: string; closingbalance: string; openingbalance: string }) =>
+      isTop(l.parent) && l.name === PNL ? (parseBalance(l.openingbalance) ?? 0) : (parseBalance(l.closingbalance) ?? 0);
     const sums = new Map<string, number>(), ledgersPer = new Map<string, number>(), openingPer = new Map<string, number>();
     for (const l of readA) {
       const k = lineOf(l);
-      sums.set(k, r2((sums.get(k) ?? 0) + (parseBalance(l.closingbalance) ?? 0)));
+      sums.set(k, r2((sums.get(k) ?? 0) + figureFor(l)));
       ledgersPer.set(k, (ledgersPer.get(k) ?? 0) + 1);
       openingPer.set(k, r2((openingPer.get(k) ?? 0) + (parseBalance(l.openingbalance) ?? 0)));
     }
@@ -162,7 +175,7 @@ function pickWindow(byDay: Record<string, number>) {
       for (let i = 0; i < 50 && x && !isTop(x); i++) { rolled.set(x, r2((rolled.get(x) ?? 0) + (parseBalance(l.closingbalance) ?? 0))); x = parentOf.get(x) ?? ""; }
     }
     const tb = await fetchReport(TALLY_URL, company!, REPORTS.find((r) => r.key === "trial-balance")!, period, 120_000);   // coordinator: 120 s, no retry
-    const tbNet = new Map<string, number>(tb.rows.map((r) => [String(r.name ?? "").trim(), r2((Number(r.debit) || 0) + (Number(r.credit) || 0))]));
+    const tbNet = new Map<string, number>(tb.rows.map((r) => [unent(String(r.name ?? "")), r2((Number(r.debit) || 0) + (Number(r.credit) || 0))]));
     const groups = [...sums].filter(([, v]) => v !== 0);
     const same = groups.filter(([g, v]) => tbNet.has(g) && Math.abs(tbNet.get(g)! - v) < 0.01).length;
     const flipped = groups.filter(([g, v]) => tbNet.has(g) && Math.abs(tbNet.get(g)! + v) < 0.01).length;
@@ -189,8 +202,9 @@ function pickWindow(byDay: Record<string, number>) {
 <SVCURRENTCOMPANY>${escapeXml(company!)}</SVCURRENTCOMPANY><SVFROMDATE>${xmlTallyDate(period.from)}</SVFROMDATE><SVTODATE>${xmlTallyDate(period.to)}</SVTODATE><EXPLODEFLAG>Yes</EXPLODEFLAG></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
     const tbDetailRaw = await post(TALLY_URL, tbDetailXml, 120_000);
     if (/<LINEERROR>/i.test(tbDetailRaw)) throw new Error("the detailed Trial Balance came back with a Tally error");
-    const tbDetail = new Map<string, number>(parseReport(REPORTS.find((r) => r.key === "trial-balance")!, tbDetailRaw)
-      .map((r) => [String(r.name ?? "").trim(), Math.round(((Number(r.debit) || 0) + (Number(r.credit) || 0)) * 100) / 100]));
+    const tbDetailRows = parseReport(REPORTS.find((r) => r.key === "trial-balance")!, tbDetailRaw)
+      .map((r) => ({ name: unent(String(r.name ?? "")), fig: Math.round(((Number(r.debit) || 0) + (Number(r.credit) || 0)) * 100) / 100 }));
+    const tbDetail = new Map<string, number>(tbDetailRows.map((r) => [r.name, r.fig]));
     /* D-M.13: every line that differs, ours or Tally's, with both figures.
        A name is printed only when it is one of Tally's own standard names
        (the 28 reserved groups and Tally's fixed report lines); any other
@@ -217,17 +231,27 @@ function pickWindow(byDay: Record<string, number>) {
         .map((k) => ({ line: safeName(k.s), ours: k.ours, tally: k.tally === undefined ? null : r2(signF * k.tally), difference: k.tally === undefined ? null : r2(signF * k.tally - k.ours),
           ledgersOurs: readA.filter((l) => { let x = l.parent; for (let i = 0; i < 50 && x && !isTop(x); i++) { if (x === k.s) return true; x = parentOf.get(x) ?? ""; } return false; }).length }));
       const directLedgers = readA.filter((l) => l.parent === g);
+      /* The detailed Trial Balance in its own order: the rows after this line up to the next line of the plain one are its parts. */
+      const at = tbDetailRows.findIndex((r) => r.name === g);
+      const parts: { line: string; tally: number; ours: number | null }[] = [];
+      for (let i = at + 1; at >= 0 && i < tbDetailRows.length && !tbNet.has(tbDetailRows[i].name); i++) {
+        const r = tbDetailRows[i];
+        const led = readA.find((l) => l.name === r.name && !parentOf.has(l.name));
+        parts.push({ line: safeName(r.name), tally: r2(signF * r.fig), ours: parentOf.has(r.name) ? (rolled.get(r.name) ?? 0) : led ? (parseBalance(led.closingbalance) ?? 0) : null });
+      }
       const directDiff = directLedgers.filter((l) => tbDetail.has(l.name) && !isOk(parseBalance(l.closingbalance) ?? 0, tbDetail.get(l.name))).length;
       differing.push({ line: safeName(g), ours, tally: theirs === undefined ? null : r2(signF * theirs), difference: theirs === undefined ? null : r2(signF * theirs - ours),
         ledgers: ledgersPer.get(g) ?? 0, openingOfThoseLedgers: openingPer.get(g) ?? 0, subGroups: subs.length, ledgersDirectlyUnder: directLedgers.length,
-        directLedgersDiffering: directDiff, subGroupsDiffering: kids });
+        directLedgersDiffering: directDiff, subGroupsDiffering: kids,
+        detailedPartsNotOurs: parts.filter((x) => x.ours === null), detailedPartsDiffering: parts.filter((x) => x.ours !== null && Math.abs(x.tally - x.ours) >= 0.01),
+        detailedPartsSum: r2(parts.reduce((t, x) => t + x.tally, 0)) });
     }
     const tbOnly = [...tbNet].filter(([n, v]) => v !== 0 && !sums.has(n)).map(([n, v]) => ({ line: safeName(n), tally: r2(signF * v) }));
     counts.groupDifferences = { differing, trialBalanceLinesWithNoLedgerOfOurs: tbOnly };
     for (const d of differing) console.log(`    differs: ${JSON.stringify(d)}`);
     for (const d of tbOnly) console.log(`    only in the Trial Balance: ${JSON.stringify(d)}`);
     const ledgerFig = new Map<string, { group: string; fig: number }>();
-    for (const l of readA) if (!parentOf.has(l.name)) ledgerFig.set(l.name, { group: lineOf(l), fig: parseBalance(l.closingbalance) ?? 0 });
+    for (const l of readA) if (!parentOf.has(l.name)) ledgerFig.set(l.name, { group: lineOf(l), fig: figureFor(l) });
     const compared = new Map<string, { group: string; ok: boolean; via: string }>();
     for (const [name, { group, fig }] of ledgerFig) {
       if (fig !== 0 && tbDetail.has(name)) compared.set(name, { group, ok: Math.abs(factor * tbDetail.get(name)! - fig) < 0.005, via: "detailed" });
