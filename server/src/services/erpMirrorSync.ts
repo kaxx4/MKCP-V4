@@ -73,6 +73,12 @@
  *   is written after every voucher of that read passed its checks (H1).
  * - lastFullRun is the planner's weekly clock: the last full run that was not
  *   a re-pull (M4).
+ * - An Owner can accept a refused big drop (migration 0121, per run). The
+ *   floor refusal stays the default and the agent never decides: acceptedRuns
+ *   is the database's list, swapAccepted passes the run id only (no floor, no
+ *   mark; the database uses the run's own recorded AlterID read), and the
+ *   database checks the acceptance again (6 hours, no other swap since, the
+ *   staged read unchanged). applyAcceptedDrops runs first in planMirrorWork.
  */
 import { createHmac } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -445,7 +451,14 @@ export interface MirrorStore {
   checkDays(tallyHighest: number, vouchers: DayCheckVoucher[]): Promise<Record<string, any>>;
   /** The last swapped full run that was not a re-pull, the planner's weekly clock (0120 M4). */
   lastFullRun(): Promise<{ run_id: string; finished_at: string } | null>;
+  /** Runs this machine staged that were refused for a big drop and that an Owner has since accepted (0121). The list is the database's, never this agent's guess. */
+  acceptedRuns(): Promise<AcceptedRun[]>;
+  /** Swap one accepted run. The database uses the run's own recorded AlterID read as the mark and passes no floor: this call cannot lower one. */
+  swapAccepted(run: string): Promise<SwapResult>;
 }
+
+/** One Owner acceptance waiting to be applied (migration 0121). */
+export interface AcceptedRun { acceptance: string; run_id: string; accepted_at?: string; expires_at?: string }
 
 /** Throws unless the parsed reply is a collection (an error envelope is never "empty"). */
 export function assertParsedCollection(parsed: any, what: string): any {
@@ -523,6 +536,14 @@ export function supabaseMirrorStore(c: SupabaseClient, machine: string, key: str
     repullStart: async () => (await call("erp_sync_repull_start", { p_company_key: companyKey, p_is_test: isTest })) ?? null,
     checkDays: async (tallyHighest, vouchers) => call("erp_sync_check_days", { p_company_key: companyKey, p_is_test: isTest, p_tally_highest: tallyHighest, p_vouchers: vouchers }),
     lastFullRun: async () => (await call("erp_sync_last_full_run", { p_company_key: companyKey, p_is_test: isTest })) ?? null,
+    acceptedRuns: async () => {
+      const data = await call("erp_sync_accepted_runs", { p_company_key: companyKey, p_is_test: isTest });
+      /* An answer that is not a list is a fault, never "nothing accepted" (G7). */
+      if (!Array.isArray(data)) throw new Error("erp_sync_accepted_runs: the answer is not a list, so nobody can say what was accepted");
+      return data as AcceptedRun[];
+    },
+    /* The mark argument is required by the function but ignored for an accepted run: the database takes the run's own AlterID read. */
+    swapAccepted: async (run) => call("erp_sync_swap", { p_run: run, p_mark_candidate: 0 }),
   };
 }
 
@@ -787,18 +808,51 @@ export async function runDayCheck(opts: { store: MirrorStore; tally: MirrorTally
   }
 }
 
-export type MirrorWork = "full" | "incremental" | "check" | "repull";
+/** What an Owner-accepted drop did when the agent applied it (task 1-5, migration 0121). */
+export interface AcceptedDropReport { run_id: string; acceptance: string; state: "swapped" | "refused" | "failed"; reason: string | null; error: string | null }
+
+/**
+ * Apply the big drops an Owner has accepted, one run at a time. The agent does
+ * not decide anything here: the database lists the accepted runs, and its swap
+ * checks the acceptance again (not older than 6 hours, no other swap since, the
+ * staged read unchanged) and uses the run's own recorded AlterID read as the
+ * mark. A run that is refused again, or that throws, is reported and the next
+ * is still tried; nothing is hidden and nothing is retried here.
+ */
+export async function applyAcceptedDrops(opts: { store: MirrorStore; log?: (line: string) => void }): Promise<AcceptedDropReport[]> {
+  const log = opts.log ?? ((l: string) => console.log(`[erpMirror] ${l}`));
+  const list = await opts.store.acceptedRuns();
+  const out: AcceptedDropReport[] = [];
+  for (const a of list) {
+    try {
+      const r = await opts.store.swapAccepted(a.run_id);
+      const state = r.state === "swapped" ? "swapped" : "refused";
+      out.push({ run_id: a.run_id, acceptance: a.acceptance, state, reason: state === "swapped" ? null : String(r.reason ?? "refused"), error: null });
+      log(`accepted drop of run ${a.run_id}: ${state}${state === "refused" ? ` (${String(r.reason ?? "")}: ${String(r.why ?? "")})` : ""}`);
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      out.push({ run_id: a.run_id, acceptance: a.acceptance, state: "failed", reason: null, error });
+      log(`accepted drop of run ${a.run_id}: failed, ${error}`);
+    }
+  }
+  return out;
+}
+
+export type MirrorWork = "apply_accepted" | "full" | "incremental" | "check" | "repull";
 
 /**
  * Pure: what the mirror runs next, in order (A7 weekly full, A11 nightly
  * check). A full run when there is no mark, when one is due, or when the last
  * full one swapped 7 or more days ago; otherwise an incremental. Then the
  * nightly check when none ran for 20 hours, then any queued re-pulls. Nothing
- * in index.ts runs it until go-live.
+ * in index.ts runs it until go-live. When an Owner has accepted a refused big
+ * drop (acceptedDrops > 0) that comes first, before any run that would swap.
  */
-export function planMirrorWork(s: { now: Date; hasMark: boolean; fullDue: boolean; lastFullAt: Date | null; lastCheckAt: Date | null; queuedRepulls: number }): MirrorWork[] {
+export function planMirrorWork(s: { now: Date; hasMark: boolean; fullDue: boolean; lastFullAt: Date | null; lastCheckAt: Date | null; queuedRepulls: number; acceptedDrops?: number }): MirrorWork[] {
   const hours = (d: Date | null) => (d ? (s.now.getTime() - d.getTime()) / 3_600_000 : Infinity);
   const out: MirrorWork[] = [];
+  /* An Owner's accepted drop goes first: it expires after 6 hours and is void if any other swap runs before it. */
+  if ((s.acceptedDrops ?? 0) > 0) out.push("apply_accepted");
   out.push(!s.hasMark || s.fullDue || hours(s.lastFullAt) >= 7 * 24 ? "full" : "incremental");
   if (hours(s.lastCheckAt) >= 20) out.push("check");
   if (s.queuedRepulls > 0) out.push("repull");

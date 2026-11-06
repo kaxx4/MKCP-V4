@@ -22,9 +22,9 @@ import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import {
   mirrorRowFrom, scrubName, scrubSaltFrom, voucherProblem, isAccountingType, eachDay, runMirrorSync, assertParsedCollection, tallyMirrorReads,
-  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_MARK_DEF,
+  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, applyAcceptedDrops, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_MARK_DEF,
   indiaToday, ledgerPeriod, judgeLoadedPeriod, incrementalRanges, INCREMENTAL_CHUNK, ERP_MIRROR_VOUCHER_DEF, loadedPeriodFromParsed, tallyDateToIso, ERP_MIRROR_COMPANY_DEF,
-  type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult, type MirrorLedgerRow, type TallyLedger, type DayCheckVoucher,
+  type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult, type MirrorLedgerRow, type TallyLedger, type DayCheckVoucher, type AcceptedRun,
 } from "../src/services/erpMirrorSync.js";
 import { erpTestFence, ERP_TEST_RPCS } from "../src/services/supabaseClient.js";
 import { parseTallyAmount } from "../src/services/xml.js";
@@ -51,7 +51,7 @@ const voucher = (guid: string, date: string, alterid: number, extra: Record<stri
   ...extra,
 });
 
-function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boolean; salt?: string | null; repull?: string | null; check?: Record<string, any> } = {}) {
+function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boolean; salt?: string | null; repull?: string | null; check?: Record<string, any>; accepted?: AcceptedRun[] | unknown; acceptedSwap?: (run: string) => SwapResult | Error } = {}) {
   const calls: string[] = [];
   const staged: MirrorRow[] = [];
   const ledgers: MirrorLedgerRow[] = [];
@@ -74,6 +74,17 @@ function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boo
     async repullStart() { calls.push("repull start"); return opts.repull ? { run_id: "R3", scope_from: opts.repull, scope_to: opts.repull, mark: 90, repull_id: "Q1" } : null; },
     async checkDays(highest, vouchers) { calls.push("check"); checked = { highest, vouchers }; return opts.check ?? { state: "ok", days_differing: 0, repulls_queued: 0 }; },
     async lastFullRun() { calls.push("last full"); return { run_id: "R0", finished_at: "2026-11-01T00:00:00Z" }; },
+    async acceptedRuns() {
+      calls.push("accepted list");
+      if (opts.accepted !== undefined && !Array.isArray(opts.accepted)) throw new Error("erp_sync_accepted_runs: the answer is not a list, so nobody can say what was accepted");
+      return (opts.accepted as AcceptedRun[] | undefined) ?? [];
+    },
+    async swapAccepted(run) {
+      calls.push(`swap accepted ${run}`);
+      const r = opts.acceptedSwap ? opts.acceptedSwap(run) : ({ state: "swapped" } as SwapResult);
+      if (r instanceof Error) throw r;
+      return r;
+    },
   };
   return { store, calls, staged, steps, ledgers, get swapArgs() { return swapArgs; }, get failed() { return failed; }, get checked() { return checked; } };
 }
@@ -518,11 +529,35 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("otherwise an incremental; the check after 20 hours; queued re-pulls last", planMirrorWork({ now, hasMark: true, fullDue: false, lastFullAt: ago(30), lastCheckAt: ago(21), queuedRepulls: 2 }).join(",") === "incremental,check,repull"
     && planMirrorWork({ now, hasMark: true, fullDue: false, lastFullAt: ago(30), lastCheckAt: ago(3), queuedRepulls: 0 }).join(",") === "incremental");
 
+  ok("an Owner's accepted drop goes first, before any run that would swap", planMirrorWork({ now, hasMark: true, fullDue: false, lastFullAt: ago(30), lastCheckAt: ago(21), queuedRepulls: 1, acceptedDrops: 1 }).join(",") === "apply_accepted,incremental,check,repull"
+    && planMirrorWork({ now, hasMark: false, fullDue: false, lastFullAt: null, lastCheckAt: ago(1), queuedRepulls: 0, acceptedDrops: 2 }).join(",") === "apply_accepted,full"
+    && planMirrorWork({ now, hasMark: true, fullDue: false, lastFullAt: ago(30), lastCheckAt: ago(3), queuedRepulls: 0, acceptedDrops: 0 }).join(",") === "incremental");
+
+  H("AN OWNER'S ACCEPTED DROP (task 1-5, 0121)");
+  {
+    const acc = (n: number): AcceptedRun => ({ acceptance: `A${n}`, run_id: `RUN${n}` });
+    const f1 = fakeStore({ accepted: [acc(1), acc(2)] });
+    const r1 = await applyAcceptedDrops({ store: f1.store, log: () => {} });
+    ok("each accepted run is swapped by its own id, in the database's order, and nothing else is called", f1.calls.join("|") === "accepted list|swap accepted RUN1|swap accepted RUN2" && r1.length === 2 && r1.every((x) => x.state === "swapped"), f1.calls.join("|"));
+    ok("the agent passes no floor and reads no Tally: its swap call is only the run id", f1.swapArgs === null && !f1.calls.some((c) => c === "swap" || c.startsWith("start") || c.startsWith("stage")));
+    const f2 = fakeStore({ accepted: [] });
+    ok("nothing accepted: nothing is swapped", (await applyAcceptedDrops({ store: f2.store, log: () => {} })).length === 0 && f2.calls.join("|") === "accepted list");
+    const f3 = fakeStore({ accepted: [acc(1), acc(2), acc(3)], acceptedSwap: (run) => run === "RUN1" ? { state: "refused", reason: "acceptance_void", why: "it expired" } : run === "RUN2" ? new Error("erp_sync_swap: network down") : { state: "swapped" } });
+    const logs: string[] = [];
+    const r3 = await applyAcceptedDrops({ store: f3.store, log: (l) => logs.push(l) });
+    ok("a refused or failed one is reported with its reason and the next is still tried", r3.map((x) => x.state).join(",") === "refused,failed,swapped" && r3[0].reason === "acceptance_void" && /network down/.test(r3[1].error ?? "") && f3.calls.length === 4, JSON.stringify(r3.map((x) => x.state)));
+    ok("the log says what happened to each run", logs.length === 3 && /RUN1.*refused.*it expired/.test(logs[0]) && /RUN2.*failed/.test(logs[1]) && /RUN3.*swapped/.test(logs[2]), logs.join(" / "));
+    const f4 = fakeStore({ accepted: { error: "x" } });
+    let threw = "";
+    try { await applyAcceptedDrops({ store: f4.store, log: () => {} }); } catch (e) { threw = (e as Error).message; }
+    ok("an answer that is not a list is a fault, never 'nothing accepted'", /not a list/.test(threw) && !f4.calls.some((c) => c.startsWith("swap")), threw);
+  }
+
   H("THE FENCE");
   const P = "https://abcdefghijklmnopqrst.supabase.co";
   const f = (path: string, m = "POST") => erpTestFence(`${P}${path}`, m, P);
   for (const fn of ["erp_sync_run_start", "erp_sync_run_step", "erp_sync_stage", "erp_sync_swap", "erp_sync_run_fail", "erp_sync_test_cleanup",
-                    "erp_sync_stage_ledgers", "erp_sync_check_days", "erp_sync_repull_start", "erp_job_mirror_check", "erp_sync_last_full_run"]) {
+                    "erp_sync_stage_ledgers", "erp_sync_check_days", "erp_sync_repull_start", "erp_job_mirror_check", "erp_sync_last_full_run", "erp_sync_accepted_runs"]) {
     ok(`the sandbox may call ${fn}`, ERP_TEST_RPCS.includes(fn) && f(`/rest/v1/rpc/${fn}`) === null);
   }
   ok("the helper functions are not on the list", ["erp_sync_actor", "erp_sync_my_run", "erp_sync_jobs_of", "erp_sync_jobs_for", "erp_sync_reconcile_jobs"].every((fn) => f(`/rest/v1/rpc/${fn}`) !== null));
