@@ -86,7 +86,8 @@ const LEDGERS = [ledger("L-1", "REAL LOOKING TRADERS"), ledger("L-2", "Cash", "5
 const FY_START = ledgerPeriod(indiaToday()).from;
 const FY_NOW = { from: FY_START.replace(/-/g, ""), to: `${Number(FY_START.slice(0, 4)) + 1}0331` };
 const FY_END = `${Number(FY_START.slice(0, 4)) + 1}-03-31`;
-function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failOn?: string; changed?: any[]; ledgers?: TallyLedger[]; vouchers?: DayCheckVoucher[]; period?: { from: string | null; to: string | null; lastVoucher?: string | null } | { from: string | null; to: string | null; lastVoucher?: string | null }[]; counted?: Record<string, number>; latestDate?: string | null } = {}) {
+function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failOn?: string; changed?: any[]; ledgers?: TallyLedger[]; vouchers?: DayCheckVoucher[]; period?: { from: string | null; to: string | null; lastVoucher?: string | null } | { from: string | null; to: string | null; lastVoucher?: string | null }[]; counted?: Record<string, number>; latestDate?: string | null; dropFirstTime?: string } = {}) {
+  let dropped = false;
   let periodRead = 0;
   const calls: string[] = [];
   const asOf: string[] = [];
@@ -101,7 +102,8 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   const tally: MirrorTally = {
     highest: () => wrap("highest", () => ({ alterId: opts.highest ?? 100, latestDate: opts.latestDate === undefined ? "2026-11-05" : opts.latestDate, count: 9, byDay: opts.counted ?? {}, vouchers: opts.vouchers ?? [{ k: "A", d: "2026-11-01", a: 90 }] })),
     vouchersOn: (day) => wrap(`day ${day}`, () => byDay[day] ?? []),
-    changedSince: (mark, upTo?: number) => wrap(`changed ${mark}${upTo === undefined ? "" : `..${upTo}`}`, () => (opts.changed ?? []).filter((v: any) => upTo === undefined ? (opts.changed!.length < 50 || Number(v.alterid) > mark) : (Number(v.alterid) > mark && Number(v.alterid) <= upTo))),
+    changedSince: (mark, upTo?: number) => wrap(`changed ${mark}${upTo === undefined ? "" : `..${upTo}`}`, () => (opts.changed ?? []).filter((v: any) => upTo === undefined ? (opts.changed!.length < 50 || Number(v.alterid) > mark) : (Number(v.alterid) > mark && Number(v.alterid) <= upTo))
+      .filter((v: any) => { if (opts.dropFirstTime && v.guid === opts.dropFirstTime && !dropped) { dropped = true; return false; } return true; })),
     ledgers: (...a: unknown[]) => { asOf.push(String(a.length)); return wrap("ledgers", () => opts.ledgers ?? LEDGERS); },
     loadedPeriod: () => wrap("period", () => { const p = opts.period ?? FY_NOW; return Array.isArray(p) ? p[Math.min(periodRead++, p.length - 1)] : p; }),
   };
@@ -211,7 +213,7 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("an incremental voucher with no GUID fails the run too", rep.state === "failed" && rep.noGuid === 1 && !s.calls.includes("swap"));
 
   H("AN INCREMENTAL RUN");
-  s = fakeStore({ mark: 50 }); t = fakeTally({}, { highest: 130, changed: [voucher("C", "20261104", 125)] });
+  s = fakeStore({ mark: 50 }); t = fakeTally({}, { highest: 130, changed: [voucher("C", "20261104", 125)], vouchers: [{ k: "C", d: "2026-11-04", a: 125 }] });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
   ok("it reads above the run's mark, after reading Tally's highest, then the ledgers", t.calls.join(",") === "highest,changed 50,period,ledgers,period");
   ok("the swap gets Tally's highest (130)", s.swapArgs?.mark === 130 && rep.state === "swapped" && s.staged.length === 1);
@@ -235,7 +237,21 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("each range is its own step", s.steps.filter((x) => /^read (AlterIDs|every voucher above)/.test(x.step)).length === 3);
   s = fakeStore({ mark: 1000 }); t = fakeTally({}, { highest: 1900, changed: big.filter((_, i) => i !== 250), vouchers: ids.map((a, i) => ({ k: `BIG-${i}`, d: "2026-11-04", a })) });
   rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
-  ok("a range read with fewer vouchers than the AlterID read counted refuses the run; nothing is swapped", rep.state === "failed" && /returned 199 vouchers, but Tally's AlterID read just before counted 200/.test(rep.error ?? "") && !s.calls.includes("swap"), rep.error ?? "");
+  ok("a range read that lacks a voucher the AlterID read listed refuses the run, after one second read; nothing is swapped", rep.state === "failed" && /1 of the 450 vouchers.*did not come back, even on a second read/.test(rep.error ?? "") && !s.calls.includes("swap")
+    && t.calls.filter((x) => x.startsWith("changed")).length === 4, rep.error ?? "");
+  /* Thread 7 review 4: a count that matches proves nothing. One voucher swapped for another with a different key has the same count. */
+  s = fakeStore({ mark: 1000 }); t = fakeTally({}, { highest: 1900, changed: big.map((v, i) => (i === 250 ? voucher("OTHER-KEY", "20261104", ids[250]) : v)), vouchers: ids.map((a, i) => ({ k: `BIG-${i}`, d: "2026-11-04", a })) });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
+  ok("200 vouchers come back for a range that listed 200, but one is a different voucher: refused (the old count check passed this)", rep.state === "failed" && /1 of the 450 vouchers/.test(rep.error ?? "") && !s.calls.includes("swap"), rep.error ?? "");
+  s = fakeStore({ mark: 1000 }); t = fakeTally({}, { highest: 1900, changed: big, dropFirstTime: "BIG-250", vouchers: ids.map((a, i) => ({ k: `BIG-${i}`, d: "2026-11-04", a })) });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
+  ok("a range that comes back one short is read once more, and then passes", rep.state === "swapped" && s.staged.length === 450 && t.calls.filter((x) => x.startsWith("changed")).length === 4 && s.steps.some((x) => /again \(a voucher the AlterID read listed was missing\)/.test(x.step)), rep.error ?? "");
+  s = fakeStore({ mark: 1000 }); t = fakeTally({}, { highest: 1900, changed: [...big, voucher("NEW-1", "20261104", 1950)], vouchers: ids.map((a, i) => ({ k: `BIG-${i}`, d: "2026-11-04", a })) });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
+  ok("extras above the AlterID read (a voucher made since) are fine", rep.state === "swapped" && s.staged.length === 451, rep.error ?? "");
+  s = fakeStore({ mark: 1000 }); t = fakeTally({}, { highest: 1900, changed: big.map((v, i) => (i === 100 ? voucher("BIG-100", "20261104", 1960) : v)), vouchers: ids.map((a, i) => ({ k: `BIG-${i}`, d: "2026-11-04", a })) });
+  rep = await runMirrorSync({ store: s.store, tally: t.tally, kind: "incremental" });
+  ok("a voucher edited meanwhile (a higher AlterID, now in a later range) is found there, not refused", rep.state === "swapped", rep.error ?? "");
   const xUp = buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, "ZZ PRACTICE CO", 1000, 1399), xOpen = buildChangedVoucherXml(ERP_MIRROR_VOUCHER_DEF, "ZZ PRACTICE CO", 1000);
   ok("the range request escapes both bounds; without an upper bound the request is exactly as before chunking",
     xUp.includes("$AlterID &gt; 1000 AND $AlterID &lt;= 1399</SYSTEM>") && !/<=|>=/.test(xUp.match(/<SYSTEM[^>]*>([^<]*)<\/SYSTEM>/)?.[1] ?? "<=") && xOpen.includes("$AlterID &gt; 1000</SYSTEM>") && !xOpen.includes(" AND "));

@@ -671,15 +671,42 @@ async function runMirror(opts: {
          vouchers than the AlterID read counted in it refuses the run, like a
          short day read (D-1-5.37); more is fine. */
       const ranges = incrementalRanges(from, top.alterId, top.vouchers?.map((v) => v.a));
+      /* Thread 7 review 4: the check is on the SET of vouchers, not the count. Every voucher
+         (GUID and AlterID) the AlterID read listed above the mark must come back with that
+         AlterID or a higher one (a voucher edited meanwhile has a higher one, and may sit in a
+         later range); extras are fine. A range that is short is read once more before the run
+         fails, because a short reply is not "fewer changes". */
+      const wanted = (top.vouchers ?? []).filter((v) => v.k && v.a !== null && v.a > from && v.a <= top.alterId);
+      const got = new Map<string, number>();
+      const note = (list: any[]) => { for (const v of list) { const g = String(v?.guid ?? "").trim(), a = Number(v?.alterid); if (g && Number.isFinite(a) && a > (got.get(g) ?? -1)) got.set(g, a); } };
+      const missingIn = (r: { above: number; upTo: number }) => wanted.filter((v) => v.a! > r.above && v.a! <= r.upTo && (got.get(v.k) ?? -1) < v.a!);
       for (const [i, r] of ranges.entries()) {
         /* The last range has no upper bound (the request as before chunking), so a voucher edited again meanwhile is read, not missed. */
         const last = i === ranges.length - 1;
         const [list, ms] = await timed(() => last ? tally.changedSince(r.above) : tally.changedSince(r.above, r.upTo));
         report.tallyReads++;
-        if (r.counted !== null && list.length < r.counted) throw new Error(`refused: the read of AlterIDs ${r.above + 1} to ${r.upTo} returned ${list.length} vouchers, but Tally's AlterID read just before counted ${r.counted} in that range; a short reply is not "fewer changes", so the run fails and nothing is swapped`);
+        note(list);
         take(list, last ? `the read above AlterID ${r.above}` : `the read of AlterIDs ${r.above + 1} to ${r.upTo}`, null);
         await store.step(run.run_id, last ? `read every voucher above AlterID ${r.above}` : `read AlterIDs ${r.above + 1} to ${r.upTo}`, "ok", list.length, ms, null);
         if (buffer.length >= STAGE_BATCH) await flush();
+      }
+      /* Judged after all ranges, so a voucher that moved up into a later range is found there. */
+      for (const [i, r] of ranges.entries()) {
+        if (!missingIn(r).length) continue;
+        const last = i === ranges.length - 1;
+        const [again, msA] = await timed(() => last ? tally.changedSince(r.above) : tally.changedSince(r.above, r.upTo));
+        report.tallyReads++;
+        /* Only what the first read did not bring (or brought with a lower AlterID) is kept again. */
+        const fresh = again.filter((v) => (got.get(String(v?.guid ?? "").trim()) ?? -1) < Number(v?.alterid));
+        note(again);
+        take(fresh, `the second read of AlterIDs ${r.above + 1} to ${r.upTo}`, null);
+        await store.step(run.run_id, `read AlterIDs ${r.above + 1} to ${r.upTo} again (a voucher the AlterID read listed was missing)`, "info", again.length, msA, { still_missing: missingIn(r).length });
+        if (buffer.length >= STAGE_BATCH) await flush();
+      }
+      const lost = ranges.flatMap((r) => missingIn(r));
+      if (lost.length) {
+        const sample = lost.slice(0, 5).map((v) => `AlterID ${v.a}`).join(", ");
+        throw new Error(`refused: ${lost.length} of the ${wanted.length} vouchers Tally's AlterID read listed above the mark did not come back, even on a second read (${sample}); a short reply is not "fewer changes", so the run fails and nothing is swapped`);
       }
     }
     await flush();
