@@ -248,6 +248,17 @@ function pickWindow(byDay: Record<string, number>) {
     }
     const tbOnly = [...tbNet].filter(([n, v]) => v !== 0 && !sums.has(n)).map(([n, v]) => ({ line: safeName(n), tally: r2(signF * v) }));
     counts.groupDifferences = { differing, trialBalanceLinesWithNoLedgerOfOurs: tbOnly };
+    /* Found on the dummy, 6-Nov-2026 (tb3): the one group still differing,
+       Current Assets, differs by exactly its Opening Stock line (23,089,054.05),
+       a figure Tally takes from the stock items, not from any ledger; every
+       other part of the group matched. A group differing only by that line is
+       explained, and named so in the output; anything else still fails. */
+    const explained = differing.filter((d: any) => d.tally !== null && d.detailedPartsDiffering.length === 0 && d.subGroupsDiffering.length === 0
+      && d.detailedPartsNotOurs.length > 0 && d.detailedPartsNotOurs.every((x: any) => x.line === "Opening Stock")
+      && Math.abs(d.ours + d.detailedPartsNotOurs.reduce((t: number, x: any) => t + x.tally, 0) - d.tally) < 0.01);
+    step("D-M.13: every primary group matches the Trial Balance, or differs only by its Opening Stock line (stock, not a ledger balance)",
+      groups.length > 0 && matched + explained.length === groups.length && tbOnly.length === 0,
+      `${matched} match, ${explained.length} differ only by Opening Stock (${explained.map((d: any) => d.line).join(", ") || "none"}), ${groups.length - matched - explained.length} unexplained, ${tbOnly.length} Trial Balance lines with no ledger of ours`);
     for (const d of differing) console.log(`    differs: ${JSON.stringify(d)}`);
     for (const d of tbOnly) console.log(`    only in the Trial Balance: ${JSON.stringify(d)}`);
     const ledgerFig = new Map<string, { group: string; fig: number }>();
