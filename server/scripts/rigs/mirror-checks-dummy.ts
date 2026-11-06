@@ -485,6 +485,7 @@ function pickWindow(byDay: Record<string, number>) {
   } finally {
     for (const d of pushedDays) { const r = sweep(d); step(`swept ZZTEST vouchers from ${d}`, r.status === 0, `sweep exit ${r.status}`); }
     const { data: cleaned, error: ce } = await c.rpc("erp_sync_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });
+    await c.rpc("erp_tally_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });   // the swap store's test rows (migration 0130)
     const ids = made.map((m) => m.job);
     const d1 = ids.length ? await c.from("erp_jobs").delete().in("id", ids).eq("is_test", true) : { error: null };
     const d2 = made.length ? await c.from("erp_proposal_requests").delete().in("request_id", made.map((m) => m.request)).eq("is_test", true) : { error: null };

@@ -112,10 +112,13 @@ export const ERP_TEST_RPCS: readonly string[] = [
   /* Task 1-6 (migration 0124): the latency rig. Emit and clean up ZZTEST signals (the database checks the
      sandbox key and the ZZTEST run name), and the read-only catch-up a screen calls. */
   "erp_signal_test_emit", "erp_signal_test_cleanup", "erp_signal_catch_up",
+  /* Go-live swap, option C (migration 0129): copy the tally-shaped blocks out of the mirror rows. The database checks the
+     machine key, the ZZTEST company key and test rows, and refuses a test row that carries a personal field. */
+  "erp_tally_derive", "erp_tally_test_cleanup",
 ];
 /** ERP mirror tables the sandbox may read (GET only, only is_test rows), task 1-5. */
 export const ERP_TEST_READ_TABLES: readonly string[] = [
-  "erp_sync_runs", "erp_sync_run_steps", "erp_sync_marks", "erp_mirror_stage", "erp_mirror_rows",
+  "erp_sync_runs", "erp_sync_run_steps", "erp_sync_marks", "erp_mirror_stage", "erp_mirror_rows", "erp_tally_rows",
   "erp_mirror_ledger_stage", "erp_mirror_ledgers", "erp_record_links", "erp_record_flags", "erp_sync_day_checks", "erp_sync_repulls",
   "erp_change_signals",
 ];

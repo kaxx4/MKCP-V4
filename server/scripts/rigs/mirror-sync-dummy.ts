@@ -224,6 +224,7 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
       step("swept from the dummy after an early stop", sweep.status === 0, `sweep exit ${sweep.status}`);
     }
     const { data: cleaned, error: ce } = await c.rpc("erp_sync_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });
+    await c.rpc("erp_tally_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });   // the swap store's test rows (migration 0130)
     const remaining = ce ? -1 : await mirrorCount().catch(() => -1);
     const { count: runsLeft } = await c.from("erp_sync_runs").select("id", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
     step("this run's test rows are deleted (mirror rows, mark, runs, steps, staging)", !ce && remaining === 0 && runsLeft === 0, ce?.message ?? JSON.stringify(cleaned));

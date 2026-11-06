@@ -28,6 +28,7 @@ import {
 } from "../src/services/erpMirrorSync.js";
 import { erpTestFence, ERP_TEST_RPCS } from "../src/services/supabaseClient.js";
 import { parseTallyAmount } from "../src/services/xml.js";
+import { TRANSACTION_COLLECTIONS } from "../src/config/collections.js";
 import { buildCollectionXml, buildChangedVoucherXml } from "../src/services/xmlBuilder.js";
 import { installMock, uninstallMock } from "../src/services/tallyMock.js";
 
@@ -420,7 +421,9 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("0120 M2: today is India's date, never the UTC date", indiaToday(new Date("2026-11-06T20:00:00Z")) === "2026-11-07" && indiaToday(new Date("2026-11-06T10:00:00Z")) === "2026-11-06");
   ok("a day read is filtered to that one day inside Tally", sent[1].includes("&gt;= 20261103") && sent[1].includes("&lt;= 20261103"));
   ok("the incremental read is filtered above the mark inside Tally", /\$AlterID &gt; 42</.test(sent[2]));
-  ok("the voucher reads ask for the ledger lines but not the inventory or e-way blocks", sent[1].includes(">AllLedgerEntries<") && !sent[1].includes("Inventory") && !sent[1].includes("EWayBill"));
+  ok("the voucher reads ask for the whole tally_vouchers field list (go-live swap, D-1-5.58): ledger lines, inventory lines, the e-way bill block, IRN, buyer and GST fields, each by name", ["AllLedgerEntries", "AllInventoryEntries", "EWayBillDetails", "IRN", "IRNQRCode", "PartyMailingName", "PartyGSTIN", "PlaceOfSupply", "ConsigneePinCode", "EnteredBy"].every((f) => sent[1].includes(`>${f}<`)));
+  ok("...and none of them is a wildcard, which would crash Tally", !/\*/.test((ERP_MIRROR_VOUCHER_DEF.fetch ?? []).join("")));
+  ok("...the mirror's list holds every field today's own voucher read asks for, so the two cannot drift", (() => { const mine = new Set(ERP_MIRROR_VOUCHER_DEF.fetch); return (TRANSACTION_COLLECTIONS.find((c) => c.name === "vouchers")?.fetch ?? []).every((f) => mine.has(f)); })());
   const errReads = tallyMirrorReads("http://localhost:9000", "ZZ PRACTICE CO", async () => ({ ENVELOPE: { HEADER: { STATUS: 0 }, BODY: {} } }));
   let threw = false; try { await errReads.vouchersOn("2026-11-03"); } catch { threw = true; }
   ok("an error envelope from Tally throws, it is never an empty day", threw);

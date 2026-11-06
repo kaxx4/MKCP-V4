@@ -83,6 +83,61 @@ function normalizeTallyEntries(raw: any, innerKey: string): any[] {
   return [];
 }
 
+/**
+ * The ledger and inventory child rows of ONE mapped voucher: the rows of tally_voucher_ledger_entries and
+ * tally_voucher_inventory_entries. One definition, used by the sync below and by the ERP mirror's tally block
+ * (erpTallyShape.ts, go-live swap D-1-5.58), so the two can never disagree about a column.
+ */
+export function voucherChildRows(v: any, company: string): { ledger: any[]; inventory: any[] } {
+  const ledger: any[] = [];
+  const inventory: any[] = [];
+  // Ledger entries
+  if (v.ledger_entries && Array.isArray(v.ledger_entries)) {
+    for (const le of v.ledger_entries) {
+      ledger.push({
+        voucher_guid: v.guid,
+        company,
+        ledger_name: le.ledgername,
+        is_debit: le.isdeemedpositive === true,
+        is_party_ledger: le.ispartyledger === true,
+        amount: le.amount,
+        bill_allocations: le.billallocations || null,
+        synced_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  // Inventory entries
+  if (v.inventory_entries && Array.isArray(v.inventory_entries)) {
+    for (const ie of v.inventory_entries) {
+      inventory.push({
+        voucher_guid: v.guid,
+        company,
+        stock_item_name: ie.stockitemname,
+        actual_qty: ie.actualqty,
+        billed_qty: ie.billedqty,
+        rate: ie.rate,
+        amount: ie.amount,
+        is_deemed_positive: ie.isdeemedpositive === true,
+        /* The location key (Phase 2.4). Tally carries godown and batch on
+           BATCHALLOCATIONS.LIST for every inventory line; this table had
+           nowhere to put them, so the mirror could not say where anything
+           physically was. `?? null` rather than `?? ""` — a row whose
+           allocation Tally did not send must read as "no key", not as an
+           empty godown name. */
+        godown_name: ie.godownname || null,
+        batch_name: ie.batchname || null,
+        destination_godown_name: ie.destinationgodownname || null,
+        batch_allocations: ie.batchallocations?.length ? ie.batchallocations : null,
+        is_split_across_godowns: ie.issplitacrossgodowns === true,
+        synced_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  return { ledger, inventory };
+}
+
 export class SupabaseSync {
   private client: SupabaseClient | null;
 
@@ -367,49 +422,9 @@ export class SupabaseSync {
         if (partialGuids.has(String(v.guid))) continue;
         rewriteGuids.add(v.guid);
 
-        // Ledger entries
-        if (v.ledger_entries && Array.isArray(v.ledger_entries)) {
-          for (const le of v.ledger_entries) {
-            ledgerEntries.push({
-              voucher_guid: v.guid,
-              company,
-              ledger_name: le.ledgername,
-              is_debit: le.isdeemedpositive === true,
-              is_party_ledger: le.ispartyledger === true,
-              amount: le.amount,
-              bill_allocations: le.billallocations || null,
-              synced_at: new Date().toISOString(),
-            });
-          }
-        }
-
-        // Inventory entries
-        if (v.inventory_entries && Array.isArray(v.inventory_entries)) {
-          for (const ie of v.inventory_entries) {
-            inventoryEntries.push({
-              voucher_guid: v.guid,
-              company,
-              stock_item_name: ie.stockitemname,
-              actual_qty: ie.actualqty,
-              billed_qty: ie.billedqty,
-              rate: ie.rate,
-              amount: ie.amount,
-              is_deemed_positive: ie.isdeemedpositive === true,
-              /* The location key (Phase 2.4). Tally carries godown and batch on
-                 BATCHALLOCATIONS.LIST for every inventory line; this table had
-                 nowhere to put them, so the mirror could not say where anything
-                 physically was. `?? null` rather than `?? ""` — a row whose
-                 allocation Tally did not send must read as "no key", not as an
-                 empty godown name. */
-              godown_name: ie.godownname || null,
-              batch_name: ie.batchname || null,
-              destination_godown_name: ie.destinationgodownname || null,
-              batch_allocations: ie.batchallocations?.length ? ie.batchallocations : null,
-              is_split_across_godowns: ie.issplitacrossgodowns === true,
-              synced_at: new Date().toISOString(),
-            });
-          }
-        }
+        const kids = voucherChildRows(v, company);
+        for (const r of kids.ledger) ledgerEntries.push(r);
+        for (const r of kids.inventory) inventoryEntries.push(r);
       }
 
       // Replace child rows for these vouchers atomically per chunk (#112): one RPC

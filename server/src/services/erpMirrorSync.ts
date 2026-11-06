@@ -87,6 +87,8 @@ import { tallyPost } from "../tally.js";
 import { buildCollectionXml, buildChangedVoucherXml } from "./xmlBuilder.js";
 import { convertVouchers, txt as tallyText, arr as tallyList } from "../converters/convert.js";
 import { parseTallyAmount } from "./xml.js";
+import { TRANSACTION_COLLECTIONS } from "../config/collections.js";
+import { tallyBlobFrom } from "./erpTallyShape.js";
 
 /** The ERP mirror's voucher fields for this half: header, identity, ledger lines (for totals). */
 export const ERP_MIRROR_VOUCHER_DEF: CollectionDef = {
@@ -101,6 +103,10 @@ export const ERP_MIRROR_VOUCHER_DEF: CollectionDef = {
        AllLedgerEntries (BANKALLOCATIONS.LIST), so they need no field of their own. */
     "EnteredBy",
     "AllLedgerEntries",
+    /* The go-live swap (D-1-5.58): every field today's voucher read asks for, so the mirror row can carry the
+       whole tally_vouchers row (inventory lines, e-way bill, IRN, buyer, GST fields). The list is today's own,
+       taken from collections.ts so it cannot drift; names Tally already answers, no `*` (buildCollection refuses one). */
+    ...(TRANSACTION_COLLECTIONS.find((c) => c.name === "vouchers")?.fetch ?? []).filter((f) => f !== "AllLedgerEntries"),
   ],
   timeout: 180_000,
   parallel: false,
@@ -292,7 +298,7 @@ export function voucherExtraFields(v: any, opts: { scrub: false } | { scrub: tru
 }
 
 /** Pure: one converted voucher (convertVouchers output) to a staging row, or null when it has no GUID. */
-export function mirrorRowFrom(v: any, opts: { scrub: false } | { scrub: true; salt: string }): MirrorRow | null {
+export function mirrorRowFrom(v: any, opts: { scrub: false } | { scrub: true; salt: string }, tally?: { company: string }): MirrorRow | null {
   const key = String(v?.guid ?? "").trim();
   if (!key) return null;
   const lines = (Array.isArray(v.allledgerentries) ? v.allledgerentries : []).filter((e: any) => String(e?.ledgername ?? "").trim());
@@ -317,6 +323,8 @@ export function mirrorRowFrom(v: any, opts: { scrub: false } | { scrub: true; sa
       effective_date: isoOf(v.effectivedate),
       ...voucherExtraFields(v, opts),
       ledgers: lines.map((e: any) => ({ ledger: name("LEDGER", String(e.ledgername ?? "")), amount: money(e.amount), debit: e.isdeemedpositive === true })),
+      /* The tally-shaped voucher and its lines for the go-live swap (erpTallyShape.ts); the database copies it out (erp_tally_derive). */
+      ...(tally ? { tally: tallyBlobFrom(v, { company: tally.company, name, test: opts.scrub }) } : {}),
     },
   };
 }
@@ -561,6 +569,10 @@ export interface MirrorStore {
   readonly isTest: boolean;
   /** The secret salt for scrubbing; required when isTest. */
   readonly scrubSalt: string | null;
+  /** The company key this store writes under; when set, every mirror row carries its tally-shaped block (go-live swap). */
+  readonly companyKey?: string;
+  /** Copy the tally-shaped blocks out of the mirror rows into the swap store (migration 0129). Optional so older stores still work. */
+  deriveTally?(): Promise<Record<string, any>>;
   start(kind: "full" | "incremental", scope?: { from: string; to: string }): Promise<{ run_id: string; scope_from: string; scope_to: string; mark: number | null }>;
   step(run: string, step: string, state: "ok" | "failed" | "info", rows?: number | null, ms?: number | null, detail?: unknown): Promise<void>;
   stage(run: string, rows: MirrorRow[]): Promise<number>;
@@ -650,6 +662,8 @@ export function supabaseMirrorStore(c: SupabaseClient, machine: string, key: str
   return {
     isTest,
     scrubSalt,
+    companyKey,
+    deriveTally: async () => call("erp_tally_derive", { p_company_key: companyKey, p_is_test: isTest }),
     start: async (kind, scope) => call("erp_sync_run_start", { p_company_key: companyKey, p_kind: kind, p_scope_from: scope?.from ?? null, p_scope_to: scope?.to ?? null, p_is_test: isTest }),
     step: async (run, step, state, rows, ms, detail) => { await call("erp_sync_run_step", { p_run: run, p_step: step, p_state: state, p_rows: rows ?? null, p_ms: ms ?? null, p_detail: detail ?? null }); },
     stage: async (run, rows) => Number(await call("erp_sync_stage", { p_run: run, p_rows: rows })),
@@ -688,6 +702,9 @@ export interface MirrorSyncReport {
   ledgersAsOf: string | null;
   /** D-C.2: the loaded period, and whether it is the financial year to date. */
   ledgerPeriod?: { from: string | null; to: string; unexpected: boolean; why: string | null } | null;
+  /** The answer of erp_tally_derive after a swap (go-live swap); null when not run. A failure here never fails the run. */
+  tally?: Record<string, any> | null;
+  tallyError?: string | null;
 }
 
 const STAGE_BATCH = 500;
@@ -737,6 +754,19 @@ export async function runRepull(opts: { store: MirrorStore; tally: MirrorTally; 
   return runMirror({ ...opts, kind: "repull" });
 }
 
+/** After a swap: copy the mirror's tally-shaped blocks into the swap store. The mirror itself is already swapped, so a failure here is reported, never thrown. */
+async function deriveAfterSwap(store: MirrorStore, runId: string, report: MirrorSyncReport, log: (l: string) => void): Promise<void> {
+  try {
+    const t0 = Date.now();
+    report.tally = await store.deriveTally!();
+    await store.step(runId, "copied the tally-shaped rows for the go-live swap", "ok", null, Date.now() - t0, report.tally);
+  } catch (e) {
+    report.tallyError = e instanceof Error ? e.message : String(e);
+    log(`tally rows not derived: ${report.tallyError}`);
+    try { await store.step(runId, "could not copy the tally-shaped rows for the go-live swap", "failed", null, null, { error: report.tallyError.slice(0, 500) }); } catch { /* reported above */ }
+  }
+}
+
 async function runMirror(opts: {
   store: MirrorStore; tally: MirrorTally; kind: "full" | "incremental" | "repull";
   scope?: { from: string; to: string };
@@ -771,7 +801,7 @@ async function runMirror(opts: {
     for (const v of list) {
       const p = voucherProblem(v) ?? (day && isoOf(v?.date) !== day ? `dated ${isoOf(v?.date)}, not ${day}` : null);
       if (p) { if (p === "no GUID") report.noGuid++; problems.push(p); continue; }
-      buffer.push(mirrorRowFrom(v, scrubOpts)!);
+      buffer.push(mirrorRowFrom(v, scrubOpts, store.companyKey ? { company: store.companyKey } : undefined)!);
     }
     if (problems.length) {
       const counts = [...new Set(problems)].map((p) => `${problems.filter((x) => x === p).length} with ${p}`).join("; ");
@@ -899,6 +929,7 @@ async function runMirror(opts: {
     report.state = res.state;
     await store.step(run.run_id, res.state === "swapped" ? "swapped into the mirror" : `refused: ${res.reason}`, res.state === "swapped" ? "ok" : "failed", null, msS, res);
     log(`${kind} run ${run.run_id}: ${res.state} (${JSON.stringify(res)})`);
+    if (res.state === "swapped" && store.deriveTally) await deriveAfterSwap(store, run.run_id, report, log);
     return report;
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
@@ -953,6 +984,7 @@ export async function applyAcceptedDrops(opts: { store: MirrorStore; log?: (line
       const r = await opts.store.swapAccepted(a.run_id);
       const state = r.state === "swapped" ? "swapped" : "refused";
       out.push({ run_id: a.run_id, acceptance: a.acceptance, state, reason: state === "swapped" ? null : String(r.reason ?? "refused"), error: null });
+      if (state === "swapped" && opts.store.deriveTally) { try { await opts.store.deriveTally(); } catch (e2) { log(`accepted drop of run ${a.run_id}: tally rows not derived: ${e2 instanceof Error ? e2.message : String(e2)}`); } }
       log(`accepted drop of run ${a.run_id}: ${state}${state === "refused" ? ` (${String(r.reason ?? "")}: ${String(r.why ?? "")})` : ""}`);
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);

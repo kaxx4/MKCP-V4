@@ -157,6 +157,7 @@ const countTag = (xml: string, tag: string) => ({
     step("the run finished without an error", false, (e as Error).message);
   } finally {
     const { data: cleaned, error: ce } = await c.rpc("erp_sync_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });
+    await c.rpc("erp_tally_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });   // the swap store's test rows (migration 0130)
     const { count: runsLeft } = await c.from("erp_sync_runs").select("id", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
     const { count: rowsLeft } = await c.from("erp_mirror_rows").select("key", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
     const { count: ledLeft } = await c.from("erp_mirror_ledgers").select("key", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
