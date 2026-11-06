@@ -98,6 +98,18 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
     if (error) throw new Error(`count: ${error.message}`);
     return count ?? 0;
   };
+  /* The go-live swap store (D-1-5.58): every row of one swap table for this run's test company, paged. */
+  const tallyRows = async (table: string): Promise<{ key: string; row: Record<string, any> }[]> => {
+    const out: { key: string; row: Record<string, any> }[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await c.from("erp_tally_rows").select("key,row").eq("company_key", companyKey).eq("tally_table", table).eq("is_test", true).order("key").range(from, from + 999);
+      if (error) throw new Error(`erp_tally_rows ${table}: ${error.message}`);
+      out.push(...((data ?? []) as any[]));
+      if (!data || data.length < 1000) break;
+    }
+    return out;
+  };
+  const sumAmounts = (rows: { row: Record<string, any> }[]) => Math.round(rows.reduce((a, r) => a + (parseFloat(String(r.row.amount ?? "0").replace(/,/g, "")) || 0), 0) * 100);
   const mark = async () => (await c.from("erp_sync_marks").select("alter_id,scope_from,scope_to,full_due").eq("company_key", companyKey).eq("is_test", true).maybeSingle()).data as { alter_id: number; scope_from: string; scope_to: string; full_due: boolean } | null;
   const sw = (r?: MirrorSyncReport) => (r?.swap ?? {}) as Record<string, any>;
   const t0 = Date.now();
@@ -135,8 +147,29 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
     step("names from the dummy are stored only as ZZ TEST stand-ins", names.length > 0 && names.every((x: string) => /^ZZ TEST\b/.test(x)), `${names.length} names checked`);
     step("a voucher with no ledger lines has no ledger total (null, never 0)", noLines.every((r: any) => r.ledger_total === null), `${noLines.length} such vouchers (inventory-only types or cancelled)`);
 
+    // 1b. the tally-shaped rows (go-live swap): derived after the swap, whole, and the same figures
+    {
+      const tv = await tallyRows("tally_vouchers"), tl = await tallyRows("tally_voucher_ledger_entries"), ti = await tallyRows("tally_voucher_inventory_entries");
+      const { data: mrows } = await c.from("erp_mirror_rows").select("key,row").eq("company_key", companyKey).eq("is_test", true).limit(5000);
+      const mirrorLines = (mrows ?? []).reduce((a: number, r: any) => a + (r.row?.tally?.ledger_entries?.length ?? 0), 0);
+      const mirrorInv = (mrows ?? []).reduce((a: number, r: any) => a + (r.row?.tally?.inventory_entries?.length ?? 0), 0);
+      const ledgerMoney = (mrows ?? []).reduce((a: number, r: any) => a + (r.row?.ledgers ?? []).reduce((b: number, l: any) => b + Math.round((Number(l.amount) || 0) * 100), 0), 0);
+      const d = runs.full1.tally as any;
+      counts.tally = { vouchers: tv.length, ledger_lines: tl.length, inventory_lines: ti.length, derive: d };
+      step("the swap store was filled after the swap with no error", !!d && !runs.full1.tallyError && d.without_block === 0 && d.mirror_vouchers === n1, JSON.stringify({ error: runs.full1.tallyError, d }));
+      step("it holds one tally_vouchers row for every mirror voucher, and the lines the mirror rows carry", tv.length === n1 && tl.length === mirrorLines && ti.length === mirrorInv, `vouchers ${tv.length}/${n1}, ledger lines ${tl.length}/${mirrorLines}, inventory lines ${ti.length}/${mirrorInv}`);
+      step("the dummy has inventory lines, so the inventory half is exercised", ti.length > 0, `${ti.length} lines`);
+      step("every voucher row has the whole tally_vouchers column list (41 columns less synced_at), an ISO date and a version of 0",
+        tv.every((r) => Object.keys(r.row).length === 40 && /^\d{4}-\d{2}-\d{2}$/.test(String(r.row.date)) && r.row.version === 0), `columns ${[...new Set(tv.map((r) => Object.keys(r.row).length))].join(",")}`);
+      step("a test row carries no personal field (the database also refuses one)", tv.every((r) => ["irn", "irn_qr", "ewb_number", "party_gstin", "buyer_name", "consignee_place", "reference"].every((f) => r.row[f] === null)));
+      step("the lines' amounts add up, to the paise, to the same total as the mirror's own ledger lines (absolute value of each: the two keep the sign in different ways)",
+        Math.abs(sumAmounts(tl)) >= 0 && tl.reduce((a, r) => a + Math.abs(Math.round((parseFloat(String(r.row.amount ?? "0").replace(/,/g, "")) || 0) * 100)), 0) === (mrows ?? []).reduce((a: number, r: any) => a + (r.row?.ledgers ?? []).reduce((b: number, l: any) => b + Math.abs(Math.round((Number(l.amount) || 0) * 100)), 0), 0),
+        `${ledgerMoney} signed in the mirror rows, ${sumAmounts(tl)} signed in the tally lines`);
+    }
+
     // 2. the same full sync again
     runs.full2 = await runMirrorSync({ store, tally, kind: "full", scope });
+    step("...and the swap store: nothing is rewritten the second time", !!runs.full2.tally && !runs.full2.tallyError && Object.values((runs.full2.tally as any).upserted).every((x) => x === 0), JSON.stringify((runs.full2.tally as any)?.upserted));
     step("the same full sync again changes nothing", runs.full2.state === "swapped" && sw(runs.full2).inserted === 0 && sw(runs.full2).changed === 0 && sw(runs.full2).pruned === 0 && sw(runs.full2).unchanged === n1,
       JSON.stringify({ ...sw(runs.full2), changed_keys: undefined }));
 
@@ -186,6 +219,7 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
       runs.inc1.state === "swapped" && runs.inc1.read === 1 && sw(runs.inc1).inserted === 1 && (got ?? []).length === 1 && (m2?.alter_id ?? 0) > before && m2?.alter_id === (got ?? [])[0]?.alter_id,
       `read ${runs.inc1.read}, ${JSON.stringify((got ?? [])[0] ?? null)}, mark ${before} to ${m2?.alter_id}`);
     step("the mirror holds one more voucher, on the busiest day", (await mirrorCount()) === n1 + 1 && (await mirrorCount(busy)) === perDay[busy] + 1);
+    step("the swap store holds that one voucher too, with its lines", (await tallyRows("tally_vouchers")).length === n1 + 1 && (runs.inc1.tally as any)?.upserted?.vouchers === 1, JSON.stringify((runs.inc1.tally as any)?.upserted));
 
     // 6. sweep: Tally's highest falls below the mark
     swept = true;
@@ -214,6 +248,7 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
     step("review H1: the full run prunes the swept voucher, lowers the mark to Tally's highest and clears the due flag",
       runs.full5.state === "swapped" && sw(runs.full5).pruned === 1 && sw(runs.full5).inserted === 0 && sw(runs.full5).alter_id_fell === true && m4?.alter_id === runs.full5.markCandidate && m4?.full_due === false && (await mirrorCount()) === n1,
       `pruned ${sw(runs.full5).pruned}, mark ${markNow} to ${m4?.alter_id}, mirror ${await mirrorCount()}`);
+    step("the swap store dropped the swept voucher with the mirror (the delete follows the mirror's own prune)", (await tallyRows("tally_vouchers")).length === n1 && (runs.full5.tally as any)?.deleted?.vouchers === 1, JSON.stringify((runs.full5.tally as any)?.deleted));
     runs.inc3 = await runMirrorSync({ store, tally, kind: "incremental" });
     step("after the full run the incremental runs again", runs.inc3.state === "swapped" && runs.inc3.read === 0, `read ${runs.inc3.read}`);
   } catch (e) {
@@ -224,7 +259,9 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
       step("swept from the dummy after an early stop", sweep.status === 0, `sweep exit ${sweep.status}`);
     }
     const { data: cleaned, error: ce } = await c.rpc("erp_sync_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });
-    await c.rpc("erp_tally_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });   // the swap store's test rows (migration 0130)
+    const { error: tce } = await c.rpc("erp_tally_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });   // the swap store's test rows (migration 0130)
+    const { count: tallyLeft } = await c.from("erp_tally_rows").select("key", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
+    step("this run's swap-store rows are deleted too", !tce && tallyLeft === 0, tce?.message ?? `${tallyLeft} left`);
     const remaining = ce ? -1 : await mirrorCount().catch(() => -1);
     const { count: runsLeft } = await c.from("erp_sync_runs").select("id", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
     step("this run's test rows are deleted (mirror rows, mark, runs, steps, staging)", !ce && remaining === 0 && runsLeft === 0, ce?.message ?? JSON.stringify(cleaned));
