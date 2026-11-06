@@ -109,6 +109,34 @@ test('crash policy: the crash log is written and counted; an unreadable log coun
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('crash policy: a huge message and stack are cut, and the log rotates at its size cap keeping one old file', () => {
+  const p = createRequire(import.meta.url)('../public/crashPolicy.js');
+  const rq = createRequire(import.meta.url); const os = rq('os'); const fs = rq('fs'); const path = rq('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'crash-'));
+  try {
+    const log = path.join(dir, 'crash-log.jsonl'), now = Date.parse('2026-11-06T10:00:00Z');
+    const big = new Error('M'.repeat(500_000)); big.stack = 'S'.repeat(500_000);
+    p.writeCrash(log, big, 'restart', now);
+    const line = fs.readFileSync(log, 'utf8');
+    assert(line.length < 6000, 'one crash line is short (was ' + line.length + ')');
+    assert(/cut: 498000 more characters/.test(line), 'the line says it was cut');
+    p.writeCrash(log, 'x'.repeat(300_000), 'restart', now);
+    assert(fs.readFileSync(log, 'utf8').length < 12000, 'a non-error value is cut too');
+    fs.writeFileSync(log, 'y'.repeat(p.MAX_LOG_BYTES));
+    p.writeCrash(log, new Error('ZZ TEST after the cap'), 'restart', now);
+    assert(fs.existsSync(log + '.1') && fs.statSync(log + '.1').size >= p.MAX_LOG_BYTES, 'the full file became the old file');
+    assert(/after the cap/.test(fs.readFileSync(log, 'utf8')) && fs.statSync(log).size < 6000, 'a fresh file holds the new line');
+    p.writeCrash(log, new Error('ZZ TEST second'), 'restart', now);
+    fs.writeFileSync(log, 'z'.repeat(p.MAX_LOG_BYTES));
+    p.writeCrash(log, new Error('ZZ TEST third'), 'restart', now);
+    assert(fs.readFileSync(log + '.1', 'utf8').startsWith('z'), 'only one old file is kept: the newer full file replaced the older one');
+    fs.rmSync(log + '.1');
+    p.writeCrash(log, new Error('a'), 'restart', now - 60_000);
+    fs.renameSync(log, log + '.1');
+    assert(p.recentCrashCount(log, now) >= 1, 'crashes in the old file still count towards the window');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('public/electron.js no longer swallows uncaughtException', () => {
   const src = readFileSync('public/electron.js', 'utf8');
   const h = src.slice(src.indexOf("process.on('uncaughtException'"), src.indexOf("process.on('unhandledRejection'"));
