@@ -29,6 +29,8 @@ import { supabaseClient, offlineReason } from "./supabaseClient.js";
 import { withTally } from "./tallyGate.js";
 import { fetchReport, reportByKey, REPORTS } from "./tallyReports.js";
 import { resolveSyncCompany } from "./scheduledSyncs.js";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 // ── The daily refresh ─────────────────────────────────────────────────────
 //
@@ -92,6 +94,67 @@ export interface ReportJob {
   status: string;
 }
 
+// -- A job left running by an agent that stopped (rebuild task 1-5, E3 and E6) --
+//
+// A report is one request to Tally, so it cannot resume half way: "resume"
+// means the job is asked again, once, by the next boot, and the screen keeps
+// the job and its progress line the whole time (the web lists the job until
+// it is dismissed, so a screen closed and opened again finds it). Before this,
+// a job whose agent died stayed "running" for ever: no result, no error.
+//
+//  - E3: at boot, a job left "running" by the previous boot goes back to
+//    "pending" with a progress line saying so, and runs again. Each job is
+//    asked again at most REPORT_RESUME_MAX times, counted on disk, so a report
+//    that itself brings the agent down cannot loop.
+//  - E6: a job "running" for longer than REPORT_STUCK_MS that this process is
+//    not running is marked "error", with why. REPORT_STUCK_MS is well above the
+//    slow reports' 420 s timeout (tallyReports.ts).
+// Each change is compare-and-set on status "running" and started_at, so a job
+// that finished meanwhile is never touched. The previous snapshot stays.
+
+export const REPORT_RESUME_MAX = 1;
+export const REPORT_STUCK_MS = 20 * 60_000;
+
+export interface RunningReportJob { id: string; status: string; started_at: string | null }
+
+/**
+ * Pure: what to do with the "running" jobs this process is not running.
+ * At boot every such job was left by an earlier boot: asked again if it has
+ * resumes left, else failed. Later (the timer), only one running for longer
+ * than REPORT_STUCK_MS is failed; a younger one is left alone.
+ */
+export function planOrphanReports(now: number, atBoot: boolean, jobs: readonly RunningReportJob[], resumes: (id: string) => number, mine: string | null)
+  : { resume: string[]; fail: { id: string; why: string }[] } {
+  const resume: string[] = [], fail: { id: string; why: string }[] = [];
+  for (const j of jobs) {
+    if (j.status !== "running" || j.id === mine) continue;
+    const started = j.started_at ? Date.parse(j.started_at) : NaN;
+    if (atBoot) {
+      const n = resumes(j.id);
+      if (n < REPORT_RESUME_MAX) resume.push(j.id);
+      else fail.push({ id: j.id, why: `The office PC stopped while this report ran, and it had already been asked again ${n} time(s). Ask for it again when Tally is free.` });
+    } else if (!Number.isFinite(started) || now - started > REPORT_STUCK_MS) {
+      fail.push({ id: j.id, why: `No result was written within ${Math.round(REPORT_STUCK_MS / 60_000)} minutes: the agent stopped while this report ran. Ask for it again.` });
+    }
+  }
+  return { resume, fail };
+}
+
+/** The on-disk count of resumes per job (one line per resume). An unreadable file counts as "already resumed": failing a job is safe, looping is not. */
+export function reportResumeLog(path = join(process.cwd(), "server", "data", "report-resumes.jsonl")) {
+  const counts = (): Map<string, number> | null => {
+    try {
+      const m = new Map<string, number>();
+      for (const line of readFileSync(path, "utf8").split("\n")) { if (!line.trim()) continue; const id = String(JSON.parse(line).id); m.set(id, (m.get(id) ?? 0) + 1); }
+      return m;
+    } catch (e) { return (e as NodeJS.ErrnoException)?.code === "ENOENT" ? new Map() : null; }
+  };
+  return {
+    count(id: string): number { const m = counts(); return m ? (m.get(id) ?? 0) : REPORT_RESUME_MAX; },
+    add(id: string): void { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, JSON.stringify({ id, at: new Date().toISOString() }) + "\n"); },
+  };
+}
+
 /** Financial year to date, which is what every one of these reports means by
  *  "now" unless the caller says otherwise. */
 function defaultPeriod(): { from: string; to: string } {
@@ -103,17 +166,48 @@ function defaultPeriod(): { from: string; to: string } {
 export class ReportRunner {
   private busy = false;
   private stopped = false;
+  private current: string | null = null;
+  private bootSwept = false;
+  private readonly askedAgain = new Set<string>();
 
   constructor(
     private readonly client: SupabaseClient,
     private readonly tallyUrl: string,
+    private readonly resumes: { count(id: string): number; add(id: string): void } = reportResumeLog(),
+    private readonly now: () => number = Date.now,
   ) {}
+
+  /** E3 and E6: settle the "running" jobs this process is not running. A failed read or write is logged; the next drain tries again. */
+  async sweepOrphans(): Promise<{ resumed: string[]; failed: string[] }> {
+    const atBoot = !this.bootSwept;
+    const out = { resumed: [] as string[], failed: [] as string[] };
+    const { data, error } = await this.client.from("tally_report_jobs").select("id, status, started_at").eq("status", "running");
+    if (error) { console.error(`[reports] could not read running jobs: ${error.message}`); return out; }
+    const jobs = (data ?? []) as RunningReportJob[];
+    const plan = planOrphanReports(this.now(), atBoot, jobs, (id) => this.resumes.count(id), this.current);
+    const startedOf = new Map(jobs.map((j) => [j.id, j.started_at]));
+    /* Compare-and-set: still running, still the same start. */
+    const cas = (q: any, id: string) => { const at = startedOf.get(id); return at ? q.eq("id", id).eq("status", "running").eq("started_at", at) : q.eq("id", id).eq("status", "running").is("started_at", null); };
+    for (const id of plan.resume) {
+      this.resumes.add(id);   // counted before the job can run again
+      const { error: e } = await cas(this.client.from("tally_report_jobs").update({ status: "pending", started_at: null, progress: "The office PC stopped while this report ran. It will be asked again." }), id);
+      if (e) console.error(`[reports] could not put job ${id} back in the queue: ${e.message}`); else { out.resumed.push(id); this.askedAgain.add(id); }
+    }
+    for (const f of plan.fail) {
+      const { error: e } = await cas(this.client.from("tally_report_jobs").update({ status: "error", progress: null, error: f.why, finished_at: new Date(this.now()).toISOString() }), f.id);
+      if (e) console.error(`[reports] could not close stuck job ${f.id}: ${e.message}`); else out.failed.push(f.id);
+    }
+    this.bootSwept = true;
+    if (out.resumed.length || out.failed.length) console.log(`[reports] left by a stopped agent: ${out.resumed.length} asked again, ${out.failed.length} closed as errors`);
+    return out;
+  }
 
   /** Claim and run everything pending, oldest first. Safe to call often. */
   async drain(): Promise<void> {
     if (this.busy || this.stopped) return;
     this.busy = true;
     try {
+      await this.sweepOrphans();
       for (;;) {
         const { data, error } = await this.client
           .from("tally_report_jobs")
@@ -124,7 +218,8 @@ export class ReportRunner {
         if (error) { console.error(`[reports] could not read the queue: ${error.message}`); return; }
         const job = (data ?? [])[0] as ReportJob | undefined;
         if (!job) return;
-        await this.run(job);
+        this.current = job.id;
+        try { await this.run(job); } finally { this.current = null; }
       }
     } finally {
       this.busy = false;
@@ -156,9 +251,9 @@ export class ReportRunner {
     await this.client.from("tally_report_jobs").update({
       status: "running",
       started_at: new Date().toISOString(),
-      progress: def.slow
+      progress: (def.slow
         ? `Asking Tally for ${def.label}. This one takes about a minute the first time.`
-        : `Asking Tally for ${def.label}…`,
+        : `Asking Tally for ${def.label}…`) + (this.askedAgain.has(job.id) ? " Asked again: the office PC stopped during the first try." : ""),
     }).eq("id", job.id);
 
     try {
