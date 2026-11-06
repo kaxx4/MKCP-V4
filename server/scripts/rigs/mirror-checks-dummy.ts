@@ -184,8 +184,9 @@ function pickWindow(byDay: Record<string, number>) {
     counts.balanceProof = { asOf, period, ledgersRead: readA.length, groupsRead: parentOf.size, ledgersUnderPrimary: readA.filter((l) => isTop(l.parent)).length,
       ledgersWithUnresolvedParent: readA.filter((l) => !isTop(l.parent) && !parentOf.has(l.parent)).length,
       primaryGroupsWithBalance: groups.length, trialBalanceRows: tb.rows.length, matchedTrialBalance: matched, sign, unmatched: groups.length - matched };
-    step("D-C.2: the ledgers' closing balances summed per primary group match Tally's Trial Balance for the loaded period",
-      groups.length > 0 && matched === groups.length, `${matched} of ${groups.length} primary groups match (${sign}); the Trial Balance has ${tb.rows.length} rows`);
+    /* A record, not the check: the check is the D-M.13 step below, which also allows a group's Opening Stock line. */
+    step("D-C.2 (record): primary groups whose ledgers sum to the Trial Balance line exactly",
+      groups.length > 0, `${matched} of ${groups.length} primary groups match (${sign}); the Trial Balance has ${tb.rows.length} rows`);
 
     /* Review 1-5 item 7 (D-1-5.41): StartingFrom and EndingAt are the
        company's year, but the undated ledger read may follow the period on
