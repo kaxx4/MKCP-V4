@@ -69,7 +69,7 @@ const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : null; };
 const OUT = arg("--out");
 const PART = arg("--part");
-if (PART !== "checks" && PART !== "tb") { console.error("say --part checks (everything but the Trial Balance) or --part tb (the Trial Balance comparison only, run last)"); process.exit(2); }
+if (PART !== "checks" && PART !== "tb" && PART !== "period") { console.error("say --part checks (everything but the Trial Balance), --part period (do the undated reads see a voucher dated after the loaded period?) or --part tb (the Trial Balance comparison only, run last)"); process.exit(2); }
 const company = practiceCompany();
 if (!company) { console.error("MKCP_PRACTICE_COMPANY is not set"); process.exit(2); }
 if (!practiceGuid()) { console.error("MKCP_PRACTICE_COMPANY_GUID is not set: the rig will not read a company it cannot identify"); process.exit(2); }
@@ -137,16 +137,38 @@ function pickWindow(byDay: Record<string, number>) {
     const gParsed = assertParsedCollection(await tallyPost(TALLY_URL, buildCollectionXml(groupDef, company!), 120_000, false), "the group read");
     const gcol = gParsed?.ENVELOPE?.BODY?.DATA?.COLLECTION;
     const parentOf = new Map<string, string>(tallyList(gcol?.GROUP ?? gcol?.["GROUP.LIST"]).map((g: any) => [(tallyText(g?.["@_NAME"]) || tallyText(g?.NAME)).trim(), tallyText(g?.PARENT).trim()]));
-    const primary = (g: string) => { let x = g; for (let i = 0; i < 50 && parentOf.get(x) && parentOf.get(x) !== "Primary"; i++) x = parentOf.get(x)!; return x; };
-    const sums = new Map<string, number>();
-    for (const l of readA) { const k = primary(l.parent); sums.set(k, Math.round(((sums.get(k) ?? 0) + (parseBalance(l.closingbalance) ?? 0)) * 100) / 100); }
+    /* D-M.13 carried item: a ledger whose parent is Primary (Profit & Loss
+       A/c is one) is its own line in the Trial Balance, not part of a group.
+       Batch 1 summed such ledgers under a made-up line "Primary", which the
+       Trial Balance never has. A parent that is neither Primary nor a group
+       the group read returned is counted as unresolved (never guessed). */
+    const isTop = (p: string) => p === "" || p === "Primary";
+    const primary = (g: string) => { let x = g; for (let i = 0; i < 50 && parentOf.get(x) && !isTop(parentOf.get(x)!); i++) x = parentOf.get(x)!; return x; };
+    const lineOf = (l: { name: string; parent: string }) => isTop(l.parent) ? l.name : parentOf.has(l.parent) ? primary(l.parent) : "(unresolved parent)";
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const sums = new Map<string, number>(), ledgersPer = new Map<string, number>(), openingPer = new Map<string, number>();
+    for (const l of readA) {
+      const k = lineOf(l);
+      sums.set(k, r2((sums.get(k) ?? 0) + (parseBalance(l.closingbalance) ?? 0)));
+      ledgersPer.set(k, (ledgersPer.get(k) ?? 0) + 1);
+      openingPer.set(k, r2((openingPer.get(k) ?? 0) + (parseBalance(l.openingbalance) ?? 0)));
+    }
+    /* Our figure for every group, rolled up through the group tree, so a differing primary group can be followed one level down. */
+    const rolled = new Map<string, number>();
+    for (const l of readA) {
+      if (isTop(l.parent) || !parentOf.has(l.parent)) continue;
+      let x = l.parent;
+      for (let i = 0; i < 50 && x && !isTop(x); i++) { rolled.set(x, r2((rolled.get(x) ?? 0) + (parseBalance(l.closingbalance) ?? 0))); x = parentOf.get(x) ?? ""; }
+    }
     const tb = await fetchReport(TALLY_URL, company!, REPORTS.find((r) => r.key === "trial-balance")!, period, 120_000);   // coordinator: 120 s, no retry
-    const tbNet = new Map<string, number>(tb.rows.map((r) => [String(r.name ?? "").trim(), Math.round(((Number(r.debit) || 0) + (Number(r.credit) || 0)) * 100) / 100]));
+    const tbNet = new Map<string, number>(tb.rows.map((r) => [String(r.name ?? "").trim(), r2((Number(r.debit) || 0) + (Number(r.credit) || 0))]));
     const groups = [...sums].filter(([, v]) => v !== 0);
     const same = groups.filter(([g, v]) => tbNet.has(g) && Math.abs(tbNet.get(g)! - v) < 0.01).length;
     const flipped = groups.filter(([g, v]) => tbNet.has(g) && Math.abs(tbNet.get(g)! + v) < 0.01).length;
     const matched = Math.max(same, flipped), sign = same >= flipped ? "the sign as Tally keeps it" : "the opposite sign";
-    counts.balanceProof = { asOf, period, ledgersRead: readA.length, groupsRead: parentOf.size,
+    const signF = same >= flipped ? 1 : -1;
+    counts.balanceProof = { asOf, period, ledgersRead: readA.length, groupsRead: parentOf.size, ledgersUnderPrimary: readA.filter((l) => isTop(l.parent)).length,
+      ledgersWithUnresolvedParent: readA.filter((l) => !isTop(l.parent) && !parentOf.has(l.parent)).length,
       primaryGroupsWithBalance: groups.length, trialBalanceRows: tb.rows.length, matchedTrialBalance: matched, sign, unmatched: groups.length - matched };
     step("D-C.2: the ledgers' closing balances summed per primary group match Tally's Trial Balance for the loaded period",
       groups.length > 0 && matched === groups.length, `${matched} of ${groups.length} primary groups match (${sign}); the Trial Balance has ${tb.rows.length} rows`);
@@ -168,8 +190,43 @@ function pickWindow(byDay: Record<string, number>) {
     if (/<LINEERROR>/i.test(tbDetailRaw)) throw new Error("the detailed Trial Balance came back with a Tally error");
     const tbDetail = new Map<string, number>(parseReport(REPORTS.find((r) => r.key === "trial-balance")!, tbDetailRaw)
       .map((r) => [String(r.name ?? "").trim(), Math.round(((Number(r.debit) || 0) + (Number(r.credit) || 0)) * 100) / 100]));
+    /* D-M.13: every line that differs, ours or Tally's, with both figures.
+       A name is printed only when it is one of Tally's own standard names
+       (the 28 reserved groups and Tally's fixed report lines); any other
+       line is "a company-made line" plus its number, never its name (the
+       dummy is an old copy of the real books). Each differing primary
+       group is followed one level down with the detailed Trial Balance. */
+    const STANDARD = new Set(["Branch / Divisions", "Capital Account", "Current Assets", "Current Liabilities", "Direct Expenses", "Direct Incomes",
+      "Fixed Assets", "Indirect Expenses", "Indirect Incomes", "Investments", "Loans (Liability)", "Misc. Expenses (ASSET)", "Purchase Accounts",
+      "Sales Accounts", "Suspense A/c", "Bank Accounts", "Bank OD A/c", "Cash-in-Hand", "Deposits (Asset)", "Duties & Taxes", "Loans & Advances (Asset)",
+      "Provisions", "Reserves & Surplus", "Secured Loans", "Stock-in-Hand", "Sundry Creditors", "Sundry Debtors", "Unsecured Loans",
+      "Profit & Loss A/c", "Difference in opening balances", "Opening Stock", "Closing Stock", "Grand Total", "(unresolved parent)"]);
+    const madeUp = new Map<string, string>();
+    const safeName = (n: string) => STANDARD.has(n) ? n : (madeUp.get(n) ?? (madeUp.set(n, `a company-made line ${madeUp.size + 1}`), madeUp.get(n)!));
+    const isOk = (ours: number, theirs: number | undefined) => theirs !== undefined && Math.abs(signF * theirs - ours) < 0.01;
+    const childrenOf = (g: string) => [...parentOf].filter(([, p]) => p === g).map(([n]) => n);
+    const differing: Record<string, unknown>[] = [];
+    for (const [g, ours] of [...sums].filter(([, v]) => v !== 0)) {
+      if (isOk(ours, tbNet.get(g))) continue;
+      const theirs = tbNet.get(g);
+      const subs = childrenOf(g);
+      const kids = subs.map((s) => ({ s, ours: rolled.get(s) ?? 0, tally: tbDetail.get(s) }))
+        .filter((k) => k.tally !== undefined || k.ours !== 0)
+        .filter((k) => !isOk(k.ours, k.tally))
+        .map((k) => ({ line: safeName(k.s), ours: k.ours, tally: k.tally === undefined ? null : r2(signF * k.tally), difference: k.tally === undefined ? null : r2(signF * k.tally - k.ours),
+          ledgersOurs: readA.filter((l) => { let x = l.parent; for (let i = 0; i < 50 && x && !isTop(x); i++) { if (x === k.s) return true; x = parentOf.get(x) ?? ""; } return false; }).length }));
+      const directLedgers = readA.filter((l) => l.parent === g);
+      const directDiff = directLedgers.filter((l) => tbDetail.has(l.name) && !isOk(parseBalance(l.closingbalance) ?? 0, tbDetail.get(l.name))).length;
+      differing.push({ line: safeName(g), ours, tally: theirs === undefined ? null : r2(signF * theirs), difference: theirs === undefined ? null : r2(signF * theirs - ours),
+        ledgers: ledgersPer.get(g) ?? 0, openingOfThoseLedgers: openingPer.get(g) ?? 0, subGroups: subs.length, ledgersDirectlyUnder: directLedgers.length,
+        directLedgersDiffering: directDiff, subGroupsDiffering: kids });
+    }
+    const tbOnly = [...tbNet].filter(([n, v]) => v !== 0 && !sums.has(n)).map(([n, v]) => ({ line: safeName(n), tally: r2(signF * v) }));
+    counts.groupDifferences = { differing, trialBalanceLinesWithNoLedgerOfOurs: tbOnly };
+    for (const d of differing) console.log(`    differs: ${JSON.stringify(d)}`);
+    for (const d of tbOnly) console.log(`    only in the Trial Balance: ${JSON.stringify(d)}`);
     const ledgerFig = new Map<string, { group: string; fig: number }>();
-    for (const l of readA) if (!parentOf.has(l.name)) ledgerFig.set(l.name, { group: primary(l.parent), fig: parseBalance(l.closingbalance) ?? 0 });
+    for (const l of readA) if (!parentOf.has(l.name)) ledgerFig.set(l.name, { group: lineOf(l), fig: parseBalance(l.closingbalance) ?? 0 });
     const compared = new Map<string, { group: string; ok: boolean; via: string }>();
     for (const [name, { group, fig }] of ledgerFig) {
       if (fig !== 0 && tbDetail.has(name)) compared.set(name, { group, ok: Math.abs(factor * tbDetail.get(name)! - fig) < 0.005, via: "detailed" });
@@ -194,10 +251,54 @@ function pickWindow(byDay: Record<string, number>) {
         + (asOf! > today ? (vouchersAfterToday > 0 ? `${vouchersAfterToday} vouchers fall after today and up to ${asOf}, so a match means the year end, not the screen's date` : `no voucher falls after today and up to ${asOf}, so this cannot tell the year end from today`) : `as of ${asOf}, today ${today}`));
   };
 
+  /* D-M.13 carried item b: the "expected loaded period" rule. When Tally's
+     loaded period ends before today (EndingAt was 5-Nov on 6-Nov), do the
+     undated reads (the AlterID read, the ledgers) see a voucher dated after
+     that end? One ZZTEST Contra dated today goes straight to the dummy; the
+     undated reads are made before and after; the voucher is swept. Nothing
+     is written to the database. Counts only in the output. */
+  const periodProbe = async () => {
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const today = indiaToday();
+    const p0 = judgeLoadedPeriod(await tally.loadedPeriod(), today);
+    const h0 = await tally.highest();
+    const l0 = await tally.ledgers();
+    counts.before = { loadedFrom: p0.from, loadedTo: p0.asOf, today, vouchers: h0.count, highestAlterId: h0.alterId, latestVoucherDate: h0.latestDate, ledgers: l0.length,
+      vouchersAfterLoadedEnd: Object.entries(h0.byDay).filter(([d]) => d > p0.asOf).reduce((s, [, n]) => s + n, 0) };
+    step("the loaded period ends before today, so the probe can tell", p0.asOf < today, `loaded ${p0.from} to ${p0.asOf}, today ${today}; latest voucher ${h0.latestDate}`);
+    if (!(p0.asOf < today)) return;
+    const p = { ...rigPayload(stamp, 1, today), label: "ZZ TEST 1-5 period probe" } as VoucherPayload;
+    if (!isSweepVoucher({ number: p.voucherNumber ?? "", narration: p.narration ?? "" }, "ZZTEST")) throw new Error("refused: not a shape the sweep can remove");
+    pushedDays.add(today);
+    const pr = await safePush(TALLY_URL, company!, p);
+    step("one ZZTEST Contra dated today is in the dummy", pr.ok, pr.ok ? "" : pr.errors.join("; "));
+    if (!pr.ok) return;
+    const p1 = judgeLoadedPeriod(await tally.loadedPeriod(), today);
+    const h1 = await tally.highest();
+    const l1 = await tally.ledgers();
+    const dayRead = await tally.vouchersOn(today);
+    const f0 = new Map(l0.map((l) => [l.guid, parseBalance(l.closingbalance) ?? 0]));
+    const moved = l1.filter((l) => (f0.get(l.guid) ?? 0) !== (parseBalance(l.closingbalance) ?? 0));
+    const amt = (p.ledgerEntries ?? [])[0]?.amount ?? 0;
+    const movedBy = [...new Set(moved.map((l) => Math.abs(r2((parseBalance(l.closingbalance) ?? 0) - (f0.get(l.guid) ?? 0)))))];
+    counts.after = { loadedFrom: p1.from, loadedTo: p1.asOf, vouchers: h1.count, highestAlterId: h1.alterId, latestVoucherDate: h1.latestDate,
+      todayInUndatedRead: h1.byDay[today] ?? 0, todayInDatedRead: dayRead.length, ledgersWhoseBalanceMoved: moved.length, movedBy, contraAmount: amt };
+    step("the dated read of today sees the Contra", dayRead.length >= 1, `${dayRead.length} on ${today}`);
+    step("finding: does the undated AlterID read see a voucher dated after the loaded period's end?", true,
+      `${h1.count - h0.count} more vouchers, ${h1.byDay[today] ?? 0} dated today; highest ${h0.alterId} to ${h1.alterId}`);
+    step("finding: do the undated ledger balances include it?", true, `${moved.length} ledgers moved, by ${JSON.stringify(movedBy)} (the Contra is ${amt})`);
+    step("finding: did the loaded period move?", true, `${p0.from} to ${p0.asOf} before, ${p1.from} to ${p1.asOf} after`);
+    const s = sweep(today); pushedDays.delete(today);
+    const h2 = await tally.highest();
+    counts.afterSweep = { vouchers: h2.count, todayInUndatedRead: h2.byDay[today] ?? 0 };
+    step("swept: Tally's count is back to where it was", s.status === 0 && h2.count === h0.count, `sweep exit ${s.status}; ${h2.count} vouchers (before ${h0.count})`);
+  };
+
   console.log(`\n  ERP mirror checks on the dummy Tally (stamp ${stamp}, commit ${prov.commit.slice(0, 8)}, tree ${prov.tree.slice(0, 8)})\n`);
   step("the run uses committed code (no uncommitted change in the agent's src or scripts)", prov.dirtyFiles.length === 0, prov.dirtyFiles.join(", "));
   try {
     if (PART === "tb") { await tbProof(); return; }
+    if (PART === "period") { await periodProbe(); return; }
     const top = await tally.highest();
     const win = pickWindow(top.byDay);
     if (!win) throw new Error("no short window of days with 20 to 200 vouchers and a day of 6 or more");
