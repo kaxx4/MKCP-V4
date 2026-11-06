@@ -29,6 +29,7 @@
     // runs perfectly while never checking for an update again — the exact
     // silent failure the updater exists to end.
     "public/autoUpdate.js",
+    "public/crashPolicy.js",
     "public/favicon.svg",
     "public/icon.png",
     "public/package.json",

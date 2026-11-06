@@ -4,6 +4,7 @@
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
+import { createRequire } from 'module';
 
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
@@ -63,6 +64,55 @@ test('electron-builder default server filter excludes .env', () => {
   const content = readFileSync('electron-builder.json5', 'utf8');
   const m = content.match(/filter:\s*\[([^\]]*)\]/);
   assert(m && !/\.env/.test(m[1]), 'default filter must not list .env');
+});
+
+// Rebuild task 1-5: the test installer must not bundle .env either (it carried the service-role key).
+test('electron-builder.test.json5 server filter excludes .env', () => {
+  const content = readFileSync('electron-builder.test.json5', 'utf8').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+  const filters = [...content.matchAll(/filter:\s*\[([^\]]*)\]/g)].map((m) => m[1]);
+  assert(filters.length > 0 && filters.every((f) => !/\.env/.test(f)), 'no filter of the test build may list .env');
+});
+
+// Every local module electron.js requires must ship in both installers, or the app dies at start.
+test('every ./module public/electron.js requires is in both builders\' files lists', () => {
+  const src = readFileSync('public/electron.js', 'utf8');
+  const mods = [...src.matchAll(/require\('\.\/([\w-]+)'\)/g)].map((m) => `public/${m[1]}.js`);
+  for (const cfg of ['electron-builder.json5', 'electron-builder.test.json5']) {
+    const c = readFileSync(cfg, 'utf8');
+    for (const m of mods) assert(c.includes(`"${m}"`), `${cfg} does not ship ${m}`);
+  }
+});
+
+// Rebuild task 1-5 (S-10): an uncaught exception is written down and the app exits; never swallowed.
+test('crash policy: quitting exits, a boot crash or a third crash in 10 min stays closed, else restart', () => {
+  const p = createRequire(import.meta.url)('../public/crashPolicy.js');
+  assert(p.decideOnCrash({ quitting: true, uptimeMs: 1e9, recentCrashes: 0 }) === 'exit', 'quitting');
+  assert(p.decideOnCrash({ quitting: false, uptimeMs: 29_999, recentCrashes: 0 }) === 'exit-no-restart', 'boot window');
+  assert(p.decideOnCrash({ quitting: false, uptimeMs: 60_000, recentCrashes: 0 }) === 'restart', 'first crash restarts');
+  assert(p.decideOnCrash({ quitting: false, uptimeMs: 60_000, recentCrashes: 1 }) === 'restart', 'second crash restarts');
+  assert(p.decideOnCrash({ quitting: false, uptimeMs: 60_000, recentCrashes: 2 }) === 'exit-no-restart', 'third crash stays closed');
+});
+
+test('crash policy: the crash log is written and counted; an unreadable log counts as many', () => {
+  const p = createRequire(import.meta.url)('../public/crashPolicy.js');
+  const rq = createRequire(import.meta.url); const os = rq('os'); const fs = rq('fs'); const path = rq('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'crash-'));
+  try {
+    const log = path.join(dir, 'crash-log.jsonl'), now = Date.parse('2026-11-06T10:00:00Z');
+    assert(p.recentCrashCount(log, now) === 0, 'no log, no crashes');
+    p.writeCrash(log, new Error('ZZ TEST boom'), 'restart', now - 11 * 60_000);
+    p.writeCrash(log, new Error('ZZ TEST boom'), 'restart', now - 60_000);
+    assert(p.recentCrashCount(log, now) === 1, 'only the crash inside 10 minutes counts');
+    assert(/ZZ TEST boom/.test(fs.readFileSync(log, 'utf8')), 'the error is in the log');
+    fs.mkdirSync(path.join(dir, 'adir.jsonl'));
+    assert(p.recentCrashCount(path.join(dir, 'adir.jsonl'), now) >= p.MAX_CRASHES_IN_WINDOW, 'unreadable counts as many');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('public/electron.js no longer swallows uncaughtException', () => {
+  const src = readFileSync('public/electron.js', 'utf8');
+  const h = src.slice(src.indexOf("process.on('uncaughtException'"), src.indexOf("process.on('unhandledRejection'"));
+  assert(!/kept alive/.test(h) && /crashPolicy\.writeCrash/.test(h) && /app\.exit\(/.test(h), 'the handler must write the crash and exit');
 });
 
 test('MirrorPanel user-visible text does not hard-code port 3100', () => {

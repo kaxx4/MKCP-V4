@@ -10,23 +10,29 @@ const APP_START = Date.now();
 // one place to tune, not a magic number buried in createPipWindow().
 const PIP_WINDOW_SIZE = { width: 360, height: 520 };
 
-// ── Crash auto-restart (loop-guarded) ─────────────────────────────────────────
-// A bare relaunch-on-any-error is dangerous: an error during shutdown undoes the
-// quit (app reopens) and an error during startup turns into an infinite relaunch
-// loop where the app never opens cleanly. Guards:
-//   • If we're intentionally quitting → just exit, never relaunch.
-//   • If the crash happens within the first 30s (boot window) → DON'T relaunch;
-//     stay alive so the user can read the error and close the app instead of
-//     fighting a flicker loop.
-//   • Otherwise → relaunch once.
+// ── An uncaught exception: write it down, then exit (rebuild task 1-5, S-10) ──
+// It used to be logged and swallowed, so the app kept running in a state Node
+// itself calls unknown: a sync or push half way through could hold a lease or
+// a lock nothing releases, while the window still said "running". Now the
+// error goes to <userData>/crash-log.jsonl first, then the app exits. It
+// restarts itself unless it is quitting, the crash came in the first 30 s
+// (a crash at boot would loop), or it crashed 3 times in 10 minutes. The rules
+// are in public/crashPolicy.js and tested in scripts/test.js. A push that was
+// mid-way is settled by the next boot from its journal and lease, never resent
+// blind (server/src/services/erpJobAgent.ts, pushAgent.ts).
+const crashPolicy = require('./crashPolicy');
 process.on('uncaughtException', (err) => {
-  console.error('[electron] uncaughtException (kept alive):', err);
-  if (appQuitting) { app.exit(0); return; }
-  // Do NOT auto-relaunch. A throw mid-sync (operational error, transient network,
-  // etc.) must not restart the app and interrupt work — that reads to the user as
-  // "the app crashed". Log it and stay alive; the window + server keep running.
-  // (True process death from OOM can't be caught here anyway; the memory headroom
-  // bump below is what prevents that.)
+  console.error('[electron] uncaughtException:', err);
+  const now = Date.now();
+  let logPath = null;
+  try { logPath = path.join(app.getPath('userData'), 'crash-log.jsonl'); } catch { /* app not ready: no path, so no restart */ }
+  const decision = logPath
+    ? crashPolicy.decideOnCrash({ quitting: appQuitting, uptimeMs: now - APP_START, recentCrashes: crashPolicy.recentCrashCount(logPath, now) })
+    : (appQuitting ? 'exit' : 'exit-no-restart');
+  if (logPath) crashPolicy.writeCrash(logPath, err, decision, now);
+  console.error(`[electron] after the uncaught exception: ${decision}`);
+  if (decision === 'restart') app.relaunch();
+  app.exit(decision === 'exit' ? 0 : 1);
 });
 process.on('unhandledRejection', (reason) => {
   // Never crash/relaunch on an unhandled promise rejection — just log it.
