@@ -162,7 +162,8 @@ function provenance() {
     sim.hiddenDay = D1;
     const a4b = await runMirrorSync({ store, tally, kind: "full", scope });
     sim.emptyDay = null; sim.hiddenDay = null;
-    step("A4: when the AlterID read loses that day too, the database's per-day floor refuses, and the mirror is unchanged", a4b.state === "refused" && a4b.swap?.reason === "day_below_floor" && (await snap()) === before,
+    /* 8 of 14 is under the whole run's 80 percent too, so either floor of the database may answer first (the volume rig proves the per-day one alone). */
+    step("A4: when the AlterID read loses that day too, a floor of the database refuses (the run's or the day's), and the mirror is unchanged", a4b.state === "refused" && ["below_floor", "day_below_floor"].includes(String(a4b.swap?.reason)) && (await snap()) === before,
       `${a4b.state}: ${a4b.swap?.reason}`);
 
     // E1
