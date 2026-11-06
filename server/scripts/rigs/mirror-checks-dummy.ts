@@ -56,7 +56,7 @@ import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/s
 import { practiceCompany, practiceGuid } from "../../src/services/tallyRole.js";
 import { safePush } from "../../src/services/safePush.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams } from "../../src/services/erpJobAgent.js";
-import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, ledgerPeriod, parseBalance, assertParsedCollection, indiaToday, judgeLoadedPeriod, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
+import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, tallyMirrorReads, eachDay, ledgerPeriod, parseBalance, assertParsedCollection, indiaToday, judgeLoadedPeriod, tallyDateToIso, type MirrorSyncReport, type DayCheckReport } from "../../src/services/erpMirrorSync.js";
 import { buildCollectionXml } from "../../src/services/xmlBuilder.js";
 import { txt as tallyText, arr as tallyList } from "../../src/converters/convert.js";
 import { fetchReport, parseReport, REPORTS } from "../../src/services/tallyReports.js";
@@ -127,10 +127,11 @@ function pickWindow(byDay: Record<string, number>) {
      part and nothing more is sent. */
   const tbProof = async () => {
     const top = await tally.highest();
-    const judged = judgeLoadedPeriod(await tally.loadedPeriod(), indiaToday());
+    const loaded = await tally.loadedPeriod();
+    const judged = judgeLoadedPeriod(loaded, indiaToday(), top.latestDate);
     const asOf: string | null = judged.asOf;
     const readA = await tally.ledgers();
-    counts.loadedPeriod = { from: judged.from, to: judged.asOf, unexpected: judged.unexpected, why: judged.why, ledgers: readA.length, vouchers: top.count };
+    counts.loadedPeriod = { from: judged.from, to: judged.asOf, lastVoucherDate: loaded.lastVoucher ?? null, latestVoucherInAlterIdRead: top.latestDate, unexpected: judged.unexpected, why: judged.why, ledgers: readA.length, vouchers: top.count };
     const groupDef = { name: "erpRigGroups", tallyCollection: "Group", metadataType: "Group", category: "master", fetch: ["Name", "Parent"], timeout: 120_000, parallel: false } as any;
     const period = { from: judged.from ?? ledgerPeriod(asOf!).from, to: asOf! };
     /* The parsed reply (rawMode false): the rig's post returns raw text, which is never a collection. Found on the dummy, 6-Nov-2026. */
@@ -260,10 +261,11 @@ function pickWindow(byDay: Record<string, number>) {
   const periodProbe = async () => {
     const r2 = (n: number) => Math.round(n * 100) / 100;
     const today = indiaToday();
-    const p0 = judgeLoadedPeriod(await tally.loadedPeriod(), today);
     const h0 = await tally.highest();
+    const lp0 = await tally.loadedPeriod();
+    const p0 = judgeLoadedPeriod(lp0, today, h0.latestDate);
     const l0 = await tally.ledgers();
-    counts.before = { loadedFrom: p0.from, loadedTo: p0.asOf, today, vouchers: h0.count, highestAlterId: h0.alterId, latestVoucherDate: h0.latestDate, ledgers: l0.length,
+    counts.before = { loadedFrom: p0.from, loadedTo: p0.asOf, lastVoucherDate: lp0.lastVoucher ?? null, unexpected: p0.unexpected, why: p0.why, today, vouchers: h0.count, highestAlterId: h0.alterId, latestVoucherDate: h0.latestDate, ledgers: l0.length,
       vouchersAfterLoadedEnd: Object.entries(h0.byDay).filter(([d]) => d > p0.asOf).reduce((s, [, n]) => s + n, 0) };
     step("the loaded period ends before today, so the probe can tell", p0.asOf < today, `loaded ${p0.from} to ${p0.asOf}, today ${today}; latest voucher ${h0.latestDate}`);
     if (!(p0.asOf < today)) return;
@@ -273,15 +275,16 @@ function pickWindow(byDay: Record<string, number>) {
     const pr = await safePush(TALLY_URL, company!, p);
     step("one ZZTEST Contra dated today is in the dummy", pr.ok, pr.ok ? "" : pr.errors.join("; "));
     if (!pr.ok) return;
-    const p1 = judgeLoadedPeriod(await tally.loadedPeriod(), today);
     const h1 = await tally.highest();
+    const lp1 = await tally.loadedPeriod();
+    const p1 = judgeLoadedPeriod(lp1, today, h1.latestDate);
     const l1 = await tally.ledgers();
     const dayRead = await tally.vouchersOn(today);
     const f0 = new Map(l0.map((l) => [l.guid, parseBalance(l.closingbalance) ?? 0]));
     const moved = l1.filter((l) => (f0.get(l.guid) ?? 0) !== (parseBalance(l.closingbalance) ?? 0));
     const amt = (p.ledgerEntries ?? [])[0]?.amount ?? 0;
     const movedBy = [...new Set(moved.map((l) => Math.abs(r2((parseBalance(l.closingbalance) ?? 0) - (f0.get(l.guid) ?? 0)))))];
-    counts.after = { loadedFrom: p1.from, loadedTo: p1.asOf, vouchers: h1.count, highestAlterId: h1.alterId, latestVoucherDate: h1.latestDate,
+    counts.after = { loadedFrom: p1.from, loadedTo: p1.asOf, lastVoucherDate: lp1.lastVoucher ?? null, unexpected: p1.unexpected, why: p1.why, vouchers: h1.count, highestAlterId: h1.alterId, latestVoucherDate: h1.latestDate,
       todayInUndatedRead: h1.byDay[today] ?? 0, todayInDatedRead: dayRead.length, ledgersWhoseBalanceMoved: moved.length, movedBy, contraAmount: amt };
     step("the dated read of today sees the Contra", dayRead.length >= 1, `${dayRead.length} on ${today}`);
     step("finding: does the undated AlterID read see a voucher dated after the loaded period's end?", true,
@@ -290,7 +293,14 @@ function pickWindow(byDay: Record<string, number>) {
     step("finding: did the loaded period move?", true, `${p0.from} to ${p0.asOf} before, ${p1.from} to ${p1.asOf} after`);
     const s = sweep(today); pushedDays.delete(today);
     const h2 = await tally.highest();
-    counts.afterSweep = { vouchers: h2.count, todayInUndatedRead: h2.byDay[today] ?? 0 };
+    const lp2 = await tally.loadedPeriod();
+    const p2 = judgeLoadedPeriod(lp2, today, h2.latestDate);
+    counts.afterSweep = { vouchers: h2.count, todayInUndatedRead: h2.byDay[today] ?? 0, latestVoucherDate: h2.latestDate, loadedTo: p2.asOf, lastVoucherDate: lp2.lastVoucher ?? null, unexpected: p2.unexpected, why: p2.why };
+    step("D-1-5.43: Tally gives a last voucher date, and it agrees with the latest date of the AlterID read before, with the voucher and after the sweep",
+      tallyDateToIso(lp0.lastVoucher) === h0.latestDate && tallyDateToIso(lp1.lastVoucher) === h1.latestDate && tallyDateToIso(lp2.lastVoucher) === h2.latestDate,
+      `last voucher ${lp0.lastVoucher}/${lp1.lastVoucher}/${lp2.lastVoucher}, AlterID read ${h0.latestDate}/${h1.latestDate}/${h2.latestDate}`);
+    step("D-1-5.43: with the new rule the period is expected before the push, with the voucher dated today, and after the sweep", !p0.unexpected && !p1.unexpected && !p2.unexpected,
+      `${p0.why ?? "expected"}; ${p1.why ?? "expected"}; ${p2.why ?? "expected"} (period ends ${p0.asOf}, ${p1.asOf}, ${p2.asOf})`);
     step("swept: Tally's count is back to where it was", s.status === 0 && h2.count === h0.count, `sweep exit ${s.status}; ${h2.count} vouchers (before ${h0.count})`);
   };
 

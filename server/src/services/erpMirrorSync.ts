@@ -126,7 +126,10 @@ export const ERP_MIRROR_COMPANY_DEF: CollectionDef = {
   tallyCollection: "Company",
   metadataType: "Company",
   category: "master",
-  fetch: ["Name", "Guid", "StartingFrom", "EndingAt"],
+  /* LastVoucherDate (D-1-5.43): the company's latest voucher date, so a period
+     that ends before today can still be shown to hide nothing. A field Tally
+     leaves empty is "not shown", never "nothing after" (G7). */
+  fetch: ["Name", "Guid", "StartingFrom", "EndingAt", "LastVoucherDate"],
   timeout: 30_000,
   parallel: false,
 };
@@ -136,10 +139,11 @@ export function loadedPeriodFromParsed(parsed: any, company: string): LoadedPeri
   const col = parsed?.ENVELOPE?.BODY?.DATA?.COLLECTION;
   const all = tallyList(col?.COMPANY ?? col?.["COMPANY.LIST"]).map((c: any) => ({
     name: (tallyText(c?.["@_NAME"]) || tallyText(c?.NAME)).trim(), from: tallyText(c?.STARTINGFROM).trim() || null, to: tallyText(c?.ENDINGAT).trim() || null,
+    lastVoucher: tallyText(c?.LASTVOUCHERDATE).trim() || null,
   }));
   const mine = all.filter((c) => c.name === company.trim());
   if (mine.length !== 1) throw new Error(`refused: the company period read found ${mine.length} companies named as this one (of ${all.length}), so the ledger balances would have no date; the run fails`);
-  return { from: mine[0].from, to: mine[0].to };
+  return { from: mine[0].from, to: mine[0].to, lastVoucher: mine[0].lastVoucher };
 }
 
 export interface MirrorLedgerRow {
@@ -301,24 +305,42 @@ export function tallyDateToIso(raw: unknown): string | null {
 }
 
 /** The period Tally has loaded, as the Company object says (raw strings). */
-export interface LoadedPeriod { from: string | null; to: string | null }
+export interface LoadedPeriod { from: string | null; to: string | null; lastVoucher?: string | null }
 
 /**
- * Pure (D-C.2): the as-of date for a ledger read with no period is the end of
- * the period Tally has loaded. That period is expected when it starts on the
- * financial year's 1 April (of today, India time) and ends today or later
- * within that year. Anything else is balance_period_unexpected. An end date
- * that cannot be read refuses the run: a balance with no known date is not
- * kept.
+ * Pure (D-C.2, D-1-5.43): the as-of date for a ledger read with no period is
+ * the end of the period Tally has loaded. On the dummy (6-Nov-2026) that end
+ * is the latest voucher date (EndingAt 5-Nov while the latest voucher was
+ * 5-Nov), and it moved to 6-Nov the moment a voucher dated 6-Nov went in. So
+ * a period that ends yesterday is normal on a morning before anyone types.
+ *
+ * The period is expected when all of these hold:
+ *  - it starts on the financial year's 1 April (of today, India time);
+ *  - it ends within that year;
+ *  - no voucher Tally gave us is dated after its end: neither the latest
+ *    date of this run's AlterID read nor the Company's LastVoucherDate;
+ *  - if it ends before today, Tally gave a readable LastVoucherDate on or
+ *    before the end (otherwise nothing shows the days after it are empty).
+ * Anything else is balance_period_unexpected: the figures could leave out
+ * vouchers, so they are never the year's or today's balances. An end date
+ * that cannot be read refuses the run.
+ * Weaker guarantee (P7): the AlterID read and LastVoucherDate come from the
+ * same Tally; if a person narrowed the period by hand and Tally hid the later
+ * vouchers from both, this cannot see it. The rig shows LastVoucherDate is
+ * filled and agrees with the AlterID read.
  */
-export function judgeLoadedPeriod(p: LoadedPeriod, today: string): { asOf: string; from: string | null; unexpected: boolean; why: string | null } {
+export function judgeLoadedPeriod(p: LoadedPeriod, today: string, latestVoucherDate: string | null): { asOf: string; from: string | null; unexpected: boolean; why: string | null } {
   const to = tallyDateToIso(p.to), from = tallyDateToIso(p.from);
   if (!to) throw new Error(`refused: Tally's loaded period has no end date that can be read (${JSON.stringify(p.to ?? null)}), so the ledger balances would have no date; the run fails and nothing is swapped`);
+  const last = tallyDateToIso(p.lastVoucher);
   const fy = ledgerPeriod(today);
   const fyEnd = `${Number(fy.from.slice(0, 4)) + 1}-03-31`;
   const why = from !== fy.from ? `the loaded period starts ${from ?? "on no readable date"}, not ${fy.from}`
-    : to < today ? `the loaded period ends ${to}, before today ${today}`
     : to > fyEnd ? `the loaded period ends ${to}, after the financial year ends ${fyEnd}`
+    : to < fy.from ? `the loaded period ends ${to}, before it starts ${fy.from}`
+    : latestVoucherDate && latestVoucherDate > to ? `Tally holds a voucher dated ${latestVoucherDate}, after the loaded period ends ${to}`
+    : last && last > to ? `Tally's last voucher date is ${last}, after the loaded period ends ${to}`
+    : to < today && !last ? `the loaded period ends ${to}, before today ${today}, and Tally gave no last voucher date (${JSON.stringify(p.lastVoucher ?? null)}) to show nothing is dated after it`
     : null;
   return { asOf: to, from, unexpected: why !== null, why };
 }
@@ -633,12 +655,20 @@ async function runMirror(opts: {
       /* M-6: the ledgers and their closing balances, one request, checked
          before any is kept. An empty list is never "no ledgers". */
       /* D-C.2: the balances are for the period Tally has loaded; its end is the as-of date. */
-      const period = judgeLoadedPeriod(await tally.loadedPeriod(), opts.today ?? indiaToday());
+      const loaded = await tally.loadedPeriod();
       report.tallyReads++;
+      let period = judgeLoadedPeriod(loaded, opts.today ?? indiaToday(), top.latestDate);
       const asOf = period.asOf;
-      if (period.unexpected) log(`ledger read flagged balance_period_unexpected: ${period.why}`);
       const [list, msL] = await timed(() => tally.ledgers());
       report.tallyReads++;
+      /* D-1-5.43: the period is read again after the ledgers. If it moved (a
+         voucher went in meanwhile), the figures' date is not known. */
+      const again = await tally.loadedPeriod();
+      report.tallyReads++;
+      if (!period.unexpected && (again.from !== loaded.from || again.to !== loaded.to || (again.lastVoucher ?? null) !== (loaded.lastVoucher ?? null))) {
+        period = { ...period, unexpected: true, why: `the loaded period moved during the ledger read (${loaded.from} to ${loaded.to}, then ${again.from} to ${again.to})` };
+      }
+      if (period.unexpected) log(`ledger read flagged balance_period_unexpected: ${period.why}`);
       if (!list.length) throw new Error("refused: the ledger read came back empty, which is not a list of ledgers, so the run fails and nothing is swapped");
       const problems = list.map(ledgerProblem).filter((p): p is string => !!p);
       if (problems.length) {
