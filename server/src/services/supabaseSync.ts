@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { recordPricePull } from "./priceChangeLog.js";
+import { postgrestInList } from "./postgrestFilter.js";
 import ws from "ws";
 import { supabaseClient } from "./supabaseClient.js";
 import {
@@ -1795,7 +1796,7 @@ export class SupabaseSync {
           .from("order_draft_lines")
           .delete()
           .eq("company", company)
-          .not("item_id", "in", `(${currentIds.join(",")})`);
+          .not("item_id", "in", postgrestInList(currentIds));   // S-7: each id quoted and escaped
         if (error) console.warn(`[Supabase] order_draft_lines orphan delete: ${error.message}`);
       }
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
