@@ -67,6 +67,7 @@ const emit = async (n: string) => {
   if (error) throw new Error(`emit ${n}: ${error.message}`);
 };
 
+async function main(): Promise<void> {
 try {
   await subscribe();
   await sleep(1500);   // let the server finish wiring the subscription before the first trial
@@ -111,3 +112,6 @@ try {
   if (OUT) { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify({ rig: "realtime-signals-live", at: new Date().toISOString(), run, trials: TRIALS, provenance: provenance(), results }, null, 2)); }
   process.exit(failed ? 1 : 0);
 }
+}
+
+main().catch((e) => { console.error(e); process.exit(2); });
