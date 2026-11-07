@@ -22,7 +22,7 @@ import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import {
   mirrorRowFrom, scrubName, scrubSaltFrom, voucherProblem, isAccountingType, eachDay, runMirrorSync, assertParsedCollection, tallyMirrorReads,
-  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, applyAcceptedDrops, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_VOUCHERTYPE_DEF, ERP_MIRROR_UNIT_DEF, ERP_MIRROR_ITEM_DEF, voucherExtrasFromParsed, voucherExtraFields, ledgerContactFields, ERP_MIRROR_MARK_DEF,
+  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, applyAcceptedDrops, deriveStepState, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_VOUCHERTYPE_DEF, ERP_MIRROR_UNIT_DEF, ERP_MIRROR_ITEM_DEF, voucherExtrasFromParsed, voucherExtraFields, ledgerContactFields, ERP_MIRROR_MARK_DEF,
   indiaToday, ledgerPeriod, judgeLoadedPeriod, incrementalRanges, INCREMENTAL_CHUNK, ERP_MIRROR_VOUCHER_DEF, loadedPeriodFromParsed, tallyDateToIso, ERP_MIRROR_COMPANY_DEF,
   type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult, type MirrorLedgerRow, type TallyLedger, type DayCheckVoucher, type AcceptedRun,
 } from "../src/services/erpMirrorSync.js";
@@ -52,7 +52,7 @@ const voucher = (guid: string, date: string, alterid: number, extra: Record<stri
   ...extra,
 });
 
-function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boolean; salt?: string | null; repull?: string | null; check?: Record<string, any>; accepted?: AcceptedRun[] | unknown; acceptedSwap?: (run: string) => SwapResult | Error } = {}) {
+function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boolean; salt?: string | null; repull?: string | null; check?: Record<string, any>; accepted?: AcceptedRun[] | unknown; acceptedSwap?: (run: string) => SwapResult | Error; derive?: () => Record<string, any> | Error } = {}) {
   const calls: string[] = [];
   const staged: MirrorRow[] = [];
   const ledgers: MirrorLedgerRow[] = [];
@@ -86,6 +86,7 @@ function fakeStore(opts: { mark?: number | null; swap?: SwapResult; isTest?: boo
       if (r instanceof Error) throw r;
       return r;
     },
+    ...(opts.derive ? { async deriveTally() { calls.push("derive"); const d = opts.derive!(); if (d instanceof Error) throw d; return d; } } : {}),
   };
   return { store, calls, staged, steps, ledgers, get swapArgs() { return swapArgs; }, get failed() { return failed; }, get checked() { return checked; } };
 }
@@ -554,6 +555,39 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
     let threw = "";
     try { await applyAcceptedDrops({ store: f4.store, log: () => {} }); } catch (e) { threw = (e as Error).message; }
     ok("an answer that is not a list is a fault, never 'nothing accepted'", /not a list/.test(threw) && !f4.calls.some((c) => c.startsWith("swap")), threw);
+  }
+
+  H("THE COPY INTO THE SWAP STORE IS WRITTEN AS WHAT IT WAS (review of thread 8, item 14)");
+  {
+    const whole = { mirror_vouchers: 4, with_block: 4, without_block: 0, deletes_skipped: false, day_floor_days: 0, day_floor_list: [] };
+    ok("a whole copy is ok", deriveStepState(whole).state === "ok");
+    ok("a mirror voucher without its block is info", deriveStepState({ ...whole, with_block: 3, without_block: 1, deletes_skipped: true }).state === "info");
+    ok("skipped deletes alone are info", deriveStepState({ ...whole, deletes_skipped: true }).state === "info");
+    ok("a day held back by the per-day floor is failed", deriveStepState({ ...whole, deletes_skipped: true, day_floor_days: 2 }).state === "failed");
+    ok("no answer at all is failed", deriveStepState(null).state === "failed");
+    const run = async (derive: () => Record<string, any> | Error) => {
+      const f = fakeStore({ derive });
+      const rep = await runMirrorSync({ store: f.store, tally: fakeTally({ "2026-11-01": [voucher("G-D1", "20261101", 40)] }, { highest: 40, counted: { "2026-11-01": 1 }, vouchers: [{ k: "G-D1", d: "2026-11-01", a: 40 }] }).tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" }, ledgers: false, log: () => {} });
+      return { f, rep };
+    };
+    const a = await run(() => whole);
+    ok("a whole copy writes an ok step and no tallyError", a.f.steps.some((x) => /^copied the tally-shaped rows/.test(x.step) && x.state === "ok") && !a.rep.tallyError);
+    const b = await run(() => ({ ...whole, with_block: 3, without_block: 1, deletes_skipped: true }));
+    ok("a copy with an unblocked voucher writes an info step that names it", b.f.steps.some((x) => x.state === "info" && /no tally-shaped block/.test(x.step)) && b.rep.state === "swapped");
+    const c = await run(() => ({ ...whole, deletes_skipped: true, day_floor_days: 1 }));
+    ok("a held-back day writes a failed step and sets tallyError, and the run still finishes swapped", c.f.steps.some((x) => x.state === "failed" && /per-day floor/.test(x.step)) && !!c.rep.tallyError && c.rep.state === "swapped");
+    const d = await run(() => new Error("derive boom"));
+    ok("a thrown copy writes a failed step", d.f.steps.some((x) => x.state === "failed" && /could not copy/.test(x.step)) && /boom/.test(d.rep.tallyError ?? ""));
+    // an accepted drop: the copy leaves a step on the run and a failure is reported on the entry
+    const e1 = fakeStore({ accepted: [{ acceptance: "A1", run_id: "RUN1" }], derive: () => whole });
+    const r1 = await applyAcceptedDrops({ store: e1.store, log: () => {} });
+    ok("an accepted drop that swapped writes the copy step on its own run", e1.steps.some((x) => /^copied the tally-shaped rows/.test(x.step) && x.state === "ok") && e1.calls.join("|") === "accepted list|swap accepted RUN1|derive|step copied the tally-shaped rows for the go-live swap" && r1[0].tally?.with_block === 4, e1.calls.join("|"));
+    const e2 = fakeStore({ accepted: [{ acceptance: "A1", run_id: "RUN1" }], derive: () => new Error("derive down") });
+    const r2 = await applyAcceptedDrops({ store: e2.store, log: () => {} });
+    ok("an accepted drop whose copy fails records a failed step and the error, and is still reported as swapped", e2.steps.some((x) => x.state === "failed") && /derive down/.test(r2[0].tallyError ?? "") && r2[0].state === "swapped");
+    const e3 = fakeStore({ accepted: [{ acceptance: "A1", run_id: "RUN1" }], acceptedSwap: () => ({ state: "refused", reason: "x" }), derive: () => whole });
+    await applyAcceptedDrops({ store: e3.store, log: () => {} });
+    ok("a refused accepted drop is not copied", !e3.calls.includes("derive"));
   }
 
   H("PART 7: THE FULL FETCH LIST (phone, mobile, PAN, registration type, bill-wise, who entered it, instruments)");

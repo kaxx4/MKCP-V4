@@ -754,12 +754,30 @@ export async function runRepull(opts: { store: MirrorStore; tally: MirrorTally; 
   return runMirror({ ...opts, kind: "repull" });
 }
 
+/**
+ * How a copy into the swap store is written in the run diary (review of thread 8, item 14). "ok" only when the copy was whole:
+ * every mirror voucher had its block and its deletes ran. A mirror voucher with no block, or deletes that were skipped, is
+ * "info"; a day that the per-day floor held back (the database refused to delete from a day that lost too much) is "failed",
+ * because the swap store then keeps rows the mirror no longer has. Pure.
+ */
+export function deriveStepState(t: Record<string, any> | null | undefined): { state: "ok" | "info" | "failed"; note: string | null } {
+  if (!t) return { state: "failed", note: "the database gave no answer for the copy" };
+  const floorDays = Number(t.day_floor_days ?? 0);
+  if (floorDays > 0) return { state: "failed", note: `deletes held back by the per-day floor on ${floorDays} day(s)` };
+  const without = Number(t.without_block ?? 0);
+  if (without > 0) return { state: "info", note: `${without} mirror voucher(s) have no tally-shaped block, so no delete ran` };
+  if (t.deletes_skipped === true) return { state: "info", note: "deletes were skipped" };
+  return { state: "ok", note: null };
+}
+
 /** After a swap: copy the mirror's tally-shaped blocks into the swap store. The mirror itself is already swapped, so a failure here is reported, never thrown. */
-async function deriveAfterSwap(store: MirrorStore, runId: string, report: MirrorSyncReport, log: (l: string) => void): Promise<void> {
+async function deriveAfterSwap(store: MirrorStore, runId: string, report: { tally?: Record<string, any> | null; tallyError?: string | null }, log: (l: string) => void): Promise<void> {
   try {
     const t0 = Date.now();
     report.tally = await store.deriveTally!();
-    await store.step(runId, "copied the tally-shaped rows for the go-live swap", "ok", null, Date.now() - t0, report.tally);
+    const { state, note } = deriveStepState(report.tally);
+    if (state !== "ok") { if (state === "failed") report.tallyError = note; log(`tally rows copied with a warning: ${note}`); }
+    await store.step(runId, state === "ok" ? "copied the tally-shaped rows for the go-live swap" : `copied the tally-shaped rows for the go-live swap, but ${note}`, state, null, Date.now() - t0, report.tally);
   } catch (e) {
     report.tallyError = e instanceof Error ? e.message : String(e);
     log(`tally rows not derived: ${report.tallyError}`);
@@ -965,7 +983,7 @@ export async function runDayCheck(opts: { store: MirrorStore; tally: MirrorTally
 }
 
 /** What an Owner-accepted drop did when the agent applied it (task 1-5, migration 0121). */
-export interface AcceptedDropReport { run_id: string; acceptance: string; state: "swapped" | "refused" | "failed"; reason: string | null; error: string | null }
+export interface AcceptedDropReport { run_id: string; acceptance: string; state: "swapped" | "refused" | "failed"; reason: string | null; error: string | null; tally?: Record<string, any> | null; tallyError?: string | null }
 
 /**
  * Apply the big drops an Owner has accepted, one run at a time. The agent does
@@ -983,8 +1001,10 @@ export async function applyAcceptedDrops(opts: { store: MirrorStore; log?: (line
     try {
       const r = await opts.store.swapAccepted(a.run_id);
       const state = r.state === "swapped" ? "swapped" : "refused";
-      out.push({ run_id: a.run_id, acceptance: a.acceptance, state, reason: state === "swapped" ? null : String(r.reason ?? "refused"), error: null });
-      if (state === "swapped" && opts.store.deriveTally) { try { await opts.store.deriveTally(); } catch (e2) { log(`accepted drop of run ${a.run_id}: tally rows not derived: ${e2 instanceof Error ? e2.message : String(e2)}`); } }
+      const entry: AcceptedDropReport = { run_id: a.run_id, acceptance: a.acceptance, state, reason: state === "swapped" ? null : String(r.reason ?? "refused"), error: null };
+      out.push(entry);
+      /* The same copy and the same diary line as after an ordinary swap: a derive failure is recorded on the run, not only logged. */
+      if (state === "swapped" && opts.store.deriveTally) await deriveAfterSwap(opts.store, a.run_id, entry, log);
       log(`accepted drop of run ${a.run_id}: ${state}${state === "refused" ? ` (${String(r.reason ?? "")}: ${String(r.why ?? "")})` : ""}`);
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
