@@ -115,6 +115,9 @@ export const ERP_TEST_RPCS: readonly string[] = [
   /* Go-live swap, option C (migration 0129): copy the tally-shaped blocks out of the mirror rows. The database checks the
      machine key, the ZZTEST company key and test rows, and refuses a test row that carries a personal field. */
   "erp_tally_derive", "erp_tally_test_cleanup",
+  /* The masters of the swap store (services/erpMasters.ts, migrations 0125 and 0136): put and finish. The database lets the sandbox key write
+     only a ZZTEST company key, as test rows, and refuses the three voucher tables here (those are the derive's). */
+  "erp_tally_put", "erp_tally_finish",
 ];
 /** ERP mirror tables the sandbox may read (GET only, only is_test rows), task 1-5. */
 export const ERP_TEST_READ_TABLES: readonly string[] = [

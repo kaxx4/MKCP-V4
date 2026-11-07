@@ -138,6 +138,28 @@ export function voucherChildRows(v: any, company: string): { ledger: any[]; inve
   return { ledger, inventory };
 }
 
+/**
+ * One declared GST rate as a tally_gst_rates row (without synced_at). One definition: the old sync and the ERP masters
+ * (services/erpMasters.ts, go-live swap) both build the row here.
+ */
+export function gstRateRow(
+  r: { scope: "item" | "stock_group"; name: string; effectiveFrom: string; gstRate: number; cgst: number; sgst: number; igst: number; taxability: string; parent?: string },
+  company: string,
+): Record<string, unknown> {
+  return {
+    company,
+    scope: r.scope,
+    name: r.name,
+    effective_from: r.effectiveFrom,
+    gst_rate: r.gstRate,
+    cgst_rate: r.cgst,
+    sgst_rate: r.sgst,
+    igst_rate: r.igst,
+    taxability: r.taxability || null,
+    parent: r.parent || null,
+  };
+}
+
 export class SupabaseSync {
   private client: SupabaseClient | null;
 
@@ -1723,19 +1745,7 @@ export class SupabaseSync {
     if (!this.client) return undefined;
     if (!rows.length) return 0;
     const t0 = Date.now();
-    const mapped = rows.map((r) => ({
-      company,
-      scope: r.scope,
-      name: r.name,
-      effective_from: r.effectiveFrom,
-      gst_rate: r.gstRate,
-      cgst_rate: r.cgst,
-      sgst_rate: r.sgst,
-      igst_rate: r.igst,
-      taxability: r.taxability || null,
-      parent: r.parent || null,
-      synced_at: new Date().toISOString(),
-    }));
+    const mapped = rows.map((r) => ({ ...gstRateRow(r, company), synced_at: new Date().toISOString() }));
     /* Every row is still written — the web shows the newest synced_at as how
        fresh Tally's rate answer is (engine/gstMaster.ts) — but the pass now
        reports how many rows actually differ, so the masters history row can

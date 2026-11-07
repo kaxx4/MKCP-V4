@@ -123,17 +123,17 @@ function entriesFor(
  * Two requests, both cheap — measured at 861 KB / 62 ms for items and
  * 98 KB / 15 ms for groups.
  */
-export async function fetchGstRates(tallyUrl: string, company: string): Promise<GstRateEntry[]> {
+export async function fetchGstRates(tallyUrl: string, company: string, limits: { itemsMs?: number; groupsMs?: number } = {}): Promise<GstRateEntry[]> {
   const itemsXml: string = await tallyPost(
     tallyUrl,
     buildCollection({ id: "MkGstItems", type: "StockItem", fetch: ["NAME", "PARENT", "GSTDETAILS.LIST"], company }),
-    240_000,
+    limits.itemsMs ?? 240_000,
     true,
   );
   const groupsXml: string = await tallyPost(
     tallyUrl,
     buildCollection({ id: "MkGstGroups", type: "StockGroup", fetch: ["NAME", "PARENT", "GSTDETAILS.LIST"], company }),
-    120_000,
+    limits.groupsMs ?? 120_000,
     true,
   );
 

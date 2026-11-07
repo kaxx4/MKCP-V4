@@ -711,24 +711,8 @@ export interface MirrorSyncReport {
 }
 
 const STAGE_BATCH = 500;
-/** Review of thread 8, item 15: a voucher row now carries its tally-shaped block, so 500 rows can be many megabytes. A request holds at most this many bytes of JSON. */
-export const STAGE_MAX_BYTES = 1_500_000;
-
-/**
- * Pure: split rows into requests of at most `maxRows` rows AND at most `maxBytes` of JSON. A single row bigger than the cap
- * goes alone (it cannot be split), so no row is ever dropped. Order is kept.
- */
-export function stageChunks<T>(rows: readonly T[], maxRows = STAGE_BATCH, maxBytes = STAGE_MAX_BYTES): T[][] {
-  const out: T[][] = [];
-  let cur: T[] = []; let bytes = 0;
-  for (const r of rows) {
-    const b = Buffer.byteLength(JSON.stringify(r), "utf8") + 1;
-    if (cur.length > 0 && (cur.length >= maxRows || bytes + b > maxBytes)) { out.push(cur); cur = []; bytes = 0; }
-    cur.push(r); bytes += b;
-  }
-  if (cur.length) out.push(cur);
-  return out;
-}
+export { STAGE_MAX_BYTES, stageChunks } from "./stageChunks.js";
+import { STAGE_MAX_BYTES, stageChunks } from "./stageChunks.js";
 
 /** L3 (task 1-5): vouchers per incremental request at most. The busiest dummy day (245 vouchers with their lines) read in one request in 79 s. */
 export const INCREMENTAL_CHUNK = 200;

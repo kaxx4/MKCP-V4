@@ -693,11 +693,11 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("the live mirror stays out of reach", f("/rest/v1/tally_vouchers?select=*", "GET") !== null && f("/rest/v1/tally_vouchers", "POST") !== null);
 
   /* Review of thread 8, item 16: the fence for the swap store, the derive and the signals, each named. */
-  for (const fn of ["erp_tally_derive", "erp_tally_test_cleanup", "erp_signal_test_emit", "erp_signal_test_cleanup", "erp_signal_catch_up"]) {
+  for (const fn of ["erp_tally_derive", "erp_tally_test_cleanup", "erp_tally_put", "erp_tally_finish", "erp_signal_test_emit", "erp_signal_test_cleanup", "erp_signal_catch_up"]) {
     ok(`the sandbox may call ${fn}, by POST only`, ERP_TEST_RPCS.includes(fn) && f(`/rest/v1/rpc/${fn}`) === null && f(`/rest/v1/rpc/${fn}`, "GET") !== null && f(`/rest/v1/rpc/${fn}`, "DELETE") !== null);
   }
-  ok("no other erp_tally_ or erp_signal_ function is open (put, finish, parity, ready, the read path, the classes, the real emit)",
-    ["erp_tally_put", "erp_tally_finish", "erp_tally_parity", "erp_tally_swap_ready", "erp_tally_swap_read_path", "erp_tally_class", "erp_tally_view_classes_sync", "erp_tally_visible_tables", "erp_signal_emit", "erp_signal_prune", "erp_signal_prune_now"]
+  ok("no other erp_tally_ or erp_signal_ function is open (parity, ready, the read path, the classes, the real emit)",
+    ["erp_tally_parity", "erp_tally_swap_ready", "erp_tally_swap_read_path", "erp_tally_class", "erp_tally_view_classes_sync", "erp_tally_visible_tables", "erp_signal_emit", "erp_signal_prune", "erp_signal_prune_now"]
       .every((fn) => !ERP_TEST_RPCS.includes(fn) && f(`/rest/v1/rpc/${fn}`) !== null));
   for (const tb of ["erp_tally_rows", "erp_change_signals"]) {
     ok(`${tb}: read only, only is_test rows`, f(`/rest/v1/${tb}?select=*&is_test=eq.true`, "GET") === null && f(`/rest/v1/${tb}?select=*`, "GET") !== null && f(`/rest/v1/${tb}?select=*&is_test=eq.false`, "GET") !== null);
