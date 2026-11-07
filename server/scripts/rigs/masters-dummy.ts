@@ -116,7 +116,7 @@ setInterval(() => {
     const rowsOf = async (t: MasterTable) => {
       const out: { key: string; row: Record<string, any>; is_test: boolean }[] = [];
       for (let from = 0; ; from += 1000) {
-        const { data, error } = await c.from("erp_tally_rows").select("key,row,is_test").eq("company_key", companyKey).eq("tally_table", t).order("key").range(from, from + 999);
+        const { data, error } = await c.from("erp_tally_rows").select("key,row,is_test").eq("company_key", companyKey).eq("tally_table", t).eq("is_test", true).order("key").range(from, from + 999);
         if (error) throw new Error(`erp_tally_rows ${t}: ${error.message}`);
         out.push(...((data ?? []) as any[]));
         if (!data || data.length < 1000) break;
