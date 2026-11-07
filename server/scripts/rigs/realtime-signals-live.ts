@@ -14,6 +14,11 @@
  *      opened again, and the catch-up function (the one a screen calls) must name the run's table for those
  *      5 signals, and the channel must carry new signals again.
  *
+ * THE REALTIME SOCKET IS OUTSIDE THE FENCE. `erpTestFence` judges HTTP requests (rest and rpc); a realtime websocket is not one, so
+ * the fence never sees what this rig subscribes to. The protection here is the rig itself: it listens to one table
+ * (`erp_change_signals`) and filters on its own run name, it writes only through `erp_signal_test_emit`, and it is a rig
+ * (never imported by the agent). Do not copy this client into agent code (task 1-6, review of thread 8, item 16).
+ *
  * Not run here, and why: the "wrong-role subscriber" check (R6) needs a signed-in session without an ERP role,
  * and live-test rule 4 forbids a fake user on live sign-in. The database-level half is in
  * supabase/live-tests/1-6_signals.sql (a signed-in person with no ERP role and the public key read no signal).

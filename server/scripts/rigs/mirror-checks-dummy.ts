@@ -64,6 +64,7 @@ import { escapeXml, tallyDate as xmlTallyDate } from "../../src/services/xml.js"
 import { rigPayload } from "./lib/simTally.js";
 import { isSweepVoucher } from "../lib/testVoucherMatch.js";
 import type { VoucherPayload } from "../../src/types.js";
+import { swapStoreCleanup } from "./rigExit.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : null; };
@@ -485,7 +486,8 @@ function pickWindow(byDay: Record<string, number>) {
   } finally {
     for (const d of pushedDays) { const r = sweep(d); step(`swept ZZTEST vouchers from ${d}`, r.status === 0, `sweep exit ${r.status}`); }
     const { data: cleaned, error: ce } = await c.rpc("erp_sync_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });
-    await c.rpc("erp_tally_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });   // the swap store's test rows (migration 0130)
+    const swapClean = await swapStoreCleanup(c, machine, key, companyKey);   // the swap store's test rows (migration 0130): the call is checked and the leftover rows counted
+    step("the swap store holds none of this run's test rows after the clean-up", swapClean.ok, swapClean.detail);
     const ids = made.map((m) => m.job);
     const d1 = ids.length ? await c.from("erp_jobs").delete().in("id", ids).eq("is_test", true) : { error: null };
     const d2 = made.length ? await c.from("erp_proposal_requests").delete().in("request_id", made.map((m) => m.request)).eq("is_test", true) : { error: null };

@@ -38,11 +38,13 @@ export interface TallyShapeOpts {
 }
 
 /** Columns that hold a person's or a registration's details: null on every test row. */
-const PERSONAL_VOUCHER_COLUMNS = [
+export const PERSONAL_VOUCHER_COLUMNS = [
   "reference", "irn", "irn_ack_no", "irn_ack_date", "irn_qr", "ewb_number", "ewb_valid_until", "vehicle_number",
   "consignee_pincode", "consignee_place", "consignee_state", "ship_to_place", "dispatch_from_place", "party_gstin",
   "buyer_name", "buyer_address", "buyer_pincode", "buyer_pincode_source", "buyer_place", "buyer_state",
   "ewb_details", "ledger_entries",
+  /* The distance is worked out from the two addresses, and the embedded inventory copy repeats the stock lines: neither may ride a test row (migration 0138 refuses them). */
+  "transport_distance_km", "inventory_entries",
 ] as const;
 
 /** The tally_vouchers columns, in the live table's order (checked against information_schema, 6-Nov-2026). */

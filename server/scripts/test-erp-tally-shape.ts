@@ -7,7 +7,7 @@
  *   npx tsx scripts/test-erp-tally-shape.ts
  */
 import {
-  tallyBlobFrom, TALLY_VOUCHER_COLUMNS, TALLY_LEDGER_ENTRY_COLUMNS, TALLY_INVENTORY_ENTRY_COLUMNS,
+  tallyBlobFrom, PERSONAL_VOUCHER_COLUMNS, TALLY_VOUCHER_COLUMNS, TALLY_LEDGER_ENTRY_COLUMNS, TALLY_INVENTORY_ENTRY_COLUMNS,
 } from "../src/services/erpTallyShape.js";
 import { mirrorRowFrom, scrubName, scrubSaltFrom } from "../src/services/erpMirrorSync.js";
 import { SupabaseSync, voucherChildRows } from "../src/services/supabaseSync.js";
@@ -63,8 +63,23 @@ console.log("\nA TEST RUN CARRIES NO PERSONAL FIELD");
 const tb = tallyBlobFrom(voucher(), test)!;
 ok("the party is a keyed stand-in", /^ZZ TEST PARTY [0-9a-f]{10}$/.test(String(tb.voucher.party_ledger_name)));
 ok("every ledger line name is a stand-in and its bill allocations are gone", tb.ledger_entries.every((r) => /^ZZ TEST LEDGER [0-9a-f]{10}$/.test(String(r.ledger_name)) && r.bill_allocations === null));
-for (const c of ["reference", "irn", "irn_ack_no", "irn_ack_date", "irn_qr", "ewb_number", "ewb_valid_until", "vehicle_number", "consignee_pincode", "consignee_place", "consignee_state", "ship_to_place", "dispatch_from_place", "party_gstin", "buyer_name", "buyer_address", "buyer_pincode", "buyer_place", "buyer_state", "ewb_details", "ledger_entries"]) {
+/* Review of thread 8, item 16: the list is the code's own (PERSONAL_VOUCHER_COLUMNS), not a copy typed here, and every column on it is FILLED in the real block, so
+   "is null" in the test block means the code nulled it and not that the fixture never had it. */
+const REQUIRED_NULLED = ["reference", "irn", "irn_ack_no", "irn_ack_date", "irn_qr", "ewb_number", "ewb_valid_until", "vehicle_number", "consignee_pincode", "consignee_place",
+  "consignee_state", "ship_to_place", "dispatch_from_place", "party_gstin", "buyer_name", "buyer_address", "buyer_pincode", "buyer_pincode_source", "buyer_place", "buyer_state",
+  "ewb_details", "ledger_entries", "transport_distance_km", "inventory_entries"];
+ok("the code's list of nulled voucher columns is exactly the 24 the database refuses (migration 0138)", same(PERSONAL_VOUCHER_COLUMNS, REQUIRED_NULLED), PERSONAL_VOUCHER_COLUMNS.length + " columns");
+const realBlock = tallyBlobFrom(voucher(), real)!;
+for (const c of PERSONAL_VOUCHER_COLUMNS) {
+  /* ledger_entries (the embedded copy on the voucher row) is only filled when Tally embeds it; the fixture does not, so it is checked by a planted value below */
+  if (c !== "ledger_entries") ok(`real run: ${c} is FILLED (so the nulling in the test run is meaningful)`, realBlock.voucher[c] !== null && realBlock.voucher[c] !== undefined && realBlock.voucher[c] !== "", String(realBlock.voucher[c]));
   ok(`test run: ${c} is null`, tb.voucher[c] === null);
+}
+{
+  const withEmbedded = tallyBlobFrom({ ...voucher(), ledger_entries: [{ ledgername: "A Real Party" }] }, test)!;
+  ok("test run: an embedded ledger_entries copy on the voucher is null even when Tally sent one", withEmbedded.voucher.ledger_entries === null);
+  ok("test run: the LEDGER LINES carry no real name and no bill allocation, on every line", tb.ledger_entries.length === 3 && tb.ledger_entries.every((r) => /^ZZ TEST LEDGER [0-9a-f]{10}$/.test(String(r.ledger_name)) && r.bill_allocations === null));
+  ok("test run: nothing in the whole test block still holds a name from the fixture", !JSON.stringify(tb).match(/A Real Party|A Buyer|Street|IRN-REAL|EWB1|WB00X0000|REF1/));
 }
 ok("the narration is dropped unless it already says ZZ TEST", tb.voucher.narration === null && tallyBlobFrom({ ...voucher(), narration: "ZZ TEST note" }, test)!.voucher.narration === "ZZ TEST note");
 ok("amounts, dates, types and numbers are kept", tb.voucher.date === "2026-11-01" && tb.ledger_entries[0].amount === "-1180.00" && tb.voucher.voucher_type === "Sales" && tb.voucher.voucher_number === "ZZ/1");

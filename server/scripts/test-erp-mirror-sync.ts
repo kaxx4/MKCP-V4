@@ -424,7 +424,8 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("the incremental read is filtered above the mark inside Tally", /\$AlterID &gt; 42</.test(sent[2]));
   ok("the voucher reads ask for the whole tally_vouchers field list (go-live swap, D-1-5.58): ledger lines, inventory lines, the e-way bill block, IRN, buyer and GST fields, each by name", ["AllLedgerEntries", "AllInventoryEntries", "EWayBillDetails", "IRN", "IRNQRCode", "PartyMailingName", "PartyGSTIN", "PlaceOfSupply", "ConsigneePinCode", "EnteredBy"].every((f) => sent[1].includes(`>${f}<`)));
   ok("...and none of them is a wildcard, which would crash Tally", !/\*/.test((ERP_MIRROR_VOUCHER_DEF.fetch ?? []).join("")));
-  ok("...the mirror's list holds every field today's own voucher read asks for, so the two cannot drift", (() => { const mine = new Set(ERP_MIRROR_VOUCHER_DEF.fetch); return (TRANSACTION_COLLECTIONS.find((c) => c.name === "vouchers")?.fetch ?? []).every((f) => mine.has(f)); })());
+  ok("...the mirror's list holds every field today's own voucher read asks for, so the two cannot drift", (() => { const mine = new Set(ERP_MIRROR_VOUCHER_DEF.fetch); const todays = TRANSACTION_COLLECTIONS.find((c) => c.name === "vouchers")?.fetch; /* review item 16: an empty find proves nothing */ return Array.isArray(todays) && todays.length > 20 && mine.size > 20 && todays.every((f) => mine.has(f)); })());
+  ok("...and that comparison is not vacuous: today's voucher list is found and long, and a field missing from the mirror's list would be seen", (() => { const todays = TRANSACTION_COLLECTIONS.find((c) => c.name === "vouchers")?.fetch ?? []; const mine = new Set(ERP_MIRROR_VOUCHER_DEF.fetch); mine.delete(todays[0]); return todays.length > 20 && !todays.every((f) => mine.has(f)); })());
   const errReads = tallyMirrorReads("http://localhost:9000", "ZZ PRACTICE CO", async () => ({ ENVELOPE: { HEADER: { STATUS: 0 }, BODY: {} } }));
   let threw = false; try { await errReads.vouchersOn("2026-11-03"); } catch { threw = true; }
   ok("an error envelope from Tally throws, it is never an empty day", threw);
@@ -690,6 +691,21 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("it cannot read mirror rows without is_test", f("/rest/v1/erp_mirror_rows?select=*", "GET") !== null);
   ok("it cannot write or delete mirror rows directly", f("/rest/v1/erp_mirror_rows?is_test=eq.true", "POST") !== null && f("/rest/v1/erp_sync_marks?is_test=eq.true", "DELETE") !== null && f("/rest/v1/erp_sync_runs?is_test=eq.true", "PATCH") !== null);
   ok("the live mirror stays out of reach", f("/rest/v1/tally_vouchers?select=*", "GET") !== null && f("/rest/v1/tally_vouchers", "POST") !== null);
+
+  /* Review of thread 8, item 16: the fence for the swap store, the derive and the signals, each named. */
+  for (const fn of ["erp_tally_derive", "erp_tally_test_cleanup", "erp_signal_test_emit", "erp_signal_test_cleanup", "erp_signal_catch_up"]) {
+    ok(`the sandbox may call ${fn}, by POST only`, ERP_TEST_RPCS.includes(fn) && f(`/rest/v1/rpc/${fn}`) === null && f(`/rest/v1/rpc/${fn}`, "GET") !== null && f(`/rest/v1/rpc/${fn}`, "DELETE") !== null);
+  }
+  ok("no other erp_tally_ or erp_signal_ function is open (put, finish, parity, ready, the read path, the classes, the real emit)",
+    ["erp_tally_put", "erp_tally_finish", "erp_tally_parity", "erp_tally_swap_ready", "erp_tally_swap_read_path", "erp_tally_class", "erp_tally_view_classes_sync", "erp_tally_visible_tables", "erp_signal_emit", "erp_signal_prune", "erp_signal_prune_now"]
+      .every((fn) => !ERP_TEST_RPCS.includes(fn) && f(`/rest/v1/rpc/${fn}`) !== null));
+  for (const tb of ["erp_tally_rows", "erp_change_signals"]) {
+    ok(`${tb}: read only, only is_test rows`, f(`/rest/v1/${tb}?select=*&is_test=eq.true`, "GET") === null && f(`/rest/v1/${tb}?select=*`, "GET") !== null && f(`/rest/v1/${tb}?select=*&is_test=eq.false`, "GET") !== null);
+    ok(`${tb}: no insert, update or delete, even with is_test`, ["POST", "PATCH", "PUT", "DELETE"].every((m) => f(`/rest/v1/${tb}?is_test=eq.true`, m) !== null));
+  }
+  ok("the swap store views and the parity and run tables are out of reach", ["erp_tally_vouchers", "erp_tally_ledgers", "erp_tally_companies", "erp_swap_parity", "erp_tally_runs", "erp_golive_switches", "erp_backup_log"]
+    .every((tb) => f(`/rest/v1/${tb}?select=*&is_test=eq.true`, "GET") !== null && f(`/rest/v1/${tb}?is_test=eq.true`, "POST") !== null));
+  ok("the fence refuses another host for a permitted call", erpTestFence("https://evil.example/rest/v1/rpc/erp_tally_derive", "POST", P) !== null);
 
   H("TODAY'S SYNC IS UNTOUCHED");
   const src = join(dirname(process.argv[1]), "..", "src");
