@@ -44,10 +44,13 @@ import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/s
 import { practiceCompany, practiceGuid } from "../../src/services/tallyRole.js";
 import { safePush, vouchersOnDateXml } from "../../src/services/safePush.js";
 import { readTag } from "../../src/services/xml.js";
-import { runMirrorSync, supabaseMirrorStore, tallyMirrorReads, eachDay, type MirrorSyncReport, type MirrorTally } from "../../src/services/erpMirrorSync.js";
+import { runMirrorSync, supabaseMirrorStore, tallyMirrorReads, eachDay, ERP_MIRROR_VOUCHER_DEF, type MirrorSyncReport, type MirrorTally } from "../../src/services/erpMirrorSync.js";
+import { buildCollectionXml } from "../../src/services/xmlBuilder.js";
+import { compareRawToBlock, parseRawVoucher, pickForCheck, splitRawVouchers } from "./lib/independentVoucherCheck.js";
 import { rigPayload } from "./lib/simTally.js";
 import { isSweepVoucher } from "../lib/testVoucherMatch.js";
 import type { VoucherPayload } from "../../src/types.js";
+import { swapStoreCleanup } from "./rigExit.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : null; };
@@ -167,6 +170,23 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
         `${ledgerMoney} signed in the mirror rows, ${sumAmounts(tl)} signed in the tally lines`);
     }
 
+    // 1c. review of thread 8, item 13: before this step only the parity check looked at block values, and parity compares the
+    //     block with the block. Here the raw XML of the busiest day is read again and parsed by code that shares nothing with the
+    //     converter or the mapper, and 8 vouchers are compared with the block the mirror holds: signed amounts (is_debit and
+    //     sign), quantities, rates, dates, and the e-way, IRN, buyer and GST fields (null on a test row by design).
+    {
+      const rawXml = await post(buildCollectionXml(ERP_MIRROR_VOUCHER_DEF, company!, busy, busy));
+      const raws = splitRawVouchers(rawXml).map(parseRawVoucher);
+      const picked = pickForCheck(raws, 8);
+      const { data: held, error: heldErr } = await c.from("erp_mirror_rows").select("key,row").eq("company_key", companyKey).eq("is_test", true).in("key", picked.map((p) => p.guid));
+      const byKey = new Map((held ?? []).map((r: any) => [r.key as string, r.row?.tally]));
+      const diffs = picked.flatMap((p) => compareRawToBlock(p, byKey.get(p.guid) as any, { test: true }));
+      counts.independentCheck = { rawVouchersOnTheDay: raws.length, compared: picked.length, ledgerLines: picked.reduce((a, p) => a + p.ledger.length, 0), stockLines: picked.reduce((a, p) => a + p.stock.length, 0), differences: diffs.length };
+      step("the raw XML of the busiest day, read independently, has the same vouchers as the day count", raws.length === (top.byDay[busy] ?? -1), `${raws.length} in the XML, Tally counts ${top.byDay[busy]}`);
+      step("independent check: 5 to 10 vouchers parsed from the raw XML (own reader) agree with the block on signed amounts, quantities, rates, dates and the e-way, IRN, buyer and GST fields",
+        !heldErr && picked.length >= 5 && picked.length <= 10 && diffs.length === 0 && picked.some((p) => p.stock.length > 0), heldErr?.message ?? (diffs.slice(0, 5).join(" ; ") || `${picked.length} vouchers, ${picked.reduce((a, p) => a + p.ledger.length, 0)} ledger lines, ${picked.reduce((a, p) => a + p.stock.length, 0)} stock lines, 0 differences`));
+    }
+
     // 2. the same full sync again
     runs.full2 = await runMirrorSync({ store, tally, kind: "full", scope });
     step("...and the swap store: nothing is rewritten the second time", !!runs.full2.tally && !runs.full2.tallyError && Object.values((runs.full2.tally as any).upserted).every((x) => x === 0), JSON.stringify((runs.full2.tally as any)?.upserted));
@@ -259,9 +279,8 @@ function pickWindow(byDay: Record<string, number>): { from: string; to: string; 
       step("swept from the dummy after an early stop", sweep.status === 0, `sweep exit ${sweep.status}`);
     }
     const { data: cleaned, error: ce } = await c.rpc("erp_sync_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });
-    const { error: tce } = await c.rpc("erp_tally_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });   // the swap store's test rows (migration 0130)
-    const { count: tallyLeft } = await c.from("erp_tally_rows").select("key", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
-    step("this run's swap-store rows are deleted too", !tce && tallyLeft === 0, tce?.message ?? `${tallyLeft} left`);
+    const swapClean = await swapStoreCleanup(c, machine, key, companyKey);   // the swap store's test rows (migration 0130): the call is checked and the leftover rows counted
+    step("this run's swap-store rows are deleted too", swapClean.ok, swapClean.detail);
     const remaining = ce ? -1 : await mirrorCount().catch(() => -1);
     const { count: runsLeft } = await c.from("erp_sync_runs").select("id", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
     step("this run's test rows are deleted (mirror rows, mark, runs, steps, staging)", !ce && remaining === 0 && runsLeft === 0, ce?.message ?? JSON.stringify(cleaned));

@@ -36,3 +36,16 @@ export function leftoverCheck(name: string, read: { count: number | null; error:
   if (read.count === null || read.count === undefined) return { name, ok: false, detail: "the count came back empty, so nothing can be said about what is left" };
   return { name, ok: read.count === 0, detail: `${read.count} left` };
 }
+
+/**
+ * The swap store's clean-up for a rig (review of thread 8, item 16): call erp_tally_test_cleanup, check that the call
+ * did not fail, then COUNT what is left in erp_tally_rows for the company (a failed count is a failed check, never zero).
+ * `c` is the rig's test-queue client; typed loosely so this file stays free of the Supabase types.
+ */
+export async function swapStoreCleanup(c: any, machine: string, key: string, companyKey: string): Promise<{ ok: boolean; detail: string }> {
+  const { data, error } = await c.rpc("erp_tally_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });
+  if (error) return { ok: false, detail: `erp_tally_test_cleanup failed: ${error.message}` };
+  const left = await c.from("erp_tally_rows").select("key", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
+  const chk = leftoverCheck("swap store rows left", { count: left.count ?? null, error: left.error ?? null });
+  return { ok: chk.ok, detail: `cleanup removed ${JSON.stringify(data)}; ${chk.detail}` };
+}
