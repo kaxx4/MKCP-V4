@@ -22,7 +22,7 @@ import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import {
   mirrorRowFrom, scrubName, scrubSaltFrom, voucherProblem, isAccountingType, eachDay, runMirrorSync, assertParsedCollection, tallyMirrorReads,
-  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, applyAcceptedDrops, deriveStepState, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_VOUCHERTYPE_DEF, ERP_MIRROR_UNIT_DEF, ERP_MIRROR_ITEM_DEF, voucherExtrasFromParsed, voucherExtraFields, ledgerContactFields, ERP_MIRROR_MARK_DEF,
+  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, applyAcceptedDrops, deriveStepState, stageChunks, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_VOUCHERTYPE_DEF, ERP_MIRROR_UNIT_DEF, ERP_MIRROR_ITEM_DEF, voucherExtrasFromParsed, voucherExtraFields, ledgerContactFields, ERP_MIRROR_MARK_DEF,
   indiaToday, ledgerPeriod, judgeLoadedPeriod, incrementalRanges, INCREMENTAL_CHUNK, ERP_MIRROR_VOUCHER_DEF, loadedPeriodFromParsed, tallyDateToIso, ERP_MIRROR_COMPANY_DEF,
   type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult, type MirrorLedgerRow, type TallyLedger, type DayCheckVoucher, type AcceptedRun,
 } from "../src/services/erpMirrorSync.js";
@@ -588,6 +588,22 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
     const e3 = fakeStore({ accepted: [{ acceptance: "A1", run_id: "RUN1" }], acceptedSwap: () => ({ state: "refused", reason: "x" }), derive: () => whole });
     await applyAcceptedDrops({ store: e3.store, log: () => {} });
     ok("a refused accepted drop is not copied", !e3.calls.includes("derive"));
+  }
+
+  H("STAGING IS CAPPED BY BYTES AS WELL AS ROWS (review of thread 8, item 15)");
+  {
+    const big = (n: number, kb: number) => Array.from({ length: n }, (_, i) => ({ key: "K" + i, pad: "x".repeat(kb * 1024) }));
+    const rows = big(10, 400);   // 10 rows of ~400 KB: the old 500-row batch would have sent 4 MB in one request
+    const parts = stageChunks(rows, 500, 1_500_000);
+    ok("ten 400 KB rows are split into requests of at most 1.5 MB", parts.length > 1 && parts.every((p) => Buffer.byteLength(JSON.stringify(p)) <= 1_500_000 + 20), parts.map((p) => p.length).join(","));
+    ok("no row is dropped and the order is kept", parts.flat().map((r) => r.key).join(",") === rows.map((r) => r.key).join(","));
+    ok("a row bigger than the cap goes alone and is not dropped", stageChunks(big(3, 2000), 500, 1_500_000).map((p) => p.length).join(",") === "1,1,1");
+    ok("small rows still go 500 at a time", stageChunks(Array.from({ length: 1200 }, (_, i) => ({ i })), 500, 1_500_000).map((p) => p.length).join(",") === "500,500,200");
+    ok("nothing in, nothing out", stageChunks([]).length === 0);
+    const f = fakeStore();
+    const days: Record<string, any[]> = { "2026-11-01": Array.from({ length: 6 }, (_, i) => voucher("G-B" + i, "20261101", 10 + i)) };
+    const rep = await runMirrorSync({ store: f.store, tally: fakeTally(days, { highest: 20, counted: { "2026-11-01": 6 }, vouchers: Array.from({ length: 6 }, (_, i) => ({ k: "G-B" + i, d: "2026-11-01", a: 10 + i })) }).tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" }, ledgers: false, log: () => {} });
+    ok("a run reports the rows and bytes of its largest staging request (the figure the dummy first-run measurement records)", rep.state === "swapped" && rep.largestBatchRows === 6 && (rep.largestBatchBytes ?? 0) > 1000, "rows " + rep.largestBatchRows + " bytes " + rep.largestBatchBytes);
   }
 
   H("PART 7: THE FULL FETCH LIST (phone, mobile, PAN, registration type, bill-wise, who entered it, instruments)");

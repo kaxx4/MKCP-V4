@@ -705,9 +705,30 @@ export interface MirrorSyncReport {
   /** The answer of erp_tally_derive after a swap (go-live swap); null when not run. A failure here never fails the run. */
   tally?: Record<string, any> | null;
   tallyError?: string | null;
+  /** The biggest single staging request of this run (item 15): its rows and its bytes of JSON. */
+  largestBatchRows?: number;
+  largestBatchBytes?: number;
 }
 
 const STAGE_BATCH = 500;
+/** Review of thread 8, item 15: a voucher row now carries its tally-shaped block, so 500 rows can be many megabytes. A request holds at most this many bytes of JSON. */
+export const STAGE_MAX_BYTES = 1_500_000;
+
+/**
+ * Pure: split rows into requests of at most `maxRows` rows AND at most `maxBytes` of JSON. A single row bigger than the cap
+ * goes alone (it cannot be split), so no row is ever dropped. Order is kept.
+ */
+export function stageChunks<T>(rows: readonly T[], maxRows = STAGE_BATCH, maxBytes = STAGE_MAX_BYTES): T[][] {
+  const out: T[][] = [];
+  let cur: T[] = []; let bytes = 0;
+  for (const r of rows) {
+    const b = Buffer.byteLength(JSON.stringify(r), "utf8") + 1;
+    if (cur.length > 0 && (cur.length >= maxRows || bytes + b > maxBytes)) { out.push(cur); cur = []; bytes = 0; }
+    cur.push(r); bytes += b;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
 
 /** L3 (task 1-5): vouchers per incremental request at most. The busiest dummy day (245 vouchers with their lines) read in one request in 79 s. */
 export const INCREMENTAL_CHUNK = 200;
@@ -805,10 +826,12 @@ async function runMirror(opts: {
   const timed = async <T>(fn: () => Promise<T>): Promise<[T, number]> => { const t0 = Date.now(); const v = await fn(); return [v, Date.now() - t0]; };
   let buffer: MirrorRow[] = [];
   const flush = async () => {
-    while (buffer.length) {
-      const part = buffer.slice(0, STAGE_BATCH);
+    const chunks = stageChunks(buffer);
+    buffer = [];
+    for (const part of chunks) {
       report.staged = await store.stage(run.run_id, part);
-      buffer = buffer.slice(STAGE_BATCH);
+      report.largestBatchBytes = Math.max(report.largestBatchBytes ?? 0, Buffer.byteLength(JSON.stringify(part), "utf8"));
+      report.largestBatchRows = Math.max(report.largestBatchRows ?? 0, part.length);
     }
   };
   /* Every voucher of a read is checked before any is kept: one bad voucher
@@ -935,7 +958,7 @@ async function runMirror(opts: {
       }
       const rows = list.map((l) => ledgerRowFrom(l, scrubOpts, asOf, period));
       let n = 0;
-      for (let i = 0; i < rows.length; i += STAGE_BATCH) n = await store.stageLedgers(run.run_id, rows.slice(i, i + STAGE_BATCH));
+      for (const part of stageChunks(rows)) n = await store.stageLedgers(run.run_id, part);
       report.ledgers = n;
       report.ledgersAsOf = asOf;
       report.ledgerPeriod = { from: period.from, to: asOf, unexpected: period.unexpected, why: period.why };
