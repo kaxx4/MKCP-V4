@@ -57,7 +57,8 @@ async function finish(): Promise<never> {
     const { error: ce } = await c.rpc("erp_sync_test_cleanup", { p_machine: machine, p_key: key, p_company_key: companyKey });
     const left: Record<string, number> = {};
     let countErr: string | null = null;
-    for (const tb of ["erp_sync_runs", "erp_mirror_rows", "erp_mirror_ledgers", "erp_mirror_stage"]) {
+    // erp_mirror_stage has no company_key column; swapStoreCleanup and the run's own cleanup cover it.
+    for (const tb of ["erp_sync_runs", "erp_mirror_rows", "erp_mirror_ledgers"]) {
       const r = await c.from(tb).select("*", { count: "exact", head: true }).eq("company_key", companyKey).eq("is_test", true);
       if (r.error) countErr = r.error.message; left[tb] = r.count ?? -1;
     }

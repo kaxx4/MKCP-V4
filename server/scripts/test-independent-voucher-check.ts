@@ -44,6 +44,7 @@ const test = { company: "ZZTEST CO", name: (k: string, s: string) => scrubName(k
   ok("the independent reader finds two vouchers, three ledger lines and one stock line each", raws.length === 2 && raws[0].ledger.length === 3 && raws[0].stock.length === 1, JSON.stringify(raws[0].ledger));
   ok("nested lists are not read as the line's own (the bill allocation's amount is not the line's)", raws[0].ledger[0].cents === -118000 && raws[0].stock[0].cents === 100000 && raws[0].stock[0].qty === 2 && raws[0].stock[0].rate === 500);
   ok("the e-way bill and distance come from their own lists", raws[0].ewbNumber === "ZZEWB1" && raws[0].distance === 104 && raws[0].transportMode === "1 - Road" && raws[0].date === "2026-11-01");
+  { const parts = splitRawVouchers("<COLLECTION><VOUCHER.LIST><X>1</X></VOUCHER.LIST><VOUCHER ACTION=\"Create\"><DATE>20261101</DATE></VOUCHER></COLLECTION>"); ok("a tag that only starts with VOUCHER is not read as a voucher", parts.length === 1 && parts[0].startsWith("<VOUCHER ACTION"), JSON.stringify(parts)); }
   ok("numOf reads grouped, signed and unit-suffixed numbers", numOf("-1,180.00") === -1180 && numOf(" 104") === 104 && numOf("500.00/nos") === 500 && numOf("") === null && numOf("2 nos") === 2);
 
   // real mode: the block agrees with the XML

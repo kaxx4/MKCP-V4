@@ -37,7 +37,7 @@ const unesc = (s: string): string =>
 
 /** The voucher elements of a reply. */
 export function splitRawVouchers(xml: string): string[] {
-  return [...xml.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0]);
+  return [...xml.matchAll(/<VOUCHER(?:\s[^>]*)?>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0]);
 }
 
 /** Remove every nested `<X.LIST>...</X.LIST>` (any depth) from the inside of an element, leaving only its own direct tags. */
@@ -93,7 +93,7 @@ const isoOf = (s: string): string | null => (/^\d{8}$/.test(s) ? `${s.slice(0, 4
 
 /** Read one `<VOUCHER>` element. */
 export function parseRawVoucher(block: string): RawVoucher {
-  const open = /^<VOUCHER\b[^>]*>/.exec(block)?.[0] ?? "";
+  const open = /^<VOUCHER(?:\s[^>]*)?>/.exec(block)?.[0] ?? "";
   const inner = block.slice(open.length, block.length - "</VOUCHER>".length);
   const own = ownTags(inner);
   const attr = (n: string) => new RegExp(`\\b${n}="([^"]*)"`).exec(open)?.[1] ?? "";
