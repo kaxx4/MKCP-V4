@@ -27,10 +27,13 @@ import { dirname } from "node:path";
 import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
 guardScriptWrites("rigs/realtime-signals-live");
 import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/services/supabaseClient.js";
+import { leftoverCheck, recordError, rigExitCode, rigSummary } from "./rigExit.js";
 
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : null; };
 const OUT = arg("--out");
 const TRIALS = Number(arg("--trials") ?? 100);
+/** latency 2, flap 2, cleanup 2. The rig exits 0 only when exactly this many checks ran and passed (review of thread 8, item 12). */
+const EXPECTED_CHECKS = 6;
 const c = erpTestQueueClient();
 const machine = agentMachineId(), key = agentMachineKey();
 const run = `ZZTESTrt${Date.now().toString(36)}`.slice(0, 40);
@@ -101,16 +104,20 @@ try {
   await sleep(3000);   // the client re-joins its channel by itself
   await emit("after");
   check("flap: after the socket returns the channel carries new signals again with no resubscribe by hand", await got6, `arrived while down: ${arrived - before - (await got6 ? 1 : 0)}`);
+} catch (e) {
+  recordError(results, e);
+  console.log("FAIL the run finished without an error (" + (e as Error).message + ")");
 } finally {
   const { data: n, error } = await c.rpc("erp_signal_test_cleanup", { p_machine: machine, p_key: key, p_run: run });
   check("cleanup: this run's test signals are removed", !error && Number(n) >= TRIALS, `removed ${n}${error ? ` error ${error.message}` : ""}`);
-  const { data: left } = await c.from("erp_change_signals").select("id", { count: "exact", head: false }).eq("is_test", true).eq("table_name", run);
-  check("cleanup: none of them is left", (left ?? []).length === 0, `${(left ?? []).length} left`);
+  const leftRead = await c.from("erp_change_signals").select("id", { count: "exact", head: true }).eq("is_test", true).eq("table_name", run);
+  const leftChk = leftoverCheck("cleanup: none of them is left", { count: leftRead.count, error: leftRead.error });
+  results.push(leftChk); console.log(`${leftChk.ok ? "PASS" : "FAIL"} ${leftChk.name} (${leftChk.detail})`);
   try { await c.removeChannel(channel); } catch { /* closing anyway */ }
   const failed = results.filter((r) => !r.ok).length;
   console.log(`\n${results.length - failed} passed, ${failed} failed`);
   if (OUT) { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify({ rig: "realtime-signals-live", at: new Date().toISOString(), run, trials: TRIALS, provenance: provenance(), results }, null, 2)); }
-  process.exit(failed ? 1 : 0);
+  process.exit(rigExitCode(results, EXPECTED_CHECKS));
 }
 }
 
