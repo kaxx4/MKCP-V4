@@ -66,3 +66,15 @@ export function daysToRead(censusKeys: string[], extraIso: string[]): string[] {
   }
   return [...days].sort();
 }
+
+/**
+ * Keep the queue lease alive while a slow step runs. The agent's own run (`runOnce`) renews the lease on a timer;
+ * a rig that claims and books by hand has to do the same, or a slow Tally outlives the lease and the outcome write
+ * is refused ("this agent does not hold the queue lease"), as happened on 8-Nov-2026 when Tally took 12 to 37 s a read.
+ * A failed renewal is ignored (the next tick tries again); the step's own result or error is passed through; the
+ * timer stops when the step ends either way.
+ */
+export async function whileHoldingLease<T>(renew: () => Promise<unknown>, everyMs: number, step: () => Promise<T>): Promise<T> {
+  const timer = setInterval(() => { void renew().catch(() => {}); }, everyMs);
+  try { return await step(); } finally { clearInterval(timer); }
+}

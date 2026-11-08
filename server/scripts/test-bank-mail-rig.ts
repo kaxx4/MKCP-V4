@@ -14,7 +14,7 @@
  *
  *   npx tsx server/scripts/test-bank-mail-rig.ts
  */
-import { bankMailRemoteId, sweepDeleteRefusal, partyUseRefusal, daysToRead } from "./rigs/lib/bankMailGuards.js";
+import { bankMailRemoteId, sweepDeleteRefusal, partyUseRefusal, daysToRead, whileHoldingLease } from "./rigs/lib/bankMailGuards.js";
 
 let pass = 0, fail = 0;
 const ok = (label: string, cond: boolean, detail = "") => {
@@ -67,5 +67,25 @@ ok("M1 the days to read are the census days plus the extra days, once each, as p
     === JSON.stringify(["2026-09-17", "2026-09-18", "2026-11-08"]));
 ok("M1 a census key that is not a date is skipped, never read", JSON.stringify(daysToRead(["bad|Receipt|X"], [])) === "[]");
 
-console.log(`\n  ${pass} passed, ${fail} failed\n`);
-process.exit(fail ? 1 : 0);
+// ── The queue lease while a slow push runs (8-Nov-2026: Tally took 12 to 37 s a read and the 30 s lease lapsed before the outcome write) ──
+(async () => {
+  const sleep = (t: number) => new Promise((r) => setTimeout(r, t));
+  let calls = 0;
+  const out = await whileHoldingLease(async () => { calls++; }, 20, async () => { await sleep(400); return "result"; });
+  const during = calls;
+  ok("lease: it is renewed several times while a slow step runs", during >= 3, `${during} renewals in about 400 ms at 20 ms`);
+  ok("lease: the step's own result comes back", out === "result");
+  await sleep(100);
+  ok("lease: renewing stops when the step ends", calls === during, `${during} then ${calls}`);
+  let failing = 0;
+  const out2 = await whileHoldingLease(async () => { failing++; throw new Error("database busy"); }, 20, async () => { await sleep(90); return 7; });
+  ok("lease: a failed renewal never stops the step", out2 === 7 && failing >= 2, `${failing} failed renewals`);
+  let thrown = "";
+  let c3 = 0;
+  try { await whileHoldingLease(async () => { c3++; }, 20, async () => { await sleep(50); throw new Error("push failed"); }); } catch (e) { thrown = (e as Error).message; }
+  await sleep(80);
+  const c3a = c3; await sleep(80);
+  ok("lease: the step's error still comes out, and renewing stops", thrown === "push failed" && c3 === c3a);
+  console.log(`\n  ${pass} passed, ${fail} failed\n`);
+  process.exit(fail ? 1 : 0);
+})();

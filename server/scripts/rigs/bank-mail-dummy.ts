@@ -5,7 +5,7 @@
  * server, never here, so this rig never creates or submits a draft: the coordinator does that part
  * in the database, and hands this rig the job id.
  *
- * Five modes, each saved with --out <file.json>:
+ * Six modes, each saved with --out <file.json>:
  *
  *   --ledgers               READ ONLY. Cheap company-list read, check the loaded company is the practice
  *                           company (name and GUID), list the ZZ TEST ledgers, say whether HDFC BANK exists,
@@ -19,6 +19,12 @@
  *                           through the fence. Prints erp_stale_test_rows() and compares the census with the
  *                           one saved by --ledgers (--census-from <that file>). Last of all it removes the test
  *                           party ledger (as --party-remove does), so one sweep leaves the dummy as it was.
+ *   --settle --job <uuid>   The crash-recovery proof. For a job this machine left `sent` (the voucher is in Tally, the outcome
+ *                           write never landed): takes the queue lease the normal way and runs the agent's OWN settle step
+ *                           (settleOwn, the one a fresh boot runs before it claims anything) with a NEW EMPTY journal, so the
+ *                           journal cannot help and the agent must settle by reading Tally (findInTally). No settle logic is
+ *                           copied here. Refuses unless that job is this machine's only open job. Prints the job row after.
+ *                           Optional --expect-master <id> checks the master id it settles to.
  *   --party-create          The dummy company has no ZZ TEST party, so this makes ONE: the ledger
  *                           "ZZ TEST BANKMAIL PARTY" under Sundry Debtors, through masterPusher's createLedger
  *                           (sandbox role, local Tally and the practice GUID are checked first). No GSTIN, no
@@ -65,7 +71,7 @@ import { readTag, escapeXml, tallyDateInt } from "../../src/services/xml.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams, sameVoucherType, type ErpJob } from "../../src/services/erpJobAgent.js";
 import { BANK_MAIL_TEST_NUMBER } from "../lib/testVoucherMatch.js";
 import { pull, isOurVoucher } from "../find-stranded-test-vouchers.js";
-import { sweepDeleteRefusal, partyUseRefusal, daysToRead } from "./lib/bankMailGuards.js";
+import { sweepDeleteRefusal, partyUseRefusal, daysToRead, whileHoldingLease } from "./lib/bankMailGuards.js";
 import { rigExitCode, rigSummary, recordError, type RigCheck } from "./rigExit.js";
 import type { VoucherPayload } from "../../src/types.js";
 
@@ -75,10 +81,11 @@ const flag = (k: string) => process.argv.includes(k);
 const OUT = arg("--out");
 const JOB = arg("--job");
 const CENSUS_FROM = arg("--census-from");
-const MODE = flag("--ledgers") ? "ledgers" : flag("--book") ? "book" : flag("--sweep") ? "sweep"
+const EXPECT_MASTER = arg("--expect-master");
+const MODE = flag("--ledgers") ? "ledgers" : flag("--book") ? "book" : flag("--sweep") ? "sweep" : flag("--settle") ? "settle"
   : flag("--party-create") ? "party-create" : flag("--party-remove") ? "party-remove" : null;
 /** How many checks each mode makes when everything goes right (rigExitCode wants the exact number). */
-const EXPECT = { ledgers: 6, book: 16, sweep: 12, "party-create": 5, "party-remove": 4 } as const;
+const EXPECT = { ledgers: 6, book: 16, settle: 9, sweep: 12, "party-create": 5, "party-remove": 4 } as const;
 
 const BANK_LEDGER = "HDFC BANK";
 /** The one ledger this rig may create and remove. The remove path compares against this exact string. */
@@ -315,7 +322,7 @@ async function modeBook() {
 
   const journalPath = join(tmpdir(), `bank-mail-dummy-${Date.now()}.jsonl`);
   const seams = tallySeams(TALLY_URL, post);
-  const agent = new ErpJobAgent({ queue: q, journal: new Journal(journalPath), company, ...seams, leaseSeconds: 30, jobLeaseSeconds: 120 });
+  const agent = new ErpJobAgent({ queue: q, journal: new Journal(journalPath), company, ...seams, leaseSeconds: 120, jobLeaseSeconds: 120 });
   let held = false;
   for (let t0 = Date.now(); Date.now() - t0 < 60_000 && !(held = await agent.heartbeat()); ) await sleep(3000);
   must("the agent holds the queue lease", held, held ? "" : agent.status.red.join("; "));   // check 6
@@ -330,7 +337,10 @@ async function modeBook() {
 
   let outcome = "no outcome";
   try {
-    const r = await agent.processJob(claimed[0] as ErpJob);
+    /* The agent's own run (runOnce) renews the queue lease on a timer; this hand-made claim has to as well, or a slow Tally
+       outlives the lease and the outcome write is refused (8-Nov-2026, Tally took 12 to 37 s a read). */
+    const r = await whileHoldingLease(() => q.takeLease(agent.nonce, 120, { nonce: agent.nonce, renewal: true }), 15_000,
+      () => agent.processJob(claimed[0] as ErpJob));
     outcome = r.outcome;
     step("the agent booked it on the dummy Tally", r.outcome === "succeeded", `${r.outcome}: ${r.detail}`);  // check 8
   } catch (e) { step("the agent booked it on the dummy Tally", false, (e as Error).message); }
@@ -375,6 +385,51 @@ async function modeBook() {
   step("findInTally finds the booked voucher exactly once (the crash-recovery read)", again.length === 1 && !againErr,
     againErr || `${again.length} found; master id ${again[0]?.masterId ?? "-"}, the job row says ${after?.master_id ?? "-"}`);  // check 16
   console.log(`\n  The voucher is still in the dummy Tally. Run --sweep --job ${JOB} to remove it.`);
+}
+
+// ── Mode: --settle ───────────────────────────────────────────────────────────
+async function modeSettle() {
+  if (!JOB || !UUID.test(JOB)) throw new Stop("--settle needs --job <uuid>");
+  const company = await preflight();                                                         // checks 1, 2
+  const c = erpTestQueueClient();
+  const machine = agentMachineId(), key = agentMachineKey();
+  const q = supabaseErpQueue(c, machine, key);
+  const job = await readJob(c, JOB);
+  const problem = !job ? "no test job has that id" : bankMailJobProblem(job) ?? (job.state !== "sent" ? "the job is " + job.state + ", not sent" : null);
+  must("the job is a bank-mail test job that was left sent", !problem, problem ?? describe(job!.payload) + " (state sent)");   // check 3
+  const p = job!.payload;
+  console.log("\n  job " + JOB + ": " + describe(p) + "; row before: state " + job!.state + ", booked number " + (job!.booked_number ?? "-") + ", master id " + (job!.master_id ?? "-"));
+
+  /* settleOwn settles EVERY job this machine left open, so it may run only when that is this one job. */
+  const mine = await q.myOpenJobs();
+  must("this machine's only open job is the named one", mine.length === 1 && mine[0].id === JOB, "open jobs: " + mine.map((j) => j.id).join(", ") + " (" + mine.length + ")");   // check 4
+
+  /* A NEW EMPTY journal: the agent writes its own boot line and nothing else, so it cannot settle from a journalled reply. */
+  const journalPath = join(tmpdir(), "bank-mail-settle-" + Date.now() + ".jsonl");
+  const seams = tallySeams(TALLY_URL, post);
+  const journal = new Journal(journalPath);
+  const agent = new ErpJobAgent({ queue: q, journal, company, ...seams, leaseSeconds: 120, jobLeaseSeconds: 120 });
+  const entries = journal.entries();
+  must("the journal is new and holds no reply, so only Tally can settle the job", entries.every((e) => e.kind === "boot") && journal.lastReply(JOB) === null, entries.length + " entry(ies): " + entries.map((e) => e.kind).join(", "));   // check 5
+
+  /* The normal way: the heartbeat (take the queue lease), then the settle step. This is the first half of runOnce, without its claim. */
+  let held = false;
+  for (let t0 = Date.now(); Date.now() - t0 < 60_000 && !(held = await agent.heartbeat()); ) await sleep(3000);
+  must("the agent holds the queue lease", held, held ? "" : agent.status.red.join("; "));    // check 6
+  const settled = await whileHoldingLease(() => q.takeLease(agent.nonce, 120, { nonce: agent.nonce, renewal: true }), 15_000, () => agent.settleOwn());
+  console.log("  settleOwn: " + JSON.stringify(settled));
+  extra.settled = settled;
+  const mineSettled = settled.filter((s) => s.id === JOB);
+  step("the agent's own settle step settled the job from Tally as succeeded", settled.length === 1 && mineSettled.length === 1 && mineSettled[0].state === "succeeded" && /found exactly once in Tally/.test(mineSettled[0].how),
+    settled.map((s) => s.state + ": " + s.how).join(" | ") || "settled nothing");        // check 7
+
+  const after = await readJob(c, JOB);
+  extra.job = { state: after?.state, bookedNumber: after?.booked_number, masterId: after?.master_id, error: after?.error };
+  console.log("\n  job row after: state " + after?.state + ", booked number " + (after?.booked_number ?? "-") + ", master id " + (after?.master_id ?? "-") + ", error " + (after?.error ?? "-"));
+  step("the job row says succeeded with the booked number", after?.state === "succeeded" && after.booked_number === p.voucherNumber,
+    "state " + after?.state + ", booked number " + (after?.booked_number ?? "-"));       // check 8
+  const masterOk = !!after?.master_id && (EXPECT_MASTER ? String(after.master_id) === EXPECT_MASTER : true);
+  step("the job row carries Tally's master id" + (EXPECT_MASTER ? " (" + EXPECT_MASTER + ")" : ""), masterOk, "master id " + (after?.master_id ?? "-"));   // check 9
 }
 
 // ── Mode 3: --sweep ──────────────────────────────────────────────────────────
@@ -455,11 +510,12 @@ async function modeSweep() {
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 (async () => {
-  if (!MODE) { console.error("Say one of --ledgers, --party-create, --book --job <uuid>, --sweep --job <uuid>, --party-remove"); process.exit(2); }
+  if (!MODE) { console.error("Say one of --ledgers, --party-create, --book --job <uuid>, --settle --job <uuid>, --sweep --job <uuid>, --party-remove"); process.exit(2); }
   console.log(`\n  bank-mail rig on the dummy Tally, mode ${MODE} (${indiaToday()})\n`);
   try {
     if (MODE === "ledgers") await modeLedgers();
     else if (MODE === "book") await modeBook();
+    else if (MODE === "settle") await modeSettle();
     else if (MODE === "party-create") await modePartyCreate();
     else if (MODE === "party-remove") await modePartyRemove();
     else await modeSweep();
