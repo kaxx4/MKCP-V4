@@ -300,6 +300,32 @@ export function diffIdentity(p: VoucherPayload, masters: TallyMasters, v: string
   return out;
 }
 
+/**
+ * Is the stored voucher `v` the payload's party? One definition for every matcher that settles a job or a push
+ * from a read of Tally (findInTally in erpJobAgent.ts and pickByMoney below).
+ */
+export function partyMatchesStored(p: Pick<VoucherPayload, "voucherType" | "partyLedgerName">, v: string): boolean {
+  return fld(v, "PARTYLEDGERNAME") === p.partyLedgerName;
+}
+
+/**
+ * The read-back's last resort, pulled out so a test can run it without a Tally:
+ * the one voucher on the day that has our type and party and whose money matches
+ * what we sent, or undefined. ONE candidate or none: two payments to one party
+ * on one day for the same amount cannot be told apart from outside, and guessing
+ * between them would report the other voucher's figures as this one's.
+ */
+export function pickByMoney(vouchers: string[], payload: VoucherPayload): string | undefined {
+  const byMoney = vouchers.filter(
+    (x) =>
+      // Case-free, as Tally compares types: the payload says "Sales", the master "SALES" (review H1; this predates task 1-3).
+      fld(x, "VOUCHERTYPENAME").trim().toUpperCase() === (payload.voucherType ?? "").trim().toUpperCase() &&
+      partyMatchesStored(payload, x) &&
+      diffStored(payload, x).length === 0,
+  );
+  return byMoney.length === 1 ? byMoney[0] : undefined;
+}
+
 export async function safePush(
   tallyUrl: string,
   company: string,
@@ -578,14 +604,7 @@ export async function safePush(
        to one party on one day for the same amount are genuinely
        indistinguishable from outside, and guessing between them would report
        the other voucher's figures as this one's. */
-    const byMoney = vouchers.filter(
-      (x) =>
-        // Case-free, as Tally compares types: the payload says "Sales", the master "SALES" (review H1; this predates task 1-3).
-        fld(x, "VOUCHERTYPENAME").trim().toUpperCase() === (payload.voucherType ?? "").trim().toUpperCase() &&
-        fld(x, "PARTYLEDGERNAME") === payload.partyLedgerName &&
-        diffStored(payload, x).length === 0,
-    );
-    if (byMoney.length === 1) mine = byMoney[0];
+    mine = pickByMoney(vouchers, payload);
   }
 
   if (!mine) {

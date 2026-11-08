@@ -30,7 +30,7 @@
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { safePush, vouchersOnDateXml, diffStored, numberTakenError, type SafePushResult } from "./safePush.js";
+import { safePush, vouchersOnDateXml, diffStored, numberTakenError, partyMatchesStored, type SafePushResult } from "./safePush.js";
 import { readTag, escapeXml, tdlString, tallyDateInt } from "./xml.js";
 import { testJobRefusal, outcomeOf, type TestOutcome } from "./erpTestQueueAgent.js";
 import type { VoucherPayload } from "../types.js";
@@ -145,7 +145,7 @@ export async function findInTally(post: (xml: string) => Promise<string>, compan
   return [...xml.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0])
     .filter((v) => sameVoucherType(readTag(v, "VOUCHERTYPENAME"), p.voucherType)
       && (!p.voucherNumber || readTag(v, "VOUCHERNUMBER") === p.voucherNumber)
-      && (!p.partyLedgerName || readTag(v, "PARTYLEDGERNAME") === p.partyLedgerName)
+      && (!p.partyLedgerName || partyMatchesStored(p, v))
       && diffStored(p, v).length === 0)
     .map((v) => ({ masterId: readTag(v, "MASTERID") }));
 }

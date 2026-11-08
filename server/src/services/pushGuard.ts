@@ -134,7 +134,10 @@ export function resolvePartyState(
 const NON_ACCOUNTING = new Set(["Receipt Note", "Material In", "Material Out", "Stock Journal", "Physical Stock"]);
 /** Tally overwrites PARTYLEDGERNAME on these with the bank/cash ledger, so the
  *  party line need not match the header. */
-const PARTY_OVERWRITTEN = new Set(["Payment", "Receipt", "Contra"]);
+export const PARTY_OVERWRITTEN = new Set(["Payment", "Receipt", "Contra"]);
+/** Is this one of the voucher types above? Compared without regard to case, as Tally compares types. */
+export const partyIsOverwritten = (voucherType: string | undefined): boolean =>
+  [...PARTY_OVERWRITTEN].some((t) => t.toLowerCase() === String(voucherType ?? "").trim().toLowerCase());
 
 const money = (n: number) => `₹${n.toFixed(2)}`;
 
