@@ -5,7 +5,7 @@
  * server, never here, so this rig never creates or submits a draft: the coordinator does that part
  * in the database, and hands this rig the job id.
  *
- * Three modes, each saved with --out <file.json>:
+ * Five modes, each saved with --out <file.json>:
  *
  *   --ledgers               READ ONLY. Cheap company-list read, check the loaded company is the practice
  *                           company (name and GUID), list the ZZ TEST ledgers, say whether HDFC BANK exists,
@@ -17,7 +17,16 @@
  *   --sweep --job <uuid>    Reads the job (number, date), deletes that one voucher from the dummy company and
  *                           confirms it is gone, then deletes the job, its proposal and its proposal request
  *                           through the fence. Prints erp_stale_test_rows() and compares the census with the
- *                           one saved by --ledgers (--census-from <that file>).
+ *                           one saved by --ledgers (--census-from <that file>). Last of all it removes the test
+ *                           party ledger (as --party-remove does), so one sweep leaves the dummy as it was.
+ *   --party-create          The dummy company has no ZZ TEST party, so this makes ONE: the ledger
+ *                           "ZZ TEST BANKMAIL PARTY" under Sundry Debtors, through masterPusher's createLedger
+ *                           (sandbox role, local Tally and the practice GUID are checked first). No GSTIN, no
+ *                           address, no opening balance; it carries the state West Bengal only because
+ *                           createLedger refuses a party with no state. Refuses if the name already exists.
+ *                           Reads it back and prints name, group and GUID.
+ *   --party-remove          Deletes that one ledger, only when its name is exactly "ZZ TEST BANKMAIL PARTY".
+ *                           Refuses while any voucher still names it as party. Confirms it is gone.
  *
  * Writes: --book books one ZZTESTBM Receipt or Payment in the dummy company and moves the job's row through
  * the queue functions; --sweep deletes that voucher and the job's three live rows. Never push_queue,
@@ -48,6 +57,8 @@ import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/s
 import { practiceCompany, practiceGuid, companyGuidsFromListing } from "../../src/services/tallyRole.js";
 import { vouchersOnDateXml, diffStored } from "../../src/services/safePush.js";
 import { loadMasters } from "../../src/services/tallyMasters.js";
+import { createLedger, deleteLedger } from "../../src/services/masterPusher.js";
+import { blocksOf, tagOf } from "../../src/services/tallyRequest.js";
 import { readTag, escapeXml, tallyDateInt } from "../../src/services/xml.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams, sameVoucherType, type ErpJob } from "../../src/services/erpJobAgent.js";
 import { isSweepVoucher } from "../lib/testVoucherMatch.js";
@@ -61,11 +72,15 @@ const flag = (k: string) => process.argv.includes(k);
 const OUT = arg("--out");
 const JOB = arg("--job");
 const CENSUS_FROM = arg("--census-from");
-const MODE = flag("--ledgers") ? "ledgers" : flag("--book") ? "book" : flag("--sweep") ? "sweep" : null;
+const MODE = flag("--ledgers") ? "ledgers" : flag("--book") ? "book" : flag("--sweep") ? "sweep"
+  : flag("--party-create") ? "party-create" : flag("--party-remove") ? "party-remove" : null;
 /** How many checks each mode makes when everything goes right (rigExitCode wants the exact number). */
-const EXPECT = { ledgers: 6, book: 15, sweep: 10 } as const;
+const EXPECT = { ledgers: 6, book: 15, sweep: 12, "party-create": 5, "party-remove": 4 } as const;
 
 const BANK_LEDGER = "HDFC BANK";
+/** The one ledger this rig may create and remove. The remove path compares against this exact string. */
+const PARTY = "ZZ TEST BANKMAIL PARTY";
+const PARTY_GROUP = "Sundry Debtors";
 const BANK_NUMBER = /^ZZTESTBM[0-9A-F]{8}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const sleep = (t: number) => new Promise((r) => setTimeout(r, t));
@@ -121,7 +136,7 @@ async function voucherOnDay(company: string, isoDate: string, type: string, numb
 }
 
 /** Vouchers that look like ours: the shared census (find-stranded-test-vouchers) plus this rig's own ZZTESTBM shape, from ONE read. */
-async function takeCensus(company: string): Promise<{ total: number; ours: string[]; bankMail: string[] }> {
+async function takeCensus(company: string): Promise<{ total: number; ours: string[]; bankMail: string[]; partyVouchers: number }> {
   const all = await pull(company);
   const key = (v: { date: string; type: string; number: string }) => `${v.date}|${v.type}|${v.number}`;
   const uniq = (a: string[]) => [...new Set(a)].sort();
@@ -129,7 +144,72 @@ async function takeCensus(company: string): Promise<{ total: number; ours: strin
     total: all.length,
     ours: uniq(all.filter(isOurVoucher).map(key)),
     bankMail: uniq(all.filter((v) => BANK_NUMBER.test(v.number)).map(key)),
+    partyVouchers: all.filter((v) => v.party.trim().toLowerCase() === PARTY.toLowerCase()).length,
   };
+}
+
+// ── The test party ledger ────────────────────────────────────────────────────
+interface PartyRead { name: string; group: string; guid: string }
+/** One ledger by exact name, with its group and GUID. A custom collection filtered inside Tally; null when it is not there. */
+async function readParty(company: string): Promise<PartyRead | null> {
+  const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MkPartyRead</ID></HEADER>
+<BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+<SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY></STATICVARIABLES>
+<TDL><TDLMESSAGE><COLLECTION NAME="MkPartyRead" ISMODIFY="No"><TYPE>Ledger</TYPE>
+<NATIVEMETHOD>Name</NATIVEMETHOD><NATIVEMETHOD>Parent</NATIVEMETHOD><NATIVEMETHOD>Guid</NATIVEMETHOD>
+<FILTER>MkPartyReadF</FILTER></COLLECTION>
+<SYSTEM TYPE="Formulae" NAME="MkPartyReadF">$Name = "${escapeXml(PARTY)}"</SYSTEM>
+</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+  const raw = await post(TALLY_URL, xml, 30_000);
+  /* blocksOf, not a bare regex: the company info carries <LEDGER>205</LEDGER> as a count (masterPusher.readLedger). */
+  const block = blocksOf(raw, "LEDGER")[0];
+  if (!block) return null;
+  const attr = /<LEDGER\b[^>]*\bNAME="([^"]*)"/i.exec(block)?.[1];
+  return { name: (attr ?? tagOf(block, "NAME") ?? "").trim(), group: (tagOf(block, "PARENT") ?? "").trim(), guid: (tagOf(block, "GUID") ?? "").trim() };
+}
+
+/**
+ * Remove the test party, exactly two checks every time (so --sweep and --party-remove count alike):
+ *  1. no voucher names it as party (the caller's census count), or it is not there;
+ *  2. it is removed and a fresh read finds nothing, or it was not there.
+ * The name read back is compared to the constant before anything is sent; nothing else can be deleted from here.
+ */
+async function removeParty(company: string, vouchersUsingIt: number): Promise<void> {
+  const here = await readParty(company);
+  if (here && here.name !== PARTY) {
+    step("no voucher uses the test party (or it is not there)", false, `the ledger read back is named "${here.name}", not exactly the test name; nothing was deleted`);
+    step("the test party ledger is removed (or was not there)", false, "skipped");
+    return;
+  }
+  const ok1 = step("no voucher uses the test party (or it is not there)", !here || vouchersUsingIt === 0, here ? `${vouchersUsingIt} voucher(s) name it as party` : "the ledger is not there");
+  if (!ok1) { step("the test party ledger is removed (or was not there)", false, "skipped: a voucher still uses it"); return; }
+  if (!here) { step("the test party ledger is removed (or was not there)", true, "it was not there"); return; }
+  const r = await deleteLedger(TALLY_URL, company, PARTY);
+  const after = await readParty(company);
+  step("the test party ledger is removed (or was not there)", r.ok && after === null,
+    r.ok ? (after ? "Tally said deleted but a fresh read still finds it" : "deleted, and a fresh read finds nothing") : `${r.notes.join(" ")} ${r.lineErrors.join("; ")}`.trim());
+}
+
+async function modePartyCreate() {
+  const company = await preflight();                                                         // checks 1, 2
+  const m = await loadMasters(TALLY_URL, company, { force: true });
+  const clash = [...m.ledgers.values()].find((l) => l.name.trim().toLowerCase() === PARTY.toLowerCase());
+  must("no ledger with that name exists yet", !clash, clash ? `"${clash.name}" is already there under ${clash.parent}` : `${m.ledgers.size} ledgers checked`);  // check 3
+  const r = await createLedger(TALLY_URL, company, { name: PARTY, parent: PARTY_GROUP, state: "West Bengal", gstRegistrationType: "Unregistered" });
+  must("Tally created the ledger", r.ok, r.ok ? `created ${r.created}` : `${r.notes.join(" ")} ${r.lineErrors.join("; ")}`.trim());   // check 4
+  const got = await readParty(company);
+  console.log(`\n  ledger read back:\n    name  ${got?.name ?? "-"}\n    group ${got?.group ?? "-"}\n    guid  ${got?.guid ?? "-"}`);
+  extra.party = got;
+  step("read back: exact name, group Sundry Debtors, a GUID", !!got && got.name === PARTY && got.group.toLowerCase() === PARTY_GROUP.toLowerCase() && got.guid.length > 0,
+    got ? `${got.name} | ${got.group} | ${got.guid || "no GUID"}` : "not found");                // check 5
+  console.log(`\n  The ledger is still in the dummy Tally. --sweep (or --party-remove) removes it.`);
+}
+
+async function modePartyRemove() {
+  const company = await preflight();                                                         // checks 1, 2
+  const cen = await takeCensus(company);
+  console.log(`\n  vouchers naming the test party: ${cen.partyVouchers}`);
+  await removeParty(company, cen.partyVouchers);                                             // checks 3, 4
 }
 
 // ── The job row ──────────────────────────────────────────────────────────────
@@ -325,15 +405,20 @@ async function modeSweep() {
   step("the census equals the one taken by --ledgers", same,
     before?.censusOurs ? `${cen.ours.length} now, ${before.censusOurs.length} before${fresh.length ? `; new: ${fresh.join(", ")}` : ""}${gone.length ? `; missing: ${gone.join(", ")}` : ""}` : "no --census-from file given or readable, so nothing was compared");  // check 9
   step("no ZZTESTBM voucher is left in the books", cen.bankMail.length === 0, `${cen.bankMail.length} left${cen.bankMail.length ? `: ${cen.bankMail.join(", ")}` : ""}`);   // check 10
+
+  /* Last, once the voucher is gone: the test party goes too, so one sweep leaves the dummy as it was. */
+  await removeParty(company, cen.partyVouchers);                                             // checks 11, 12
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 (async () => {
-  if (!MODE) { console.error("Say one of --ledgers, --book --job <uuid>, --sweep --job <uuid>"); process.exit(2); }
+  if (!MODE) { console.error("Say one of --ledgers, --party-create, --book --job <uuid>, --sweep --job <uuid>, --party-remove"); process.exit(2); }
   console.log(`\n  bank-mail rig on the dummy Tally, mode ${MODE} (${indiaToday()})\n`);
   try {
     if (MODE === "ledgers") await modeLedgers();
     else if (MODE === "book") await modeBook();
+    else if (MODE === "party-create") await modePartyCreate();
+    else if (MODE === "party-remove") await modePartyRemove();
     else await modeSweep();
   } catch (e) {
     recordError(steps, e, e instanceof Stop ? "the run stopped" : "the run finished without an error");
