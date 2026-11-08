@@ -1,0 +1,7 @@
+# Hash of contracts/gst-twins.json (SHA-256, line endings read as LF).
+# The file is a copy of the web repo's web-dashboard/contracts/gst-twins.json
+# (kaxx4/MKCPWEB; Live-Sync\wt\erp-rebuild-web\web-dashboard\contracts\gst-twins.json).
+# Never edit the cases here. A change goes through the web generator
+# (web-dashboard/scripts/contracts/build-gst-twins.ts) and a logged decision; then copy the
+# file again and write the new hash below. scripts/test-gst-contract.ts fails if they differ.
+2a3004b49df307766dc92529b11c201743961c714f0773728b2d655f0a2a7884
