@@ -10,7 +10,6 @@
  *   npx tsx server/scripts/test-test-voucher-match.ts
  */
 import { isOurVoucher, NUMBER_PATTERNS } from "./find-stranded-test-vouchers.js";
-import { isOurVoucher, NUMBER_PATTERNS } from "./find-stranded-test-vouchers.js";
 import { isDrainTestNumber, isSweepVoucher, sweepPrefixAllowed, storedCopyOf, harnessMustRemove } from "./lib/testVoucherMatch.js";
 
 let pass = 0, fail = 0;

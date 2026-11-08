@@ -135,7 +135,7 @@ const noPartyLines = [{ name: BANK, amount: "-101.00", dr: true, bank: true }, {
     const r = stored({ type: "Receipt", number: "ZZTESTBM00000001", header: BANK, lines: goodLines });
     ok("partyMatchesStored: Receipt, party on a line", partyMatchesStored(payload("Receipt", "x"), r));
     ok("partyMatchesStored: Receipt, header alone is not enough", !partyMatchesStored(payload("Receipt", "x"), stored({ type: "Receipt", number: "x", header: PARTY, lines: noPartyLines })));
-    ok("partyMatchesStored: the type is compared without regard to case", partyMatchesStored({ ...payload("Receipt", "x"), voucherType: "RECEIPT" } as VoucherPayload, r));
+    ok("partyMatchesStored: the type is compared without regard to case", partyMatchesStored({ ...payload("Receipt", "x"), voucherType: "RECEIPT" } as unknown as VoucherPayload, r));
     ok("PARTY_OVERWRITTEN is exported from pushGuard and holds Payment, Receipt and Contra only",
       PARTY_OVERWRITTEN.size === 3 && ["Payment", "Receipt", "Contra"].every((t) => PARTY_OVERWRITTEN.has(t)));
     ok("partyIsOverwritten: Sales, Purchase, Journal are not", !["Sales", "Purchase", "Journal", "Debit Note"].some(partyIsOverwritten));
