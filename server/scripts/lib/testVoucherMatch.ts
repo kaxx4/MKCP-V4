@@ -35,9 +35,23 @@ export function sweepPrefixAllowed(prefix: string): boolean {
 }
 
 /**
+ * The number the server gives a TEST bank-mail draft: ZZTESTBM and exactly 8 upper-case hex characters, no separator
+ * (migration 0175: 'ZZTESTBM' || upper(substr(md5(stable_key), 1, 8))). The older shape below needs a slash or dash,
+ * so it never saw these. This is deliberately that exact shape and nothing looser: 7 or 9 characters, lower case or a
+ * non-hex letter do not match.
+ */
+export const BANK_MAIL_TEST_NUMBER = /^ZZTESTBM[0-9A-F]{8}$/;
+
+/** Does this number have the shape a harness stamps on its vouchers? One definition for the sweep and the harness's own removal. */
+export function hasHarnessNumberShape(number: string, prefix: string): boolean {
+  return new RegExp(`^${prefix}\\d*[/-]`).test(number) || (prefix === "ZZTEST" && BANK_MAIL_TEST_NUMBER.test(number));
+}
+
+/**
  * True when a voucher is a harness voucher the sweep may delete. Both must hold:
  *  - the number is the mark followed by digits and a separator (`ZZTEST/CN1`,
- *    `GSTV12/1`), so a real `MKCP-05` never matches;
+ *    `GSTV12/1`), or, for ZZTEST only, a test bank-mail number (`ZZTESTBM` + 8
+ *    upper-case hex), so a real `MKCP-05` never matches;
  *  - the narration carries the same mark, so a voucher that merely shares the
  *    number shape but was not written by a harness is left alone.
  * An unlisted prefix returns false regardless of the voucher.
@@ -46,8 +60,7 @@ export function isSweepVoucher(v: { number: string; narration: string }, prefix:
   if (!sweepPrefixAllowed(prefix)) return false;
   const number = typeof v.number === "string" ? v.number : "";
   const narration = typeof v.narration === "string" ? v.narration : "";
-  const numberShape = new RegExp(`^${prefix}\\d*[/-]`);
-  return numberShape.test(number) && narration.includes(prefix);
+  return hasHarnessNumberShape(number, prefix) && narration.includes(prefix);
 }
 
 /** What a harness sent, as far as finding its stored copy goes. */
@@ -82,6 +95,6 @@ export function storedCopyOf(sent: SentVoucher, day: readonly StoredVoucher[]): 
  */
 export function harnessMustRemove(sent: SentVoucher, stored: StoredVoucher | undefined, prefix: string): boolean {
   if (!stored || !sweepPrefixAllowed(prefix)) return false;
-  if (!new RegExp(`^${prefix}\\d*[/-]`).test((sent.voucherNumber ?? "").trim())) return false;
+  if (!hasHarnessNumberShape((sent.voucherNumber ?? "").trim(), prefix)) return false;
   return !isSweepVoucher(stored, prefix);
 }

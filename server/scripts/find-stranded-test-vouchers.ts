@@ -35,6 +35,7 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { esc, blocksOf, tagOf } from "../src/services/tallyRequest.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
+import { BANK_MAIL_TEST_NUMBER } from "./lib/testVoucherMatch.js";
 
 const U = process.env.TALLY_URL || "http://localhost:9000";
 const DO = process.argv.includes("--delete");
@@ -70,6 +71,7 @@ export const NUMBER_PATTERNS: RegExp[] = [
   /^ADOPT\d+\//i,            // ADOPT61309/SUBJECT
   /^ZZTEST\//i,
   /^ZZTEST\d+\//i,          // ZZTEST1234567/S3 (test-edge-cases since 0-3)
+  BANK_MAIL_TEST_NUMBER,    // ZZTESTBM57968668: a test bank-mail draft's voucher (ZZTESTBM + 8 upper-case hex, no separator; exact, no i flag)
   /^GSTV\d*\//i,
   /^PROBE[-/]/i,
   /^FID[-/]/i,

@@ -9,6 +9,8 @@
  *
  *   npx tsx server/scripts/test-test-voucher-match.ts
  */
+import { isOurVoucher, NUMBER_PATTERNS } from "./find-stranded-test-vouchers.js";
+import { isOurVoucher, NUMBER_PATTERNS } from "./find-stranded-test-vouchers.js";
 import { isDrainTestNumber, isSweepVoucher, sweepPrefixAllowed, storedCopyOf, harnessMustRemove } from "./lib/testVoucherMatch.js";
 
 let pass = 0, fail = 0;
@@ -58,6 +60,31 @@ expect("ZZTEST number is NOT swept under the GSTV prefix",
   isSweepVoucher({ number: "ZZTEST/CN1", narration: "ZZTEST x" }, "GSTV"), false);
 expect("number matching but narration empty is NOT swept",
   isSweepVoucher({ number: "ZZTEST/CN1", narration: "" }, "ZZTEST"), false);
+
+console.log("\nbank-mail test vouchers: ZZTESTBM plus exactly 8 upper-case hex characters, and nothing looser");
+// The server numbers a test bank-mail draft ZZTESTBM + 8 hex with no separator, so the older shape (mark, digits, / or -) never saw it.
+const bm = (number: string, narration = "ZZ TEST BANK MAIL DUMMY PUSH ZZTEST") => ({ number, narration });
+expect("ZZTESTBM57968668 with a ZZTEST narration is swept", isSweepVoucher(bm("ZZTESTBM57968668"), "ZZTEST"), true);
+expect("ZZTESTBM9F3A0C1D (letters A to F) is swept", isSweepVoucher(bm("ZZTESTBM9F3A0C1D"), "ZZTEST"), true);
+expect("ZZTESTBM with 7 hex characters is NOT swept", isSweepVoucher(bm("ZZTESTBM5796866"), "ZZTEST"), false);
+expect("ZZTESTBM with 9 hex characters is NOT swept", isSweepVoucher(bm("ZZTESTBM579686681"), "ZZTEST"), false);
+expect("ZZTESTBM with lower-case hex is NOT swept", isSweepVoucher(bm("ZZTESTBM9f3a0c1d"), "ZZTEST"), false);
+expect("ZZTESTBM with a non-hex letter is NOT swept", isSweepVoucher(bm("ZZTESTBM9F3A0C1G"), "ZZTEST"), false);
+expect("ZZTESTBM with a slash tail is NOT the bank-mail shape", isSweepVoucher(bm("ZZTESTBM57968668/1"), "ZZTEST"), false);
+expect("a real-looking company number is NOT swept", isSweepVoucher(bm("26-27/0679"), "ZZTEST"), false);
+expect("a real MKCP bill is NOT swept", isSweepVoucher(bm("MKCP-05"), "ZZTEST"), false);
+expect("lower-case zztestbm is NOT swept", isSweepVoucher(bm("zztestbm57968668"), "ZZTEST"), false);
+expect("ZZTESTBM57968668 with no ZZTEST in the narration is NOT swept", isSweepVoucher(bm("ZZTESTBM57968668", "AS PER BILL"), "ZZTEST"), false);
+expect("ZZTESTBM57968668 under the GSTV prefix is NOT swept", isSweepVoucher(bm("ZZTESTBM57968668", "GSTV12345 x"), "GSTV"), false);
+expect("the census counts ZZTESTBM57968668", isOurVoucher(bm("ZZTESTBM57968668")), true);
+expect("the census counts it whatever the narration says (the number is the mark)", isOurVoucher(bm("ZZTESTBM57968668", "AS PER BILL")), true);
+expect("the census does NOT count 7 hex", isOurVoucher(bm("ZZTESTBM5796866", "AS PER BILL")), false);
+expect("the census does NOT count 9 hex", isOurVoucher(bm("ZZTESTBM579686681", "AS PER BILL")), false);
+expect("the census does NOT count lower-case hex", isOurVoucher(bm("ZZTESTBM9f3a0c1d", "AS PER BILL")), false);
+expect("the census does NOT count a real company number", isOurVoucher(bm("26-27/0679", "AS PER BILL")), false);
+expect("NUMBER_PATTERNS still has the older shapes (ZZTEST/ and ZZTEST digits /)", NUMBER_PATTERNS.some((r) => r.test("ZZTEST/X1")) && NUMBER_PATTERNS.some((r) => r.test("ZZTEST1234567/S3")), true);
+expect("a stored ZZTESTBM copy is not left to the harness (the sweep now sees it)",
+  harnessMustRemove({ voucherType: "Receipt", voucherNumber: "ZZTESTBM57968668", narration: "x ZZTEST" }, { number: "ZZTESTBM57968668", narration: "x ZZTEST", type: "Receipt" }, "ZZTEST"), false);
 
 console.log("\ntest-edge-cases --push: which of its own vouchers the sweep cannot see");
 // Third review, 5-Nov-2026: the empty-narration purchase and the Journals (stored
