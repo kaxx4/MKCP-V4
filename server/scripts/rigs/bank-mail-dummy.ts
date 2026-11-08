@@ -33,10 +33,13 @@
  * claim_push_jobs, the old test queue or any table main reads. The draft table and its change signals are
  * the coordinator's, not this rig's: the fence does not reach them.
  *
- * The sweep guard: the server numbers a test draft ZZTESTBM plus 8 upper-case hex characters, with no slash
- * or dash. The shared `isSweepVoucher` and the census patterns now know that shape (BANK_MAIL_TEST_NUMBER in
- * lib/testVoucherMatch.ts). This rig deletes only a voucher that passes the shared `isSweepVoucher` AND whose
- * number is exactly the job's own number, and it still counts ZZTESTBM vouchers on their own beside the census.
+ * The guards (rules in rigs/lib/bankMailGuards.ts, asserted offline by test-bank-mail-rig.ts):
+ *  - sweep (M2): the voucher is deleted only when the job's number is ZZTESTBM + 8 upper-case hex, the job's REMOTEID is exactly
+ *    MKCP|<type>|<that number>|<financial year>, and the one voucher found by that number has that number and type, passes the
+ *    shared `isSweepVoucher` and carries ZZTEST. It deletes by that one REMOTEID; there are no guesses.
+ *  - party removal (M1): refused while any voucher names the party on a ledger line (the production line reader, on every day
+ *    that holds a voucher that looks like ours, plus the job's day and today), as header party, or while any ZZTESTBM voucher
+ *    is in the books. The rig still counts ZZTESTBM vouchers on their own beside the census.
  *
  * Needs: sandbox role, local Tally with the practice company open, the Tally slot, this machine's registered
  * key, and (for --book and --sweep) MKCP_ERP_TEST_QUEUE=on for that one process.
@@ -54,14 +57,15 @@ guardScriptWrites("rigs/bank-mail-dummy"); // writes only on a sandbox role agai
 import { tallyPost, HEALTH_XML } from "../../src/tally.js";
 import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/services/supabaseClient.js";
 import { practiceCompany, practiceGuid, companyGuidsFromListing } from "../../src/services/tallyRole.js";
-import { vouchersOnDateXml, diffStored } from "../../src/services/safePush.js";
+import { vouchersOnDateXml, diffStored, partyMatchesStored } from "../../src/services/safePush.js";
 import { loadMasters } from "../../src/services/tallyMasters.js";
 import { createLedger, deleteLedger } from "../../src/services/masterPusher.js";
 import { blocksOf, tagOf } from "../../src/services/tallyRequest.js";
 import { readTag, escapeXml, tallyDateInt } from "../../src/services/xml.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams, sameVoucherType, type ErpJob } from "../../src/services/erpJobAgent.js";
-import { isSweepVoucher, BANK_MAIL_TEST_NUMBER } from "../lib/testVoucherMatch.js";
-import { pull, isOurVoucher, remoteIdGuesses } from "../find-stranded-test-vouchers.js";
+import { BANK_MAIL_TEST_NUMBER } from "../lib/testVoucherMatch.js";
+import { pull, isOurVoucher } from "../find-stranded-test-vouchers.js";
+import { sweepDeleteRefusal, partyUseRefusal, daysToRead } from "./lib/bankMailGuards.js";
 import { rigExitCode, rigSummary, recordError, type RigCheck } from "./rigExit.js";
 import type { VoucherPayload } from "../../src/types.js";
 
@@ -173,19 +177,38 @@ async function readParty(company: string): Promise<PartyRead | null> {
 }
 
 /**
+ * What still uses the test party, or null (review M1, 8-Nov-2026). Tally overwrites the header party on Receipt and
+ * Payment, so a header count alone can say zero while a booked voucher names the party on a ledger line. This reads
+ * every day that holds a voucher that looks like ours (the census days) plus the extra days given, one day per
+ * request, and judges the vouchers with the production line reader inside partyUseRefusal. A day that cannot be
+ * read is a refusal, never "nothing". It also refuses while any ZZTESTBM voucher is in the books.
+ * The limit: a voucher on some other day that names the party is not seen here; Tally itself is the last guard.
+ */
+async function partyRefusal(company: string, cen: { ours: string[]; bankMail: string[]; partyVouchers: number }, extraDays: string[]): Promise<string | null> {
+  const xmls: string[] = [];
+  for (const day of daysToRead([...cen.ours, ...cen.bankMail], extraDays)) {
+    try {
+      const raw = await post(TALLY_URL, vouchersOnDateXml(company, day));
+      xmls.push(...[...raw.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0]));
+    } catch (e) { return `the day ${day} could not be read (${(e as Error).message}), so nothing can be said about what uses the party`; }
+  }
+  return partyUseRefusal(PARTY, { voucherXmls: xmls, bankMailNumbers: cen.bankMail, headerCount: cen.partyVouchers });
+}
+
+/**
  * Remove the test party, exactly two checks every time (so --sweep and --party-remove count alike):
- *  1. no voucher names it as party (the caller's census count), or it is not there;
+ *  1. nothing uses it (the caller's partyRefusal), or it is not there;
  *  2. it is removed and a fresh read finds nothing, or it was not there.
  * The name read back is compared to the constant before anything is sent; nothing else can be deleted from here.
  */
-async function removeParty(company: string, vouchersUsingIt: number): Promise<void> {
+async function removeParty(company: string, usedBy: string | null): Promise<void> {
   const here = await readParty(company);
   if (here && here.name !== PARTY) {
-    step("no voucher uses the test party (or it is not there)", false, `the ledger read back is named "${here.name}", not exactly the test name; nothing was deleted`);
+    step("nothing uses the test party (or it is not there)", false, `the ledger read back is named "${here.name}", not exactly the test name; nothing was deleted`);
     step("the test party ledger is removed (or was not there)", false, "skipped");
     return;
   }
-  const ok1 = step("no voucher uses the test party (or it is not there)", !here || vouchersUsingIt === 0, here ? `${vouchersUsingIt} voucher(s) name it as party` : "the ledger is not there");
+  const ok1 = step("nothing uses the test party (or it is not there)", !here || usedBy === null, here ? (usedBy ?? "no voucher names it on a ledger line or as header party, and no ZZTESTBM voucher is in the books") : "the ledger is not there");
   if (!ok1) { step("the test party ledger is removed (or was not there)", false, "skipped: a voucher still uses it"); return; }
   if (!here) { step("the test party ledger is removed (or was not there)", true, "it was not there"); return; }
   const r = await deleteLedger(TALLY_URL, company, PARTY);
@@ -212,8 +235,9 @@ async function modePartyCreate() {
 async function modePartyRemove() {
   const company = await preflight();                                                         // checks 1, 2
   const cen = await takeCensus(company);
-  console.log(`\n  vouchers naming the test party: ${cen.partyVouchers}`);
-  await removeParty(company, cen.partyVouchers);                                             // checks 3, 4
+  console.log(`\n  vouchers naming the test party in the header: ${cen.partyVouchers}; ZZTESTBM vouchers in the books: ${cen.bankMail.length}`);
+  const usedBy = await partyRefusal(company, cen, [indiaToday()]);
+  await removeParty(company, usedBy);                                                        // checks 3, 4
 }
 
 // ── The job row ──────────────────────────────────────────────────────────────
@@ -333,10 +357,9 @@ async function modeBook() {
   step("type is the job's type", !!v && sameVoucherType(v.type, p.voucherType), v?.type ?? "no voucher");   // check 11
   /* Tally overwrites the header party with the bank ledger on Payment, Receipt and Contra (PARTY_OVERWRITTEN in pushGuard.ts),
      so for those three types the party is looked for on the ledger lines, and for any other type on the header. */
-  const partyOnLines = !!v && v.lines.some((l) => l.ledger === p.partyLedgerName);
-  const headerOverwritten = /^(payment|receipt|contra)$/i.test(p.voucherType);
-  step("party is the job's party (on a ledger line for Payment, Receipt and Contra)", !!v && (headerOverwritten ? partyOnLines : v.party === p.partyLedgerName),
-    v ? `header party ${v.party}; ${headerOverwritten ? `party on a ledger line: ${partyOnLines}` : "compared on the header"}` : "no voucher");          // check 12
+  /* The production rule itself, not a copy: partyMatchesStored (safePush.ts), the one matcher findInTally and the money fallback use. */
+  step("party is the job's party (the production matcher: ledger lines for Payment, Receipt and Contra)", !!v && partyMatchesStored(p, v.xml),
+    v ? `header party ${v.party}; ${v.lines.length} ledger line(s)` : "no voucher");          // check 12
   const abs = (s: string) => Math.abs(parseFloat(s.replace(/[^0-9.\-]/g, "")));
   const want = (p.ledgerEntries ?? []).map((e) => ({ ledger: e.ledgerName, amount: e.amount }));
   const linesOk = !!v && want.length >= 2 && want.every((w) => v.lines.some((l) => l.ledger === w.ledger && Math.abs(abs(l.amount) - w.amount) < 0.02));
@@ -364,25 +387,23 @@ async function modeSweep() {
   must("the job is a bank-mail test job", !problem, problem ?? describe(job!.payload));    // check 3
   const p = job!.payload, number = p.voucherNumber!;
 
-  /* Tally first: find the one voucher, judge it with the shared sweep guard plus the job's own number, delete it, confirm it is gone. */
+  /* Tally first: find the one voucher, then refuse unless every rule in sweepDeleteRefusal holds (review M2): the job's number is
+     ZZTESTBM + 8 upper-case hex, its REMOTEID is exactly MKCP|<type>|<that number>|<financial year>, the one voucher found by that
+     number has that number and type, passes the shared isSweepVoucher and carries ZZTEST. Then delete by that REMOTEID alone. */
   const found = await voucherOnDay(company, p.date, p.voucherType, number);
-  const guarded = found.filter((v) => v.number === number && isSweepVoucher({ number: v.number, narration: v.narration }, "ZZTEST"));
-  step("the voucher in Tally passes the sweep guard (or none was booked)", found.length <= 1 && guarded.length === found.length,
-    `${found.length} found; passes the shared isSweepVoucher and carries the job's own number: ${guarded.length}`);  // check 4
+  const refusal = sweepDeleteRefusal({ voucherType: p.voucherType, voucherNumber: p.voucherNumber, date: p.date, remoteId: p.remoteId }, found);
+  step("the voucher in Tally passes the sweep guard (or none was booked)", refusal === null,
+    refusal ?? `${found.length} found; REMOTEID is the server's form for this voucher; the voucher passes the shared isSweepVoucher and carries ZZTEST`);  // check 4
   let deletedInTally = 0;
-  if (found.length === 1 && guarded.length === 1) {
-    const day = tallyDateInt(p.date), type = found[0].type;
-    const ids = [...new Set([String(p.remoteId), ...remoteIdGuesses(type, number)])];
-    for (const rid of ids) {
-      const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Import</TALLYREQUEST><TYPE>Data</TYPE><ID>Vouchers</ID></HEADER>
+  if (refusal === null && found.length === 1) {
+    const day = tallyDateInt(p.date), type = found[0].type, rid = String(p.remoteId);
+    const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Import</TALLYREQUEST><TYPE>Data</TYPE><ID>Vouchers</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY></STATICVARIABLES></DESC>
 <DATA><TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="${escapeXml(rid)}" VCHTYPE="${escapeXml(type)}" ACTION="Delete"><DATE>${day}</DATE><VOUCHERTYPENAME>${escapeXml(type)}</VOUCHERTYPENAME><VOUCHERNUMBER>${escapeXml(number)}</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
-      try {
-        const res = await post(TALLY_URL, xml, 60_000);
-        deletedInTally = parseInt(readTag(res, "DELETED") || "0", 10) || 0;
-      } catch { /* a wrong REMOTEID guess reads as "does not exist"; try the next */ }
-      if (deletedInTally) break;
-    }
+    try {
+      const res = await post(TALLY_URL, xml, 60_000);
+      deletedInTally = parseInt(readTag(res, "DELETED") || "0", 10) || 0;
+    } catch { /* "does not exist": nothing was deleted, and the check below says so */ }
   }
   step("the voucher was deleted from the dummy Tally (or none was booked)", found.length === 0 || deletedInTally === 1, `deleted ${deletedInTally} of ${found.length}`);  // check 5
   const left = await voucherOnDay(company, p.date, p.voucherType, number);
@@ -392,16 +413,18 @@ async function modeSweep() {
   const pid = job!.proposal_id;
   const reqs = pid ? await c.from("erp_proposal_requests").select("request_id").eq("is_test", true).eq("proposal_id", pid) : { data: [], error: null };
   const reqIds = ((reqs.data ?? []) as { request_id: string }[]).map((r) => r.request_id);
-  const d1 = await c.from("erp_jobs").delete().in("id", [JOB]).eq("is_test", true);
-  const d2 = reqIds.length ? await c.from("erp_proposal_requests").delete().in("request_id", reqIds).eq("is_test", true) : { error: null };
-  const d3 = pid ? await c.from("erp_proposals").delete().in("id", [pid]).eq("is_test", true) : { error: null };
+  /* The rows are the only record of which voucher this was. While the voucher is still in Tally (it was refused or the delete failed), keep them. */
+  const keepRows = left.length > 0;
+  const d1 = keepRows ? { error: null } : await c.from("erp_jobs").delete().in("id", [JOB]).eq("is_test", true);
+  const d2 = keepRows || !reqIds.length ? { error: null } : await c.from("erp_proposal_requests").delete().in("request_id", reqIds).eq("is_test", true);
+  const d3 = keepRows || !pid ? { error: null } : await c.from("erp_proposals").delete().in("id", [pid]).eq("is_test", true);
   const errs = [reqs.error?.message, d1.error?.message, d2.error?.message, d3.error?.message].filter(Boolean);
   const jobLeft = await c.from("erp_jobs").select("id").eq("is_test", true).eq("id", JOB);
   const propLeft = pid ? await c.from("erp_proposals").select("id").eq("is_test", true).eq("id", pid) : { data: [], error: null };
   const reqLeft = pid ? await c.from("erp_proposal_requests").select("request_id").eq("is_test", true).eq("proposal_id", pid) : { data: [], error: null };
   const leftN = (jobLeft.data?.length ?? 0) + (propLeft.data?.length ?? 0) + (reqLeft.data?.length ?? 0);
   step("the job, its proposal and its proposal request are deleted", errs.length === 0 && !jobLeft.error && !propLeft.error && !reqLeft.error && leftN === 0,
-    errs.join("; ") || `deleted job 1, proposal ${pid ? 1 : 0}, request(s) ${reqIds.length}; ${leftN} left`);   // check 7
+    keepRows ? `kept, because the voucher is still in Tally; ${leftN} row(s) left` : errs.join("; ") || `deleted job 1, proposal ${pid ? 1 : 0}, request(s) ${reqIds.length}; ${leftN} left`);   // check 7
 
   /* Information: change signals the draft's submit made are the coordinator's to remove (the fence does not reach them). */
   const sig = await c.from("erp_change_signals").select("table_name", { count: "exact", head: true }).eq("is_test", true).eq("table_name", "erp_bank_mail_drafts");
@@ -426,7 +449,8 @@ async function modeSweep() {
   step("no ZZTESTBM voucher is left in the books", cen.bankMail.length === 0, `${cen.bankMail.length} left${cen.bankMail.length ? `: ${cen.bankMail.join(", ")}` : ""}`);   // check 10
 
   /* Last, once the voucher is gone: the test party goes too, so one sweep leaves the dummy as it was. */
-  await removeParty(company, cen.partyVouchers);                                             // checks 11, 12
+  const usedBy = await partyRefusal(company, cen, [p.date]);
+  await removeParty(company, usedBy);                                                        // checks 11, 12
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────────
