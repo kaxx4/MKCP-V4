@@ -1,4 +1,4 @@
-import { classifyTransfer, contentTypeFor, readHead } from "./fileTransferKind.js";
+import { classifyTransfer, contentTypeFor, dbKind, readHead } from "./fileTransferKind.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import fs from "fs";
 import path from "path";
@@ -130,7 +130,7 @@ export async function pushFileToWeb(company: string, filePath: string, note: str
       filename,
       storage_path: storagePath,
       mime,
-      kind,
+      kind: dbKind(kind),
       size_bytes: buf.length,
       note,
       created_by: "desktop-agent",

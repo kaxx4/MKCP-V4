@@ -16,6 +16,8 @@ export type FileTransferKind =
   | "purchase_xml"
   | "packing_list"
   | "sales_order"
+  /** A Sales INVOICE, what the split-invoice flow produces (web port, task 2-5). */
+  | "sales_invoice"
   | "unknown";
 
 /** Content types Tally's exports actually need, by extension.
@@ -75,6 +77,11 @@ export function classifyTransfer(filename: string, head: string): FileTransferKi
     if (upper.includes("SALES ORDER") || upper.includes("SALESORDER") || /quote/.test(name)) {
       return "sales_order";
     }
+    // Before the PURCHASE test, as on the web: a split file is named "split-..."
+    // and its vouchers are VCHTYPE="Sales".
+    if (/^split-/.test(name) || upper.includes('VCHTYPE="SALES"')) {
+      return "sales_invoice";
+    }
     if (upper.includes("PURCHASE") || /purchase|transit|manifest/.test(name)) {
       return "purchase_xml";
     }
@@ -86,4 +93,17 @@ export function classifyTransfer(filename: string, head: string): FileTransferKi
   }
 
   return "unknown";
+}
+
+/**
+ * The labels the live `file_transfer_kind` enum holds (checked 14-Oct-2026, by the
+ * web app): price_list, purchase_xml, packing_list, sales_order, unknown. The enum
+ * rejects "sales_invoice", so it is stored as "unknown" until a migration adds it.
+ * Same guard as the web's `dbKind` (lib/fileTransfer.ts). Without it, sending a
+ * split sales file up would fail the whole insert now that the classifier says
+ * "sales_invoice".
+ */
+const DB_KINDS: ReadonlySet<string> = new Set(["price_list", "purchase_xml", "packing_list", "sales_order", "unknown"]);
+export function dbKind(kind: FileTransferKind): FileTransferKind {
+  return DB_KINDS.has(kind) ? kind : "unknown";
 }
