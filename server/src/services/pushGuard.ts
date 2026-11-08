@@ -19,7 +19,7 @@ import { partyIdentity } from "./voucherPusher.js";
 import { sameState, codeForState, stateFromGstin, normalizeGstin, isGstinChecksumValid, isCashLikeParty, PIN_RE, HSN_RE } from "./gstIdentity.js";
 import type { OpenBill } from "./billSettlement.js";
 import { remoteIdHasUniquePart } from "./remoteId.js";
-import { isErpSeriesNumber } from "./voucherSeries.js";
+import { isErpSeriesNumber, indiaDateOf } from "./voucherSeries.js";
 
 export interface GuardResult { ok: boolean; errors: string[]; warnings: string[]; }
 
@@ -165,12 +165,19 @@ export const FILED_THROUGH = (process.env.MKCP_FILED_THROUGH ?? "").trim();
 
 /** GSTR-1 for month M is due on the 11th of M+1: the last day of the newest
  *  month whose due date has passed. Mirror of the web app's
- *  `gstReturnFiledThrough` — change both or neither. */
+ *  `gstReturnFiledThrough` — change both or neither; both run
+ *  `contracts/gst-twins.json` (`scripts/test-gst-contract.ts`).
+ *
+ *  The day is India's day (`indiaDateOf`, +05:30 all year), never the clock of
+ *  the machine this runs on: task 2-5, 8-Nov-2026. It used `getDate()`, which
+ *  reads the machine's own zone, so a machine set to another zone turned over
+ *  to the next month's boundary on the wrong day. On the office PC (India time)
+ *  the answer is unchanged. */
 export function gstReturnFiledThrough(today: Date = new Date()): string {
-  const back = today.getDate() > 11 ? 1 : 2;
-  const end = new Date(today.getFullYear(), today.getMonth() - back + 1, 0);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${end.getFullYear()}-${p(end.getMonth() + 1)}-${p(end.getDate())}`;
+  const [y, m, d] = indiaDateOf(today).split("-").map(Number);
+  const back = d > 11 ? 1 : 2;
+  // Day 0 of the month after the boundary month is that month's last day; UTC so the machine zone cannot move it.
+  return new Date(Date.UTC(y, m - 1 - back + 1, 0)).toISOString().slice(0, 10);
 }
 
 /** The boundary in force now. A function, not a constant: the agent runs for

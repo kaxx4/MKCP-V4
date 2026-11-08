@@ -1,0 +1,525 @@
+{
+  "contract": "gst-twins",
+  "version": 1,
+  "task": "2-5 (file 03 row 2-5, file 04 K12, T-8)",
+  "note": "Shared by the web app and the sync agent. A case with `pinned` has its answer set by hand from the GST rules or the calendar (its `source` says which), not from either side's code. Each side maps every rule name to its own function and must give exactly `out`. Instants carry their offset; dates are YYYY-MM-DD. Fake data only.",
+  "rules": [
+    "filedThrough",
+    "financialYear",
+    "remoteId",
+    "classifyTransfer",
+    "stateFromGstin",
+    "codeForState",
+    "sameState",
+    "normalizeGstin",
+    "gstinChecksumValid",
+    "pincode",
+    "hsn",
+    "cashLikeParty",
+    "ewayThreshold",
+    "stateTable"
+  ],
+  "cases": [
+    {
+      "rule": "filedThrough",
+      "why": "00:10 IST on the 11th: due day, two months back",
+      "in": [
+        "2026-11-11T00:10:00+05:30"
+      ],
+      "pinned": {
+        "out": "2026-09-30",
+        "source": "GSTR-1 of a monthly filer for month M is due on the 11th of M+1 (CGST Rules rule 59), in India time"
+      },
+      "out": "2026-09-30"
+    },
+    {
+      "rule": "filedThrough",
+      "why": "23:50 IST on the 11th: still the due day",
+      "in": [
+        "2026-11-11T23:50:00+05:30"
+      ],
+      "pinned": {
+        "out": "2026-09-30",
+        "source": "GSTR-1 of a monthly filer for month M is due on the 11th of M+1 (CGST Rules rule 59), in India time"
+      },
+      "out": "2026-09-30"
+    },
+    {
+      "rule": "filedThrough",
+      "why": "00:10 IST on the 12th: last month is now filed (18:40 UTC on the 11th)",
+      "in": [
+        "2026-11-12T00:10:00+05:30"
+      ],
+      "pinned": {
+        "out": "2026-10-31",
+        "source": "GSTR-1 of a monthly filer for month M is due on the 11th of M+1 (CGST Rules rule 59), in India time"
+      },
+      "out": "2026-10-31"
+    },
+    {
+      "rule": "filedThrough",
+      "why": "23:50 IST on the 12th",
+      "in": [
+        "2026-11-12T23:50:00+05:30"
+      ],
+      "out": "2026-10-31"
+    },
+    {
+      "rule": "filedThrough",
+      "why": "the 1st",
+      "in": [
+        "2026-10-01T10:00:00+05:30"
+      ],
+      "out": "2026-08-31"
+    },
+    {
+      "rule": "filedThrough",
+      "why": "crosses the year",
+      "in": [
+        "2027-01-05T10:00:00+05:30"
+      ],
+      "pinned": {
+        "out": "2026-11-30",
+        "source": "GSTR-1 of a monthly filer for month M is due on the 11th of M+1 (CGST Rules rule 59), in India time"
+      },
+      "out": "2026-11-30"
+    },
+    {
+      "rule": "filedThrough",
+      "why": "February ends on the 28th",
+      "in": [
+        "2027-03-15T10:00:00+05:30"
+      ],
+      "out": "2027-02-28"
+    },
+    {
+      "rule": "filedThrough",
+      "why": "leap February",
+      "in": [
+        "2028-03-12T09:00:00+05:30"
+      ],
+      "out": "2028-02-29"
+    },
+    {
+      "rule": "financialYear",
+      "why": "1 April starts the year",
+      "in": [
+        "2026-04-01"
+      ],
+      "pinned": {
+        "out": "2026-27",
+        "source": "the Indian financial year runs 1 April to 31 March"
+      },
+      "out": "2026-27"
+    },
+    {
+      "rule": "financialYear",
+      "why": "31 March ends it",
+      "in": [
+        "2027-03-31"
+      ],
+      "pinned": {
+        "out": "2026-27",
+        "source": "the Indian financial year runs 1 April to 31 March"
+      },
+      "out": "2026-27"
+    },
+    {
+      "rule": "financialYear",
+      "why": "not a date",
+      "in": [
+        "nonsense"
+      ],
+      "out": ""
+    },
+    {
+      "rule": "remoteId",
+      "why": "a sale",
+      "in": [
+        "Sales",
+        "GST/12/2026-27",
+        "2026-11-05"
+      ],
+      "out": "MKCP|Sales|GST/12/2026-27|2026-27"
+    },
+    {
+      "rule": "remoteId",
+      "why": "characters that would break the attribute are dropped",
+      "in": [
+        "Sales Order",
+        " SO<7>&\"'x ",
+        "2027-03-31"
+      ],
+      "out": "MKCP|Sales Order|SO7x|2026-27"
+    },
+    {
+      "rule": "remoteId",
+      "why": "control characters are dropped",
+      "in": [
+        "Receipt",
+        "R\u00011\u001f2",
+        "2026-04-01"
+      ],
+      "out": "MKCP|Receipt|R12|2026-27"
+    },
+    {
+      "rule": "remoteId",
+      "why": "no date, no year",
+      "in": [
+        "Journal",
+        "J-9",
+        null
+      ],
+      "out": "MKCP|Journal|J-9"
+    },
+    {
+      "rule": "classifyTransfer",
+      "why": "a Tally price list",
+      "in": [
+        "prices.json",
+        "{\"STOCKITEM\":[{\"NAME\":\"ZZ TEST RIM\",\"FULLPRICELIST\":[]}]}"
+      ],
+      "out": "price_list"
+    },
+    {
+      "rule": "classifyTransfer",
+      "why": "JSON that is not a price list",
+      "in": [
+        "data.json",
+        "{\"a\":1}"
+      ],
+      "out": "unknown"
+    },
+    {
+      "rule": "classifyTransfer",
+      "why": "a sales order export",
+      "in": [
+        "order.xml",
+        "<ENVELOPE><VOUCHER VCHTYPE=\"Sales Order\"></VOUCHER></ENVELOPE>"
+      ],
+      "out": "sales_order"
+    },
+    {
+      "rule": "classifyTransfer",
+      "why": "a purchase voucher export",
+      "in": [
+        "bill.xml",
+        "<ENVELOPE><VOUCHER VCHTYPE=\"Purchase\"></VOUCHER></ENVELOPE>"
+      ],
+      "out": "purchase_xml"
+    },
+    {
+      "rule": "classifyTransfer",
+      "why": "a split sales invoice by its name (web only until T2 ports it)",
+      "in": [
+        "split-ZZ-TEST.xml",
+        "<ENVELOPE></ENVELOPE>"
+      ],
+      "out": "sales_invoice"
+    },
+    {
+      "rule": "classifyTransfer",
+      "why": "a sales invoice by its type (web only until T2 ports it)",
+      "in": [
+        "out.xml",
+        "<ENVELOPE><VOUCHER VCHTYPE=\"Sales\"></VOUCHER></ENVELOPE>"
+      ],
+      "out": "sales_invoice"
+    },
+    {
+      "rule": "classifyTransfer",
+      "why": "a packing list spreadsheet",
+      "in": [
+        "Packing List ZZ.xlsx",
+        ""
+      ],
+      "out": "packing_list"
+    },
+    {
+      "rule": "classifyTransfer",
+      "why": "anything else",
+      "in": [
+        "notes.txt",
+        "hello"
+      ],
+      "out": "unknown"
+    },
+    {
+      "rule": "stateFromGstin",
+      "why": "West Bengal",
+      "in": [
+        "19ZZZCZ0001Z1ZX"
+      ],
+      "pinned": {
+        "out": "West Bengal",
+        "source": "GST state code 19 is West Bengal (GSTN state code list)"
+      },
+      "out": "West Bengal"
+    },
+    {
+      "rule": "stateFromGstin",
+      "why": "Maharashtra",
+      "in": [
+        "27ZZZCZ0002Z1ZZ"
+      ],
+      "pinned": {
+        "out": "Maharashtra",
+        "source": "GST state code 27 is Maharashtra (GSTN state code list)"
+      },
+      "out": "Maharashtra"
+    },
+    {
+      "rule": "stateFromGstin",
+      "why": "lower case and spaces",
+      "in": [
+        " 19zzzcz0001z1zx "
+      ],
+      "out": "West Bengal"
+    },
+    {
+      "rule": "stateFromGstin",
+      "why": "no code",
+      "in": [
+        "ZZ"
+      ],
+      "out": null
+    },
+    {
+      "rule": "stateFromGstin",
+      "why": "empty",
+      "in": [
+        null
+      ],
+      "out": null
+    },
+    {
+      "rule": "codeForState",
+      "why": "a state",
+      "in": [
+        "West Bengal"
+      ],
+      "pinned": {
+        "out": "19",
+        "source": "GST state code 19 is West Bengal (GSTN state code list)"
+      },
+      "out": "19"
+    },
+    {
+      "rule": "codeForState",
+      "why": "case and spaces",
+      "in": [
+        "  west   bengal "
+      ],
+      "out": "19"
+    },
+    {
+      "rule": "codeForState",
+      "why": "not a state",
+      "in": [
+        "Atlantis"
+      ],
+      "out": null
+    },
+    {
+      "rule": "sameState",
+      "why": "same state, different spelling",
+      "in": [
+        "WEST BENGAL",
+        "west bengal"
+      ],
+      "out": true
+    },
+    {
+      "rule": "sameState",
+      "why": "two states",
+      "in": [
+        "West Bengal",
+        "Bihar"
+      ],
+      "out": false
+    },
+    {
+      "rule": "sameState",
+      "why": "an empty state is never the same",
+      "in": [
+        "",
+        ""
+      ],
+      "out": false
+    },
+    {
+      "rule": "normalizeGstin",
+      "why": "spaces, dashes, lower case",
+      "in": [
+        " 19-zzzcz0001z1zx "
+      ],
+      "out": "19ZZZCZ0001Z1ZX"
+    },
+    {
+      "rule": "gstinChecksumValid",
+      "why": "a correct check digit",
+      "in": [
+        "19ZZZCZ0001Z1ZX"
+      ],
+      "out": true
+    },
+    {
+      "rule": "gstinChecksumValid",
+      "why": "a wrong check digit",
+      "in": [
+        "19ZZZCZ0001Z1ZA"
+      ],
+      "out": false
+    },
+    {
+      "rule": "gstinChecksumValid",
+      "why": "too short",
+      "in": [
+        "19ZZZ"
+      ],
+      "out": false
+    },
+    {
+      "rule": "pincode",
+      "why": "a pincode",
+      "in": [
+        "700001"
+      ],
+      "out": true
+    },
+    {
+      "rule": "pincode",
+      "why": "cannot start with 0",
+      "in": [
+        "070001"
+      ],
+      "pinned": {
+        "out": false,
+        "source": "an Indian PIN code is six digits and its first digit is 1 to 9 (India Post)"
+      },
+      "out": false
+    },
+    {
+      "rule": "pincode",
+      "why": "five digits",
+      "in": [
+        "70001"
+      ],
+      "out": false
+    },
+    {
+      "rule": "hsn",
+      "why": "four digits",
+      "in": [
+        "8714"
+      ],
+      "out": true
+    },
+    {
+      "rule": "hsn",
+      "why": "six digits",
+      "in": [
+        "871493"
+      ],
+      "out": true
+    },
+    {
+      "rule": "hsn",
+      "why": "eight digits",
+      "in": [
+        "87149300"
+      ],
+      "out": true
+    },
+    {
+      "rule": "hsn",
+      "why": "five digits",
+      "in": [
+        "87149"
+      ],
+      "pinned": {
+        "out": false,
+        "source": "HSN codes are 2, 4, 6 or 8 digits in the Customs Tariff; no 5-digit code exists"
+      },
+      "out": false
+    },
+    {
+      "rule": "cashLikeParty",
+      "why": "the cash ledger",
+      "in": [
+        " cash "
+      ],
+      "out": true
+    },
+    {
+      "rule": "cashLikeParty",
+      "why": "mixed order",
+      "in": [
+        "Mixed Order"
+      ],
+      "out": true
+    },
+    {
+      "rule": "cashLikeParty",
+      "why": "a dealer",
+      "in": [
+        "ZZ TEST CYCLES"
+      ],
+      "out": false
+    },
+    {
+      "rule": "ewayThreshold",
+      "why": "e-way bill above this goods value",
+      "in": [],
+      "pinned": {
+        "out": 50000,
+        "source": "an e-way bill is needed when the consignment value exceeds Rs 50,000 (CGST Rules rule 138)"
+      },
+      "out": 50000
+    },
+    {
+      "rule": "stateTable",
+      "why": "every GST state code",
+      "in": [],
+      "out": {
+        "10": "Bihar",
+        "11": "Sikkim",
+        "12": "Arunachal Pradesh",
+        "13": "Nagaland",
+        "14": "Manipur",
+        "15": "Mizoram",
+        "16": "Tripura",
+        "17": "Meghalaya",
+        "18": "Assam",
+        "19": "West Bengal",
+        "20": "Jharkhand",
+        "21": "Odisha",
+        "22": "Chhattisgarh",
+        "23": "Madhya Pradesh",
+        "24": "Gujarat",
+        "26": "Dadra & Nagar Haveli and Daman & Diu",
+        "27": "Maharashtra",
+        "29": "Karnataka",
+        "30": "Goa",
+        "31": "Lakshadweep",
+        "32": "Kerala",
+        "33": "Tamil Nadu",
+        "34": "Puducherry",
+        "35": "Andaman & Nicobar Islands",
+        "36": "Telangana",
+        "37": "Andhra Pradesh",
+        "38": "Ladakh",
+        "97": "Other Territory",
+        "01": "Jammu & Kashmir",
+        "02": "Himachal Pradesh",
+        "03": "Punjab",
+        "04": "Chandigarh",
+        "05": "Uttarakhand",
+        "06": "Haryana",
+        "07": "Delhi",
+        "08": "Rajasthan",
+        "09": "Uttar Pradesh"
+      }
+    }
+  ]
+}

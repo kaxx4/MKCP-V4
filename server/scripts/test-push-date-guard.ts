@@ -59,7 +59,8 @@ ok("a ledger with no dated registration is not refused here", backdatedPurchaseR
 ok("an unknown ledger is left to the name rule", backdatedPurchaseRefusals(p({ partyLedgerName: "NOBODY" }), m, "").length === 0);
 
 // ── The boundary when MKCP_FILED_THROUGH is unset (owner: "Monthly, by the 11th") ──
-const d = (y: number, mo: number, day: number) => new Date(y, mo - 1, day);
+// Noon in India on that day, so the answer does not depend on the machine's own zone (task 2-5).
+const d = (y: number, mo: number, day: number) => new Date(Date.UTC(y, mo - 1, day, 6, 30));
 ok("1-Oct: August is filed, September is not", gstReturnFiledThrough(d(2026, 10, 1)) === "2026-08-31", gstReturnFiledThrough(d(2026, 10, 1)));
 ok("11-Oct (due day): still August", gstReturnFiledThrough(d(2026, 10, 11)) === "2026-08-31");
 ok("12-Oct: September is filed", gstReturnFiledThrough(d(2026, 10, 12)) === "2026-09-30");
