@@ -567,6 +567,8 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
     ok("a day held back by the per-day floor is failed", deriveStepState({ ...whole, deletes_skipped: true, day_floor_days: 2 }).state === "failed");
     ok("a whole table held back by the table floor (migration 0143) is failed, and the note says an Owner can release it", (() => { const r = deriveStepState({ ...whole, deletes_skipped: true, table_floor_tables: 1, table_floor_list: ["tally_vouchers"] }); return r.state === "failed" && /table floor/.test(r.note ?? "") && /Owner/.test(r.note ?? ""); })());
     ok("a release that let the deletes through is ok and says nothing is held back", deriveStepState({ ...whole, released: true }).state === "ok");
+    ok("a release that let the deletes through is ok even though the floors tripped (their counts are not zero)", deriveStepState({ ...whole, released: true, deletes_skipped: false, day_floor_days: 2, table_floor_tables: 1, table_floor_list: ["tally_vouchers"] }).state === "ok");
+    ok("a floor that tripped with no release still fails", deriveStepState({ ...whole, released: false, deletes_skipped: true, table_floor_tables: 1, table_floor_list: ["tally_vouchers"] }).state === "failed");
     ok("no answer at all is failed", deriveStepState(null).state === "failed");
     const run = async (derive: () => Record<string, any> | Error) => {
       const f = fakeStore({ derive });

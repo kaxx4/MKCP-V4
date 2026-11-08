@@ -81,6 +81,21 @@ const test = { company: "ZZTEST CO", name: (k: string, s: string) => scrubName(k
   ok("real mode: the lines are read with their names (the XML side too)", raws[0].ledger.map((l) => l.name).join("|") === "PARTY 001 & SONS|Sales|Output GST" && raws[0].stock[0].name === "Item One");
   ok("real mode: a buyer the XML holds but the block lacks is caught", plant((b) => { b.voucher.buyer_name = null; }).some((x) => /buyer name is empty/.test(x)));
   ok("real mode: a buyer the XML does not hold is caught", plant((b) => { b.voucher.buyer_name = "Somebody Else"; }).some((x) => /buyer name in the block is not one the XML holds/.test(x)));
+  // second review M2: a Cash sale has no buyer name in the block, and the check must not call that a missing buyer
+  {
+    const cashXml = sales("g-c", "ZZ/C").split("PARTY 001 &amp; SONS</PARTYMAILINGNAME>").join("Cash</PARTYMAILINGNAME>").replace("<PARTYMAILINGNAME>", "<BASICBUYERNAME>Cash</BASICBUYERNAME><PARTYMAILINGNAME>");
+    const cashRaw = parseRawVoucher(splitRawVouchers(reply(cashXml))[0]);
+    const cashConv = (await tallyMirrorReads("http://x", "ZZ CO", async () => parser.parse(reply(cashXml))).vouchersOn("2026-11-01"))[0];
+    const cashBlock = tallyBlobFrom(cashConv, real)!;
+    ok("a Cash voucher is read with Cash as its mailing and buyer name, and the block holds no buyer", cashRaw.buyerNames.length === 2 && cashRaw.buyerNames.every((n) => n === "Cash") && cashBlock.voucher.buyer_name === null, JSON.stringify(cashRaw.buyerNames) + " / " + String(cashBlock.voucher.buyer_name));
+    ok("real mode: a Cash voucher with no mailing name in the block is NOT called a missing buyer", compareRawToBlock(cashRaw, cashBlock, { test: false }).every((x) => !/buyer name/.test(x)), compareRawToBlock(cashRaw, cashBlock, { test: false }).join(" ; "));
+    const lower = { ...cashRaw, buyerNames: ["CASH"] };
+    ok("...whatever the capitals", compareRawToBlock(lower, cashBlock, { test: false }).every((x) => !/buyer name/.test(x)));
+    const mixed = { ...cashRaw, buyerNames: ["Cash", "PARTY 001 & SONS"] };
+    ok("a real name beside Cash is still required in the block (the filter drops only Cash)", compareRawToBlock(mixed, cashBlock, { test: false }).some((x) => /buyer name is empty/.test(x)));
+    const wrongBlock = clone(cashBlock); wrongBlock.voucher.buyer_name = "Somebody Else";
+    ok("a block that names a buyer on a Cash voucher is still checked against the XML (nothing the XML holds, so it is not one it holds)", compareRawToBlock(cashRaw, wrongBlock, { test: false }).every((x) => !/is empty/.test(x)));
+  }
   ok("test mode still compares lines without names (they are scrubbed) and still agrees", compareRawToBlock(raws[0], tblocks[0], { test: true }).length === 0);
   ok("real mode: an e-way bill number dropped from the block is caught", plant((b) => { b.voucher.ewb_number = null; }).some((x) => /e-way bill number/.test(x)));
   ok("real mode: a wrong IRN is caught", plant((b) => { b.voucher.irn = "OTHER"; }).some((x) => /IRN/.test(x)));

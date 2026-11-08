@@ -175,10 +175,12 @@ export function compareRawToBlock(raw: RawVoucher, blk: Block | null | undefined
     if (o.test) { if (has) d.push(`${tag4}: ${what} is filled in a TEST block (a personal field leaked)`); }
     else if (xml === "" ? has : String(blockVal ?? "").trim() !== xml) d.push(`${tag4}: ${what} is ${has ? "different" : "empty"} in the block (XML ${xml === "" ? "empty" : "has a value"})`);
   }
+  // a name that is just "Cash" is not a buyer: the converter reports it as null (CASH-P1), so the XML side drops it too (second review M2)
+  const buyers = raw.buyerNames.filter((n) => !/^cash$/i.test(n.trim()));
   const hasBuyer = v.buyer_name !== null && v.buyer_name !== undefined && String(v.buyer_name) !== "";
   if (o.test) { if (hasBuyer) d.push(`${tag4}: buyer name is filled in a TEST block (a personal field leaked)`); }
-  else if (raw.buyerNames.length && !hasBuyer) d.push(`${tag4}: buyer name is empty in the block and the XML has one`);
-  else if (raw.buyerNames.length && hasBuyer && !raw.buyerNames.includes(String(v.buyer_name).trim())) d.push(`${tag4}: buyer name in the block is not one the XML holds`);
+  else if (buyers.length && !hasBuyer) d.push(`${tag4}: buyer name is empty in the block and the XML has one`);
+  else if (buyers.length && hasBuyer && !buyers.includes(String(v.buyer_name).trim())) d.push(`${tag4}: buyer name in the block is not one the XML holds`);
   return d;
 }
 
