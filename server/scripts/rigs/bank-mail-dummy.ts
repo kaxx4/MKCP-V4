@@ -33,11 +33,10 @@
  * claim_push_jobs, the old test queue or any table main reads. The draft table and its change signals are
  * the coordinator's, not this rig's: the fence does not reach them.
  *
- * Why the sweep has its own guard: the server numbers a test draft ZZTESTBM plus 8 hex characters, with no
- * slash or dash. `isSweepVoucher` (lib/testVoucherMatch.ts) wants ZZTEST, digits, then a separator, so it says
- * no to these, and the shared census and sweep script cannot see them. This rig therefore deletes only a
- * voucher whose number is exactly the job's own number AND has the ZZTESTBM shape AND whose narration holds
- * ZZTEST, and it counts ZZTESTBM vouchers in its own census beside the shared one.
+ * The sweep guard: the server numbers a test draft ZZTESTBM plus 8 upper-case hex characters, with no slash
+ * or dash. The shared `isSweepVoucher` and the census patterns now know that shape (BANK_MAIL_TEST_NUMBER in
+ * lib/testVoucherMatch.ts). This rig deletes only a voucher that passes the shared `isSweepVoucher` AND whose
+ * number is exactly the job's own number, and it still counts ZZTESTBM vouchers on their own beside the census.
  *
  * Needs: sandbox role, local Tally with the practice company open, the Tally slot, this machine's registered
  * key, and (for --book and --sweep) MKCP_ERP_TEST_QUEUE=on for that one process.
@@ -61,7 +60,7 @@ import { createLedger, deleteLedger } from "../../src/services/masterPusher.js";
 import { blocksOf, tagOf } from "../../src/services/tallyRequest.js";
 import { readTag, escapeXml, tallyDateInt } from "../../src/services/xml.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams, sameVoucherType, type ErpJob } from "../../src/services/erpJobAgent.js";
-import { isSweepVoucher } from "../lib/testVoucherMatch.js";
+import { isSweepVoucher, BANK_MAIL_TEST_NUMBER } from "../lib/testVoucherMatch.js";
 import { pull, isOurVoucher, remoteIdGuesses } from "../find-stranded-test-vouchers.js";
 import { rigExitCode, rigSummary, recordError, type RigCheck } from "./rigExit.js";
 import type { VoucherPayload } from "../../src/types.js";
@@ -75,13 +74,13 @@ const CENSUS_FROM = arg("--census-from");
 const MODE = flag("--ledgers") ? "ledgers" : flag("--book") ? "book" : flag("--sweep") ? "sweep"
   : flag("--party-create") ? "party-create" : flag("--party-remove") ? "party-remove" : null;
 /** How many checks each mode makes when everything goes right (rigExitCode wants the exact number). */
-const EXPECT = { ledgers: 6, book: 15, sweep: 12, "party-create": 5, "party-remove": 4 } as const;
+const EXPECT = { ledgers: 6, book: 16, sweep: 12, "party-create": 5, "party-remove": 4 } as const;
 
 const BANK_LEDGER = "HDFC BANK";
 /** The one ledger this rig may create and remove. The remove path compares against this exact string. */
 const PARTY = "ZZ TEST BANKMAIL PARTY";
 const PARTY_GROUP = "Sundry Debtors";
-const BANK_NUMBER = /^ZZTESTBM[0-9A-F]{8}$/;
+const BANK_NUMBER = BANK_MAIL_TEST_NUMBER;   // one definition (G1)
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const sleep = (t: number) => new Promise((r) => setTimeout(r, t));
 const indiaToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
@@ -345,6 +344,13 @@ async function modeBook() {
   step("narration ends ZZTEST", !!v && v.narration.endsWith("ZZTEST"), v?.narration ?? "no voucher");     // check 14
   const diffs = v ? diffStored(p, v.xml) : ["no voucher"];
   step("the stored copy matches what was sent, field by field", diffs.length === 0, diffs.join("; "));      // check 15
+  /* The crash-recovery read (findInTally) must find the booked voucher exactly once, as the real settle path would.
+     It matches the party on the ledger lines for Receipt, Payment and Contra, because Tally overwrites the header party. */
+  let again: { masterId: string }[] = [];
+  let againErr = "";
+  try { again = await seams.find(company, p); } catch (e) { againErr = (e as Error).message; }
+  step("findInTally finds the booked voucher exactly once (the crash-recovery read)", again.length === 1 && !againErr,
+    againErr || `${again.length} found; master id ${again[0]?.masterId ?? "-"}, the job row says ${after?.master_id ?? "-"}`);  // check 16
   console.log(`\n  The voucher is still in the dummy Tally. Run --sweep --job ${JOB} to remove it.`);
 }
 
@@ -358,12 +364,11 @@ async function modeSweep() {
   must("the job is a bank-mail test job", !problem, problem ?? describe(job!.payload));    // check 3
   const p = job!.payload, number = p.voucherNumber!;
 
-  /* Tally first: find the one voucher, judge it with the strict guard, delete it, confirm it is gone. */
+  /* Tally first: find the one voucher, judge it with the shared sweep guard plus the job's own number, delete it, confirm it is gone. */
   const found = await voucherOnDay(company, p.date, p.voucherType, number);
-  const guarded = found.filter((v) => v.number === number && BANK_NUMBER.test(v.number) && v.narration.includes("ZZTEST"));
-  const shared = found[0] ? isSweepVoucher({ number: found[0].number, narration: found[0].narration }, "ZZTEST") : null;
+  const guarded = found.filter((v) => v.number === number && isSweepVoucher({ number: v.number, narration: v.narration }, "ZZTEST"));
   step("the voucher in Tally passes the sweep guard (or none was booked)", found.length <= 1 && guarded.length === found.length,
-    `${found.length} found; strict guard ${guarded.length}; the shared isSweepVoucher says ${shared === null ? "n/a" : shared} because the number has no separator`);  // check 4
+    `${found.length} found; passes the shared isSweepVoucher and carries the job's own number: ${guarded.length}`);  // check 4
   let deletedInTally = 0;
   if (found.length === 1 && guarded.length === 1) {
     const day = tallyDateInt(p.date), type = found[0].type;
