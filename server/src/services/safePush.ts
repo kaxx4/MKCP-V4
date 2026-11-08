@@ -12,7 +12,7 @@
 import { tallyPost } from "../tally.js";
 import { buildVoucherImportXml, parseImportResponse, partyIdentity, type PartyIdentity } from "./voucherPusher.js";
 import { loadMasters, gstRateFor, hsnFor, type TallyMasters } from "./tallyMasters.js";
-import { guardVoucher, isInwardSupply, type GuardContext } from "./pushGuard.js";
+import { guardVoucher, isInwardSupply, partyIsOverwritten, type GuardContext } from "./pushGuard.js";
 import { loadOpenBills } from "./billSettlement.js";
 import { nextFreeNumber, takenNumbers } from "./voucherNumbering.js";
 import { withTally } from "./tallyGate.js";
@@ -303,9 +303,18 @@ export function diffIdentity(p: VoucherPayload, masters: TallyMasters, v: string
 /**
  * Is the stored voucher `v` the payload's party? One definition for every matcher that settles a job or a push
  * from a read of Tally (findInTally in erpJobAgent.ts and pickByMoney below).
+ *
+ * Tally overwrites the header party (PARTYLEDGERNAME) with the bank or cash ledger on Payment, Receipt and Contra
+ * (PARTY_OVERWRITTEN in pushGuard.ts; seen on the dummy company 8-Nov-2026: a Receipt with header "HDFC BANK" and
+ * the party on the credit line). For those three types the party is therefore matched on the ledger lines: a line
+ * whose ledger name equals the payload party. Every other type keeps the header compare. Lines are read the way
+ * diffStored reads them (empty placeholder blocks dropped).
  */
 export function partyMatchesStored(p: Pick<VoucherPayload, "voucherType" | "partyLedgerName">, v: string): boolean {
-  return fld(v, "PARTYLEDGERNAME") === p.partyLedgerName;
+  if (!partyIsOverwritten(p.voucherType)) return fld(v, "PARTYLEDGERNAME") === p.partyLedgerName;
+  const party = p.partyLedgerName;
+  if (!party) return false;
+  return [...listOf(v, "LEDGERENTRIES\\.LIST"), ...listOf(v, "ALLLEDGERENTRIES\\.LIST")].some((x) => fld(x, "LEDGERNAME") === party);
 }
 
 /**
