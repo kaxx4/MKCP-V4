@@ -35,7 +35,9 @@ import {
 } from "../../src/services/erpMirrorSync.js";
 import { buildCollectionXml } from "../../src/services/xmlBuilder.js";
 import type { CollectionDef } from "../../src/types.js";
-import { swapStoreCleanup } from "./rigExit.js";
+import { rigExitCodeAtLeast, swapStoreCleanup } from "./rigExit.js";
+/** Checks that passed in the last full live run (16 of 16, commit 9ec3a44). A run with fewer passes is not a pass. */
+const MIN_CHECKS = 16;
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : null; };
@@ -169,6 +171,8 @@ const countTag = (xml: string, tag: string) => ({
       passed: steps.filter((s) => s.ok).length, failed: steps.filter((s) => !s.ok).length };
     if (OUT) { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify(report, null, 2)); }
     console.log(`\n  ${report.passed} passed, ${report.failed} failed (${report.minutes} min)`);
-    process.exit(report.failed ? 1 : 0);
+    const exitCode = rigExitCodeAtLeast(steps.map((s) => ({ name: s.step, ok: s.ok, detail: s.detail })), MIN_CHECKS);
+    if (exitCode === 1 && report.failed === 0) console.log(`  only ${report.passed} checks passed; at least ${MIN_CHECKS} are expected, so this is not a pass`);
+    process.exit(exitCode);
   }
 })();

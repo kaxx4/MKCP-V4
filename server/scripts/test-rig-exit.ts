@@ -4,7 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { leftoverCheck, recordError, rigExitCode, rigSummary, type RigCheck } from "./rigs/rigExit.js";
+import { leftoverCheck, recordError, rigExitCode, rigExitCodeAtLeast, rigSummary, type RigCheck } from "./rigs/rigExit.js";
 
 let passed = 0, failed = 0;
 const ok = (name: string, cond: boolean) => { if (cond) passed++; else { failed++; console.log(`FAIL ${name}`); } };
@@ -30,6 +30,18 @@ ok("zero left passes", leftoverCheck("left", { count: 0, error: null }).ok === t
 ok("three left fails", leftoverCheck("left", { count: 3, error: null }).ok === false);
 ok("the summary names a shortfall", /only 1 of the 6 expected/.test(rigSummary([pass("a")], 6)));
 ok("the summary does not name one when a check failed", !/only/.test(rigSummary([pass("a"), fail("b")], 6)));
+
+// review of threads 9 and 10, item 10: the four older rigs need a minimum number of passed checks before they exit 0
+ok("at least: enough passes and none failed exits 0", rigExitCodeAtLeast([pass("a"), pass("b"), pass("c")], 2) === 0);
+ok("at least: exactly the minimum exits 0", rigExitCodeAtLeast([pass("a"), pass("b")], 2) === 0);
+ok("at least: a run that stopped early (fewer passes, none failed) exits 1", rigExitCodeAtLeast([pass("a")], 32) === 1);
+ok("at least: no checks at all exits 1", rigExitCodeAtLeast([], 14) === 1);
+ok("at least: one failed check exits 1 however many passed", rigExitCodeAtLeast([pass("a"), pass("b"), fail("c")], 2) === 1);
+for (const [file, min] of [["mirror-sync-dummy.ts", "32"], ["mirror-part7-dummy.ts", "16"], ["r1-mirror-replay.ts", "14"], ["mirror-checks-dummy.ts", ""]] as const) {
+  const text = readFileSync(join(dirname(process.argv[1]), "rigs", file), "utf8");
+  ok(`${file} exits through rigExitCodeAtLeast with a minimum`, /process\.exit\(exitCode\)/.test(text) && /rigExitCodeAtLeast\(steps\.map/.test(text) && /const MIN_CHECKS = /.test(text) && (min === "" || new RegExp(`const MIN_CHECKS = ${min};`).test(text)));
+  ok(`${file} no longer exits 0 on "nothing failed" alone`, !/process\.exit\(report\.failed \? 1 : 0\)/.test(text));
+}
 
 // the rig itself uses all of it (a scan, so a later edit that drops the rule is seen offline)
 const rig = readFileSync(join(dirname(process.argv[1]), "rigs", "realtime-signals-live.ts"), "utf8");

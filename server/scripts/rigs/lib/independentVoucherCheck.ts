@@ -10,19 +10,21 @@
  * What it compares, per voucher:
  *  - the GUID, the date and the effective date (YYYYMMDD in Tally, ISO in the block), the number, the type,
  *    cancelled and optional flags, the place of supply, the e-way transport mode and (real runs) the distance;
- *  - every ledger line: whether it is a debit (ISDEEMEDPOSITIVE) and its signed amount in paise, as a set (a line
- *    whose sign flipped, or whose amount changed, makes the two sets differ), and that a debit carries a negative amount;
- *  - every stock line: quantity, billed quantity, rate, amount in paise and the deemed-positive flag, as a set;
+ *  - every ledger line: its ledger name, whether it is a debit (ISDEEMEDPOSITIVE) and its signed amount in paise, as a set
+ *    (a line whose sign flipped, whose amount changed or that moved to another ledger makes the two sets differ), and that a
+ *    debit carries a negative amount;
+ *  - every stock line: item name, quantity, billed quantity, rate, amount in paise and the deemed-positive flag, as a set;
  *  - the e-way bill number and validity, the IRN and its acknowledgement, the buyer name and the party GSTIN:
- *      real runs: the block holds what the XML holds;
+ *      real runs: the block holds what the XML holds (a buyer the XML has and the block lacks is a difference);
  *      test runs (the dummy is an old copy of the real books): the block holds NULL wherever the XML holds a value,
  *      because a test row may carry no personal field. A value in a test block is a leak and is reported.
- * Names are not compared on test runs (they are replaced by keyed stand-ins on purpose); the count of lines is.
+ * Names are not compared on test runs (they are replaced by keyed stand-ins on purpose); the count of lines is, and the
+ * lines are matched on sign, amount, quantity and rate alone there. On real runs the names are part of the line's key.
  *
  * Pure: no Tally, no database. The rig feeds it the raw reply of one day's read.
  */
-export interface RawLine { debit: boolean | null; cents: number | null }
-export interface RawStock { qty: number | null; billed: number | null; rate: number | null; cents: number | null; deemedPositive: boolean | null }
+export interface RawLine { name: string; debit: boolean | null; cents: number | null }
+export interface RawStock { name: string; qty: number | null; billed: number | null; rate: number | null; cents: number | null; deemedPositive: boolean | null }
 export interface RawVoucher {
   guid: string; date: string | null; effectiveDate: string | null; number: string; type: string; cancelled: boolean; optional: boolean;
   placeOfSupply: string; transportMode: string; distance: number | null;
@@ -116,9 +118,9 @@ export function parseRawVoucher(block: string): RawVoucher {
     ewbNumber: tag(ewbOwn, "BILLNUMBER"), ewbValidUntil: tag(ewbOwn, "VALIDUPTO"),
     irn: tag(own, "IRN"), irnAckNo: tag(own, "IRNACKNO"),
     buyerNames: [tag(own, "PARTYMAILINGNAME"), tag(own, "BASICBUYERNAME")].filter(Boolean), partyGstin: tag(own, "PARTYGSTIN"),
-    ledger: lines.map((l) => { const t = ownTags(l); return { debit: yes(tag(t, "ISDEEMEDPOSITIVE")), cents: paise(numOf(tag(t, "AMOUNT"))) }; }),
+    ledger: lines.map((l) => { const t = ownTags(l); return { name: tag(t, "LEDGERNAME"), debit: yes(tag(t, "ISDEEMEDPOSITIVE")), cents: paise(numOf(tag(t, "AMOUNT"))) }; }),
     stock: stock.map((l) => { const t = ownTags(l); return {
-      qty: numOf(tag(t, "ACTUALQTY")), billed: numOf(tag(t, "BILLEDQTY")), rate: numOf(tag(t, "RATE")), cents: paise(numOf(tag(t, "AMOUNT"))), deemedPositive: yes(tag(t, "ISDEEMEDPOSITIVE")),
+      name: tag(t, "STOCKITEMNAME"), qty: numOf(tag(t, "ACTUALQTY")), billed: numOf(tag(t, "BILLEDQTY")), rate: numOf(tag(t, "RATE")), cents: paise(numOf(tag(t, "AMOUNT"))), deemedPositive: yes(tag(t, "ISDEEMEDPOSITIVE")),
     }; }),
   };
 }
@@ -149,18 +151,19 @@ export function compareRawToBlock(raw: RawVoucher, blk: Block | null | undefined
   if (o.test) { if (v.transport_distance_km !== null && v.transport_distance_km !== undefined) d.push(`${tag4}: transport distance is filled in a TEST block (a personal field leaked)`); }
   else eq("transport distance", raw.distance, v.transport_distance_km === null || v.transport_distance_km === undefined ? null : numOf(String(v.transport_distance_km)));
 
-  // ledger lines: a set of (is a debit, signed paise)
-  const rl = raw.ledger.map((l) => keyOf(l.debit === true, l.cents));
-  const bl = blk.ledger_entries.map((l) => keyOf(l.is_debit === true, paise(numOf(String(l.amount ?? "")))));
+  // ledger lines: a set of (ledger name on a real run, is a debit, signed paise)
+  const nm = (x: unknown) => (o.test ? "" : String(x ?? "").trim());
+  const rl = raw.ledger.map((l) => keyOf(nm(l.name), l.debit === true, l.cents));
+  const bl = blk.ledger_entries.map((l) => keyOf(nm(l.ledger_name), l.is_debit === true, paise(numOf(String(l.amount ?? "")))));
   if (raw.ledger.length !== blk.ledger_entries.length) d.push(`${tag4}: ${blk.ledger_entries.length} ledger line(s) in the block and ${raw.ledger.length} in the XML`);
-  else if (!sameSet(rl, bl)) d.push(`${tag4}: the ledger lines differ in sign or amount (block ${[...bl].sort().join(", ")}; XML ${[...rl].sort().join(", ")})`);
+  else if (!sameSet(rl, bl)) d.push(`${tag4}: the ledger lines differ in ledger, sign or amount (block ${[...bl].sort().join(", ")}; XML ${[...rl].sort().join(", ")})`);
   for (const l of blk.ledger_entries) { const c = paise(numOf(String(l.amount ?? ""))); if (l.is_debit === true && (c ?? 0) > 0) d.push(`${tag4}: the block has a debit line with a positive amount`); }
 
-  // stock lines: a set of (qty, billed qty, rate, paise, deemed positive)
-  const rs = raw.stock.map((s) => keyOf(s.qty, s.billed, s.rate, s.cents, s.deemedPositive === true));
-  const bs = blk.inventory_entries.map((s) => keyOf(numOf(String(s.actual_qty ?? "")), numOf(String(s.billed_qty ?? "")), numOf(String(s.rate ?? "")), paise(numOf(String(s.amount ?? ""))), s.is_deemed_positive === true));
+  // stock lines: a set of (item name on a real run, qty, billed qty, rate, paise, deemed positive)
+  const rs = raw.stock.map((s) => keyOf(nm(s.name), s.qty, s.billed, s.rate, s.cents, s.deemedPositive === true));
+  const bs = blk.inventory_entries.map((s) => keyOf(nm(s.stock_item_name), numOf(String(s.actual_qty ?? "")), numOf(String(s.billed_qty ?? "")), numOf(String(s.rate ?? "")), paise(numOf(String(s.amount ?? ""))), s.is_deemed_positive === true));
   if (raw.stock.length !== blk.inventory_entries.length) d.push(`${tag4}: ${blk.inventory_entries.length} stock line(s) in the block and ${raw.stock.length} in the XML`);
-  else if (!sameSet(rs, bs)) d.push(`${tag4}: the stock lines differ in quantity, rate, amount or sign (block ${[...bs].sort().join(", ")}; XML ${[...rs].sort().join(", ")})`);
+  else if (!sameSet(rs, bs)) d.push(`${tag4}: the stock lines differ in item, quantity, rate, amount or sign (block ${[...bs].sort().join(", ")}; XML ${[...rs].sort().join(", ")})`);
 
   // e-way bill, IRN, buyer, party GSTIN
   const personal: [string, string, unknown][] = [
@@ -174,6 +177,7 @@ export function compareRawToBlock(raw: RawVoucher, blk: Block | null | undefined
   }
   const hasBuyer = v.buyer_name !== null && v.buyer_name !== undefined && String(v.buyer_name) !== "";
   if (o.test) { if (hasBuyer) d.push(`${tag4}: buyer name is filled in a TEST block (a personal field leaked)`); }
+  else if (raw.buyerNames.length && !hasBuyer) d.push(`${tag4}: buyer name is empty in the block and the XML has one`);
   else if (raw.buyerNames.length && hasBuyer && !raw.buyerNames.includes(String(v.buyer_name).trim())) d.push(`${tag4}: buyer name in the block is not one the XML holds`);
   return d;
 }

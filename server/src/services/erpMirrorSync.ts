@@ -768,7 +768,9 @@ export async function runRepull(opts: { store: MirrorStore; tally: MirrorTally; 
 export function deriveStepState(t: Record<string, any> | null | undefined): { state: "ok" | "info" | "failed"; note: string | null } {
   if (!t) return { state: "failed", note: "the database gave no answer for the copy" };
   const floorDays = Number(t.day_floor_days ?? 0);
-  if (floorDays > 0) return { state: "failed", note: `deletes held back by the per-day floor on ${floorDays} day(s)` };
+  if (floorDays > 0) return { state: "failed", note: `deletes held back by the per-day floor on ${floorDays} day(s); an Owner can release them (release_tally_derive) once the mirror is confirmed right` };
+  const floorTables = Number(t.table_floor_tables ?? 0);
+  if (floorTables > 0) return { state: "failed", note: `deletes held back by the table floor on ${floorTables} table(s) (${Array.isArray(t.table_floor_list) ? t.table_floor_list.join(", ") : "see the answer"}); an Owner can release them (release_tally_derive) once the mirror is confirmed right` };
   const without = Number(t.without_block ?? 0);
   if (without > 0) return { state: "info", note: `${without} mirror voucher(s) have no tally-shaped block, so no delete ran` };
   if (t.deletes_skipped === true) return { state: "info", note: "deletes were skipped" };

@@ -74,6 +74,14 @@ const test = { company: "ZZTEST CO", name: (k: string, s: string) => scrubName(k
   ok("a changed voucher number is caught", plant((b) => { b.voucher.voucher_number = "ZZ/9"; }).some((x) => /voucher number/.test(x)));
   ok("a changed transport distance is caught", plant((b) => { b.voucher.transport_distance_km = 99; }).some((x) => /distance/.test(x)));
   ok("a changed place of supply is caught", plant((b) => { b.voucher.place_of_supply = "Bihar"; }).some((x) => /place of supply/.test(x)));
+  // review of threads 9 and 10, item 5: a line is keyed by its name too, and a buyer the XML has must be in a real block
+  ok("real mode: two ledger names swapped between lines (same amounts) are caught", plant((b) => { const t = b.ledger_entries[1].ledger_name; b.ledger_entries[1].ledger_name = b.ledger_entries[2].ledger_name; b.ledger_entries[2].ledger_name = t; }).some((x) => /ledger lines differ/.test(x)));
+  ok("real mode: a ledger line moved to another ledger is caught", plant((b) => { b.ledger_entries[1].ledger_name = "Other ledger"; }).some((x) => /ledger lines differ/.test(x)));
+  ok("real mode: a stock line under another item name is caught", plant((b) => { b.inventory_entries[0].stock_item_name = "Item Two"; }).some((x) => /stock lines differ/.test(x)));
+  ok("real mode: the lines are read with their names (the XML side too)", raws[0].ledger.map((l) => l.name).join("|") === "PARTY 001 & SONS|Sales|Output GST" && raws[0].stock[0].name === "Item One");
+  ok("real mode: a buyer the XML holds but the block lacks is caught", plant((b) => { b.voucher.buyer_name = null; }).some((x) => /buyer name is empty/.test(x)));
+  ok("real mode: a buyer the XML does not hold is caught", plant((b) => { b.voucher.buyer_name = "Somebody Else"; }).some((x) => /buyer name in the block is not one the XML holds/.test(x)));
+  ok("test mode still compares lines without names (they are scrubbed) and still agrees", compareRawToBlock(raws[0], tblocks[0], { test: true }).length === 0);
   ok("real mode: an e-way bill number dropped from the block is caught", plant((b) => { b.voucher.ewb_number = null; }).some((x) => /e-way bill number/.test(x)));
   ok("real mode: a wrong IRN is caught", plant((b) => { b.voucher.irn = "OTHER"; }).some((x) => /IRN/.test(x)));
   ok("real mode: a dropped party GSTIN is caught", plant((b) => { b.voucher.party_gstin = null; }).some((x) => /GSTIN/.test(x)));

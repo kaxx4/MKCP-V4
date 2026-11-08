@@ -64,12 +64,14 @@ import { escapeXml, tallyDate as xmlTallyDate } from "../../src/services/xml.js"
 import { rigPayload } from "./lib/simTally.js";
 import { isSweepVoucher } from "../lib/testVoucherMatch.js";
 import type { VoucherPayload } from "../../src/types.js";
-import { swapStoreCleanup } from "./rigExit.js";
+import { rigExitCodeAtLeast, swapStoreCleanup } from "./rigExit.js";
 
 const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : null; };
 const OUT = arg("--out");
 const PART = arg("--part");
+/** Checks that passed in the last full live run of each part (checks 19 at a56f6ba, tb 3, period 9, ranges 3). A run with fewer passes is not a pass. */
+const MIN_CHECKS = ({ checks: 19, tb: 3, period: 9, ranges: 3 } as Record<string, number>)[PART ?? "checks"] ?? 1;
 if (PART !== "checks" && PART !== "tb" && PART !== "period" && PART !== "ranges") { console.error("say --part checks (everything but the Trial Balance), --part period (do the undated reads see a voucher dated after the loaded period?) or --part tb (the Trial Balance comparison only, run last)"); process.exit(2); }
 const company = practiceCompany();
 if (!company) { console.error("MKCP_PRACTICE_COMPANY is not set"); process.exit(2); }
@@ -506,6 +508,8 @@ function pickWindow(byDay: Record<string, number>) {
       runs: Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, brief(r)])), passed: steps.filter((s) => s.ok).length, failed: steps.filter((s) => !s.ok).length };
     if (OUT) { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify(report, null, 2)); }
     console.log(`\n  ${report.passed} passed, ${report.failed} failed (${report.minutes} min)`);
-    process.exit(report.failed ? 1 : 0);
+    const exitCode = rigExitCodeAtLeast(steps.map((s) => ({ name: s.step, ok: s.ok, detail: s.detail })), MIN_CHECKS);
+    if (exitCode === 1 && report.failed === 0) console.log(`  only ${report.passed} checks passed; at least ${MIN_CHECKS} are expected, so this is not a pass`);
+    process.exit(exitCode);
   }
 })();

@@ -43,7 +43,9 @@ import { runMirrorSync, runRepull, runDayCheck, supabaseMirrorStore, ledgerPerio
 import { rigPayload } from "./lib/simTally.js";
 import type { VoucherPayload } from "../../src/types.js";
 import type { SafePushResult } from "../../src/services/safePush.js";
-import { swapStoreCleanup } from "./rigExit.js";
+import { rigExitCodeAtLeast, swapStoreCleanup } from "./rigExit.js";
+/** Checks that passed in the last full live run (14 of 14, commit 7085222). A run with fewer passes is not a pass. */
+const MIN_CHECKS = 14;
 
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : null; };
 const OUT = arg("--out");
@@ -242,6 +244,8 @@ function provenance() {
     const report = { rig: "r1-mirror-replay", stamp, companyKey, provenance: prov, minutes: Math.round((Date.now() - t0) / 6000) / 10, steps, passed: steps.filter((s) => s.ok).length, failed: steps.filter((s) => !s.ok).length };
     if (OUT) { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify(report, null, 2)); }
     console.log(`\n  ${report.passed} passed, ${report.failed} failed (${report.minutes} min)`);
-    process.exit(report.failed ? 1 : 0);
+    const exitCode = rigExitCodeAtLeast(steps.map((s) => ({ name: s.step, ok: s.ok, detail: s.detail })), MIN_CHECKS);
+    if (exitCode === 1 && report.failed === 0) console.log(`  only ${report.passed} checks passed; at least ${MIN_CHECKS} are expected, so this is not a pass`);
+    process.exit(exitCode);
   }
 })();

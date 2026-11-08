@@ -17,6 +17,18 @@ export function rigExitCode(results: RigCheck[], expected: number): 0 | 1 {
   return failed === 0 && passed === expected ? 0 : 1;
 }
 
+/**
+ * For the older rigs (review of threads 9 and 10, item 10, D-1-5.88): 0 only when no check failed AND at least `minimum` checks passed.
+ * `minimum` is the number that passed in the last full live run of that rig. A run that stops early, or whose checks are skipped by a
+ * condition, can no longer exit 0 on "nothing failed"; a rig that gains checks keeps passing until its number is raised. The rigs that
+ * were written with this rule (realtime, masters, full year) use the exact `rigExitCode`.
+ */
+export function rigExitCodeAtLeast(results: RigCheck[], minimum: number): 0 | 1 {
+  const passed = results.filter((r) => r.ok).length;
+  const failed = results.length - passed;
+  return failed === 0 && passed >= minimum ? 0 : 1;
+}
+
 /** One line for the end of the rig's output; names the shortfall when fewer checks ran than were expected. */
 export function rigSummary(results: RigCheck[], expected: number): string {
   const passed = results.filter((r) => r.ok).length;
