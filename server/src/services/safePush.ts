@@ -300,6 +300,23 @@ export function diffIdentity(p: VoucherPayload, masters: TallyMasters, v: string
   return out;
 }
 
+/** Voucher types compared as Tally does: the queue says "Sales", the master is "SALES" (review H1, 5-Nov-2026). The one case-free type compare. */
+export const sameVoucherType = (a: string | undefined, b: string | undefined): boolean =>
+  (a ?? "").trim().toUpperCase() === (b ?? "").trim().toUpperCase();
+
+/**
+ * The real ledger lines of a stored voucher (empty placeholder blocks dropped). ALLLEDGERENTRIES.LIST when it holds
+ * anything, else the plain LEDGERENTRIES.LIST: never both, because the two can list the same lines and summing them
+ * double-counts (repo CLAUDE.md, "Read ALLLEDGERENTRIES.LIST alone"). diffStored reads both lists together; this is
+ * the stricter reading used to match a party and count lines.
+ */
+export function storedLedgerLines(v: string): string[] {
+  const all = listOf(v, "ALLLEDGERENTRIES\\.LIST");
+  return all.length ? all : listOf(v, "LEDGERENTRIES\\.LIST");
+}
+/** The ledger names on a stored voucher's lines, as storedLedgerLines reads them. */
+export const voucherLedgerNames = (v: string): string[] => storedLedgerLines(v).map((x) => fld(x, "LEDGERNAME"));
+
 /**
  * Is the stored voucher `v` the payload's party? One definition for every matcher that settles a job or a push
  * from a read of Tally (findInTally in erpJobAgent.ts and pickByMoney below).
@@ -307,14 +324,23 @@ export function diffIdentity(p: VoucherPayload, masters: TallyMasters, v: string
  * Tally overwrites the header party (PARTYLEDGERNAME) with the bank or cash ledger on Payment, Receipt and Contra
  * (PARTY_OVERWRITTEN in pushGuard.ts; seen on the dummy company 8-Nov-2026: a Receipt with header "HDFC BANK" and
  * the party on the credit line). For those three types the party is therefore matched on the ledger lines: a line
- * whose ledger name equals the payload party. Every other type keeps the header compare. Lines are read the way
- * diffStored reads them (empty placeholder blocks dropped).
+ * whose ledger name equals the payload party, compared exactly (case and spaces count). The stored voucher must also
+ * hold exactly as many real lines as the payload sent, because diffStored accepts a subset and a combined voucher
+ * (the same lines plus others) must not be taken for this one. Every other type keeps the header compare.
+ *
+ * Fail-safe edges, by design:
+ *  - An empty payload party never matches on these three types, so the money fallback (pickByMoney) finds nothing;
+ *    the number path in findInTally, which skips the party test when the payload has none, still works.
+ *  - A child voucher type such as "Bank Receipt" is not one of the three names, so it keeps the header compare and,
+ *    when Tally has overwritten its header with the bank, is not found. A miss leaves a job uncertain for a person;
+ *    it is never settled on a guess.
  */
-export function partyMatchesStored(p: Pick<VoucherPayload, "voucherType" | "partyLedgerName">, v: string): boolean {
+export function partyMatchesStored(p: Pick<VoucherPayload, "voucherType" | "partyLedgerName" | "ledgerEntries">, v: string): boolean {
   if (!partyIsOverwritten(p.voucherType)) return fld(v, "PARTYLEDGERNAME") === p.partyLedgerName;
   const party = p.partyLedgerName;
   if (!party) return false;
-  return [...listOf(v, "LEDGERENTRIES\\.LIST"), ...listOf(v, "ALLLEDGERENTRIES\\.LIST")].some((x) => fld(x, "LEDGERNAME") === party);
+  const names = voucherLedgerNames(v);
+  return names.length === (p.ledgerEntries ?? []).length && names.includes(party);
 }
 
 /**
@@ -327,8 +353,7 @@ export function partyMatchesStored(p: Pick<VoucherPayload, "voucherType" | "part
 export function pickByMoney(vouchers: string[], payload: VoucherPayload): string | undefined {
   const byMoney = vouchers.filter(
     (x) =>
-      // Case-free, as Tally compares types: the payload says "Sales", the master "SALES" (review H1; this predates task 1-3).
-      fld(x, "VOUCHERTYPENAME").trim().toUpperCase() === (payload.voucherType ?? "").trim().toUpperCase() &&
+      sameVoucherType(fld(x, "VOUCHERTYPENAME"), payload.voucherType) &&
       partyMatchesStored(payload, x) &&
       diffStored(payload, x).length === 0,
   );

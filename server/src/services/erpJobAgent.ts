@@ -30,7 +30,7 @@
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { safePush, vouchersOnDateXml, diffStored, numberTakenError, partyMatchesStored, type SafePushResult } from "./safePush.js";
+import { safePush, vouchersOnDateXml, diffStored, numberTakenError, partyMatchesStored, sameVoucherType, type SafePushResult } from "./safePush.js";
 import { readTag, escapeXml, tdlString, tallyDateInt } from "./xml.js";
 import { testJobRefusal, outcomeOf, type TestOutcome } from "./erpTestQueueAgent.js";
 import type { VoucherPayload } from "../types.js";
@@ -131,9 +131,8 @@ export function looksLikeTallyMessage(err: string): boolean {
 const ms = (iso: string) => new Date(iso).getTime();
 
 // ── Reading Tally to settle ───────────────────────────────────────────────────
-/** Voucher types compared as Tally does: the queue says "Sales", the master is "SALES" (review H1, 5-Nov-2026). */
-export const sameVoucherType = (a: string | undefined, b: string | undefined): boolean =>
-  (a ?? "").trim().toUpperCase() === (b ?? "").trim().toUpperCase();
+/** The one case-free type compare lives in safePush.ts; re-exported so existing callers keep their import. */
+export { sameVoucherType };
 
 /**
  * The vouchers in Tally that match a payload on type, date, number, party and

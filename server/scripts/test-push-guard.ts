@@ -204,6 +204,19 @@ function offlineCases() {
     said("app-assigned number, bare exceptions=1 — keeps the mirror-race wording",
       rejectionErrors(app, bare, 1), [/taken from the mirror/, /claims it first/, /Re-sync, then push again with the next free number/], [/typed/i, /clear the override/i]);
   }
+  {
+    // Review 8-Nov-2026 (L1): the bank-instrument warning for Payment, Receipt and Contra uses the one case-free rule,
+    // so a type spelled in lower case gets the warning too (the guard only warns about the spelling, it does not refuse).
+    for (const type of ["Receipt", "receipt"]) {
+      const v = receipt(`${TAG}/BK`, PARTY_LOCAL, 100);
+      v.voucherType = type as VoucherPayload["voucherType"];
+      v.ledgerEntries[0].ledgerName = "STATE BANK OF INDIA";
+      const r = guardVoucher(v, m, {});
+      const hit = r.warnings.some((w) => /bank ledger with no instrument detail/.test(w));
+      console.log(`  ${hit ? "✓" : "✗"} a ${type} to a bank ledger with no instrument detail gets the Bank Allocation warning`);
+      if (hit) pass++; else fail++;
+    }
+  }
 }
 
 async function main() {

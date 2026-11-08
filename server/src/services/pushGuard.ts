@@ -527,6 +527,9 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
   // ── Party line sanity ─────────────────────────────────────────────────────
   const partyLines = (p.ledgerEntries ?? []).filter(e => e.isPartyLedger);
   if (partyLines.length > 1) errors.push(`Expected at most one party ledger line, found ${partyLines.length}.`);
+  /* Case-SENSITIVE on purpose (review 8-Nov-2026, L1): this is a refusal, and partyIsOverwritten would make it skip a
+     lower-case "receipt", which the guard accepts with only a spelling warning. Using the case-free rule here would loosen
+     that refusal, so it stays as it was; the warning below (bank instrument detail) only adds a message, so it is case-free. */
   if (partyLines.length === 1 && !PARTY_OVERWRITTEN.has(p.voucherType) && partyLines[0].ledgerName !== p.partyLedgerName) {
     errors.push(`The party line ("${partyLines[0].ledgerName}") must match partyLedgerName ("${p.partyLedgerName}").`);
   }
@@ -765,7 +768,7 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
 
   // ── A bank ledger with no instrument detail makes Tally prompt on every
   //    entry — 1,275 of the company's real vouchers carry one. ───────────────
-  if (PARTY_OVERWRITTEN.has(p.voucherType)) {
+  if (partyIsOverwritten(p.voucherType)) {
     for (const e of p.ledgerEntries ?? []) {
       const led = findLedger(m, e.ledgerName);
       if (!isMiss(led) && /BANK/i.test(led.parent) && !e.bankAllocation) {
