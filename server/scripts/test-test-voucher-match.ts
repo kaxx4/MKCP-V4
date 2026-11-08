@@ -81,6 +81,11 @@ expect("the census does NOT count 7 hex", isOurVoucher(bm("ZZTESTBM5796866", "AS
 expect("the census does NOT count 9 hex", isOurVoucher(bm("ZZTESTBM579686681", "AS PER BILL")), false);
 expect("the census does NOT count lower-case hex", isOurVoucher(bm("ZZTESTBM9f3a0c1d", "AS PER BILL")), false);
 expect("the census does NOT count a real company number", isOurVoucher(bm("26-27/0679", "AS PER BILL")), false);
+expect("ZZTESTBM57968668 with a trailing space is NOT swept", isSweepVoucher(bm("ZZTESTBM57968668 "), "ZZTEST"), false);
+expect("ZZTESTBM57968668 with a trailing newline is NOT swept", isSweepVoucher(bm("ZZTESTBM57968668\n"), "ZZTEST"), false);
+expect("ZZTESTBM57968668 with a leading space is NOT swept", isSweepVoucher(bm(" ZZTESTBM57968668"), "ZZTEST"), false);
+expect("the census does NOT count a trailing space", isOurVoucher(bm("ZZTESTBM57968668 ", "AS PER BILL")), false);
+expect("the census does NOT count a trailing newline", isOurVoucher(bm("ZZTESTBM57968668\n", "AS PER BILL")), false);
 expect("NUMBER_PATTERNS still has the older shapes (ZZTEST/ and ZZTEST digits /)", NUMBER_PATTERNS.some((r) => r.test("ZZTEST/X1")) && NUMBER_PATTERNS.some((r) => r.test("ZZTEST1234567/S3")), true);
 expect("a stored ZZTESTBM copy is not left to the harness (the sweep now sees it)",
   harnessMustRemove({ voucherType: "Receipt", voucherNumber: "ZZTESTBM57968668", narration: "x ZZTEST" }, { number: "ZZTESTBM57968668", narration: "x ZZTEST", type: "Receipt" }, "ZZTEST"), false);
