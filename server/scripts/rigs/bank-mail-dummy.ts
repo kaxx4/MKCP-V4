@@ -332,7 +332,12 @@ async function modeBook() {
   }
   step("Tally holds exactly one voucher with that number", got.length === 1, `${got.length} found`);   // check 10
   step("type is the job's type", !!v && sameVoucherType(v.type, p.voucherType), v?.type ?? "no voucher");   // check 11
-  step("party is the job's party", !!v && v.party === p.partyLedgerName, v ? "" : "no voucher");          // check 12
+  /* Tally overwrites the header party with the bank ledger on Payment, Receipt and Contra (PARTY_OVERWRITTEN in pushGuard.ts),
+     so for those three types the party is looked for on the ledger lines, and for any other type on the header. */
+  const partyOnLines = !!v && v.lines.some((l) => l.ledger === p.partyLedgerName);
+  const headerOverwritten = /^(payment|receipt|contra)$/i.test(p.voucherType);
+  step("party is the job's party (on a ledger line for Payment, Receipt and Contra)", !!v && (headerOverwritten ? partyOnLines : v.party === p.partyLedgerName),
+    v ? `header party ${v.party}; ${headerOverwritten ? `party on a ledger line: ${partyOnLines}` : "compared on the header"}` : "no voucher");          // check 12
   const abs = (s: string) => Math.abs(parseFloat(s.replace(/[^0-9.\-]/g, "")));
   const want = (p.ledgerEntries ?? []).map((e) => ({ ledger: e.ledgerName, amount: e.amount }));
   const linesOk = !!v && want.length >= 2 && want.every((w) => v.lines.some((l) => l.ledger === w.ledger && Math.abs(abs(l.amount) - w.amount) < 0.02));
