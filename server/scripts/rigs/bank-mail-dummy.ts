@@ -133,8 +133,8 @@ async function voucherOnDay(company: string, isoDate: string, type: string, numb
         lines: blocks.map((b) => ({
           ledger: readTag(b, "LEDGERNAME").trim(), amount: readTag(b, "AMOUNT").trim(), positive: readTag(b, "ISDEEMEDPOSITIVE").trim(),
           /* bank and bill details, read as stored so they can be shown beside the line */
-          bank: [...b.matchAll(/<BANKALLOCATIONS.LIST[^>]*>[sS]*?</BANKALLOCATIONS.LIST>/g)].map((m) => `instrument ${readTag(m[0], "INSTRUMENTNUMBER").trim()}, type ${readTag(m[0], "TRANSACTIONTYPE").trim()}, amount ${readTag(m[0], "AMOUNT").trim()}`),
-          bills: [...b.matchAll(/<BILLALLOCATIONS.LIST[^>]*>[sS]*?</BILLALLOCATIONS.LIST>/g)].map((m) => `name "${readTag(m[0], "NAME").trim()}", type ${readTag(m[0], "BILLTYPE").trim()}, amount ${readTag(m[0], "AMOUNT").trim()}`),
+          bank: [...b.matchAll(/<BANKALLOCATIONS\.LIST\b[^>]*>[\s\S]*?<\/BANKALLOCATIONS\.LIST>/g)].map((m) => `instrument ${readTag(m[0], "INSTRUMENTNUMBER").trim()}, type ${readTag(m[0], "TRANSACTIONTYPE").trim()}, amount ${readTag(m[0], "AMOUNT").trim()}`),
+          bills: [...b.matchAll(/<BILLALLOCATIONS\.LIST\b[^>]*>[\s\S]*?<\/BILLALLOCATIONS\.LIST>/g)].map((m) => `name "${readTag(m[0], "NAME").trim()}", type ${readTag(m[0], "BILLTYPE").trim()}, amount ${readTag(m[0], "AMOUNT").trim()}`),
         })),
       };
     });
