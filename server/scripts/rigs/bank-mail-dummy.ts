@@ -116,7 +116,7 @@ async function preflight(): Promise<string> {
   return company;
 }
 
-interface Block { number: string; type: string; date: string; party: string; narration: string; lines: { ledger: string; amount: string; positive: string }[]; xml: string }
+interface Block { number: string; type: string; date: string; party: string; narration: string; lines: { ledger: string; amount: string; positive: string; bank: string[]; bills: string[] }[]; xml: string }
 
 /** The vouchers of one day, type and number, filtered inside Tally. Never a dated ledger collection. */
 async function voucherOnDay(company: string, isoDate: string, type: string, number: string): Promise<Block[]> {
@@ -130,7 +130,12 @@ async function voucherOnDay(company: string, isoDate: string, type: string, numb
       return {
         number: readTag(v, "VOUCHERNUMBER").trim(), type: readTag(v, "VOUCHERTYPENAME").trim(), date: readTag(v, "DATE").trim(),
         party: readTag(v, "PARTYLEDGERNAME").trim(), narration: readTag(v, "NARRATION").trim(), xml: v,
-        lines: blocks.map((b) => ({ ledger: readTag(b, "LEDGERNAME").trim(), amount: readTag(b, "AMOUNT").trim(), positive: readTag(b, "ISDEEMEDPOSITIVE").trim() })),
+        lines: blocks.map((b) => ({
+          ledger: readTag(b, "LEDGERNAME").trim(), amount: readTag(b, "AMOUNT").trim(), positive: readTag(b, "ISDEEMEDPOSITIVE").trim(),
+          /* bank and bill details, read as stored so they can be shown beside the line */
+          bank: [...b.matchAll(/<BANKALLOCATIONS.LIST[^>]*>[sS]*?</BANKALLOCATIONS.LIST>/g)].map((m) => `instrument ${readTag(m[0], "INSTRUMENTNUMBER").trim()}, type ${readTag(m[0], "TRANSACTIONTYPE").trim()}, amount ${readTag(m[0], "AMOUNT").trim()}`),
+          bills: [...b.matchAll(/<BILLALLOCATIONS.LIST[^>]*>[sS]*?</BILLALLOCATIONS.LIST>/g)].map((m) => `name "${readTag(m[0], "NAME").trim()}", type ${readTag(m[0], "BILLTYPE").trim()}, amount ${readTag(m[0], "AMOUNT").trim()}`),
+        })),
       };
     });
 }
@@ -319,7 +324,11 @@ async function modeBook() {
   extra.voucher = v ? { type: v.type, number: v.number, date: v.date, party: v.party, narration: v.narration, lines: v.lines } : null;
   if (v) {
     console.log(`\n  Tally read-back (${p.date}):\n    type ${v.type}\n    number ${v.number}\n    date ${v.date}\n    party ${v.party}\n    narration ${v.narration}`);
-    for (const l of v.lines) console.log(`    line ${l.ledger} | ${l.amount} | deemed positive ${l.positive}`);
+    for (const l of v.lines) {
+      console.log(`    line ${l.ledger} | ${l.amount} | deemed positive ${l.positive}`);
+      for (const b of l.bank) console.log(`      bank: ${b}`);
+      for (const b of l.bills) console.log(`      bill: ${b}`);
+    }
   }
   step("Tally holds exactly one voucher with that number", got.length === 1, `${got.length} found`);   // check 10
   step("type is the job's type", !!v && sameVoucherType(v.type, p.voucherType), v?.type ?? "no voucher");   // check 11
