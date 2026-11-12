@@ -143,13 +143,21 @@ console.log("\nthe agent sends to the right company, or does not send:");
   ok("a week later it is due again", p("2027-04-12", { lastPullAt: new Date(NOW("2027-04-12").getTime() - WEEK_MS - 1000) }).due);
   ok("past 30 June it stops whatever is recorded", !p("2027-07-01").due && /hard stop/.test(p("2027-07-01").why));
 
-  const store = {} as never;
-  const notOpen = await runLastYearPull({ entry: listNext[1], tallyUrl: "x", listing: async () => `<COMPANY NAME="other"><GUID>${G25}</GUID></COMPANY>`, store });
-  ok("last year's company not open: skipped with the reason, nothing read", notOpen.state === "skipped" && /not open/.test(notOpen.why) && notOpen.report === null);
-  const wrongGuid = await runLastYearPull({ entry: listNext[1], tallyUrl: "x", listing: async () => `<COMPANY NAME="${THIS}"><GUID>${G26}</GUID></COMPANY>`, store });
-  ok("open under another GUID: skipped, never read", wrongGuid.state === "skipped" && /different GUID/.test(wrongGuid.why));
-  const down = await runLastYearPull({ entry: listNext[1], tallyUrl: "x", listing: async () => { throw new Error("reset"); }, store });
-  ok("Tally's list could not be read: failed, nothing read", down.state === "failed" && down.report === null);
+  let synced = 0;
+  const sync = async () => { synced++; return { state: "swapped" as const, error: null }; };
+  const open = (name: string, guid: string) => async () => `<COMPANY NAME="${name}"><GUID>${guid}</GUID></COMPANY>`;
+  const notOpen = await runLastYearPull({ entry: listNext[1], listing: open("other", G25), sync });
+  ok("last year's company not open: skipped with the reason, nothing read", notOpen.state === "skipped" && /not open/.test(notOpen.why) && notOpen.report === null && synced === 0);
+  const wrongGuid = await runLastYearPull({ entry: listNext[1], listing: open(THIS, G26), sync });
+  ok("open under another GUID: skipped, never read", wrongGuid.state === "skipped" && /different GUID/.test(wrongGuid.why) && synced === 0);
+  const down = await runLastYearPull({ entry: listNext[1], listing: async () => { throw new Error("reset"); }, sync });
+  ok("Tally's list could not be read: failed, nothing read", down.state === "failed" && down.report === null && synced === 0);
+  const good = await runLastYearPull({ entry: listNext[1], listing: open(THIS, G25), sync });
+  ok("open under the recorded GUID: the checked sync runs once for that company and the pull is reported", good.state === "pulled" && synced === 1);
+  const refused = await runLastYearPull({ entry: listNext[1], listing: open(THIS, G25), sync: async () => ({ state: "refused" as const, error: "below the floor" }) });
+  ok("a refusal by the sync's floor is a skip, not a failure", refused.state === "skipped" && /floor/.test(refused.why));
+  const crashed = await runLastYearPull({ entry: listNext[1], listing: open(THIS, G25), sync: async () => { throw new Error("db down"); } });
+  ok("a sync that throws is a failure with its reason", crashed.state === "failed" && /db down/.test(crashed.why));
 
   console.log(`\n  ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

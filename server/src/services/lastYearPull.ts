@@ -19,7 +19,6 @@
  */
 import { indiaDateOf } from "./voucherSeries.js";
 import { lastYearEntry, loadedProblem, type CompanyYear } from "./companyYears.js";
-import { runMirrorSync, tallyMirrorReads, type MirrorStore, type MirrorSyncReport } from "./erpMirrorSync.js";
 
 /** The last day last year's company is read at all, whatever is or is not recorded: 30 June of the new financial year. */
 export const LAST_YEAR_HARD_STOP = "06-30";
@@ -49,31 +48,33 @@ export function planLastYearPull(s: {
   return { due: true, why: s.lastPullAt ? "a week or more since the last pull" : "never pulled", entry };
 }
 
+/** What the checked mirror sync answers for one run (the part this module reads). The sync itself is passed in by whoever wires it at go-live. */
+export interface PullReport { state: "swapped" | "refused" | "failed"; error: string | null }
+
 export interface LastYearPullResult {
   state: "pulled" | "skipped" | "failed";
   why: string;
-  report: MirrorSyncReport | null;
+  report: PullReport | null;
 }
 
 /**
- * Read last year's company into the mirror. `listing` reads Tally's company list; `store` is the mirror store keyed by LAST
- * year's company key. Read-only on Tally: the checks are two reads (the list, then the sync's own reads). A company that is
- * not open, or open under another GUID, is skipped with the reason: never read, never an error that stops anything else.
+ * Read last year's company into the mirror. `listing` reads Tally's company list; `sync` runs the checked full mirror sync for
+ * that company name (the caller binds the store keyed by LAST year's company key, the Tally reads for that company, and any
+ * scope). Read-only on Tally: the list, then the sync's own reads. A company that is not open, or open under another GUID,
+ * is skipped with the reason: never read, never an error that stops anything else. The sync is injected so this module, like
+ * the rest of the agent's src, does not start the mirror sync by itself (it is wired at go-live).
  */
 export async function runLastYearPull(o: {
   entry: CompanyYear;
-  tallyUrl: string;
   listing: () => Promise<string>;
-  store: MirrorStore;
-  scope?: { from: string; to: string };
-  log?: (line: string) => void;
+  sync: (company: string) => Promise<PullReport>;
 }): Promise<LastYearPullResult> {
   let problem: string | null;
   try { problem = loadedProblem(await o.listing(), o.entry); }
   catch (e) { return { state: "failed", why: `Tally's company list could not be read (${(e as Error).message})`, report: null }; }
   if (problem) return { state: "skipped", why: problem, report: null };
   try {
-    const report = await runMirrorSync({ store: o.store, tally: tallyMirrorReads(o.tallyUrl, o.entry.company), kind: "full", scope: o.scope, log: o.log });
+    const report = await o.sync(o.entry.company);
     return { state: report.state === "swapped" ? "pulled" : report.state === "refused" ? "skipped" : "failed", why: report.error ?? report.state, report };
   } catch (e) {
     return { state: "failed", why: (e as Error).message.slice(0, 200), report: null };
