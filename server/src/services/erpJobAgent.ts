@@ -37,6 +37,8 @@ import type { VoucherPayload } from "../types.js";
 import { takenNumbersOrThrow, takenVouchersOrThrow } from "./voucherNumbering.js";
 import { seriesDefaultFor, isPartyKeyedType, numberTakenBy, type TakenVoucher } from "./voucherSeries.js";
 import { setRecordedFiledThrough } from "./pushGuard.js";
+import { resolveTarget, targetOf, loadedProblem, type CompanyYear } from "./companyYears.js";
+import { HEALTH_XML } from "../tally.js";
 
 export interface ErpJob {
   id: string;
@@ -50,6 +52,8 @@ export interface ErpJob {
   master_id?: string | null;
   /** Set on a person's resend (D21): the job this one resends. */
   resend_of?: string | null;
+  /** The Tally company the database stamped when the job was marked sent (migration 0109); null before that. */
+  company?: string | null;
 }
 
 export interface LeaseInfo {
@@ -74,7 +78,7 @@ export interface ErpQueue {
    * machine-key door `erp_agent_filed_through`), or null when nothing is recorded. Optional: a queue without it
    * leaves the agent on its own boundary.
    */
-  filedThrough?(): Promise<string | null>;
+  filedThrough?(kind?: "gstr1" | "gstr3b"): Promise<string | null>;
 }
 
 // ── The journal ───────────────────────────────────────────────────────────────
@@ -221,6 +225,13 @@ export interface ErpJobAgentOpts {
   /** Read Tally for a payload; defaults to findInTally. */
   find: (company: string, payload: VoucherPayload) => Promise<{ masterId: string }[]>;
   nonce?: string;
+  /**
+   * F17: the recorded list of {company, financial year, GUID}. A job that names a target other than `company` is sent
+   * only to the entry matching its name and GUID. Empty or absent: every job goes to `company`, as before.
+   */
+  companies?: CompanyYear[];
+  /** F17: is this listed company open in Tally under its GUID? Null when yes; the reason when not. `tallySeams` supplies it. */
+  companyLoaded?: (entry: CompanyYear) => Promise<string | null>;
   /** How often to read the recorded filing boundary (default 300 s). */
   filedEverySec?: number;
   leaseSeconds?: number;
@@ -357,11 +368,24 @@ export class ErpJobAgent {
     return done;
   }
 
+  /**
+   * The company to read when settling a job an earlier boot sent (F17). The company the database stamped at
+   * `erp_mark_job_sent` wins; else the stamped target; else the agent's own. A target that cannot be resolved is not
+   * guessed: the read goes to the agent's own company, which cannot match a voucher of another year's books, and the
+   * job then ends uncertain for a person to settle (a read never settles on anything but exactly one match).
+   */
+  private recoveryCompany(job: ErpJob): string {
+    const stamped = String(job.company ?? "").trim();
+    if (stamped) return stamped;
+    const t = resolveTarget(this.o.companies ?? [], targetOf(job.payload), this.o.company);
+    return t.ok ? t.company : this.o.company;
+  }
+
   /** A job that was sent with no reply in hand: read Tally, settle only on exactly one match. */
   private async readBack(job: ErpJob): Promise<{ state: JobOutcome; how: string; masterId?: string | null }> {
     let found: { masterId: string }[];
     try {
-      found = await this.o.find(this.o.company, job.payload);
+      found = await this.o.find(this.recoveryCompany(job), job.payload);
     } catch (e) {
       const msg = (e as Error).message;
       this.journalOrStop({ kind: "read-failed", jobId: job.id, error: msg, at: new Date().toISOString() });
@@ -457,14 +481,14 @@ export class ErpJobAgent {
    * supplier, number and year). Review H1: supplier bill numbers repeat, so a
    * plain number match would refuse a second supplier's genuine bill.
    */
-  private async numberTakenInTally(job: ErpJob): Promise<{ reason: string; taken: boolean } | null> {
+  private async numberTakenInTally(job: ErpJob, company: string): Promise<{ reason: string; taken: boolean } | null> {
     const p = job.payload;
     const number = String(p.voucherNumber ?? "").trim();
     if (!this.o.taken || (p.action ?? "Create") !== "Create" || !number) return null;
     if (!seriesDefaultFor(p.voucherType) && !isPartyKeyedType(p.voucherType)) return null;
     let list: Array<string | TakenVoucher>;
     try {
-      list = await this.o.taken(this.o.company, p.voucherType);
+      list = await this.o.taken(company, p.voucherType);
     } catch (e) {
       return { taken: false, reason: `Not sent: Tally's ${p.voucherType} numbers could not be read to check ${number} is free (${(e as Error).message}). Nothing is in the books; send it again when Tally answers.` };
     }
@@ -477,7 +501,24 @@ export class ErpJobAgent {
 
   async processJob(job: ErpJob): Promise<RunReport["results"][number]> {
     const key = job.idempotency_key;
-    const refusal = this.o.refuse(job, this.o.company);
+    /* F17: which company is this job for? No target stamped: the agent's own, as always. A target must match the
+       recorded list by name AND GUID, and be open in Tally under that GUID, or the job stops here, before Tally. */
+    const target = resolveTarget(this.o.companies ?? [], targetOf(job.payload), this.o.company);
+    if (!target.ok) {
+      await this.finishWithRetry(job, "failed", { error: target.reason, result: { stage: "guard", target: "refused" } });
+      return { id: job.id, key, outcome: "failed", detail: target.reason };
+    }
+    const company = target.company;
+    if (target.viaList && target.entry && this.o.companyLoaded) {
+      let problem: string | null;
+      try { problem = await this.o.companyLoaded(target.entry); }
+      catch (e) { problem = `Tally's company list could not be read to check "${company}" is open (${(e as Error).message}). Nothing was sent; send it again when Tally answers.`; }
+      if (problem) {
+        await this.finishWithRetry(job, "failed", { error: problem, result: { stage: "guard", target: "not-loaded" } });
+        return { id: job.id, key, outcome: "failed", detail: problem };
+      }
+    }
+    const refusal = this.o.refuse(job, company);
     if (refusal) {
       await this.finishWithRetry(job, "failed", { error: refusal, result: { stage: "guard" } });
       return { id: job.id, key, outcome: "failed", detail: refusal };
@@ -488,7 +529,7 @@ export class ErpJobAgent {
        already in the books; more than one, a person decides; none, push. */
     if (job.resend_of) {
       let found: { masterId: string }[] | null = null;
-      try { found = await this.o.find(this.o.company, job.payload); } catch { found = null; }
+      try { found = await this.o.find(company, job.payload); } catch { found = null; }
       if (found === null || found.length > 0) {
         const one = found?.length === 1 && !!job.payload.voucherNumber; // M3: no number, never settled by a read
         const state: JobOutcome = one ? "succeeded" : "uncertain";
@@ -504,7 +545,7 @@ export class ErpJobAgent {
        already there (the 15-Sep Contra 29 incident). Checked before `sent`, so a
        refusal leaves nothing in the books. A read that fails stops the push too:
        "could not look" is never "free". */
-    const blocked = this.o.taken ? await this.numberTakenInTally(job) : null;
+    const blocked = this.o.taken ? await this.numberTakenInTally(job, company) : null;
     if (blocked) {
       this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: blocked.reason, at: new Date().toISOString() });
       /* number_taken tells a resend (migration 0115) to take a fresh number;
@@ -517,7 +558,7 @@ export class ErpJobAgent {
     const renew = this.open.has(job.id) ? null
       : setInterval(() => { void this.o.queue.renew(this.nonce, job.id, this.o.jobLeaseSeconds).catch(() => {}); }, this.o.renewEveryMs);
     try {
-      const m = await this.o.queue.markSent(this.nonce, job.id, this.o.company);
+      const m = await this.o.queue.markSent(this.nonce, job.id, company);
       if (!m.ok) {
         this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: m.reason ?? "refused", at: new Date().toISOString() });
         return { id: job.id, key, outcome: m.refused ? "failed" : "not-sent", detail: m.reason ?? "not sent" };
@@ -525,7 +566,7 @@ export class ErpJobAgent {
       this.journalOrStop({ kind: "sent", jobId: job.id, key, at: new Date().toISOString() });
       let res: SafePushResult;
       try {
-        res = await this.o.push(this.o.company, job.payload);
+        res = await this.o.push(company, job.payload);
         this.timeouts = 0;
       } catch (e) {
         const msg = (e as Error).message;
@@ -543,7 +584,7 @@ export class ErpJobAgent {
       if (outcome === "succeeded" && res.voucherId && this.o.stamp) {
         /* Review 1-5 item 3: a stamp read that times out counts towards
            "Tally may be showing a message", the same as a push that does. */
-        try { alterId = await this.o.stamp(this.o.company, job.payload, res.voucherId); this.timeouts = 0; }
+        try { alterId = await this.o.stamp(company, job.payload, res.voucherId); this.timeouts = 0; }
         catch (e) { const msg = (e as Error).message; stampError = msg.slice(0, 200); this.noteTallyError(msg); }
       }
       const detail = outcome === "succeeded" ? (bookedNumber && bookedNumber !== job.payload.voucherNumber
@@ -595,6 +636,8 @@ export function tallySeams(tallyUrl: string, post: (url: string, xml: string, ti
     taken: (company: string, voucherType: string): Promise<Array<string | TakenVoucher>> => isPartyKeyedType(voucherType)
       ? takenVouchersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x))
       : takenNumbersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x)),
+    /* F17: a company other than the agent's own is only sent to when Tally has it open under the recorded GUID. One company-list read. */
+    companyLoaded: async (entry: CompanyYear) => loadedProblem(await post(tallyUrl, HEALTH_XML, 10_000), entry),
   };
 }
 
@@ -615,6 +658,6 @@ export function supabaseErpQueue(c: { rpc: (fn: string, args: Record<string, unk
       p_result: f.result ?? null, p_error: f.error ?? null,
     }),
     myOpenJobs: () => call<ErpJob[]>("erp_my_open_jobs", {}),
-    filedThrough: async () => { const d = await call<string | null>("erp_agent_filed_through", {}); return d ? String(d).slice(0, 10) : null; },
+    filedThrough: async (kind) => { const d = await call<string | null>("erp_agent_filed_through", { p_kind: kind ?? null }); return d ? String(d).slice(0, 10) : null; },
   };
 }
