@@ -257,7 +257,7 @@ test('pushAgent never retries a rejection Tally answered', () => {
     'pushAgent is retrying answered rejections again — only the verify stage was being exhausted'
   );
   assert(
-    /await fail\(job, job\.max_attempts, why, result\);/.test(src),
+    /await fail\(job, job\.max_attempts, why, /.test(src),
     'the !res.ok branch must exhaust the retry budget: Tally already gave its answer'
   );
   assert(
@@ -307,10 +307,12 @@ test('read-back matches on number first, and money only as a last resort', () =>
   const src = readFileSync('server/src/services/safePush.ts', 'utf8');
   const byNumber = src.indexOf('fld(x, "VOUCHERNUMBER") === payload.voucherNumber');
   const byNarration = src.indexOf('fld(x, "NARRATION") === payload.narration');
-  const byMoney = src.indexOf('const byMoney = vouchers.filter');
+  // The money fallback now lives in the exported pickByMoney(); what must hold
+  // is where safePush CALLS it, which has to be after the number and narration.
+  const byMoney = src.indexOf('mine = pickByMoney(vouchers, payload)');
   assert(byNumber > 0 && byNarration > byNumber, 'number must be matched before narration');
   assert(byMoney > byNarration, 'the party+amount fallback must come last');
-  assert(/byMoney\.length === 1/.test(src), 'the money fallback must accept ONE candidate or none — never pick between duplicates');
+  assert(/byMoney\.length === 1 \? byMoney\[0\] : undefined/.test(src), 'pickByMoney must accept ONE candidate or none — never pick between duplicates');
 });
 
 // ── Local server address (#121) ────────────────────────────────────────────
