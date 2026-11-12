@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { holdModeOn, requesterFrom } from "./services/pricePullStaging.js";
 import path from "node:path";
 import "dotenv/config";
 import express from "express";
@@ -258,7 +259,7 @@ app.post("/api/tally/sync-masters", syncGuard, async (req, res) => {
  * already landed by the time GST is attempted.
  */
 app.post("/api/tally/sync-price-list", syncGuard, async (req, res) => {
-  const { company, origin = "manual", includeGst = false } = req.body;
+  const { company, origin = "manual", includeGst = false, requestedBy } = req.body;
   const t0 = Date.now();
   const ac = new AbortController();
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
@@ -273,7 +274,15 @@ app.post("/api/tally/sync-price-list", syncGuard, async (req, res) => {
       console.log(`[SYNC] ✗ origin=${origin} company=${company} route=sync-price-list rows=0 ${Date.now() - t0}ms`);
       return;
     }
-    await supabaseSync.syncPriceList(entries, company, origin);
+    /* F11 agent half: in hold mode (MKCP_PRICE_PULL_HOLD=on, default off) the pull waits in staging for an Owner or Checker, with the
+       person who asked written at insert; an accepted pull is copied into the list below. Off: straight to the list, as it always was. */
+    if (holdModeOn()) {
+      const staged = await supabaseSync.stagePriceList(entries, company, origin, requestedBy);
+      console.log(`[SYNC] price pull held for a decision origin=${origin} staged=${staged ?? "none"} requester=${requesterFrom(requestedBy) ? "named" : "nobody"}`);
+      await supabaseSync.applyAcceptedPulls(company);
+    } else {
+      await supabaseSync.syncPriceList(entries, company, origin);
+    }
     const items = new Set(entries.map((e) => e.itemName)).size;
 
     let gst: { rows: number } | undefined;

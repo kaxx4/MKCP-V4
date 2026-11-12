@@ -1,4 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { stagingRow, writePull, applyAccepted } from "./pricePullStaging.js";
+import type { PriceListEntry } from "./tallyPriceList.js";
 import { recordPricePull } from "./priceChangeLog.js";
 import { postgrestInList } from "./postgrestFilter.js";
 import ws from "ws";
@@ -1613,6 +1615,30 @@ export class SupabaseSync {
       console.error(`[Supabase] App settings sync failed: ${e.message}`);
       throw e;
     }
+  }
+
+  /**
+   * F11 agent half (D-8-4.15, D-8-4.28): hold a price pull for a decision instead of writing it to the list. Writes ONE row to
+   * erp_price_pull_staging (insert only) with the person who asked, when the command names one. Returns the staged id, or
+   * null when there is no client (offline / sandbox) or the pull has no dealer rows. Used only in hold mode (MKCP_PRICE_PULL_HOLD=on).
+   */
+  async stagePriceList(entries: PriceListEntry[], company: string, routeOrigin: string, requestedBy?: unknown): Promise<number | null> {
+    if (!this.client) return null;
+    const row = stagingRow({ company, entries, routeOrigin, requestedBy });
+    if (!row) return null;
+    return writePull(this.client as never, row);
+  }
+
+  private lastAcceptedPullApplied = 0;
+  /** F11 agent half: copy the newest accepted pull into the list in force, once. Returns the id copied or null. */
+  async applyAcceptedPulls(company: string): Promise<number | null> {
+    if (!this.client) return null;
+    const id = await applyAccepted({
+      client: this.client as never, company, lastAppliedId: this.lastAcceptedPullApplied,
+      apply: (entries, c, origin) => this.syncPriceList(entries, c, origin),
+    });
+    if (id !== null) this.lastAcceptedPullApplied = id;
+    return id;
   }
 
   /**

@@ -3,6 +3,7 @@ import ws from "ws";
 import { postTallySync } from "./localSyncClient.js";
 import { supabaseClient } from "./supabaseClient.js";
 import { refuseSharedWrite } from "./tallyRole.js";
+import { mergeRequesters } from "./pricePullStaging.js";
 
 // Same WebSocket polyfill used by SupabaseSync
 if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
@@ -370,7 +371,7 @@ function subscribeForCompany(
    * pull with that". A manual "refresh price list" click now refreshes GST
    * too, via the same route the daily scheduler uses (priceGstDailySync.ts).
    */
-  type PriceBatch = { ids: number[]; retries: number };
+  type PriceBatch = { ids: number[]; retries: number; /** F11: what each queued command named as its requester (one entry per command). */ requesters: unknown[] };
   let priceBatch: PriceBatch | null = null;
   let priceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -385,17 +386,19 @@ function subscribeForCompany(
     } else {
       priceBatch.ids = Array.from(new Set([...b.ids, ...priceBatch.ids]));
       priceBatch.retries = Math.max(priceBatch.retries, b.retries);
+      priceBatch.requesters = [...b.requesters, ...priceBatch.requesters];
     }
     armPriceTimer();
   };
 
   /** Queue one price_list command. Several queued within COALESCE_MS collapse
    *  into the single fire below — see the comment on the batch above. */
-  function queuePriceList(id: number): void {
+  function queuePriceList(id: number, requestedBy?: unknown): void {
     if (!priceBatch) {
-      priceBatch = { ids: [id], retries: 0 };
+      priceBatch = { ids: [id], retries: 0, requesters: [requestedBy] };
     } else {
       priceBatch.ids.push(id);
+      priceBatch.requesters.push(requestedBy);
     }
     armPriceTimer();
     console.log(
@@ -411,7 +414,7 @@ function subscribeForCompany(
     const { ids } = b;
     try {
       const resp = await postTallySync(
-        localPort, { company, origin: "web-price-list", includeGst: true }, "/api/tally/sync-price-list",
+        localPort, { company, origin: "web-price-list", includeGst: true, requestedBy: mergeRequesters(b.requesters) }, "/api/tally/sync-price-list",
       );
       if (resp.ok && resp.json?.success) {
         console.log(
@@ -472,7 +475,7 @@ function subscribeForCompany(
    * replay on reconnect — same claim, same routing, same coalescing either
    * way, so a command run twice by accident is a no-op, not a double pull.
    */
-  async function handleIncomingCommand(row: { id: number; days: unknown; scope: string | null }): Promise<void> {
+  async function handleIncomingCommand(row: { id: number; days: unknown; scope: string | null; requested_by?: unknown }): Promise<void> {
     const claimed = await claimCommand(row.id);
     if (!claimed) return; // already ack'd by the other path — idempotent no-op
 
@@ -480,7 +483,7 @@ function subscribeForCompany(
       /* A scoped command is NOT merged into the full-refresh burst buffer —
          see the comment above `queuePriceList`'s definition for why a
          price-list pull is a different question with no date window. */
-      queuePriceList(row.id);
+      queuePriceList(row.id, row.requested_by);
       return;
     }
 
@@ -519,7 +522,7 @@ function subscribeForCompany(
       const cutoff = new Date(Date.now() - STALE_MS).toISOString();
       const { data, error } = await supabase
         .from("tally_refresh_commands")
-        .select("id, days, scope, created_at")
+        .select("id, days, scope, created_at, requested_by")
         .eq("company", company)
         .eq("status", "pending")
         .gte("created_at", cutoff)
@@ -538,6 +541,7 @@ function subscribeForCompany(
           id: Number((r as any).id),
           days: (r as any).days,
           scope: (r as any).scope ?? null,
+          requested_by: (r as any).requested_by ?? null,
         });
       }
     } catch (err: any) {
@@ -569,6 +573,7 @@ function subscribeForCompany(
           id: (payload.new as any).id,
           days: (payload.new as any).days,
           scope: (payload.new as any).scope ?? null,
+          requested_by: (payload.new as any).requested_by ?? null,
         });
       }
     )
