@@ -14,6 +14,7 @@ import "dotenv/config";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { preflight } from "./lib/t11.js";
+import { makeLive, indiaToday, turn, TallyDownError, type Live } from "./lib/t11Live.js";
 import { tallyPost } from "../../src/tally.js";
 import { buildCollectionXml } from "../../src/services/xmlBuilder.js";
 import { MASTER_COLLECTIONS, TRANSACTION_COLLECTIONS } from "../../src/config/collections.js";
@@ -40,28 +41,31 @@ function populated(obj: string, field: string): boolean {
 
 interface Row { def: string; request: string; objects: number; fields: number; populated: string[]; neverPopulated: string[]; ms: number; error?: string }
 
-async function readDef(url: string, company: string, def: CollectionDef, from?: string, to?: string): Promise<Row> {
+async function readDef(l: Live, def: CollectionDef, from?: string, to?: string): Promise<Row> {
+  const url = l.url, company = l.company;
   const t0 = Date.now();
   const fetch = def.fetch ?? [];
   try {
     const xml = buildCollectionXml(def, company, from, to);
-    const raw = (await tallyPost(url, xml, Math.min(def.timeout, 240_000), true)) as string;
+    const raw = (await turn(l, `read ${def.name}`, () => tallyPost(url, xml, Math.min(def.timeout, 240_000), true))) as string;
     const objs = objects(raw, def.tallyCollection.toUpperCase());
     const pop = fetch.filter((f) => objs.some((o) => populated(o, f)));
     return { def: def.name, request: `${def.tallyCollection}${from ? ` ${from}` : ""}`, objects: objs.length, fields: fetch.length, populated: pop, neverPopulated: fetch.filter((f) => !pop.includes(f)), ms: Date.now() - t0 };
   } catch (e) {
+    if (e instanceof TallyDownError) throw e;
     return { def: def.name, request: def.tallyCollection, objects: 0, fields: fetch.length, populated: [], neverPopulated: fetch, ms: Date.now() - t0, error: (e as Error).message.slice(0, 160) };
   }
 }
 
 (async () => {
   const pf = await preflight();
+  const l = makeLive(pf, indiaToday(), "000000");
   const rows: Row[] = [];
   const masters: CollectionDef[] = [...MASTER_COLLECTIONS, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_VOUCHERTYPE_DEF, ERP_MIRROR_UNIT_DEF, ERP_MIRROR_ITEM_DEF, ERP_MIRROR_COMPANY_DEF];
-  for (const d of masters) { const r = await readDef(pf.tallyUrl, pf.company, d); rows.push(r); console.log(`  ${d.name}: ${r.objects} objects, ${r.populated.length}/${r.fields} fields populated, ${r.ms} ms${r.error ? `  ERROR ${r.error}` : ""}`); }
+  for (const d of masters) { const r = await readDef(l, d); rows.push(r); console.log(`  ${d.name}: ${r.objects} objects, ${r.populated.length}/${r.fields} fields populated, ${r.ms} ms${r.error ? `  ERROR ${r.error}` : ""}`); }
 
   // Days: the smallest days (3 to 25 vouchers) that between them cover the most voucher types.
-  const all = await pullAll(pf.company);
+  const all = await turn(l, "list vouchers", () => pullAll(pf.company));
   const byDay = new Map<string, Set<string>>(); const count = new Map<string, number>();
   for (const v of all) { const d = String(v.date); byDay.set(d, (byDay.get(d) ?? new Set()).add(v.type)); count.set(d, (count.get(d) ?? 0) + 1); }
   const candidates = [...byDay.keys()].filter((d) => (count.get(d) ?? 0) >= 3 && (count.get(d) ?? 0) <= 25);
@@ -75,7 +79,7 @@ async function readDef(url: string, company: string, def: CollectionDef, from?: 
   const merged = new Map<string, Row>();
   for (const d of vdefs) for (const day of chosen) {
     const iso = `${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}`;
-    const r = await readDef(pf.tallyUrl, pf.company, d, iso, iso);
+    const r = await readDef(l, d, iso, iso);
     console.log(`  ${d.name} ${iso}: ${r.objects} vouchers, ${r.populated.length}/${r.fields} fields populated, ${r.ms} ms${r.error ? `  ERROR ${r.error}` : ""}`);
     const prev = merged.get(d.name);
     if (!prev) merged.set(d.name, { ...r, request: `Voucher by day x${chosen.length}` });
@@ -88,4 +92,4 @@ async function readDef(url: string, company: string, def: CollectionDef, from?: 
   console.log(`\n  ${rows.length - bad.length} of ${rows.length} reads answered with objects; ${bad.length} did not`);
   if (OUT) { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify({ at: new Date().toISOString(), rows }, null, 2)); }
   process.exit(bad.length ? 1 : 0);
-})().catch((e) => { console.error(`FAILED: ${(e as Error).message}`); process.exit(2); });
+})().catch((e) => { console.error(e instanceof TallyDownError ? `TALLY_DOWN: ${e.message}. Nothing more was sent; Tally was not restarted. This read-only run is not a pass.` : `FAILED: ${(e as Error).message}`); process.exit(2); });
