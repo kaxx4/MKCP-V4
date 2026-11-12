@@ -36,6 +36,7 @@ import { testJobRefusal, outcomeOf, type TestOutcome } from "./erpTestQueueAgent
 import type { VoucherPayload } from "../types.js";
 import { takenNumbersOrThrow, takenVouchersOrThrow } from "./voucherNumbering.js";
 import { seriesDefaultFor, isPartyKeyedType, numberTakenBy, type TakenVoucher } from "./voucherSeries.js";
+import { setRecordedFiledThrough } from "./pushGuard.js";
 
 export interface ErpJob {
   id: string;
@@ -68,6 +69,12 @@ export interface ErpQueue {
     masterId?: string | null; bookedNumber?: string | null; result?: unknown; error?: string | null;
   }): Promise<boolean>;
   myOpenJobs(): Promise<ErpJob[]>;
+  /**
+   * F6, agent half: the newest day a person recorded as filed (`erp_filed_through()` of migration 0283, through the
+   * machine-key door `erp_agent_filed_through`), or null when nothing is recorded. Optional: a queue without it
+   * leaves the agent on its own boundary.
+   */
+  filedThrough?(): Promise<string | null>;
 }
 
 // ── The journal ───────────────────────────────────────────────────────────────
@@ -214,6 +221,8 @@ export interface ErpJobAgentOpts {
   /** Read Tally for a payload; defaults to findInTally. */
   find: (company: string, payload: VoucherPayload) => Promise<{ masterId: string }[]>;
   nonce?: string;
+  /** How often to read the recorded filing boundary (default 300 s). */
+  filedEverySec?: number;
   leaseSeconds?: number;
   jobLeaseSeconds?: number;
   renewEveryMs?: number;
@@ -384,6 +393,29 @@ export class ErpJobAgent {
     return { state: "uncertain", how };
   }
 
+  private filedAt = 0;
+  /** Last read of the recorded filing boundary (state for the report and the tests). */
+  filedStatus: { value: string | null; at: string | null; error: string | null } = { value: null, at: null, error: null };
+
+  /**
+   * F6, agent half: before claiming, take the later of the agent's own filed boundary and the recorded one. At most
+   * once per `filedEverySec` (default 300). A failed read changes nothing and never opens a period; it is noted in
+   * `filedStatus` so the report can say so. Nothing here reads or writes Tally.
+   */
+  private async refreshFiledThrough(): Promise<void> {
+    if (!this.o.queue.filedThrough) return;
+    const nowMs = (this.o.now ?? Date.now)();
+    if (this.filedAt && nowMs - this.filedAt < (this.o.filedEverySec ?? 300) * 1000) return;
+    this.filedAt = nowMs;
+    try {
+      const d = await this.o.queue.filedThrough();
+      setRecordedFiledThrough(d);
+      this.filedStatus = { value: d, at: new Date(nowMs).toISOString(), error: null };
+    } catch (e) {
+      this.filedStatus = { ...this.filedStatus, at: new Date(nowMs).toISOString(), error: (e as Error).message.slice(0, 160) };
+    }
+  }
+
   private running = false;
   /** Jobs this boot holds right now, renewed together from claim time (review L2). */
   private open = new Set<string>();
@@ -404,6 +436,7 @@ export class ErpJobAgent {
       report.held = await this.heartbeat();
       if (!report.held) { report.stopped = this.status.red.join("; "); return report; }
       report.settled = await this.settleOwn();
+      await this.refreshFiledThrough();
       const jobs = await this.o.queue.claim(this.nonce, limit, this.o.jobLeaseSeconds);
       for (const job of jobs) this.open.add(job.id);
       for (const job of jobs) {
@@ -582,5 +615,6 @@ export function supabaseErpQueue(c: { rpc: (fn: string, args: Record<string, unk
       p_result: f.result ?? null, p_error: f.error ?? null,
     }),
     myOpenJobs: () => call<ErpJob[]>("erp_my_open_jobs", {}),
+    filedThrough: async () => { const d = await call<string | null>("erp_agent_filed_through", {}); return d ? String(d).slice(0, 10) : null; },
   };
 }

@@ -184,8 +184,29 @@ export function gstReturnFiledThrough(today: Date = new Date()): string {
 /** The boundary in force now. A function, not a constant: the agent runs for
  *  weeks, and the boundary moves on the 12th of every month. */
 export function filedThroughOn(today: Date = new Date()): string {
-  return FILED_THROUGH || gstReturnFiledThrough(today);
+  return laterDate(FILED_THROUGH || gstReturnFiledThrough(today), recordedFiledThrough);
 }
+
+/**
+ * F6, agent half (D-M.112, D-M.187): the newest day a person has RECORDED as filed, read from the database's
+ * `erp_filed_through()` (migration 0283) by the ERP job agent. The agent keeps its own boundary (MKCP_FILED_THROUGH,
+ * else the statutory calendar) and takes the LATER of the two, so a recorded filing can only add to what is closed.
+ * It never moves back: a later read that returns an earlier date, nothing, or fails changes nothing.
+ */
+let recordedFiledThrough = "";
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+export function laterDate(a: string, b: string): string { return !b ? a : !a ? b : a >= b ? a : b; }
+/** Offer a recorded date. Returns true when it moved the boundary. A value that is not a real YYYY-MM-DD day is ignored. */
+export function setRecordedFiledThrough(day: string | null | undefined): boolean {
+  const d = String(day ?? "").trim().slice(0, 10);
+  if (!ISO_DAY.test(d) || new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) !== d) return false;
+  if (recordedFiledThrough && d <= recordedFiledThrough) return false;
+  recordedFiledThrough = d;
+  return true;
+}
+export const recordedFiledThroughNow = (): string => recordedFiledThrough;
+/** For tests only: forget what was recorded. */
+export function resetRecordedFiledThroughForTests(): void { recordedFiledThrough = ""; }
 
 /** Money vouchers never reach a GST return, so no filed period binds them —
  *  the web app's `NO_RETURN` (domain/editability.ts). Settlement edits on an
