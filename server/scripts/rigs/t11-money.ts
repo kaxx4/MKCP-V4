@@ -36,7 +36,7 @@ const CLEANUP = arg("--cleanup");
 const kit = DUMMY_KIT;
 const num = (s: string) => parseTallyAmount(s) ?? NaN;
 /** Checks expected from each part's first full run; -1 = not calibrated yet. */
-const EXPECTED: Record<string, number> = { receipts: 126, payments: 100, contras: -1, modes: -1 };
+const EXPECTED: Record<string, number> = { receipts: 126, payments: 100, contras: 61, modes: -1 };
 
 class Made {
   vouchers: VoucherPayload[] = []; parties: string[] = []; items: string[] = [];
@@ -151,7 +151,9 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
     for (const c of modeCases(stamp, day, kit, D, C)) {
       await runCase(c);
       const v = await stored(c.voucher);
-      const ba = v ? (v.match(/<BANKALLOCATIONS\.LIST>[\s\S]*?<\/BANKALLOCATIONS\.LIST>/)?.[0] ?? "") : "";
+      // The bank allocation sits on the BANK ledger's line. Other lines carry an empty placeholder, so the first block in the voucher is the wrong one to read.
+      const bankLine = v ? lineOf(v, kit.bank) ?? "" : "";
+      const ba = [...bankLine.matchAll(/<BANKALLOCATIONS\.LIST>[\s\S]*?<\/BANKALLOCATIONS\.LIST>/g)].map((x) => x[0]).find((b) => readTag(b, "TRANSACTIONTYPE") || readTag(b, "INSTRUMENTNUMBER")) ?? "";
       const sent = c.voucher.ledgerEntries.find((e) => e.bankAllocation)!.bankAllocation!;
       const got = { type: readTag(ba, "TRANSACTIONTYPE"), mode: readTag(ba, "TRANSFERMODE"), no: readTag(ba, "INSTRUMENTNUMBER") };
       seen.push(`${c.id}: sent type "${sent.transactionType}" mode "${sent.transferMode}" no "${sent.instrumentNumber}" -> stored type "${got.type}" mode "${got.mode}" no "${got.no}"`);
