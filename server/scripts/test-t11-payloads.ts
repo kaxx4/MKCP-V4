@@ -29,6 +29,7 @@ import { moneyParties, moneyScenario, alteredCopy } from "./rigs/lib/t11Money.js
 import { ledgerFlagsXml } from "./rigs/lib/t11Live.js";
 import { TallyGate, TallyDownError, minGapFromArgv } from "./rigs/lib/t11Gate.js";
 import { pickNamed } from "./rigs/lib/envByPath.js";
+import { selectDenyNames } from "./rigs/lib/denylist.js";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, detail = "") => {
@@ -283,6 +284,11 @@ const gateDone = (async () => {
   try { await w.run("request that kills Tally", async () => { live = false; throw new Error("socket hang up"); }); } catch (e) { lost = e; }
   ok("a request during which Tally disappears becomes TallyDownError", lost instanceof TallyDownError && w.down !== null && /socket hang up/.test((lost as Error).message));
   ok("--min-gap-sec: default 120 s, 0 allowed, junk falls back to 120 s", minGapFromArgv([]) === 120_000 && minGapFromArgv(["--min-gap-sec", "0"]) === 0 && minGapFromArgv(["--min-gap-sec", "30"]) === 30_000 && minGapFromArgv(["--min-gap-sec", "x"]) === 120_000);
+  { const d = selectDenyNames([
+      { name: "ZZ TEST DEBTOR 1", parent: "Sundry Debtors" }, { name: "PARTY 042 CYCLE STORES", parent: "Sundry Debtors" }, { name: "Cash", parent: "Cash-in-Hand" },
+      { name: "PERSON 003", parent: "Salary Payable" }, { name: "TDS ( 194 J )", parent: "Duties & Taxes" }, { name: "AB", parent: "Sundry Creditors" }, { name: "party 042   cycle stores", parent: "Sundry Creditors" } ]);
+    ok("the deny-list picks trading parties and people, once each, upper-cased, and skips accounts, fakes and tiny names",
+      d.join("|") === "PARTY 042 CYCLE STORES|PERSON 003", d.join("|")); }
   const picked = pickNamed("A=1\nMKCP_AGENT_MACHINE_ID=sandbox-laptop-1\nMKCP_ERP_AGENT_KEY=abc\nSUPABASE_SERVICE_KEY=secret\n");
   ok("the env picker takes only the two named settings and nothing else", Object.keys(picked).sort().join(",") === "MKCP_AGENT_MACHINE_ID,MKCP_ERP_AGENT_KEY" && !("SUPABASE_SERVICE_KEY" in picked));
   ok("the env picker returns nothing for a file without them", Object.keys(pickNamed("X=1\n")).length === 0);
