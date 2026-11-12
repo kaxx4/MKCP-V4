@@ -28,7 +28,7 @@ export { TallyDownError };
 import type { ZzItem, ZzParty } from "./t11Kit.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const post = (url: string, xml: string, ms = 180_000) => tallyPost(url, xml, ms, true) as Promise<string>;
+const post = (url: string, xml: string, ms = 360_000) => tallyPost(url, xml, ms, true) as Promise<string>;
 
 /** One pace-and-liveness gate per process (D-M.180). `--min-gap-sec N` sets the rest between turns (default 120). */
 let theGate: TallyGate | null = null;
