@@ -373,6 +373,14 @@ export interface NewGodown {
   name: string;
 }
 
+export interface NewCostCentre {
+  name: string;
+  /** The cost centre it sits under; empty for a top-level one. */
+  parent?: string;
+  /** The cost category; empty means Tally's own "Primary Cost Category". */
+  category?: string;
+}
+
 export interface MasterWriteResult {
   ok: boolean;
   created: number;
@@ -436,6 +444,15 @@ export function buildGodownXml(g: NewGodown, action: "Create" | "Alter" = "Creat
     </GODOWN>`;
 }
 
+export function buildCostCentreXml(c: NewCostCentre, action: "Create" | "Alter" = "Create"): string {
+  return `
+    <COSTCENTRE NAME="${esc(c.name)}" ACTION="${action}">
+      <NAME>${esc(c.name)}</NAME>
+      ${c.parent ? `<PARENT>${esc(c.parent)}</PARENT>` : "<PARENT/>"}
+      ${c.category ? `<CATEGORY>${esc(c.category)}</CATEGORY>` : ""}
+    </COSTCENTRE>`;
+}
+
 async function writeMaster(
   tallyUrl: string, company: string, body: string, want: "created" | "deleted", what: string,
 ): Promise<MasterWriteResult> {
@@ -463,7 +480,7 @@ async function writeMaster(
 
 /** Read one master of a known-safe type back by name. Returns the raw blocks. */
 async function readMasterRaw(
-  tallyUrl: string, company: string, type: "StockItem" | "Unit" | "Godown", name: string, fields: string[],
+  tallyUrl: string, company: string, type: "StockItem" | "Unit" | "Godown" | "CostCentre", name: string, fields: string[],
 ): Promise<string> {
   const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>MpRead${type}</ID></HEADER>
 <BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
@@ -547,3 +564,16 @@ export async function createGodown(tallyUrl: string, company: string, godown: Ne
 
 export const deleteGodown = (tallyUrl: string, company: string, name: string) =>
   writeMaster(tallyUrl, company, `<GODOWN NAME="${esc(name)}" ACTION="Delete"><NAME>${esc(name)}</NAME></GODOWN>`, "deleted", "godown");
+
+/** Create a cost centre and read it back by name with the same fields the sync pulls (Name, Parent, Category). */
+export async function createCostCentre(tallyUrl: string, company: string, centre: NewCostCentre): Promise<MasterWriteResult & { readBack?: { parent: string; category: string } | null }> {
+  const res = await writeMaster(tallyUrl, company, buildCostCentreXml(centre), "created", "cost centre");
+  if (!res.ok) return res;
+  const block = await readMasterRaw(tallyUrl, company, "CostCentre", centre.name, ["Name", "Parent", "Category"]);
+  if (!block) return { ...res, ok: false, readBack: null, notes: ["Tally reported success and the cost centre cannot be read back."] };
+  const f = (t: string) => (new RegExp(`<${t}[^>]*>([^<]*)</${t}>`, "i").exec(block)?.[1] ?? "").replace(/&#4;\s*/g, "").trim();
+  return { ...res, readBack: { parent: f("PARENT"), category: f("CATEGORY") } };
+}
+
+export const deleteCostCentre = (tallyUrl: string, company: string, name: string) =>
+  writeMaster(tallyUrl, company, `<COSTCENTRE NAME="${esc(name)}" ACTION="Delete"><NAME>${esc(name)}</NAME></COSTCENTRE>`, "deleted", "cost centre");

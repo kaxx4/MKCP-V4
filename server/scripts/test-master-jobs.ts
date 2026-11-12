@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ErpJobAgent, Journal, type ErpJob } from "../src/services/erpJobAgent.js";
 import { isMasterKind, planMasterJob, settleMasterJob, masterTestRefusal, type MasterOutcome, type MasterPlan } from "../src/services/masterJobs.js";
-import { buildStockItemXml, buildLedgerXml, isValidUnitName } from "../src/services/masterPusher.js";
+import { buildStockItemXml, buildLedgerXml, buildCostCentreXml, isValidUnitName } from "../src/services/masterPusher.js";
 import { hsnRevisions, type TallyMasters, type MasterItem, type MasterLedger } from "../src/services/tallyMasters.js";
 import { fixtureMasters, G_PARTS, SUPPLIER } from "./guardrails/fixtures.js";
 import { memErpQueue } from "./rigs/lib/memErpQueue.js";
@@ -134,6 +134,15 @@ const refusedWith = (kind: string, payload: unknown, re: RegExp, m = masters()) 
     ok("a stock GROUP is read exactly as before (the GST block is not read for a group)", hsnRevisions(built).length === 0);
     ok("a hand-typed item with HSNDETAILS is read exactly as before (the GST block is ignored beside it)", hsnRevisions(typed, true).map((r) => r.code).join() === "87141010");
     ok("an item that declares no HSN still inherits its group's", hsnRevisions(inherit, true).length === 0);
+  }
+
+  console.log("\n  the cost centre request (T11, 13-Nov-2026)");
+  {
+    const top = buildCostCentreXml({ name: "ZZ TEST CC 1 P" });
+    const kid = buildCostCentreXml({ name: "ZZ TEST CC 1 C & Co", parent: "ZZ TEST CC 1 P", category: "ZZ TEST CAT" });
+    ok("a top-level cost centre has an empty parent and no category line", /<COSTCENTRE NAME="ZZ TEST CC 1 P" ACTION="Create">/.test(top) && /<PARENT[/]>/.test(top) && !/<CATEGORY>/.test(top));
+    ok("a child names its parent and category, and the name is escaped", /<PARENT>ZZ TEST CC 1 P<[/]PARENT>/.test(kid) && /<CATEGORY>ZZ TEST CAT<[/]CATEGORY>/.test(kid) && /C &amp; Co/.test(kid));
+    ok("an Alter request says Alter", /ACTION="Alter"/.test(buildCostCentreXml({ name: "X" }, "Alter")));
   }
 
   console.log("\n  the sandbox rule for a test master job");
