@@ -154,6 +154,15 @@ export interface LedgerEntry {
    * Real discounted invoices in this company carry it as `Goods`.
    */
   appropriateToGst?: "Goods" | "Services";
+  /**
+   * GST rate and assessable value Tally stores on the tax lines of a reverse-charge Journal
+   * (`GSTTAXRATE`, `GSTASSESSABLEVALUE`). Read off 18 operator-typed RCM Journals on the dummy
+   * (12-Nov-2026): the output/input CGST and SGST lines carry the half rate (2.50 on a 5 percent
+   * freight bill) and the taxable value; the GST UNDER RCM holding line carries neither.
+   * Send both or neither. Only valid on a voucher that carries `taxAdjustment`.
+   */
+  gstTaxRate?: number;
+  gstAssessableValue?: number;
   isPartyLedger: boolean;
   billAllocations?: BillAllocation[];
   bankAllocation?: BankAllocation;
@@ -205,6 +214,14 @@ export interface VoucherPayload {
    * sequence and an invoice number that no longer means anything.
    */
   action?: "Create" | "Alter" | "Cancel" | "Delete";
+  /**
+   * Marks a Journal as a GST tax-liability adjustment, the flag Tally's returns read. A reverse-charge
+   * bill is booked as TWO Journals: "Increase in Tax Liability" (Dr GST UNDER RCM, Cr output tax) and
+   * "Decrease in Tax Liability" (Dr input tax, Cr GST UNDER RCM). Sent as `TAXADJUSTMENT`, with
+   * `STATPAYMENTTYPE` GST and `GSTADDITIONALDETAILS` Others, the three voucher tags the hand-typed
+   * Journals carry. Journals only; the guard refuses it on any other type.
+   */
+  taxAdjustment?: "Increase in Tax Liability" | "Decrease in Tax Liability";
   /**
    * Permit an Alter or Delete against a voucher in a GST period that has already
    * been filed.

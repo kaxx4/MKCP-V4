@@ -207,6 +207,43 @@ console.log("\nC29 freight bill under reverse charge:");
   ok("C29 the payment settles the bill against its Agst Ref", s.pay.ledgerEntries[0].billAllocations?.[0].billType === "Agst Ref" && s.pay.ledgerEntries[0].billAllocations?.[0].name === s.billNo);
 }
 
+// ── C29 tax-adjustment flag (D-M.180): the XML, the guard and the comparer ───
+console.log("\nC29 reverse-charge journals carry the tax-adjustment flag:");
+{
+  const s = c29(STAMP, DAY, kit);
+  const ix = buildVoucherImportXml(M.company, s.tax, M);
+  const dx = buildVoucherImportXml(M.company, s.taxDecrease, M);
+  ok("the increase journal sends TAXADJUSTMENT Increase, STATPAYMENTTYPE GST and GSTADDITIONALDETAILS Others",
+    /<TAXADJUSTMENT>Increase in Tax Liability<\/TAXADJUSTMENT>/.test(ix) && /<STATPAYMENTTYPE>GST<\/STATPAYMENTTYPE>/.test(ix) && /<GSTADDITIONALDETAILS>Others<\/GSTADDITIONALDETAILS>/.test(ix));
+  ok("the decrease journal sends TAXADJUSTMENT Decrease", /<TAXADJUSTMENT>Decrease in Tax Liability<\/TAXADJUSTMENT>/.test(dx) && !/Increase in Tax/.test(dx));
+  ok("the tax lines send the half rate (2.50 on a 5 percent bill) and the taxable value; the holding line neither",
+    (ix.match(/<GSTTAXRATE>2\.50<\/GSTTAXRATE>/g) ?? []).length === 2 && (ix.match(/<GSTASSESSABLEVALUE>/g) ?? []).length === 2 && (dx.match(/<GSTTAXRATE>2\.50<\/GSTTAXRATE>/g) ?? []).length === 2);
+  ok("the assessable value is the freight taxable amount", new RegExp(`<GSTASSESSABLEVALUE>${s.amount.toFixed(2)}</GSTASSESSABLEVALUE>`).test(ix), ix.match(/<GSTASSESSABLEVALUE>[^<]*/)?.[0]);
+  ok("every line of an adjustment journal mirrors its amount in VATEXPAMOUNT, as the hand-typed ones do", (ix.match(/<VATEXPAMOUNT>/g) ?? []).length === 3);
+  const plain = { ...s.tax, taxAdjustment: undefined, ledgerEntries: s.tax.ledgerEntries.map((e) => ({ ...e, gstTaxRate: undefined, gstAssessableValue: undefined })) } as VoucherPayload;
+  const px = buildVoucherImportXml(M.company, plain, M);
+  ok("a journal with no adjustment sends none of these tags (nothing else changed)", !/TAXADJUSTMENT|STATPAYMENTTYPE|GSTADDITIONALDETAILS|GSTTAXRATE|GSTASSESSABLEVALUE|VATEXPAMOUNT/.test(px));
+  const onSales = { ...s.bill, taxAdjustment: "Increase in Tax Liability" } as VoucherPayload;
+  ok("a tax adjustment on a Purchase is refused", !guardVoucher(onSales, M, {}).ok);
+  const bad = { ...s.tax, taxAdjustment: "Whatever" } as unknown as VoucherPayload;
+  ok("an unknown adjustment is refused", !guardVoucher(bad, M, {}).ok);
+  const rateNoAdj = { ...plain, ledgerEntries: plain.ledgerEntries.map((e, i) => (i === 1 ? { ...e, gstTaxRate: 2.5, gstAssessableValue: 100 } : e)) } as VoucherPayload;
+  ok("a GST rate on a voucher with no adjustment is refused", !guardVoucher(rateNoAdj, M, {}).ok);
+  const rateOnly = { ...s.tax, ledgerEntries: s.tax.ledgerEntries.map((e, i) => (i === 1 ? { ...e, gstAssessableValue: undefined } : e)) } as VoucherPayload;
+  ok("a rate without the assessable value is refused", !guardVoucher(rateOnly, M, {}).ok);
+  const zeroRate = { ...s.tax, ledgerEntries: s.tax.ledgerEntries.map((e, i) => (i === 1 ? { ...e, gstTaxRate: 0 } : e)) } as VoucherPayload;
+  ok("a zero GST rate is refused", !guardVoucher(zeroRate, M, {}).ok);
+  // The comparer reads the flag back: it passes our own XML, and names a dropped flag and a wrong rate.
+  const rd = compareToPayload(s.tax, ix.replace(/^[\s\S]*?<VOUCHER /, "<VOUCHER "));
+  ok("the comparer checks the flag, the payment type, the details and each rate and value",
+    ["tax adjustment", "statutory payment type", "GST additional details"].every((f) => rd.some((r) => r.field === f && r.ok)) && rd.filter((r) => /GST rate|assessable value/.test(r.field) && r.ok).length === 4,
+    failures(rd).join(" | "));
+  const dropped = compareToPayload(s.tax, ix.replace(/^[\s\S]*?<VOUCHER /, "<VOUCHER ").replace(/<TAXADJUSTMENT>[^<]*<\/TAXADJUSTMENT>/, ""));
+  ok("the comparer names a dropped flag", failures(dropped).some((r) => /tax adjustment/.test(r)));
+  const wrongRate = compareToPayload(s.tax, ix.replace(/^[\s\S]*?<VOUCHER /, "<VOUCHER ").replace(/<GSTTAXRATE>2\.50/, "<GSTTAXRATE>6.00"));
+  ok("the comparer names a wrong rate", failures(wrongRate).some((r) => /GST rate/.test(r)));
+}
+
 // ── C22: Stock Journal ───────────────────────────────────────────────────────
 console.log("\nC22 Stock Journal from a count difference:");
 {

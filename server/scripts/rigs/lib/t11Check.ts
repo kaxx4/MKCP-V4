@@ -53,6 +53,11 @@ export function compareToPayload(p: VoucherPayload, stored: string, opts: { part
   if (p.referenceDate) add("reference date", tallyDate(p.referenceDate), readTag(stored, "REFERENCEDATE"));
   /* Tally keeps no party on a Journal (operator-typed Journals have an empty PARTYLEDGERNAME), and replaces it on Payment/Receipt/Contra. */
   if (!opts.partyOverwritten && !/^journal$/i.test(p.voucherType) && p.partyLedgerName) add("party ledger", p.partyLedgerName, readTag(stored, "PARTYLEDGERNAME"));
+  if (p.taxAdjustment) {
+    add("tax adjustment", p.taxAdjustment, readTag(stored, "TAXADJUSTMENT"));
+    add("statutory payment type", "GST", readTag(stored, "STATPAYMENTTYPE"));
+    add("GST additional details", "Others", readTag(stored, "GSTADDITIONALDETAILS"));
+  }
   const isInv = readTag(stored, "ISINVOICE");
   add("is invoice", yn(p.isInvoice), /^yes$/i.test(isInv) ? "Yes" : "No");
 
@@ -84,6 +89,8 @@ export function compareToPayload(p: VoucherPayload, stored: string, opts: { part
     const l = lines[idx];
     add(`ledger "${e.ledgerName}" amount`, String(want), String(num(readTag(l, "AMOUNT"))), eqNum(num(readTag(l, "AMOUNT")), want));
     add(`ledger "${e.ledgerName}" side`, yn(e.isDeemedPositive), readTag(l, "ISDEEMEDPOSITIVE") || "(absent)");
+    if (e.gstTaxRate !== undefined) add(`ledger "${e.ledgerName}" GST rate`, String(e.gstTaxRate), String(num(readTag(l, "GSTTAXRATE"))), eqNum(num(readTag(l, "GSTTAXRATE")), e.gstTaxRate));
+    if (e.gstAssessableValue !== undefined) add(`ledger "${e.ledgerName}" GST assessable value`, String(e.gstAssessableValue), String(num(readTag(l, "GSTASSESSABLEVALUE"))), eqNum(num(readTag(l, "GSTASSESSABLEVALUE")), e.gstAssessableValue));
     if (e.appropriateToGst) add(`ledger "${e.ledgerName}" appropriates to GST`, "GST", readTag(l, "APPROPRIATEFOR") || "(absent)");
     const storedBills = blocks(l, "BILLALLOCATIONS\\.LIST");
     const billSpent = new Set<number>();

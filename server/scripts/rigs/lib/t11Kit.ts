@@ -223,21 +223,24 @@ export function buildBillPayment(o: { kit: Kit; number: string; date: string; na
  *   increase (TAXADJUSTMENT "Increase in Tax Liability"): Dr GST UNDER RCM for the whole tax, Cr OUTPUT CGST, Cr OUTPUT SGST
  *   decrease (TAXADJUSTMENT "Decrease in Tax Liability"): Dr INPUT CGST, Dr INPUT SGST, Cr GST UNDER RCM for the whole tax
  * so the holding ledger nets to nil and the tax shows as both output and input. `rate` is the freight GST rate
- * (5 for goods transport), split half and half. The agent's pusher has no way to send the TAXADJUSTMENT flag, so
- * the rig pushes the lines and the rig's report says plainly that the flag is not sent.
+ * (5 for goods transport), split half and half. Each journal carries the TAXADJUSTMENT flag (and STATPAYMENTTYPE GST,
+ * GSTADDITIONALDETAILS Others), and its CGST and SGST lines carry the half rate and the taxable value, as the
+ * hand-typed ones do (D-M.180). Proved offline; the dummy run is pending.
  */
 export function buildRcmJournals(o: { kit: Kit; numberIncrease: string; numberDecrease: string; date: string; narration: string; taxable: number; rate: number }): { increase: VoucherPayload; decrease: VoucherPayload; half: number; both: number } {
   const half = r2(o.taxable * o.rate / 200);
   const both = r2(half * 2);
   const L = (name: string, amount: number, dr: boolean): LedgerEntry => ({ ledgerName: name, amount, isDeemedPositive: dr, isPartyLedger: false });
-  const journal = (number: string, lines: LedgerEntry[], tag: string): VoucherPayload => ({
+  /** A tax line: carries the half rate and the taxable value, as Tally writes it. */
+  const T = (name: string, amount: number, dr: boolean): LedgerEntry => ({ ...L(name, amount, dr), gstTaxRate: o.rate / 2, gstAssessableValue: o.taxable });
+  const journal = (number: string, lines: LedgerEntry[], tag: string, taxAdjustment: VoucherPayload["taxAdjustment"]): VoucherPayload => ({
     voucherType: "Journal", date: o.date, voucherNumber: number, isInvoice: false,
     remoteId: zzRemoteId("JOURNAL", number), narration: `${o.narration} (${tag})`, partyLedgerName: lines.find((l) => l.isDeemedPositive)!.ledgerName,
-    ledgerEntries: lines,
+    ledgerEntries: lines, taxAdjustment,
   } as VoucherPayload);
   return {
-    increase: journal(o.numberIncrease, [L(o.kit.rcmAsset, both, true), L(o.kit.outCgst, half, false), L(o.kit.outSgst, half, false)], "increase"),
-    decrease: journal(o.numberDecrease, [L(o.kit.inCgst, half, true), L(o.kit.inSgst, half, true), L(o.kit.rcmAsset, both, false)], "decrease"),
+    increase: journal(o.numberIncrease, [L(o.kit.rcmAsset, both, true), T(o.kit.outCgst, half, false), T(o.kit.outSgst, half, false)], "increase", "Increase in Tax Liability"),
+    decrease: journal(o.numberDecrease, [T(o.kit.inCgst, half, true), T(o.kit.inSgst, half, true), L(o.kit.rcmAsset, both, false)], "decrease", "Decrease in Tax Liability"),
     half, both,
   };
 }

@@ -515,6 +515,24 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     if (!p.narration?.trim()) warnings.push("A Stock Journal with no narration cannot be traced to the count that caused it.");
   }
 
+  /* ── Tax-liability adjustment (reverse-charge Journals, D-M.180) ────────────────
+     TAXADJUSTMENT belongs to a Journal only: on any other type Tally would take it as a statement about a sale
+     or purchase. The rate and assessable value ride together on the tax lines, and a line that carries them on a
+     voucher with no TAXADJUSTMENT is a mistake (Tally ignores it, and the return then disagrees with the books). */
+  const adjustments = ["Increase in Tax Liability", "Decrease in Tax Liability"];
+  if (p.taxAdjustment !== undefined) {
+    if (p.voucherType.toUpperCase() !== "JOURNAL") errors.push(`Tax adjustment "${p.taxAdjustment}" is only for a Journal, not a ${p.voucherType}.`);
+    if (!adjustments.includes(p.taxAdjustment)) errors.push(`Tax adjustment must be "Increase in Tax Liability" or "Decrease in Tax Liability", not "${String(p.taxAdjustment)}".`);
+  }
+  for (const le of p.ledgerEntries ?? []) {
+    const hasRate = le.gstTaxRate !== undefined, hasValue = le.gstAssessableValue !== undefined;
+    if (!hasRate && !hasValue) continue;
+    if (p.taxAdjustment === undefined) errors.push(`Line "${le.ledgerName}" carries a GST rate or assessable value but the voucher has no tax adjustment; Tally would ignore it.`);
+    if (hasRate !== hasValue) errors.push(`Line "${le.ledgerName}" must carry the GST rate and the assessable value together, or neither.`);
+    if (hasRate && !(Number.isFinite(le.gstTaxRate!) && le.gstTaxRate! > 0 && le.gstTaxRate! <= 50)) errors.push(`Line "${le.ledgerName}" has a GST rate of ${le.gstTaxRate}; it must be above 0 and at most 50.`);
+    if (hasValue && !(Number.isFinite(le.gstAssessableValue!) && le.gstAssessableValue! > 0)) errors.push(`Line "${le.ledgerName}" has an assessable value of ${le.gstAssessableValue}; it must be above 0.`);
+  }
+
   const hasStock = (p.inventoryEntries?.length ?? 0) > 0;
   // Invoice-SHAPED, not `isInvoice`: a Sales Order Note carries ISINVOICE=No
   // yet still puts its goods in stock lines with their own accounting

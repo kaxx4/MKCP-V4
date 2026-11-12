@@ -51,7 +51,7 @@ const kit = DUMMY_KIT;
 const num = (s: string) => parseTallyAmount(s) ?? NaN;
 
 /** Checks each part is expected to make, learned from its first full live run. -1 = not yet calibrated. */
-const EXPECTED: Record<string, number> = { c22: 27, c23: 23, c25: 54, c26: 31, c26b: 23, c29: 29 };
+const EXPECTED: Record<string, number> = { c22: 27, c23: 23, c25: 54, c26: 31, c26b: 23, c29: 43 };
 
 /** What a part made, so teardown can undo it whatever happens in the middle. */
 class Made {

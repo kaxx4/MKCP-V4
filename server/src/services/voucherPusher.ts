@@ -240,7 +240,7 @@ function renderIdentity(id: PartyIdentity): string {
   ].join("");
 }
 
-function buildLedgerEntries(entries: LedgerEntry[], isInvoice: boolean, voucherDate: string): string {
+function buildLedgerEntries(entries: LedgerEntry[], isInvoice: boolean, voucherDate: string, taxAdjustment = false): string {
   const tag = isInvoice ? "LEDGERENTRIES.LIST" : "ALLLEDGERENTRIES.LIST";
   return entries.map(e => {
     const amt = e.signedAmount !== undefined ? fmtAmount(e.signedAmount) : tallyAmount(e.amount, e.isDeemedPositive);
@@ -256,12 +256,18 @@ function buildLedgerEntries(entries: LedgerEntry[], isInvoice: boolean, voucherD
     <EXCISEALLOCTYPE>Based on Value</EXCISEALLOCTYPE>
     <METHODTYPE>As User Defined Value</METHODTYPE>
     <VATEXPAMOUNT>${amt}</VATEXPAMOUNT>` : "";
+    /* Reverse-charge Journal tax lines: Tally writes GSTTAXRATE before AMOUNT and GSTASSESSABLEVALUE after it. */
+    const gstRate = e.gstTaxRate !== undefined ? `
+    <GSTTAXRATE>${e.gstTaxRate.toFixed(2)}</GSTTAXRATE>` : "";
+    const gstValue = e.gstAssessableValue !== undefined ? `
+    <GSTASSESSABLEVALUE>${fmtAmount(e.gstAssessableValue)}</GSTASSESSABLEVALUE>` : "";
     return `
   <${tag}>
     <LEDGERNAME>${esc(e.ledgerName)}</LEDGERNAME>
     <ISDEEMEDPOSITIVE>${e.isDeemedPositive ? "Yes" : "No"}</ISDEEMEDPOSITIVE>
-    <ISPARTYLEDGER>${e.isPartyLedger ? "Yes" : "No"}</ISPARTYLEDGER>${gstAppropriation}
-    <AMOUNT>${amt}</AMOUNT>
+    <ISPARTYLEDGER>${e.isPartyLedger ? "Yes" : "No"}</ISPARTYLEDGER>${gstAppropriation}${gstRate}
+    <AMOUNT>${amt}</AMOUNT>${gstValue}${taxAdjustment && !e.appropriateToGst ? `
+    <VATEXPAMOUNT>${amt}</VATEXPAMOUNT>` : ""}
     ${e.billAllocations && e.billAllocations.length > 0 ? buildBillAllocations(e.billAllocations, e.isDeemedPositive) : ""}
     ${e.bankAllocation ? buildBankAllocation(e.bankAllocation, e.amount, e.isDeemedPositive, voucherDate) : ""}
   </${tag}>`;
@@ -465,12 +471,16 @@ export function buildVoucherImportXml(company: string, payload: VoucherPayload, 
             ${payload.reference ? `<REFERENCE>${esc(payload.reference)}</REFERENCE>` : ""}
             ${payload.referenceDate ? `<REFERENCEDATE>${esc(toVoucherDate(payload.referenceDate))}</REFERENCEDATE>` : ""}
             ${payload.narration ? `<NARRATION>${esc(payload.narration)}</NARRATION>` : ""}
-            <PARTYLEDGERNAME>${esc(payload.partyLedgerName)}</PARTYLEDGERNAME>
+            <PARTYLEDGERNAME>${esc(payload.partyLedgerName)}</PARTYLEDGERNAME>${
+              payload.taxAdjustment ? `
+            <TAXADJUSTMENT>${esc(payload.taxAdjustment)}</TAXADJUSTMENT>
+            <STATPAYMENTTYPE>GST</STATPAYMENTTYPE>
+            <GSTADDITIONALDETAILS>Others</GSTADDITIONALDETAILS>` : ""}
             ${identity ? renderIdentity(identity) : ""}
             ${isInvoiceShaped(payload) ? `<PARTYNAME>${esc(payload.partyLedgerName)}</PARTYNAME>
             <BASICBASEPARTYNAME>${esc(payload.partyLedgerName)}</BASICBASEPARTYNAME>
             <VCHENTRYMODE>${hasInventory ? "Item Invoice" : "Accounting Invoice"}</VCHENTRYMODE>` : ""}
-            ${buildLedgerEntries(payload.ledgerEntries, isInvoiceShaped(payload), payload.date)}
+            ${buildLedgerEntries(payload.ledgerEntries, isInvoiceShaped(payload), payload.date, !!payload.taxAdjustment)}
             ${hasInventory ? buildInventoryEntries(payload.inventoryEntries!, isInwardSupply(payload.voucherType) ? undefined : masters, payload.date) : ""}
           </VOUCHER>
         </TALLYMESSAGE>
