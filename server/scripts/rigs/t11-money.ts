@@ -36,7 +36,7 @@ const CLEANUP = arg("--cleanup");
 const kit = DUMMY_KIT;
 const num = (s: string) => parseTallyAmount(s) ?? NaN;
 /** Checks expected from each part's first full run; -1 = not calibrated yet. */
-const EXPECTED: Record<string, number> = { receipts: 126, payments: 100, contras: 61, modes: -1 };
+const EXPECTED: Record<string, number> = { receipts: 126, payments: 100, contras: 61, modes: 74 };
 
 class Made {
   vouchers: VoucherPayload[] = []; parties: string[] = []; items: string[] = [];
