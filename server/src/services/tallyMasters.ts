@@ -292,7 +292,7 @@ export async function loadMasters(
     if (!name) continue;
     items.set(name, {
       name,
-      hsnRevisions: hsnRevisions(b),
+      hsnRevisions: hsnRevisions(b, true),
       baseUnit: field(b, "BASEUNITS") || "PC",
       denominator: leadingNumber(field(b, "DENOMINATOR")) || 1,
       closingRate: leadingNumber(field(b, "CLOSINGRATE")),
@@ -553,8 +553,16 @@ function gstRevisions(block: string): GstRevision[] {
   return out.sort((a, b) => a.from.localeCompare(b.from));
 }
 
-/** Every dated, DECLARED HSN block (SRCOFHSNDETAILS = "Specify Details Here"). */
-function hsnRevisions(block: string): HsnRevision[] {
+/**
+ * Every dated, DECLARED HSN block (SRCOFHSNDETAILS = "Specify Details Here").
+ *
+ * `alsoGstBlock` (stock ITEMS only): an item made by `createStockItem` carries its own HSN as an HSNCODE inside GSTDETAILS.LIST, which is the one
+ * place that builder writes it (proved by its own read-back). Found 13-Nov-2026 on the dummy (master-jobs-dummy.ts): such an item read back its
+ * own HSN from Tally, but this reader saw none and `hsnFor` answered with the stock group's, so a voucher line for it would have carried the wrong
+ * HSN. Read only when the item declares no HSNDETAILS of its own, so every item typed by hand is read exactly as before (0 of 489 items on the
+ * dummy carry an HSNCODE inside GSTDETAILS.LIST, probed 13-Nov-2026, R-probe-item-hsn).
+ */
+export function hsnRevisions(block: string, alsoGstBlock = false): HsnRevision[] {
   const out: HsnRevision[] = [];
   for (const [, b] of block.matchAll(/<HSNDETAILS\.LIST>([\s\S]*?)<\/HSNDETAILS\.LIST>/g)) {
     const code = /<HSNCODE>\s*([^<]*?)\s*<\/HSNCODE>/.exec(b)?.[1] ?? "";
@@ -566,6 +574,14 @@ function hsnRevisions(block: string): HsnRevision[] {
       code,
       description: unescapeXml(/<HSN>\s*([^<]*?)\s*<\/HSN>/.exec(b)?.[1] ?? ""),
     });
+  }
+  if (alsoGstBlock && out.length === 0) {
+    for (const [, b] of block.matchAll(/<GSTDETAILS\.LIST>([\s\S]*?)<\/GSTDETAILS\.LIST>/g)) {
+      const code = /<HSNCODE>\s*([^<]*?)\s*<\/HSNCODE>/.exec(b)?.[1] ?? "";
+      if (!code) continue;
+      const raw = /<APPLICABLEFROM>\s*([^<]*?)\s*<\/APPLICABLEFROM>/.exec(b)?.[1] ?? "";
+      out.push({ from: /^\d{8}$/.test(raw) ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}` : "", code, description: "" });
+    }
   }
   return out.sort((a, b) => a.from.localeCompare(b.from));
 }

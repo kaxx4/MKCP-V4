@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { ErpJobAgent, Journal, type ErpJob } from "../src/services/erpJobAgent.js";
 import { isMasterKind, planMasterJob, settleMasterJob, masterTestRefusal, type MasterOutcome, type MasterPlan } from "../src/services/masterJobs.js";
 import { buildStockItemXml, buildLedgerXml, isValidUnitName } from "../src/services/masterPusher.js";
-import type { TallyMasters, MasterItem, MasterLedger } from "../src/services/tallyMasters.js";
+import { hsnRevisions, type TallyMasters, type MasterItem, type MasterLedger } from "../src/services/tallyMasters.js";
 import { fixtureMasters, G_PARTS, SUPPLIER } from "./guardrails/fixtures.js";
 import { memErpQueue } from "./rigs/lib/memErpQueue.js";
 import { sandboxForRig } from "./rigs/lib/simTally.js";
@@ -123,6 +123,17 @@ const refusedWith = (kind: string, payload: unknown, re: RegExp, m = masters()) 
     ok("a party in Tally exactly as asked: present", settleMasterJob(pgood.plan, lp, "2026-11-12").state === "present");
     lp.ledgers.get("ZZ TEST NEW SUPPLIER")!.state = "Punjab";
     ok("a party with another state: differs", settleMasterJob(pgood.plan, lp, "2026-11-12").state === "differs");
+  }
+
+  console.log("\n  the masters reader sees an item's own HSN (found on the dummy, 13-Nov-2026)");
+  {
+    const built = "<STOCKITEM><NAME>X</NAME><GSTDETAILS.LIST><APPLICABLEFROM>20260401</APPLICABLEFROM><HSNCODE>87149290</HSNCODE><TAXABILITY>Taxable</TAXABILITY></GSTDETAILS.LIST></STOCKITEM>";
+    const typed = "<STOCKITEM><NAME>Y</NAME><HSNDETAILS.LIST><APPLICABLEFROM>20260401</APPLICABLEFROM><HSNCODE>87141010</HSNCODE><SRCOFHSNDETAILS>Specify Details Here</SRCOFHSNDETAILS></HSNDETAILS.LIST><GSTDETAILS.LIST><APPLICABLEFROM>20260401</APPLICABLEFROM><HSNCODE>87149999</HSNCODE></GSTDETAILS.LIST></STOCKITEM>";
+    const inherit = "<STOCKITEM><NAME>Z</NAME><GSTDETAILS.LIST><APPLICABLEFROM>20260401</APPLICABLEFROM><TAXABILITY>Taxable</TAXABILITY></GSTDETAILS.LIST></STOCKITEM>";
+    ok("an item made by the builder: its HSN inside GSTDETAILS.LIST is read for an item", hsnRevisions(built, true).map((r) => r.code).join() === "87149290" && hsnRevisions(built, true)[0].from === "2026-04-01");
+    ok("a stock GROUP is read exactly as before (the GST block is not read for a group)", hsnRevisions(built).length === 0);
+    ok("a hand-typed item with HSNDETAILS is read exactly as before (the GST block is ignored beside it)", hsnRevisions(typed, true).map((r) => r.code).join() === "87141010");
+    ok("an item that declares no HSN still inherits its group's", hsnRevisions(inherit, true).length === 0);
   }
 
   console.log("\n  the sandbox rule for a test master job");
