@@ -81,7 +81,7 @@ export const PIN_RE = /^[1-9]\d{5}$/;
 export const HSN_RE = /^\d{4}(\d{2}(\d{2})?)?$/;
 
 /**
- * "MIXED ORDER" is a real Tally ledger (`SUNDRY DEBTORS (EG)`) but not a real
+ * The mixed-order ledger is a real Tally ledger (`SUNDRY DEBTORS (EG)`) but not a real
  * party: it is several cash orders billed together for packing convenience,
  * and the buyer is different on every invoice. Owner, 24-Sep-2026: treat it
  * like `Cash` — a typed buyer name and address on every invoice, place of
@@ -96,7 +96,7 @@ export const HSN_RE = /^\d{4}(\d{2}(\d{2})?)?$/;
  */
 export const MIXED_ORDER_PARTY = "MIXED ORDER";
 
-/** True for the shared `Cash` ledger or `MIXED ORDER` by NAME. Does not read
+/** True for the shared `Cash` ledger or the mixed-order ledger by NAME. Does not read
  *  the ledger group — callers that also treat any ledger under a "cash" group
  *  as a walk-in (`isWalkInLedger` in pushGuard.ts) OR this. */
 export function isCashLikeParty(name: string | null | undefined): boolean {

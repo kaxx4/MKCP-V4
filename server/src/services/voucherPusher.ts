@@ -190,7 +190,7 @@ export function partyIdentity(p: VoucherPayload, masters?: TallyMasters): PartyI
 
   /* A walk-in is a ledger with no identity of its own: no GSTIN, no address, no
      state. Only then do the operator's typed name and address apply.
-     `MIXED ORDER` is the exception that PROVES this can't be state-derived
+     The mixed-order ledger is the exception that PROVES this can't be state-derived
      alone: its ledger carries a state (West Bengal, unlike Cash) but is not a
      real, single, addressable buyer — several cash orders billed together,
      a different buyer every time (owner, 24-Sep-2026). So it is forced onto

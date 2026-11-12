@@ -20,6 +20,7 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { loadMasters, type TallyMasters } from "../src/services/tallyMasters.js";
 import { guardVoucher } from "../src/services/pushGuard.js";
+import { MIXED_ORDER_PARTY } from "../src/services/gstIdentity.js";
 import { safePush, rejectionErrors } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
 import {
@@ -94,15 +95,15 @@ function offlineCases() {
     sale({ number: "PG/8c", party: "Cash", placeOfSupply: "West Bengal", buyerName: "PARTY 905 CYCLE", buyerAddress: ["JHALDAH", "PURULIA 723202"], lines: [{ item: "CARRIER CLIP", amount: 50000, rate: 5 }] }), m);
   expectRejected("cash walk-in declaring an out-of-state place of supply",
     sale({ number: "PG/8d", party: "Cash", placeOfSupply: "Odisha", buyerName: "X", buyerAddress: ["Y"], lines: clip }), m, "place of supply is West Bengal");
-  // MIXED ORDER: several cash orders billed together for packing convenience,
+  // The mixed-order ledger: several cash orders billed together for packing convenience,
   // a different buyer every time (owner, 24-Sep-2026). Its ledger carries a
   // state (unlike Cash) but no pincode — gets the SAME cash rules regardless.
-  expectAccepted("MIXED ORDER passes with no ledger pincode once a buyer address is typed",
-    sale({ number: "PG/8h", party: "MIXED ORDER", placeOfSupply: "West Bengal", buyerName: "WALK-IN BUYER", buyerAddress: ["BAGNAN"], lines: clip }), m);
-  expectRejected("MIXED ORDER still needs a typed buyer address",
-    sale({ number: "PG/8i", party: "MIXED ORDER", placeOfSupply: "West Bengal", buyerName: "WALK-IN BUYER", lines: clip }), m, "needs the buyer's address");
-  expectRejected("MIXED ORDER gets the same ₹50,000 ceiling as Cash",
-    sale({ number: "PG/8j", party: "MIXED ORDER", placeOfSupply: "West Bengal", buyerName: "WALK-IN BUYER", buyerAddress: ["BAGNAN"], lines: [{ item: "CARRIER CLIP", amount: 60000, rate: 5 }] }), m, "over the ₹50000 limit for a cash sale");
+  expectAccepted("the mixed-order ledger passes with no ledger pincode once a buyer address is typed",
+    sale({ number: "PG/8h", party: MIXED_ORDER_PARTY, placeOfSupply: "West Bengal", buyerName: "WALK-IN BUYER", buyerAddress: ["BAGNAN"], lines: clip }), m);
+  expectRejected("the mixed-order ledger still needs a typed buyer address",
+    sale({ number: "PG/8i", party: MIXED_ORDER_PARTY, placeOfSupply: "West Bengal", buyerName: "WALK-IN BUYER", lines: clip }), m, "needs the buyer's address");
+  expectRejected("the mixed-order ledger gets the same ₹50,000 ceiling as Cash",
+    sale({ number: "PG/8j", party: MIXED_ORDER_PARTY, placeOfSupply: "West Bengal", buyerName: "WALK-IN BUYER", buyerAddress: ["BAGNAN"], lines: [{ item: "CARRIER CLIP", amount: 60000, rate: 5 }] }), m, "over the ₹50000 limit for a cash sale");
   expectRejected("a party-ledger sale carrying a typed buyer name/address (second consignee)",
     sale({ number: "PG/8e", party: PARTY_LOCAL, buyerName: "SOMEONE ELSE", buyerAddress: ["ELSEWHERE"], lines: clip }), m, "second consignee");
   expectRejected("a Sales Order Note whose ledger has no pincode (refused like a Sales invoice)",

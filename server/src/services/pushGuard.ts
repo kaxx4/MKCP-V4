@@ -62,7 +62,7 @@ const OUTWARD_TAXED = new Set(["SALES", "SALES ORDER", "SALES ORDER NOTE"]);
 
 /**
  * The e-way bill threshold: CGST Rule 138, consignment (goods) value above
- * ₹50,000. Used for a cash walk-in or MIXED ORDER (`isCashLikeParty`), whose
+ * ₹50,000. Used for a cash walk-in or the mixed-order ledger (`isCashLikeParty`), whose
  * ship-to is whatever the operator typed.
  *
  * Owner, 24-Sep-2026, superseding the earlier "optional below the limit"
@@ -695,13 +695,13 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
         }
       }
       if (walkIn) {
-        // A counter sale (or MIXED ORDER): the buyer is in the shop, so the
+        // A counter sale (or the mixed-order ledger): the buyer is in the shop, so the
         // supply is local.
         if (declared && !sameState(declared, HOME_STATE_NAME)) {
           errors.push(`A cash sale's place of supply is ${HOME_STATE_NAME}, not "${declared}" — the buyer is standing in the shop and the tax is charged as local.`);
         }
         if (!p.buyerName?.trim()) {
-          errors.push(`A cash sale needs the buyer's name — it is the bill-to and ship-to on the invoice, and the Cash/MIXED ORDER ledger has neither.`);
+          errors.push(`A cash sale needs the buyer's name — it is the bill-to and ship-to on the invoice, and the Cash and mixed-order ledgers have neither.`);
         }
         const typed = (p.buyerAddress ?? []).map(l => l.trim()).filter(Boolean);
         const goods = (p.inventoryEntries ?? []).reduce((t, i) => t + Math.abs(i.amount), 0);
@@ -897,7 +897,7 @@ export function taxCheck(p: VoucherPayload, m: TallyMasters): {
 }
 
 /** The shared walk-in ledger — the same test as the web's `isWalkIn`:
- *  named Cash or MIXED ORDER (`isCashLikeParty`), or under a cash group. */
+ *  named Cash or the mixed-order ledger (`isCashLikeParty`), or under a cash group. */
 export function isWalkInLedger(l: Pick<MasterLedger, "name" | "parent">): boolean {
   return isCashLikeParty(l.name) || /cash/i.test(l.parent ?? "");
 }

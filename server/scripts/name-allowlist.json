@@ -1,0 +1,110 @@
+{
+  "note": "Lines that genuinely need a deny-listed word. Each entry is the file, a fingerprint of the trimmed line, and why. No name is stored here.",
+  "entries": [
+    {
+      "file": "migrations/022_tally_sync_history_realtime.sql",
+      "line": "bac7c4fe1bc4a3a5",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "migrations/022_tally_sync_history_realtime.sql",
+      "line": "1dbe1180e4e2725b",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "migrations/025_voucher_transport_fields.sql",
+      "line": "7d39b6a50e538d81",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "migrations/043_voucher_cash_buyer.sql",
+      "line": "15ffcafaefc14fe5",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/contracts/gst-twins.json",
+      "line": "ae9d1c5905b49bab",
+      "why": "the name of the shared mixed-order system ledger. The app looks the ledger up by this exact name, so it cannot be changed here. It is not a person or a business."
+    },
+    {
+      "file": "server/contracts/gst-twins.json",
+      "line": "6e208285f4c09416",
+      "why": "the name of the shared mixed-order system ledger. The app looks the ledger up by this exact name, so it cannot be changed here. It is not a person or a business."
+    },
+    {
+      "file": "server/scripts/guardrails/fixtures.ts",
+      "line": "9c3b06405ed131e2",
+      "why": "the name of the shared mixed-order system ledger. The app looks the ledger up by this exact name, so it cannot be changed here. It is not a person or a business."
+    },
+    {
+      "file": "server/scripts/guardrails/g7.ts",
+      "line": "c9fd7fd5ebf691ba",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/scripts/probe-ewaybill-fields.ts",
+      "line": "05948f94dc238d77",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/scripts/push-fidelity.ts",
+      "line": "68b0b77422146f01",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/scripts/resync-range.ts",
+      "line": "d4f7841c2e9c9231",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/scripts/test-erp-tally-shape.ts",
+      "line": "801b4f975fa3a9f5",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/scripts/test-erp-tally-shape.ts",
+      "line": "c698b59b7e8a716d",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/scripts/test-remaining-types.ts",
+      "line": "574342add07239af",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/src/converters/convert.ts",
+      "line": "635b65ea9fe003b4",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/src/converters/convert.ts",
+      "line": "fa4acd1dfa2dc0b0",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/src/services/erpTallyShape.ts",
+      "line": "7ed3f012ecf64f1f",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/src/services/erpTallyShape.ts",
+      "line": "21aeea7c58b2709a",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/src/services/gstIdentity.ts",
+      "line": "9b984070e36a2843",
+      "why": "the name of the shared mixed-order system ledger. The app looks the ledger up by this exact name, so it cannot be changed here. It is not a person or a business."
+    },
+    {
+      "file": "server/src/services/pushGuard.ts",
+      "line": "059e8ed943bbd5a5",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    },
+    {
+      "file": "server/src/services/supabaseSync.ts",
+      "line": "e205eec7d19e0422",
+      "why": "a common word that is also a Tally term: part of a column or field name, or ordinary prose. It is not a person or a business."
+    }
+  ]
+}
