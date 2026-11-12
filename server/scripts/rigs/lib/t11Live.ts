@@ -94,6 +94,10 @@ export async function census(l: Live): Promise<{ total: number; ours: number; mi
 /** safePush as production calls it (all three gates). */
 export const push = (l: Live, p: VoucherPayload, opts: { verify?: boolean } = {}): Promise<SafePushResult> => safePush(l.url, l.company, p, opts);
 
+/** How a voucher is found again: by number, except a Journal (the Journal type is numbered "None", so Tally keeps no number): by its narration. */
+export const byKey = (p: VoucherPayload): { number?: string; narration?: string; type: string } =>
+  p.voucherNumber && !/^journal$/i.test(p.voucherType) ? { number: p.voucherNumber, type: p.voucherType } : { narration: p.narration, type: p.voucherType };
+
 /** The payload that undoes `p`: same REMOTEID, number, date and type, action Delete. */
 export const asDelete = (p: VoucherPayload): VoucherPayload => ({ ...p, action: "Delete" } as VoucherPayload);
 export const asCancel = (p: VoucherPayload): VoucherPayload => ({ ...p, action: "Cancel" } as VoucherPayload);
@@ -103,7 +107,7 @@ export const asAlter = (p: VoucherPayload, patch: Partial<VoucherPayload> = {}):
 export async function remove(l: Live, p: VoucherPayload): Promise<{ ok: boolean; detail: string }> {
   try {
     const r = await push(l, asDelete(p), { verify: false });
-    const left = p.voucherNumber ? await countStored(l, p.date, { number: p.voucherNumber, type: p.voucherType }) : await countStored(l, p.date, { narration: p.narration, type: p.voucherType });
+    const left = await countStored(l, p.date, byKey(p));
     return { ok: r.ok && left === 0, detail: r.ok ? `${left} left` : (r.errors[0] ?? "delete refused").slice(0, 120) };
   } catch (e) { return { ok: false, detail: (e as Error).message.slice(0, 120) }; }
 }

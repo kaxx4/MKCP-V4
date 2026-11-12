@@ -46,11 +46,13 @@ export function compareToPayload(p: VoucherPayload, stored: string, opts: { part
   // ── Header ──────────────────────────────────────────────────────────────
   add("date", tallyDate(p.date), readTag(stored, "DATE"));
   add("voucher type", p.voucherType.toUpperCase(), readTag(stored, "VOUCHERTYPENAME").toUpperCase());
-  if (p.voucherNumber) add("voucher number", p.voucherNumber, readTag(stored, "VOUCHERNUMBER"));
+  /* The Journal voucher type is numbered "None": Tally keeps no number on it (operator-typed Journals have an empty VOUCHERNUMBER). */
+  if (p.voucherNumber && !(/^journal$/i.test(p.voucherType) && !readTag(stored, "VOUCHERNUMBER"))) add("voucher number", p.voucherNumber, readTag(stored, "VOUCHERNUMBER"));
   add("narration", p.narration ?? "", readTag(stored, "NARRATION"));
   add("reference", p.reference ?? "", readTag(stored, "REFERENCE"));
   if (p.referenceDate) add("reference date", tallyDate(p.referenceDate), readTag(stored, "REFERENCEDATE"));
-  if (!opts.partyOverwritten && p.partyLedgerName) add("party ledger", p.partyLedgerName, readTag(stored, "PARTYLEDGERNAME"));
+  /* Tally keeps no party on a Journal (operator-typed Journals have an empty PARTYLEDGERNAME), and replaces it on Payment/Receipt/Contra. */
+  if (!opts.partyOverwritten && !/^journal$/i.test(p.voucherType) && p.partyLedgerName) add("party ledger", p.partyLedgerName, readTag(stored, "PARTYLEDGERNAME"));
   const isInv = readTag(stored, "ISINVOICE");
   add("is invoice", yn(p.isInvoice), /^yes$/i.test(isInv) ? "Yes" : "No");
 

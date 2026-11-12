@@ -31,7 +31,7 @@ import { c23, c25, c26, c26b, c29 } from "./lib/t11Scenarios.js";
 import { stockJournalScenario } from "./lib/t11StockJournal.js";
 import { compareToPayload, failures, ledgerBrief } from "./lib/t11Check.js";
 import {
-  Recorder, census, countStored, dropItem, dropParty, freshMasters, indiaToday, makeItem, makeLive, makeParty,
+  Recorder, byKey, census, countStored, dropItem, dropParty, freshMasters, indiaToday, makeItem, makeLive, makeParty,
   push, readStored, remove, stampFrom, sweepDay, asAlter, asCancel, type Live,
 } from "./lib/t11Live.js";
 import { storedInventoryLines } from "../../src/services/safePush.js";
@@ -71,7 +71,7 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
     rec.check(label, r.ok === expectOk, detail);
     return r;
   };
-  const stored = async (p: VoucherPayload) => readStored(l, p.date, p.voucherNumber ? { number: p.voucherNumber, type: p.voucherType } : { narration: p.narration, type: p.voucherType });
+  const stored = async (p: VoucherPayload) => readStored(l, p.date, byKey(p));
   const fieldCheck = (label: string, p: VoucherPayload, v: string | null, partyOverwritten = false) => {
     if (!v) { rec.check(`${label}: every field we sent reads back as sent`, false, "the voucher could not be read"); return; }
     const res = compareToPayload(p, v, { partyOverwritten, derivedPostings: true });

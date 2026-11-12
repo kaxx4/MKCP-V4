@@ -20,7 +20,7 @@ import { preflight } from "./lib/t11.js";
 import { DUMMY_KIT, r2 } from "./lib/t11Kit.js";
 import { alteredCopy, moneyScenario, variant, type BillExpect, type MoneyCase } from "./lib/t11Money.js";
 import { compareToPayload, failures, ledgerBrief } from "./lib/t11Check.js";
-import { Recorder, census, countStored, dropItem, dropParty, freshMasters, indiaToday, makeItem, makeLive, makeParty, push, readLedgerFlags, readStored, remove, stampFrom, sweepDay, asCancel, type Live } from "./lib/t11Live.js";
+import { Recorder, byKey, census, countStored, dropItem, dropParty, freshMasters, indiaToday, makeItem, makeLive, makeParty, push, readLedgerFlags, readStored, remove, stampFrom, sweepDay, asCancel, type Live } from "./lib/t11Live.js";
 import { loadOpenBills } from "../../src/services/billSettlement.js";
 import { readTag, parseTallyAmount } from "../../src/services/xml.js";
 import { pull as pullAll, remoteIdGuesses } from "../find-stranded-test-vouchers.js";
@@ -56,7 +56,7 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
   const s = moneyScenario(stamp, day, kit, { tdsLedger, secondBank });
   const D = s.parties.debtor.name, C = s.parties.carrier.name, E = s.parties.expense.name, N = s.parties.plainDebtor.name;
 
-  const stored = (p: VoucherPayload) => readStored(l, p.date, { number: p.voucherNumber!, type: p.voucherType });
+  const stored = (p: VoucherPayload) => readStored(l, p.date, byKey(p));
   const send = async (label: string, p: VoucherPayload) => {
     const r = await push(l, p);
     made.track(p);
