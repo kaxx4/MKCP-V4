@@ -9,6 +9,7 @@
  *   npx tsx scripts/rigs/t11-money.ts --part receipts   [--out f.json] [--expect N]
  *   npx tsx scripts/rigs/t11-money.ts --part payments
  *   npx tsx scripts/rigs/t11-money.ts --part contras    (also Alter / Cancel / Delete of a Receipt, Payment, Contra)
+ *   npx tsx scripts/rigs/t11-money.ts --part modes      (D-M.197: the bank transfer modes the web sends, Cheque/UPI/NEFT/RTGS, spelling read back)
  *   npx tsx scripts/rigs/t11-money.ts --cleanup <stamp>
  *
  * Run from server/. Sandbox role and loopback are enforced by guardScriptWrites and the preflight; fake data only.
@@ -18,7 +19,7 @@ import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
 guardScriptWrites("rigs/t11-money");
 import { preflight } from "./lib/t11.js";
 import { DUMMY_KIT, r2 } from "./lib/t11Kit.js";
-import { alteredCopy, moneyScenario, variant, type BillExpect, type MoneyCase } from "./lib/t11Money.js";
+import { alteredCopy, moneyScenario, modeCases, variant, type BillExpect, type MoneyCase } from "./lib/t11Money.js";
 import { compareToPayload, failures, ledgerBrief } from "./lib/t11Check.js";
 import { Recorder, byKey, census, countStored, dropItem, dropParty, freshMasters, indiaToday, makeItem, makeLive, makeParty, push, readLedgerFlags, readStored, remove, stampFrom, sweepDay, asCancel, turn, TallyDownError, stopForTallyDown, gate, type Live } from "./lib/t11Live.js";
 import { loadOpenBills } from "../../src/services/billSettlement.js";
@@ -35,7 +36,7 @@ const CLEANUP = arg("--cleanup");
 const kit = DUMMY_KIT;
 const num = (s: string) => parseTallyAmount(s) ?? NaN;
 /** Checks expected from each part's first full run; -1 = not calibrated yet. */
-const EXPECTED: Record<string, number> = { receipts: 126, payments: 100, contras: -1 };
+const EXPECTED: Record<string, number> = { receipts: 126, payments: 100, contras: -1, modes: -1 };
 
 class Made {
   vouchers: VoucherPayload[] = []; parties: string[] = []; items: string[] = [];
@@ -106,7 +107,7 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
   };
 
   // ── ledgers and bills ───────────────────────────────────────────────────
-  const need = part === "receipts" ? [s.parties.debtor, s.parties.plainDebtor] : part === "payments" ? [s.parties.carrier, s.parties.expense] : [s.parties.debtor, s.parties.carrier];
+  const need = part === "receipts" ? [s.parties.debtor, s.parties.plainDebtor] : part === "payments" ? [s.parties.carrier, s.parties.expense] : [s.parties.debtor, s.parties.carrier];   // contras and modes
   for (const p of need) { const r = await makeParty(l, p); made.parties.push(p.name); rec.check(`ledger "${p.name.replace(/ZZ TEST /, "")}" made with the production builder`, r.ok, r.detail); }
   await freshMasters(l);
   const flag = async (name: string, want: boolean) => {
@@ -115,7 +116,7 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
   };
   if (part === "receipts") { await flag(D, true); await flag(N, false); }
   if (part === "payments") { await flag(C, true); await flag(E, false); }
-  if (part === "contras") { await flag(D, true); await flag(C, true); }
+  if (part === "contras" || part === "modes") { await flag(D, true); await flag(C, true); }
   for (const nm of [kit.cash, kit.bank]) { const f = await readLedgerFlags(l, nm); rec.note(`book ledger "${nm}": parent "${f?.parent}", bill-by-bill ${f?.billWise}`); }
 
   if (part === "receipts") {
@@ -141,6 +142,23 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
     for (const c of s.cases.filter((x) => x.kind === "payment")) await runCase(c);
     const open2 = await billsNow();
     rec.check("the expense ledger (not bill-by-bill) has no bill in Tally's open bills", !open2.some((x) => x.party === E));
+    return;
+  }
+
+  if (part === "modes") {
+    // Which spelling does Tally keep? Each stored bank allocation is read and its two strings are put on the record.
+    const seen: string[] = [];
+    for (const c of modeCases(stamp, day, kit, D, C)) {
+      await runCase(c);
+      const v = await stored(c.voucher);
+      const ba = v ? (v.match(/<BANKALLOCATIONS\.LIST>[\s\S]*?<\/BANKALLOCATIONS\.LIST>/)?.[0] ?? "") : "";
+      const sent = c.voucher.ledgerEntries.find((e) => e.bankAllocation)!.bankAllocation!;
+      const got = { type: readTag(ba, "TRANSACTIONTYPE"), mode: readTag(ba, "TRANSFERMODE"), no: readTag(ba, "INSTRUMENTNUMBER") };
+      seen.push(`${c.id}: sent type "${sent.transactionType}" mode "${sent.transferMode}" no "${sent.instrumentNumber}" -> stored type "${got.type}" mode "${got.mode}" no "${got.no}"`);
+      rec.check(`${c.id} the bank allocation reads back with the same spelling (mode "${sent.transferMode}")`,
+        !!ba && got.type === sent.transactionType && got.mode === sent.transferMode && got.no === sent.instrumentNumber, `stored type "${got.type}", mode "${got.mode}", number "${got.no}"`);
+    }
+    for (const line of seen) rec.note(`READ-BACK ${line}`);
     return;
   }
 
@@ -220,7 +238,7 @@ async function cleanup(l: Live): Promise<number> {
   const pf = await preflight();
   console.log(`  preflight ok (dummy is the only company open, ${pf.listMs} ms)`);
   if (CLEANUP) process.exit(await cleanup(makeLive(pf, indiaToday(), CLEANUP)));
-  if (!["receipts", "payments", "contras"].includes(PART)) { console.error(`usage: --part receipts|payments|contras   (got "${PART}")`); process.exit(2); }
+  if (!["receipts", "payments", "contras", "modes"].includes(PART)) { console.error(`usage: --part receipts|payments|contras|modes   (got "${PART}")`); process.exit(2); }
   const stamp = stampFrom();
   const l = makeLive(pf, indiaToday(), stamp);
   const expected = arg("--expect") ? Number(arg("--expect")) : EXPECTED[PART];

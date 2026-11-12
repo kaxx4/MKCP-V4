@@ -182,3 +182,28 @@ export function variant(p: VoucherPayload, tag: string): VoucherPayload {
   const number = `${p.voucherNumber}${tag}`;
   return { ...p, voucherNumber: number, remoteId: zzRemoteId(p.voucherType, number), narration: `${p.narration} ${tag}` } as VoucherPayload;
 }
+
+/**
+ * D-M.197: the transfer modes the web now sends (paymentMode.ts MODE_SHAPE, lane/money-entry): "Cheque", "UPI", "NEFT" and "RTGS",
+ * all under transaction type "Cheque/DD". One bank Receipt and one bank Payment per mode, no bill allocation (On Account), each with an
+ * instrument number of the shape the web gives that mode. The rig sends them and reads the bank allocation back to see which spelling
+ * Tally keeps. Pure data; fake data only.
+ */
+export const WEB_MODES: ReadonlyArray<{ mode: string; transactionType: string; instrument: (stamp: string, n: number) => string }> = [
+  { mode: "Cheque", transactionType: "Cheque/DD", instrument: (_s, n) => String(700100 + n).slice(-6) },
+  { mode: "UPI", transactionType: "Cheque/DD", instrument: (s, n) => `4${s}${String(n).padStart(5, "0")}`.slice(0, 12).padEnd(12, "0") },
+  { mode: "NEFT", transactionType: "Cheque/DD", instrument: (s, n) => `ZZBKN${s}${n}` },
+  { mode: "RTGS", transactionType: "Cheque/DD", instrument: (s, n) => `ZZBKR${s}${n}` },
+];
+
+export function modeCases(stamp: string, day: string, kit: Kit, debtor: string, carrier: string): MoneyCase[] {
+  const out: MoneyCase[] = [];
+  WEB_MODES.forEach((m, i) => {
+    const bankFor = (who: string, k: number): BankAllocation => ({ transactionType: m.transactionType, transferMode: m.mode, instrumentNumber: m.instrument(stamp, k), favouring: who });
+    out.push({ id: `W${i + 1}R`, kind: "receipt", label: `Receipt, On Account, bank, web mode "${m.mode}" under "${m.transactionType}"`,
+      voucher: receipt({ number: zzNumber(stamp, `W${i + 1}R`), date: day, narration: zzNarration(stamp, `W${i + 1}R ${m.mode}`), party: debtor, amount: 100 + i, into: kit.bank, bank: bankFor(debtor, i * 2 + 1) }) });
+    out.push({ id: `W${i + 1}P`, kind: "payment", label: `Payment, On Account, bank, web mode "${m.mode}" under "${m.transactionType}"`,
+      voucher: payment({ number: zzNumber(stamp, `W${i + 1}P`), date: day, narration: zzNarration(stamp, `W${i + 1}P ${m.mode}`), party: carrier, amount: 110 + i, from: kit.bank, bank: bankFor(carrier, i * 2 + 2) }) });
+  });
+  return out;
+}
