@@ -51,7 +51,7 @@ const kit = DUMMY_KIT;
 const num = (s: string) => parseTallyAmount(s) ?? NaN;
 
 /** Checks each part is expected to make, learned from its first full live run. -1 = not yet calibrated. */
-const EXPECTED: Record<string, number> = { c22: -1, c23: -1, c25: -1, c26: -1, c26b: -1, c29: -1 };
+const EXPECTED: Record<string, number> = { c22: 27, c23: 23, c25: 54, c26: 31, c26b: 23, c29: 29 };
 
 /** What a part made, so teardown can undo it whatever happens in the middle. */
 class Made {
@@ -65,8 +65,8 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
   const day = l.day, stamp = l.stamp;
   /** Push through safePush; record one check; track the voucher for teardown (even on a failed verify the books may hold it). */
   const send = async (label: string, p: VoucherPayload, expectOk = true) => {
+    made.track(p);   // before the push: if Tally accepts it and the read-back then fails, teardown still deletes it
     const r = await push(l, p);
-    made.track(p);
     const detail = r.ok ? `stage ${r.stage}` : `stage ${r.stage}: ${[...r.errors, ...r.differences].join(" | ").slice(0, 260)}`;
     rec.check(label, r.ok === expectOk, detail);
     return r;

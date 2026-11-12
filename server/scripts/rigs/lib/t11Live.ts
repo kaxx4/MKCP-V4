@@ -108,7 +108,8 @@ export async function remove(l: Live, p: VoucherPayload): Promise<{ ok: boolean;
   try {
     const r = await push(l, asDelete(p), { verify: false });
     const left = await countStored(l, p.date, byKey(p));
-    return { ok: r.ok && left === 0, detail: r.ok ? `${left} left` : (r.errors[0] ?? "delete refused").slice(0, 120) };
+    /* Judge by the books (G7/P1): gone is gone, whether or not Tally had it to delete. */
+    return { ok: left === 0, detail: r.ok ? `${left} left` : `${left} left (delete said: ${(r.errors[0] ?? "refused").slice(0, 90)})` };
   } catch (e) { return { ok: false, detail: (e as Error).message.slice(0, 120) }; }
 }
 

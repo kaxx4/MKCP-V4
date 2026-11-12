@@ -35,7 +35,7 @@ const CLEANUP = arg("--cleanup");
 const kit = DUMMY_KIT;
 const num = (s: string) => parseTallyAmount(s) ?? NaN;
 /** Checks expected from each part's first full run; -1 = not calibrated yet. */
-const EXPECTED: Record<string, number> = { receipts: -1, payments: -1, contras: -1 };
+const EXPECTED: Record<string, number> = { receipts: 126, payments: 100, contras: -1 };
 
 class Made {
   vouchers: VoucherPayload[] = []; parties: string[] = []; items: string[] = [];
@@ -58,8 +58,8 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
 
   const stored = (p: VoucherPayload) => readStored(l, p.date, byKey(p));
   const send = async (label: string, p: VoucherPayload) => {
+    made.track(p);   // before the push: if Tally accepts it and the read-back then fails, teardown still deletes it
     const r = await push(l, p);
-    made.track(p);
     rec.check(label, r.ok, r.ok ? `stage ${r.stage}${r.differences.length ? `; differences: ${r.differences.join(" | ").slice(0, 160)}` : ""}` : `stage ${r.stage}: ${[...r.errors, ...r.differences].join(" | ").slice(0, 300)}`);
     return r;
   };
@@ -152,7 +152,7 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
       const A = base, B = variant(base, "B");
       await send(`${what} life A created`, A);
       const alt = alteredCopy(A, 190, `ZZCHANGED${stamp}`);
-      const ra = await push(l, alt); made.track(alt);
+      made.track(alt); const ra = await push(l, alt);
       rec.check(`${what} ALTER: amount 150 to 190, instrument number and narration changed, same REMOTEID`, ra.ok, ra.ok ? `stage ${ra.stage}` : [...ra.errors, ...ra.differences].join(" | ").slice(0, 300));
       const va = await stored(alt);
       fieldCheck(`${what} ALTER`, alt, va, over);
