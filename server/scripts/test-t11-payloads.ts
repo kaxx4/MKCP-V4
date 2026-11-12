@@ -189,16 +189,21 @@ console.log("\nC29 freight bill under reverse charge:");
 {
   const s = c29(STAMP, DAY, kit);
   accepted("C29 the freight bill", s.bill);
-  accepted("C29 the RCM tax journal", s.tax);
+  accepted("C29 the RCM increase-in-liability journal", s.tax);
+  accepted("C29 the RCM decrease-in-liability journal", s.taxDecrease);
   const open = [...fixtureOpenBills(), { name: s.billNo, party: s.parties.transport.name, date: DAY.replace(/-/g, ""), closing: s.amount, outstanding: s.amount, creditPeriod: "" }];
   accepted("C29 the payment of the bill (Agst Ref)", s.pay, { openBills: open });
   ok("C29 the bill has no GST line and no stock (the tax is booked by the journal)", s.bill.ledgerEntries.length === 2 && !s.bill.inventoryEntries?.length);
   ok("C29 Cr carrier with a New Ref named by his bill, Dr FREIGHT ( UNDER RCM ) for the net",
     s.bill.ledgerEntries[0].isDeemedPositive === false && s.bill.ledgerEntries[0].billAllocations?.[0].billType === "New Ref"
     && s.bill.ledgerEntries[1].ledgerName === kit.freightRcm && s.bill.ledgerEntries[1].isDeemedPositive === true);
-  const jr = s.tax.ledgerEntries;
-  const sum = (dr: boolean) => r2(jr.filter((e) => e.isDeemedPositive === dr).reduce((a, e) => a + e.amount, 0));
-  ok("C29 the journal balances and books tax at 5 percent of the bill", sum(true) === sum(false) && s.rcmTax === 2075, `${sum(true)} / ${sum(false)}`);
+  const bal = (j: VoucherPayload) => { const t = (dr: boolean) => r2(j.ledgerEntries.filter((e) => e.isDeemedPositive === dr).reduce((x, e) => x + e.amount, 0)); return [t(true), t(false)]; };
+  const [i1, i2] = bal(s.tax), [d1, d2] = bal(s.taxDecrease);
+  ok("C29 each journal balances; the increase books 5 percent of the bill as OUTPUT tax", i1 === i2 && d1 === d2 && i1 === s.rcmTax && s.rcmTax === 2075, `${i1}/${i2} ${d1}/${d2}`);
+  ok("C29 the increase is Dr GST UNDER RCM, Cr OUTPUT CGST and SGST; the decrease is Dr INPUT CGST and SGST, Cr GST UNDER RCM",
+    s.tax.ledgerEntries[0].ledgerName === kit.rcmAsset && s.tax.ledgerEntries[0].isDeemedPositive && s.tax.ledgerEntries.slice(1).every((e) => /^OUTPUT [CS]GST$/.test(e.ledgerName) && !e.isDeemedPositive)
+    && s.taxDecrease.ledgerEntries.slice(0, 2).every((e) => /^INPUT [CS]GST$/.test(e.ledgerName) && e.isDeemedPositive) && s.taxDecrease.ledgerEntries[2].ledgerName === kit.rcmAsset && !s.taxDecrease.ledgerEntries[2].isDeemedPositive);
+  ok("C29 the party of each journal is its first debit ledger (the Journal convention)", s.tax.partyLedgerName === kit.rcmAsset && s.taxDecrease.partyLedgerName === kit.inCgst);
   ok("C29 the payment settles the bill against its Agst Ref", s.pay.ledgerEntries[0].billAllocations?.[0].billType === "Agst Ref" && s.pay.ledgerEntries[0].billAllocations?.[0].name === s.billNo);
 }
 
@@ -288,6 +293,7 @@ console.log("\nField-by-field comparer (t11Check.ts):");
   const xml = buildVoucherImportXml(M.company, inv, M);
   const same = compareToPayload(inv, xml);
   ok("the comparer finds nothing to complain about on the voucher our own builder writes", failures(same).length === 0, failures(same).join(" | "));
+  ok("live mode also expects the sales/purchase posting line Tally derives from the stock lines (our own import XML has none, so it is named missing)", failures(compareToPayload(inv, xml, { derivedPostings: true })).some((f) => /posting ledger/.test(f)));
   ok("it checks many fields (date, type, number, narration, lines, sides, bills, stock, godown, batch, accounting)", same.length >= 40, `${same.length} checks`);
   const bad = (re: RegExp, to: string) => failures(compareToPayload(inv, xml.replace(re, to)));
   ok("it names a narration Tally dropped", bad(/<NARRATION>[^<]*<\/NARRATION>/, "").some((f) => /^narration/.test(f)));

@@ -176,3 +176,9 @@ export function alteredCopy(p: VoucherPayload, newAmount: number, newInstrument:
     })),
   } as VoucherPayload;
 }
+
+/** The same voucher under a different number (so two of one kind can stand side by side): new number, REMOTEID and narration tag. */
+export function variant(p: VoucherPayload, tag: string): VoucherPayload {
+  const number = `${p.voucherNumber}${tag}`;
+  return { ...p, voucherNumber: number, remoteId: zzRemoteId(p.voucherType, number), narration: `${p.narration} ${tag}` } as VoucherPayload;
+}

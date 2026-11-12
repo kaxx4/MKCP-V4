@@ -218,21 +218,26 @@ export function buildBillPayment(o: { kit: Kit; number: string; date: string; na
 }
 
 /**
- * The reverse-charge tax on a freight bill, booked as the house books it (journal narration
- * "BEING GST UNDER RCM"): the tax is booked as OUTPUT tax payable and the same amount as INPUT credit
- * through the RCM holding ledger, so the net on the books is nil and both tax heads show in the returns.
- * `rate` is the freight GST rate (5 for goods transport).
+ * The reverse-charge tax on a freight bill, booked the way the house books it. Read off 18 operator-typed
+ * Journals narrated "BEING GST UNDER RCM" on the dummy (12-Nov-2026): TWO journals per bill, each balanced.
+ *   increase (TAXADJUSTMENT "Increase in Tax Liability"): Dr GST UNDER RCM for the whole tax, Cr OUTPUT CGST, Cr OUTPUT SGST
+ *   decrease (TAXADJUSTMENT "Decrease in Tax Liability"): Dr INPUT CGST, Dr INPUT SGST, Cr GST UNDER RCM for the whole tax
+ * so the holding ledger nets to nil and the tax shows as both output and input. `rate` is the freight GST rate
+ * (5 for goods transport), split half and half. The agent's pusher has no way to send the TAXADJUSTMENT flag, so
+ * the rig pushes the lines and the rig's report says plainly that the flag is not sent.
  */
-export function buildRcmJournal(o: { kit: Kit; number: string; date: string; narration: string; taxable: number; rate: number }): VoucherPayload {
+export function buildRcmJournals(o: { kit: Kit; numberIncrease: string; numberDecrease: string; date: string; narration: string; taxable: number; rate: number }): { increase: VoucherPayload; decrease: VoucherPayload; half: number; both: number } {
   const half = r2(o.taxable * o.rate / 200);
   const both = r2(half * 2);
   const L = (name: string, amount: number, dr: boolean): LedgerEntry => ({ ledgerName: name, amount, isDeemedPositive: dr, isPartyLedger: false });
+  const journal = (number: string, lines: LedgerEntry[], tag: string): VoucherPayload => ({
+    voucherType: "Journal", date: o.date, voucherNumber: number, isInvoice: false,
+    remoteId: zzRemoteId("JOURNAL", number), narration: `${o.narration} (${tag})`, partyLedgerName: lines.find((l) => l.isDeemedPositive)!.ledgerName,
+    ledgerEntries: lines,
+  } as VoucherPayload);
   return {
-    voucherType: "Journal", date: o.date, voucherNumber: o.number, isInvoice: false,
-    remoteId: zzRemoteId("JOURNAL", o.number), narration: o.narration, partyLedgerName: o.kit.rcmAsset,
-    ledgerEntries: [
-      L(o.kit.rcmAsset, both, true), L(o.kit.outCgst, half, false), L(o.kit.outSgst, half, false),
-      L(o.kit.inCgst, half, true), L(o.kit.inSgst, half, true), L(o.kit.rcmAsset, both, false),
-    ],
-  } as VoucherPayload;
+    increase: journal(o.numberIncrease, [L(o.kit.rcmAsset, both, true), L(o.kit.outCgst, half, false), L(o.kit.outSgst, half, false)], "increase"),
+    decrease: journal(o.numberDecrease, [L(o.kit.inCgst, half, true), L(o.kit.inSgst, half, true), L(o.kit.rcmAsset, both, false)], "decrease"),
+    half, both,
+  };
 }

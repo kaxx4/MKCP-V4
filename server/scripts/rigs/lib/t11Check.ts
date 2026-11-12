@@ -12,7 +12,7 @@
  * tag names), a hand-mutated copy, and an empty voucher.
  */
 import { readTag, parseTallyAmount, tallyDate } from "../../../src/services/xml.js";
-import { storedLedgerLines } from "../../../src/services/safePush.js";
+import { storedLedgerLines, storedInventoryLines } from "../../../src/services/safePush.js";
 import type { LedgerEntry, InventoryEntry, VoucherPayload } from "../../../src/types.js";
 
 export interface FieldResult { field: string; sent: string; stored: string; ok: boolean }
@@ -36,7 +36,9 @@ const qtyOf = (s: string): number => num(s);
  * Compare. `expectEmptyHeaderParty` is for Payment, Receipt and Contra, where Tally replaces the header
  * party with the bank or cash ledger (PARTY_OVERWRITTEN in pushGuard).
  */
-export function compareToPayload(p: VoucherPayload, stored: string, opts: { partyOverwritten?: boolean } = {}): FieldResult[] {
+const r2c = (n: number): number => Math.round(n * 100) / 100;
+
+export function compareToPayload(p: VoucherPayload, stored: string, opts: { partyOverwritten?: boolean; derivedPostings?: boolean } = {}): FieldResult[] {
   const out: FieldResult[] = [];
   const add = (field: string, sent: string, got: string, ok?: boolean) =>
     out.push({ field, sent, stored: got, ok: ok ?? sameText(sent, got) });
@@ -56,7 +58,21 @@ export function compareToPayload(p: VoucherPayload, stored: string, opts: { part
   const lines = storedLedgerLines(stored);
   const spent = new Set<number>();
   const sent = (p.ledgerEntries ?? []) as LedgerEntry[];
-  add("ledger line count", String(sent.length), String(lines.filter((x) => readTag(x, "LEDGERNAME")).length));
+  /* Tally also lists, among the ledger lines, the posting each stock line makes to its sales/purchase ledger (the
+     accounting allocation), merged by ledger: those are expected on top of what we sent, and must carry the stock total. */
+  const postings = new Map<string, number>();
+  for (const il of (p.inventoryEntries ?? []) as InventoryEntry[]) {
+    if (!il.salesLedgerName) continue;
+    postings.set(il.salesLedgerName, (postings.get(il.salesLedgerName) ?? 0) + (il.isDeemedPositive ? -Math.abs(il.amount) : Math.abs(il.amount)));
+  }
+  const derived = opts.derivedPostings ? [...postings.keys()].filter((n) => !sent.some((e) => e.ledgerName === n)) : [];
+  add("ledger line count", String(sent.length + derived.length), String(lines.filter((x) => readTag(x, "LEDGERNAME")).length));
+  for (const n of derived) {
+    const i = lines.findIndex((x, k) => !spent.has(k) && readTag(x, "LEDGERNAME") === n);
+    if (i < 0) { add(`posting ledger "${n}" (from the stock lines)`, "present", "NOT STORED", false); continue; }
+    spent.add(i);
+    add(`posting ledger "${n}" amount (the stock total)`, String(r2c(postings.get(n)!)), String(num(readTag(lines[i], "AMOUNT"))), eqNum(num(readTag(lines[i], "AMOUNT")), postings.get(n)!));
+  }
   for (const e of sent) {
     const want = signedOf(e);
     let idx = lines.findIndex((x, i) => !spent.has(i) && readTag(x, "LEDGERNAME") === e.ledgerName && eqNum(num(readTag(x, "AMOUNT")), want));
@@ -94,7 +110,7 @@ export function compareToPayload(p: VoucherPayload, stored: string, opts: { part
   }
 
   // ── Stock lines ─────────────────────────────────────────────────────────
-  const inv = blocks(stored, "ALLINVENTORYENTRIES\\.LIST");
+  const inv = storedInventoryLines(stored);
   const invSent = (p.inventoryEntries ?? []) as InventoryEntry[];
   if (invSent.length || inv.length) add("stock line count", String(invSent.length), String(inv.length));
   const ispent = new Set<number>();
@@ -127,3 +143,11 @@ export function compareToPayload(p: VoucherPayload, stored: string, opts: { part
 
 /** Only the failures, one line each. */
 export const failures = (r: FieldResult[]): string[] => r.filter((x) => !x.ok).map((x) => `${x.field}: sent "${x.sent}", stored "${x.stored}"`);
+
+/** One line per stored ledger line: name, side, signed amount. For the note a failed comparison leaves in the log (books ledgers only; party names are masked). */
+export function ledgerBrief(stored: string): string {
+  return storedLedgerLines(stored).map((b) => {
+    const n = readTag(b, "LEDGERNAME");
+    return `${/^ZZ TEST /.test(n) ? n.replace(/\d+$/, "#") : n} ${readTag(b, "ISDEEMEDPOSITIVE") === "Yes" ? "Dr" : "Cr"} ${readTag(b, "AMOUNT")}`;
+  }).join(" ; ");
+}

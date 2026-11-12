@@ -29,11 +29,12 @@ import { preflight } from "./lib/t11.js";
 import { DUMMY_KIT, r2, saleTotals, zzItems, zzParties } from "./lib/t11Kit.js";
 import { c23, c25, c26, c26b, c29 } from "./lib/t11Scenarios.js";
 import { stockJournalScenario } from "./lib/t11StockJournal.js";
-import { compareToPayload, failures } from "./lib/t11Check.js";
+import { compareToPayload, failures, ledgerBrief } from "./lib/t11Check.js";
 import {
   Recorder, census, countStored, dropItem, dropParty, freshMasters, indiaToday, makeItem, makeLive, makeParty,
   push, readStored, remove, stampFrom, sweepDay, asAlter, asCancel, type Live,
 } from "./lib/t11Live.js";
+import { storedInventoryLines } from "../../src/services/safePush.js";
 import { loadOpenBills } from "../../src/services/billSettlement.js";
 import { readTag, parseTallyAmount } from "../../src/services/xml.js";
 import { gstRateFor, hsnFor } from "../../src/services/tallyMasters.js";
@@ -73,9 +74,10 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
   const stored = async (p: VoucherPayload) => readStored(l, p.date, p.voucherNumber ? { number: p.voucherNumber, type: p.voucherType } : { narration: p.narration, type: p.voucherType });
   const fieldCheck = (label: string, p: VoucherPayload, v: string | null, partyOverwritten = false) => {
     if (!v) { rec.check(`${label}: every field we sent reads back as sent`, false, "the voucher could not be read"); return; }
-    const res = compareToPayload(p, v, { partyOverwritten });
+    const res = compareToPayload(p, v, { partyOverwritten, derivedPostings: true });
     const bad = failures(res);
     rec.check(`${label}: every field we sent reads back as sent (${res.length} fields)`, bad.length === 0, bad.slice(0, 6).join(" | "));
+    if (bad.length) rec.note(`${label} stored ledger lines: ${ledgerBrief(v)}`);
   };
 
   // ── C23 ──────────────────────────────────────────────────────────────────
@@ -164,7 +166,7 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
     const nv = await stored(s.note);
     const noteQty = new Map<string, number>();
     for (const i of s.note.inventoryEntries!) noteQty.set(i.stockItemName, (noteQty.get(i.stockItemName) ?? 0) + i.quantity);
-    rec.check("C26 the note reads back with 6 stock lines", !!nv && (nv.match(/<STOCKITEMNAME>/g) ?? []).length === 6, nv ? `${(nv.match(/<STOCKITEMNAME>/g) ?? []).length}` : "no read");
+    rec.check("C26 the note reads back with 6 stock lines", !!nv && storedInventoryLines(nv).length === 6, nv ? `${storedInventoryLines(nv).length}` : "no read");
     const rl = await send("C26 Split: the note becomes the ledger bill (lines 1 and 2), same voucher", s.ledgerBill);
     rec.check("C26 ledger bill has no differences", rl.differences.length === 0, rl.differences.join(" | ").slice(0, 160));
     const lv = await stored(s.ledgerBill);
@@ -234,16 +236,23 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
     let open = await loadOpenBills(l.url, l.company);
     const mine = open.find((b) => b.name === s.billNo && b.party === s.parties.transport.name);
     rec.check("C29 the bill is open for the carrier as a payable of the full amount", !!mine && Math.abs(mine.closing - s.amount) < 0.011 && mine.closing > 0, mine ? `closing ${mine.closing}` : "not among the open bills");
-    const rj = await send("C29 the reverse-charge tax journal is pushed (BEING GST UNDER RCM)", s.tax);
-    rec.check("C29 the journal read-back has no differences", rj.differences.length === 0, rj.differences.join(" | ").slice(0, 160));
-    const vj = await stored(s.tax);
-    fieldCheck("C29 RCM journal", s.tax, vj);
     const half = r2(s.rcmTax / 2);
-    const jl = (vj ?? "").match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/g) ?? [];
-    const amt = (name: string, side: string) => jl.filter((b) => readTag(b, "LEDGERNAME") === name && readTag(b, "ISDEEMEDPOSITIVE") === side).map((b) => Math.abs(num(readTag(b, "AMOUNT")))).reduce((a, x) => a + x, 0);
-    rec.check(`C29 the journal books the tax: ${s.rcmTax} (5 percent of ${s.amount}) on each side, CGST ${half} and SGST ${half}`,
-      Math.abs(amt(kit.outCgst, "No") - half) < 0.011 && Math.abs(amt(kit.outSgst, "No") - half) < 0.011 && Math.abs(amt(kit.inCgst, "Yes") - half) < 0.011 && Math.abs(amt(kit.inSgst, "Yes") - half) < 0.011,
-      `out ${amt(kit.outCgst, "No")}/${amt(kit.outSgst, "No")}, in ${amt(kit.inCgst, "Yes")}/${amt(kit.inSgst, "Yes")}`);
+    const tally = async (label: string, p: VoucherPayload, outs: [string, string][], ins: [string, string, number][]) => {
+      const rj = await send(`C29 ${label} journal is pushed (BEING GST UNDER RCM)`, p);
+      rec.check(`C29 ${label} journal read-back has no differences`, rj.differences.length === 0, rj.differences.join(" | ").slice(0, 160));
+      const vj = await stored(p);
+      fieldCheck(`C29 ${label} journal`, p, vj);
+      const jl = (vj ?? "").match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/g) ?? [];
+      const amt = (name: string, side: string) => jl.filter((b) => readTag(b, "LEDGERNAME") === name && readTag(b, "ISDEEMEDPOSITIVE") === side).map((b) => Math.abs(num(readTag(b, "AMOUNT")))).reduce((a, x) => a + x, 0);
+      rec.check(`C29 ${label} journal books the tax right: ${[...outs, ...ins.map((i) => [i[0], i[1]] as [string, string])].map(([n, sd]) => `${n} ${sd === "Yes" ? "Dr" : "Cr"}`).join(", ")}`,
+        outs.every(([n, sd]) => Math.abs(amt(n, sd) - half) < 0.011) && ins.every(([n, sd, v]) => Math.abs(amt(n, sd) - v) < 0.011),
+        [...outs.map(([n, sd]) => `${n} ${amt(n, sd)}`), ...ins.map(([n, sd]) => `${n} ${amt(n, sd)}`)].join(", "));
+      return vj;
+    };
+    const vInc = await tally("increase-in-liability", s.tax, [[kit.outCgst, "No"], [kit.outSgst, "No"]], [[kit.rcmAsset, "Yes", s.rcmTax]]);
+    const vDec = await tally("decrease-in-liability", s.taxDecrease, [[kit.inCgst, "Yes"], [kit.inSgst, "Yes"]], [[kit.rcmAsset, "No", s.rcmTax]]);
+    const rcmNet = (v: string | null) => (v ?? "").match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/g)?.filter((b) => readTag(b, "LEDGERNAME") === kit.rcmAsset).reduce((a, b) => a + num(readTag(b, "AMOUNT")), 0) ?? NaN;
+    rec.check("C29 the GST UNDER RCM holding ledger nets to nil across the two journals", Math.abs(r2(rcmNet(vInc) + rcmNet(vDec))) < 0.005, `${rcmNet(vInc)} + ${rcmNet(vDec)}`);
     const rp = await send("C29 the payment of the freight bill is pushed (Dr carrier against the bill, Cr Cash)", s.pay);
     rec.check("C29 the payment read-back has no differences", rp.differences.length === 0, rp.differences.join(" | ").slice(0, 160));
     const vp = await stored(s.pay);
@@ -251,7 +260,7 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
     open = await loadOpenBills(l.url, l.company);
     const left = open.find((b) => b.name === s.billNo && b.party === s.parties.transport.name);
     rec.check("C29 the bill is settled: no longer open for the carrier", !left || Math.abs(left.closing) < 0.011, left ? `still ${left.closing}` : "gone from the open bills");
-    rec.check("C29 three vouchers of this run stand", (await census(l)).mine === 3);
+    rec.check("C29 four vouchers of this run stand (bill, two journals, payment)", (await census(l)).mine === 4);
     return;
   }
 

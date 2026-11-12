@@ -13,7 +13,7 @@
  */
 import type { VoucherPayload } from "../../../src/types.js";
 import {
-  buildBillPayment, buildFreightBill, buildPurchase, buildRcmJournal, buildSale, r2, saleTotals,
+  buildBillPayment, buildFreightBill, buildPurchase, buildRcmJournals, buildSale, r2, saleTotals,
   zzItems, zzNarration, zzNumber, zzParties, zzRemoteId, type Kit, type Line, type ZzItem, type ZzParty,
 } from "./t11Kit.js";
 
@@ -126,9 +126,9 @@ export function c29(stamp: string, day: string, kit: Kit) {
   const amount = 41500;
   const billNo = `ZZB${stamp}`;
   const bill = buildFreightBill({ kit, number: zzNumber(stamp, "F1"), date: day, narration: zzNarration(stamp, "freight bill under RCM"), carrier: parties.transport, billNo, amount });
-  const tax = buildRcmJournal({ kit, number: zzNumber(stamp, "F2"), date: day, narration: zzNarration(stamp, "BEING GST UNDER RCM"), taxable: amount, rate: 5 });
+  const rcm = buildRcmJournals({ kit, numberIncrease: zzNumber(stamp, "F2"), numberDecrease: zzNumber(stamp, "F4"), date: day, narration: zzNarration(stamp, "BEING GST UNDER RCM"), taxable: amount, rate: 5 });
   const pay = buildBillPayment({ kit, number: zzNumber(stamp, "F3"), date: day, narration: zzNarration(stamp, "freight bill paid"), party: parties.transport, billName: billNo, amount });
-  return { parties, bill, tax, pay, billNo, amount, rcmTax: r2(amount * 5 / 100) };
+  return { parties, bill, tax: rcm.increase, taxDecrease: rcm.decrease, pay, billNo, amount, rcmTax: r2(amount * 5 / 100) };
 }
 
 export { saleTotals };

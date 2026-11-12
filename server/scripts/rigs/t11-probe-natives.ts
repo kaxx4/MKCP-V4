@@ -32,8 +32,15 @@ const max = Number(process.argv[4] ?? 2);
   const mask = (s: string) => s.replace(/<(PARTYLEDGERNAME|PARTYNAME|PARTYMAILINGNAME|BASICBUYERNAME|CONSIGNEEMAILINGNAME|PARTYGSTIN|CONSIGNEEGSTIN|GSTIN|ADDRESS|BASICBUYERADDRESS|GUID|REMOTEID|VCHKEY|IRN\w*|EWAY\w*)>([^<]+)</g, "<$1>***<");
   for (const v of vs.slice(0, max)) {
     const tags = [...new Set([...v.matchAll(/<([A-Z0-9_.]+)[ >]/g)].map((m) => m[1]))].filter((t) => !/^(\/)/.test(t));
-    console.log(`\n--- tags (${tags.length}): ${tags.join(" ")}`);
-    console.log(mask(v.replace(/\s{2,}/g, " ")).slice(0, 6000));
+    console.log(`\n--- voucher (${tags.length} distinct tags)`);
+    const head = v.replace(/<(ALLLEDGERENTRIES|LEDGERENTRIES|ALLINVENTORYENTRIES|INVENTORYENTRIESIN|INVENTORYENTRIESOUT)\.LIST>[\s\S]*?<\/\1\.LIST>/g, "");
+    const filled = [...head.matchAll(/<([A-Z0-9_]+)>([^<]+)<\/\1>/g)].map((m) => `${m[1]}=${m[2].trim()}`).filter((s) => !/^(GUID|REMOTEALTGUID|VCHKEY|CMPGSTIN|ENTEREDBY|VCHSTATUSDATE|ALTERID|MASTERID|VOUCHERKEY|UPDATEDDATETIME)=/.test(s));
+    console.log(`non-empty scalars: ${mask(filled.join(" | ").replace(/&#4;\s*/g, ""))}`);
+    for (const blk of v.matchAll(/<(ALLLEDGERENTRIES|LEDGERENTRIES|ALLINVENTORYENTRIES|INVENTORYENTRIESIN|INVENTORYENTRIESOUT)\.LIST>([\s\S]*?)<\/\1\.LIST>/g)) {
+      const fl = [...blk[2].matchAll(/<([A-Z0-9_]+)>([^<]+)<\/\1>/g)].map((m) => `${m[1]}=${m[2].trim()}`);
+      const nested = [...new Set([...blk[2].matchAll(/<([A-Z0-9_]+\.LIST)[ >]/g)].map((m) => m[1]))];
+      console.log(`  ${blk[1]}: ${mask(fl.join(" | ").replace(/&#4;\s*/g, ""))}${nested.length ? `\n     nested lists: ${nested.join(" ")}` : ""}`);
+    }
   }
   process.exit(0);
 })().catch((e) => { console.error(`FAILED: ${(e as Error).message}`); process.exit(2); });

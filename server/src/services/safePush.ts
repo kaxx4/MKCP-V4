@@ -204,7 +204,7 @@ export function diffStored(p: VoucherPayload, v: string): string[] {
     }
   }
 
-  const inv = listOf(v, "ALLINVENTORYENTRIES\\.LIST");
+  const inv = storedInventoryLines(v);
   const sent = p.inventoryEntries ?? [];
   if (inv.length !== sent.length) out.push(`stock lines: sent ${sent.length}, stored ${inv.length}`);
   // Consume each stored line at most once. The same item legitimately appears
@@ -310,6 +310,21 @@ export const sameVoucherType = (a: string | undefined, b: string | undefined): b
  * double-counts (repo CLAUDE.md, "Read ALLLEDGERENTRIES.LIST alone"). diffStored reads both lists together; this is
  * the stricter reading used to match a party and count lines.
  */
+/**
+ * The real stock lines of a stored voucher. ALLINVENTORYENTRIES.LIST when it holds anything (every invoice); else the
+ * Stock Journal's two lists, INVENTORYENTRIESIN.LIST and INVENTORYENTRIESOUT.LIST (the spellings the Import uses; a
+ * Stock Journal read back may name them INVENTORYENTRIES.IN.LIST / INVENTORYENTRIES.OUT.LIST, so both are accepted).
+ * Never both families together, so a line is never counted twice.
+ */
+export function storedInventoryLines(v: string): string[] {
+  const all = listOf(v, "ALLINVENTORYENTRIES\\.LIST");
+  if (all.length) return all;
+  return [
+    ...listOf(v, "INVENTORYENTRIESIN\\.LIST"), ...listOf(v, "INVENTORYENTRIESOUT\\.LIST"),
+    ...listOf(v, "INVENTORYENTRIES\\.IN\\.LIST"), ...listOf(v, "INVENTORYENTRIES\\.OUT\\.LIST"),
+  ];
+}
+
 export function storedLedgerLines(v: string): string[] {
   const all = listOf(v, "ALLLEDGERENTRIES\\.LIST");
   return all.length ? all : listOf(v, "LEDGERENTRIES\\.LIST");

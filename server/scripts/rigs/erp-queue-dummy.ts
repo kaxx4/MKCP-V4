@@ -38,6 +38,8 @@ const TALLY_URL = process.env.TALLY_URL || "http://localhost:9000";
 const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : null; };
 const OUT = arg("--out");
 const JOBS = Number(arg("--jobs") ?? 60);
+/** T11: skip the four Sales steps (H1/M1, D21). They take a REAL debtor ledger from the dummy as the voucher's party, which the tallycheck lane's rule forbids ("no real ledger as party"). Everything else, H-14 included, runs. */
+const NO_SALES = process.argv.includes("--no-sales");
 const CHILD = arg("--child");             // "after-accept" | "before-send": a boot that dies mid-push
 const JOURNAL = arg("--journal") ?? join(tmpdir(), `erp-queue-dummy-${Date.now()}.jsonl`);
 const company = practiceCompany();
@@ -232,6 +234,8 @@ async function main() {
     await R2.runOnce(5);
     step("D4 an uncertain job never retries itself", (await job(k2.id)).state === "uncertain" && (await inTally(k2.p)) === 0);
 
+    if (NO_SALES) step("H1/M1/D21 Sales steps skipped by --no-sales (they use a real debtor ledger as the party)", true, "not run");
+    else {
     // H1 and M1 with Sales: payload "Sales", master "SALES"
     const s1 = await enqueueSale(1);
     await R2.runOnce(1);
@@ -266,6 +270,7 @@ async function main() {
     const r4 = await SR.processJob({ ...rc, resend_of: s1.id });
     step("H1 D21 a resend of a Sales job that landed reads Tally first, finds it once, and does not push again",
       rc?.id === s4.id && r4.outcome === "succeeded" && before === 1 && (await inTally(s1.p)) === 1, r4.detail);
+    }
   } catch (e) {
     step("the run finished without an error", false, (e as Error).message);
   } finally {
