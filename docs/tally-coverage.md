@@ -72,6 +72,7 @@ from Tally and compares it with what was sent; the live rigs run it on every vou
 | M2 | Stock item | yes | builder exists, not wired | yes | `:402, 484, 508` | `test-t11-payloads` | `test-batch04-dummy` (C14); T11 C22, C23 | Alter not wired, not tested |
 | M3 | Unit | yes | builder exists, not wired | yes | `:422, 515, 530` | - | `test-batch04-dummy` (C14) | Alter not wired |
 | M4 | Godown | yes | builder exists, not wired | yes | `:431, 540, 548` | - | `test-batch04-dummy` (C14) | Alter not wired |
+| M6 | New item / new party from a queue job (`new_item`, `new_party`) | yes, through M1/M2/M3 builders | - | no (the rig tears down by name) | `src/services/masterJobs.ts`, `erpJobAgent.ts` | `test-master-jobs` (59) | `rigs/master-jobs-dummy` (21 of 21, 13-Nov) | The sandbox claim rule does not hand out master jobs, so the real queue path is not run on the dummy |
 | M5 | Stock group, ledger group, voucher type, cost centre, currency | not built | - | - | - | - | - | The agent never writes these; reads only (section 3) |
 
 ## 3. Reads (everything the agent pulls)
@@ -170,11 +171,9 @@ and bank allocations read back, and Tally's own open bills read afterwards. `ISB
 
 Recorded as D-T11.n in `rebuild-plan/decisions-log.md`.
 
-## 8. Status at the end of the lane (12-Nov-2026)
+## 8. Status at the end of the lane (13-Nov-2026)
 
-Proven on the dummy: C22, C23, C25, C26, C26b, C29, H-14 (without the four Sales steps), the money receipts and
-payments matrix, B1 to B5 and B7. Offline: 512 checks pass. Not finished: the contras part with Alter, Cancel and
-Delete of a Receipt, Payment and Contra, because TallyPrime stopped during it. Not run: `t11-pull-fields`, B6
-`--compare`, B9 as a script, fidelity for the non-Sales types. Left in the dummy: contras K1 to K3, possibly one
-Receipt, and two ZZ TEST ledgers, all with stamp 123649 (clean with `t11-money.ts --cleanup 123649`).
+Proven on the dummy: C22, C23, C25, C26, C26b, C29 (now with the reverse-charge flag, 29 checks), H-14 (without the four Sales steps), the money receipts, payments and contras matrix (contras 61 checks including Alter, Cancel and Delete), the bank transfer modes Cheque, UPI, NEFT and RTGS (read back with identical spelling, 74 checks), the go-live rigs for F11, F6 and F17, B1 to B7, and the master-jobs worker for new items and new parties (21 checks). Offline: all suites pass.
+Not proven: cost centre fields (the dummy has none and there is no builder); the real queue claim of a master job (sandbox rule). Open: A7 fails with inherited lines in tracked files (none from this lane).
+The dummy holds no ZZ TEST rows; the books read 3,371 vouchers, 5 of them ours.
 Full table, failures and causes: `rebuild-plan/reports/T11-tally-coverage.md`.
