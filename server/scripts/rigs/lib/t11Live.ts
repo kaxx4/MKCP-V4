@@ -21,6 +21,7 @@ import { loadMasters, invalidateMasters, type TallyMasters } from "../../../src/
 import { escapeXml, tdlString, tallyDateInt } from "../../../src/services/xml.js";
 import { pull as pullAll } from "../../find-stranded-test-vouchers.js";
 import { rigExitCode, type RigCheck } from "../rigExit.js";
+import { guardScriptWrites } from "../../../src/services/scriptWriteGuard.js";
 import type { VoucherPayload } from "../../../src/types.js";
 import type { Preflight } from "./t11.js";
 import { TallyGate, TallyDownError, httpPing, minGapFromArgv } from "./t11Gate.js";
@@ -28,6 +29,8 @@ export { TallyDownError };
 import type { ZzItem, ZzParty } from "./t11Kit.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
+/** Every write in this file asks first (sandbox role and a loopback Tally), so this library cannot be used to write from a machine that may not. */
+const mayWrite = (): void => guardScriptWrites("rigs/lib/t11Live");
 const post = (url: string, xml: string, ms = 360_000) => tallyPost(url, xml, ms, true) as Promise<string>;
 
 /** One pace-and-liveness gate per process (D-M.180). `--min-gap-sec N` sets the rest between turns (default 120). */
@@ -116,7 +119,7 @@ export async function census(l: Live): Promise<{ total: number; ours: number; mi
 }
 
 /** safePush as production calls it (all three gates). */
-export const push = (l: Live, p: VoucherPayload, opts: { verify?: boolean } = {}): Promise<SafePushResult> => turn(l, `push ${p.action ?? "Create"} ${p.voucherType} ${p.voucherNumber ?? ""}`, () => safePush(l.url, l.company, p, opts));
+export const push = (l: Live, p: VoucherPayload, opts: { verify?: boolean } = {}): Promise<SafePushResult> => (mayWrite(), turn(l, `push ${p.action ?? "Create"} ${p.voucherType} ${p.voucherNumber ?? ""}`, () => safePush(l.url, l.company, p, opts)));
 
 /** How a voucher is found again: by number, except a Journal (the Journal type is numbered "None", so Tally keeps no number): by its narration. */
 export const byKey = (p: VoucherPayload): { number?: string; narration?: string; type: string } =>
@@ -152,19 +155,23 @@ export function ledgerOf(p: ZzParty): NewLedger {
 }
 
 export async function makeParty(l: Live, p: ZzParty): Promise<{ ok: boolean; detail: string }> {
+  mayWrite();
   const r = await turn(l, "create ledger", () => createLedger(l.url, l.company, ledgerOf(p)));
   return { ok: r.ok, detail: r.ok ? (r.notes[0] ?? "") : [...r.notes, ...r.lineErrors].join("; ").slice(0, 200) };
 }
 export async function makeItem(l: Live, i: ZzItem): Promise<{ ok: boolean; detail: string }> {
+  mayWrite();
   const item: NewStockItem = { name: i.name, parent: i.parent, baseUnit: i.baseUnit, gstRate: i.gstRate, hsn: i.hsn };
   const r = await turn(l, "create item", () => createStockItem(l.url, l.company, item));
   return { ok: r.ok, detail: r.ok ? (r.notes[0] ?? "") : [...r.notes, ...r.lineErrors].join("; ").slice(0, 200) };
 }
 export async function dropParty(l: Live, name: string): Promise<{ ok: boolean; detail: string }> {
+  mayWrite();
   const r = await turn(l, "delete ledger", () => deleteLedger(l.url, l.company, name));
   return { ok: r.ok, detail: r.ok ? "deleted" : r.notes.join("; ").slice(0, 160) };
 }
 export async function dropItem(l: Live, name: string): Promise<{ ok: boolean; detail: string }> {
+  mayWrite();
   const r = await turn(l, "delete item", () => deleteStockItem(l.url, l.company, name));
   return { ok: r.ok, detail: r.ok ? "deleted" : r.notes.join("; ").slice(0, 160) };
 }

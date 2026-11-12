@@ -34,6 +34,8 @@ import { safePush, vouchersOnDateXml, diffStored, numberTakenError, partyMatches
 import { readTag, escapeXml, tdlString, tallyDateInt } from "./xml.js";
 import { testJobRefusal, outcomeOf, type TestOutcome } from "./erpTestQueueAgent.js";
 import type { VoucherPayload } from "../types.js";
+import { isMasterKind, planMasterJob, settleMasterJob, createMasterJob, readMasterId, masterTestRefusal, type MasterOutcome, type MasterPlan } from "./masterJobs.js";
+import { loadMasters, type TallyMasters } from "./tallyMasters.js";
 import { takenNumbersOrThrow, takenVouchersOrThrow } from "./voucherNumbering.js";
 import { seriesDefaultFor, isPartyKeyedType, numberTakenBy, type TakenVoucher } from "./voucherSeries.js";
 import { setRecordedFiledThrough } from "./pushGuard.js";
@@ -259,6 +261,15 @@ export interface ErpJobAgentOpts {
    * Null or a failed read leaves the baseline to the mirror's first sighting.
    */
   stamp?: (company: string, payload: VoucherPayload, masterId: string) => Promise<number | null>;
+  /**
+   * D-M.206: the worker for jobs of kind `new_item` and `new_party` (web task 8-3). `masters` is a FRESH read of the company's masters (never the
+   * cache: a name made a minute ago must be seen); `createMaster` makes what a plan says and reads it back; `masterIdOf` reads the id of a master
+   * that is in Tally, to settle a lost reply. `tallySeams` supplies all three. Without them a job of those kinds is finished `failed` with a
+   * plain reason, never pushed as a voucher.
+   */
+  masters?: (company: string) => Promise<TallyMasters>;
+  createMaster?: (company: string, plan: MasterPlan) => Promise<MasterOutcome>;
+  masterIdOf?: (company: string, plan: MasterPlan) => Promise<string | null>;
 }
 
 export interface RunReport {
@@ -271,7 +282,7 @@ export interface RunReport {
 export class ErpJobAgent {
   readonly nonce: string;
   readonly status: AgentStatus = { red: [], holder: null, lastHeartbeat: null, skewMs: null, tallyMayShowMessage: false };
-  private o: Required<Omit<ErpJobAgentOpts, "nonce" | "refuse" | "probe" | "taken" | "stamp">> & { refuse: NonNullable<ErpJobAgentOpts["refuse"]>; probe?: ErpJobAgentOpts["probe"]; taken?: ErpJobAgentOpts["taken"]; stamp?: ErpJobAgentOpts["stamp"] };
+  private o: Required<Omit<ErpJobAgentOpts, "nonce" | "refuse" | "probe" | "taken" | "stamp" | "masters" | "createMaster" | "masterIdOf">> & { refuse: NonNullable<ErpJobAgentOpts["refuse"]>; probe?: ErpJobAgentOpts["probe"]; taken?: ErpJobAgentOpts["taken"]; stamp?: ErpJobAgentOpts["stamp"]; masters?: ErpJobAgentOpts["masters"]; createMaster?: ErpJobAgentOpts["createMaster"]; masterIdOf?: ErpJobAgentOpts["masterIdOf"] };
   private timeouts = 0;
 
   constructor(opts: ErpJobAgentOpts) {
@@ -280,7 +291,9 @@ export class ErpJobAgent {
       leaseSeconds: 90, jobLeaseSeconds: 120, renewEveryMs: 30_000, maxSkewMs: 60_000, finishTries: 6, readTries: 3,
       wait: (t: number) => new Promise<void>((r) => setTimeout(r, t)), now: () => Date.now(),
       refuse: (job: ErpJob, company: string) => (job.is_test
-        ? testJobRefusal({ company, payload: job.payload, label: String(job.payload.label ?? "") })
+        ? (isMasterKind(job.kind)
+          ? masterTestRefusal({ company, payload: job.payload, label: String(job.payload.label ?? "") })
+          : testJobRefusal({ company, payload: job.payload, label: String(job.payload.label ?? "") }))
         : "refused: real ERP jobs are claimed only by the office agent after go-live"),
       ...opts,
     } as any;
@@ -499,6 +512,84 @@ export class ErpJobAgent {
       : `Not sent: ${p.voucherType} number ${number} is already used in Tally (as ${hit}). Pushing it would overwrite that voucher. Nothing is in the books from this job.` };
   }
 
+  /** The ISO day in India, for judging an item's GST. */
+  private today(): string { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date(this.o.now())); }
+
+  /**
+   * D-M.206: a `new_item` or `new_party` job. Plan from a fresh read of the masters (everything Tally would refuse is refused here, `failed`, nothing
+   * sent), write `sent`, make the unit and the item (or the ledger), read it back, and finish `succeeded` only with the master's id in hand.
+   * A reply lost after `sent` is settled by reading the masters (`readBackMaster`), never by making it again.
+   */
+  private async processMasterJob(job: ErpJob, company: string, key: string): Promise<RunReport["results"][number]> {
+    const stop = async (reason: string, result: Record<string, unknown>): Promise<RunReport["results"][number]> => {
+      this.journalOrStop({ kind: "not-sent", jobId: job.id, reason, at: new Date().toISOString() });
+      await this.finishWithRetry(job, "failed", { error: reason, result: { stage: "guard", ...result } });
+      return { id: job.id, key, outcome: "failed", detail: reason };
+    };
+    if (!this.o.masters || !this.o.createMaster) return stop("This machine cannot make new items or parties yet (no master worker is set up). Nothing was sent to Tally.", { master: "no-worker" });
+    let m: TallyMasters;
+    try { m = await this.o.masters(company); }
+    catch (e) { return stop(`Tally's items and ledgers could not be read (${(e as Error).message.slice(0, 120)}), so nothing could be checked. Nothing was sent; send it again when Tally answers.`, { master: "unread" }); }
+    const planned = planMasterJob(job.kind, job.payload, m);
+    if (!planned.ok) return stop(planned.reason, { master: "refused" });
+    const plan = planned.plan;
+    const renew = this.open.has(job.id) ? null
+      : setInterval(() => { void this.o.queue.renew(this.nonce, job.id, this.o.jobLeaseSeconds).catch(() => {}); }, this.o.renewEveryMs);
+    try {
+      const sent = await this.o.queue.markSent(this.nonce, job.id, company);
+      if (!sent.ok) {
+        this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: sent.reason ?? "refused", at: new Date().toISOString() });
+        return { id: job.id, key, outcome: sent.refused ? "failed" : "not-sent", detail: sent.reason ?? "not sent" };
+      }
+      this.journalOrStop({ kind: "sent", jobId: job.id, key, at: new Date().toISOString() });
+      let out: MasterOutcome;
+      try { out = await this.o.createMaster(company, plan); this.timeouts = 0; }
+      catch (e) {
+        const msg = (e as Error).message;
+        this.journalOrStop({ kind: "reply-lost", jobId: job.id, error: msg, at: new Date().toISOString() });
+        this.noteTallyError(msg);
+        const r = await this.readBackMaster(job);
+        return { id: job.id, key, outcome: r.state, detail: `no reply from Tally (${msg}); ${r.how}`, masterId: r.masterId };
+      }
+      /* Tally refused and nothing was made: failed (safe to send again once fixed). Made but not proven (no id, or the read-back differs): uncertain,
+         for a person. */
+      const outcome: JobOutcome = out.ok ? "succeeded" : out.madeUnproven ? "uncertain" : "failed";
+      this.journalOrStop({ kind: "reply", jobId: job.id, outcome, stage: out.stage, masterId: out.masterId, bookedNumber: null,
+        errors: out.ok ? [] : [out.reason], differences: [], at: new Date().toISOString() });
+      await this.finishWithRetry(job, outcome, {
+        masterId: out.masterId, bookedNumber: null,
+        result: { stage: out.stage, master: plan.kind, name: plan.kind === "new_item" ? plan.item.name : plan.ledger.name,
+          ...(out.unitMade ? { unit_made: true } : {}), ...(out.readBack ? { read_back: out.readBack } : {}), reason: out.reason },
+        error: outcome === "succeeded" ? null : out.reason,
+      });
+      return { id: job.id, key, outcome, detail: out.reason, masterId: out.masterId };
+    } finally {
+      if (renew) clearInterval(renew);
+    }
+  }
+
+  /** A master job sent with no reply in hand: read the masters; settle `succeeded` only when Tally shows exactly what the plan says. */
+  private async readBackMaster(job: ErpJob): Promise<{ state: JobOutcome; how: string; masterId?: string | null }> {
+    const company = this.recoveryCompany(job);
+    const leave = async (how: string): Promise<{ state: JobOutcome; how: string }> => {
+      await this.finishWithRetry(job, "uncertain", { result: { settled: "read-back", master: true }, error: `This may already be in Tally: ${how}` });
+      return { state: "uncertain", how };
+    };
+    if (!this.o.masters) return leave("this machine cannot read Tally's masters; a person must check it");
+    let m: TallyMasters;
+    try { m = await this.o.masters(company); }
+    catch (e) { return leave(`Tally could not be read (${(e as Error).message.slice(0, 100)}); a person must check it`); }
+    // Judged against the masters as they are NOW: a name that exists is what we are looking for, not a clash.
+    const shaped = planMasterJob(job.kind, job.payload, m, { allowExisting: true });
+    if (!shaped.ok) return leave(`the request could not be read back (${shaped.reason})`);
+    const v = settleMasterJob(shaped.plan, m, this.today());
+    if (v.state !== "present") return leave(v.state === "absent" ? "sent, but not found in Tally; it may not have arrived. Check it before sending again" : v.detail);
+    let masterId: string | null = null;
+    try { masterId = this.o.masterIdOf ? await this.o.masterIdOf(company, shaped.plan) : null; } catch { masterId = null; }
+    await this.finishWithRetry(job, "succeeded", { masterId, result: { settled: "read-back", master: true } });
+    return { state: "succeeded", how: v.detail, masterId };
+  }
+
   async processJob(job: ErpJob): Promise<RunReport["results"][number]> {
     const key = job.idempotency_key;
     /* F17: which company is this job for? No target stamped: the agent's own, as always. A target must match the
@@ -524,6 +615,7 @@ export class ErpJobAgent {
       return { id: job.id, key, outcome: "failed", detail: refusal };
     }
     this.journalOrStop({ kind: "claimed", jobId: job.id, key, at: new Date().toISOString() });
+    if (isMasterKind(job.kind)) return this.processMasterJob(job, company, key);
     /* D21: a resend keeps its REMOTEID, so a Create would alter in place if the
        old one landed. Read Tally first: exactly that voucher found, it is
        already in the books; more than one, a person decides; none, push. */
@@ -638,6 +730,10 @@ export function tallySeams(tallyUrl: string, post: (url: string, xml: string, ti
       : takenNumbersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x)),
     /* F17: a company other than the agent's own is only sent to when Tally has it open under the recorded GUID. One company-list read. */
     companyLoaded: async (entry: CompanyYear) => loadedProblem(await post(tallyUrl, HEALTH_XML, 10_000), entry),
+    /* D-M.206: the master worker. A fresh read of the masters (never the cache), the writes through masterPusher, and the master's id. */
+    masters: (company: string) => loadMasters(tallyUrl, company, { force: true }),
+    createMaster: (company: string, plan: MasterPlan) => createMasterJob(tallyUrl, company, plan),
+    masterIdOf: (company: string, plan: MasterPlan) => readMasterId(tallyUrl, company, plan.kind === "new_item" ? "StockItem" : "Ledger", plan.kind === "new_item" ? plan.item.name : plan.ledger.name),
   };
 }
 
