@@ -116,6 +116,32 @@ Rows with no script before this lane: C17, C18, C20 (partly), C21, C22, C23, C24
 C29, C30, C31, C32, C33 (partly), C34, C35, and B8, B9. This lane added scripts for C22, C23, C25, C26 (and the
 split's edges), C27, C28, C29, B8 (fields) and the field-presence read (`t11-pull-fields`).
 
+## 4.1 The money-voucher matrix (D-M.164), rows added by this lane
+
+Rig: `server/scripts/rigs/t11-money.ts` (scenarios in `lib/t11Money.ts`, offline shape test in `scripts/test-t11-payloads.ts`).
+Each case is pushed through `safePush`, read back field by field (`t11Check`), totals tied to the paisa, bill
+and bank allocations read back, and Tally's own open bills read afterwards. `ISBILLWISEON` is read from Tally.
+
+| Row | Case | Offline | Dummy |
+|---|---|---|---|
+| M-R1 | Receipt, one bill in full, bank, cheque with number | payloads | PASS (receipts 126/0) |
+| M-R2 | Receipt, several bills in full, bank, UTR | payloads | PASS |
+| M-R3 | Receipt, part payment of one bill, cash | payloads | PASS (bill left with 125) |
+| M-R4 | Receipt, overpay one bill, bank, cheque with no number | payloads | PASS; Tally accepts and flips the bill; guard silent (F3) |
+| M-R5 | Receipt, Advance (new bill), cash | payloads | PASS |
+| M-R6 | Receipt, On Account, no allocation | payloads | PASS |
+| M-R7 | Receipt, On Account as an explicit allocation | payloads | PASS (production never builds this, F4) |
+| M-R8 | Receipt, 9 bills plus On Account in one voucher (C27) | payloads | PASS |
+| M-R9 | Receipt, bank with no instrument detail | payloads | PASS |
+| M-R10 | Receipt from a ledger that is not bill-by-bill | payloads | PASS |
+| M-P1..P3 | Payment, one bill / several bills / part, bank and cash | payloads | PASS (payments 100/0) |
+| M-P4 | Payment, overpay one bill | payloads | PASS; accepted, bill flips (F3) |
+| M-P5..P7 | Payment, Advance / On Account / bills plus On Account | payloads | PASS |
+| M-P8 | Payment to an expense ledger (not bill-by-bill) | payloads | PASS |
+| M-P9 | Payment with TDS (`TDS ( 194 J )` exists in the dummy) | payloads | PASS |
+| M-K1..K3 | Contra cash to bank, bank to cash, bank to bank (`HDFC BANK DOD`) | payloads | PASS in the interrupted contras run |
+| M-ALT/CAN/DEL x (Receipt, Payment, Contra) | Alter, Cancel, Delete of one of each | payloads | NOT RUN: Tally stopped mid-run (delete of Receipt and Payment was exercised by the teardowns) |
+
 ## 5. Still not testable on the dummy (and why)
 
 - **Delivery Note** (W10, C32): not configured in the dummy's voucher types. Needs the office machine.
@@ -144,6 +170,11 @@ split's edges), C27, C28, C29, B8 (fields) and the field-presence read (`t11-pul
 
 Recorded as D-T11.n in `rebuild-plan/decisions-log.md`.
 
-## 8. Status at the end of the lane
+## 8. Status at the end of the lane (12-Nov-2026)
 
-Filled in from the lane report (`rebuild-plan/reports/T11-tally-coverage.md`) when the runs finish.
+Proven on the dummy: C22, C23, C25, C26, C26b, C29, H-14 (without the four Sales steps), the money receipts and
+payments matrix, B1 to B5 and B7. Offline: 512 checks pass. Not finished: the contras part with Alter, Cancel and
+Delete of a Receipt, Payment and Contra, because TallyPrime stopped during it. Not run: `t11-pull-fields`, B6
+`--compare`, B9 as a script, fidelity for the non-Sales types. Left in the dummy: contras K1 to K3, possibly one
+Receipt, and two ZZ TEST ledgers, all with stamp 123649 (clean with `t11-money.ts --cleanup 123649`).
+Full table, failures and causes: `rebuild-plan/reports/T11-tally-coverage.md`.
