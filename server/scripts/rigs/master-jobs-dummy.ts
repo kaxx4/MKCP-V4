@@ -34,7 +34,7 @@ const OUT = arg("--out");
 const CLEANUP = arg("--cleanup");
 const kit = DUMMY_KIT;
 /** First full run's check count; -1 = not calibrated yet. */
-const EXPECTED = -1;
+const EXPECTED = 21;
 const post = (url: string, xml: string, ms = 180_000) => tallyPost(url, xml, ms, true) as Promise<string>;
 /** A unit symbol is letters only (Tally answers BAD UNIT NAME for digits): the stamp's digits become letters. */
 const lettersOf = (stamp: string): string => stamp.replace(/\d/g, (d) => "ABCDEFGHIJ"[Number(d)]);
