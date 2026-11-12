@@ -20,6 +20,7 @@ import { sameState, codeForState, stateFromGstin, normalizeGstin, isGstinChecksu
 import type { OpenBill } from "./billSettlement.js";
 import { remoteIdHasUniquePart } from "./remoteId.js";
 import { isErpSeriesNumber, indiaDateOf } from "./voucherSeries.js";
+import { isStockJournal } from "./stockJournal.js";
 
 export interface GuardResult { ok: boolean; errors: string[]; warnings: string[]; }
 
@@ -189,7 +190,7 @@ export function filedThroughOn(today: Date = new Date()): string {
 /** Money vouchers never reach a GST return, so no filed period binds them —
  *  the web app's `NO_RETURN` (domain/editability.ts). Settlement edits on an
  *  old payment are the commonest edit there is. */
-const NO_RETURN = new Set(["PAYMENT", "RECEIPT", "JOURNAL", "CONTRA"]);
+const NO_RETURN = new Set(["PAYMENT", "RECEIPT", "JOURNAL", "CONTRA", "STOCK JOURNAL"]);
 
 /** The filed boundary that binds THIS voucher type now — "" when none does. */
 export function filedBoundaryFor(voucherType: string, today: Date = new Date()): string {
@@ -352,8 +353,11 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
 
   // ── Names must resolve EXACTLY. Near misses are the dangerous case: Tally
   //    drops the fragment rather than erroring, so name them precisely. ──────
+  /* A Stock Journal has no party and no ledger lines (services/stockJournal.ts): the party and the ledger-line
+     checks do not apply to it, and its own rules run after the stock-line loop. */
+  const stockOnly = isStockJournal(p.voucherType);
   const party = findLedger(m, p.partyLedgerName);
-  if (isMiss(party)) {
+  if (isMiss(party) && !stockOnly) {
     errors.push(party.suggestion
       ? `Party ledger "${p.partyLedgerName}" does not exist — Tally spells it "${party.suggestion}".`
       : `Party ledger "${p.partyLedgerName}" does not exist.`);
@@ -393,7 +397,7 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     warnings.push(`Party "${party.name}" has no state on its ledger master — the tax head cannot be derived from it.`);
   }
 
-  if (!p.ledgerEntries?.length) errors.push("Voucher has no ledger entries.");
+  if (!p.ledgerEntries?.length && !stockOnly) errors.push("Voucher has no ledger entries.");
 
   for (const e of p.ledgerEntries ?? []) {
     const led = findLedger(m, e.ledgerName);
@@ -494,6 +498,21 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     if (!Number.isFinite(ie.amount) || ie.amount <= 0) {
       errors.push(`Amount for "${ie.stockItemName}" must be a positive magnitude — a zero-value stock line would add stock with no value.`);
     }
+  }
+
+  /* ── Stock Journal (task C22): stock lines only, each with a godown ─────────────
+     It moves stock and no money, so it must carry no ledger line, no invoice flag and no party, and at least one
+     stock line. The godown is required, not defaulted: a count difference belongs to a place, and a line with no
+     godown lands where Tally chooses. The per-line rules above (item exists, base unit, positive quantity, whole
+     quantity, amount = quantity x rate, amount above zero) already ran. */
+  if (stockOnly) {
+    if (!(p.inventoryEntries?.length)) errors.push("A Stock Journal needs at least one stock line.");
+    if (p.ledgerEntries?.length) errors.push("A Stock Journal carries stock lines only; it has no ledger lines, because it moves no money.");
+    if (p.isInvoice) errors.push("A Stock Journal is not an invoice.");
+    for (const ie of p.inventoryEntries ?? []) {
+      if (!ie.godownName) errors.push(`Stock line "${ie.stockItemName}" names no godown. A count difference belongs to a place.`);
+    }
+    if (!p.narration?.trim()) warnings.push("A Stock Journal with no narration cannot be traced to the count that caused it.");
   }
 
   const hasStock = (p.inventoryEntries?.length ?? 0) > 0;

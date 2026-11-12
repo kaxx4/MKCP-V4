@@ -4,6 +4,7 @@ import { findLedger, gstRateFor, hsnFor, mailingOn, registrationOn, type TallyMa
 import { HOME_STATE_NAME, isInwardSupply, resolvePartyState } from "./pushGuard.js";
 import { escapeXml as esc, fmtAmount, fmtQty, fmtSigned, tallyDate, parseImportResult, importVerdict, type ImportAction } from "./xml.js";
 import { isCashLikeParty } from "./gstIdentity.js";
+import { buildStockJournalXml, isStockJournal } from "./stockJournal.js";
 
 // Patterns for voucher types whose balance is on the inventory side, not ledger entries.
 // Match case-insensitively because companies can rename them (e.g. "DELIVERY NOTE").
@@ -386,6 +387,8 @@ function buildInventoryEntries(entries: InventoryEntry[], masters?: TallyMasters
  * carries no party GST identity and lands in the GSTR-1 exception bucket.
  */
 export function buildVoucherImportXml(company: string, payload: VoucherPayload, masters?: TallyMasters): string {
+  // A Stock Journal has stock lines only (no party, ledger lines or tax): its own builder, same single way in.
+  if (isStockJournal(payload.voucherType)) return buildStockJournalXml(company, payload);
   const isInventoryVoucher = isInventoryVoucherType(payload.voucherType);
 
   // Validate Dr/Cr balance only for accounting vouchers.

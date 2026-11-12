@@ -219,7 +219,9 @@ export interface VoucherPayload {
    * cast in at call sites, which defeats the point of the union.
    */
   voucherType: "Sales" | "Purchase" | "Receipt" | "Payment" | "Contra" | "Credit Note"
-    | "Debit Note" | "Journal" | "Sales Order Note" | "Delivery Note" | "Receipt Note";
+    | "Debit Note" | "Journal" | "Sales Order Note" | "Delivery Note" | "Receipt Note"
+    /** Moves stock without moving money (a count difference). Stock lines only; see services/stockJournal.ts. */
+    | "Stock Journal";
   date: string;               // YYYY-MM-DD
   /**
    * The party's postal address, one line per element.
