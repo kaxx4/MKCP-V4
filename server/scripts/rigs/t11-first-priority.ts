@@ -27,7 +27,7 @@ import { guardScriptWrites } from "../../src/services/scriptWriteGuard.js";
 guardScriptWrites("rigs/t11-first-priority");
 import { preflight } from "./lib/t11.js";
 import { DUMMY_KIT, r2, saleTotals, zzItems, zzParties } from "./lib/t11Kit.js";
-import { c23, c25, c26, c26b, c29 } from "./lib/t11Scenarios.js";
+import { c23, c25, c26, c26b, c26r, c29 } from "./lib/t11Scenarios.js";
 import { stockJournalScenario } from "./lib/t11StockJournal.js";
 import { compareToPayload, failures, ledgerBrief } from "./lib/t11Check.js";
 import {
@@ -51,7 +51,7 @@ const kit = DUMMY_KIT;
 const num = (s: string) => parseTallyAmount(s) ?? NaN;
 
 /** Checks each part is expected to make, learned from its first full live run. -1 = not yet calibrated. */
-const EXPECTED: Record<string, number> = { c22: 27, c23: 23, c25: 54, c26: 31, c26b: 23, c29: 43 };
+const EXPECTED: Record<string, number> = { c22: 27, c23: 23, c25: 54, c26: 31, c26b: 23, c26r: -1, c29: 43 };
 
 /** What a part made, so teardown can undo it whatever happens in the middle. */
 class Made {
@@ -196,6 +196,46 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
     const owed = [readParty(lv, s.parties.local.name), ...cashStored.map((v) => readParty(v, kit.cash))];
     rec.check("C26 each bill's party line equals its worked total, to the paisa", owed.every((o, i) => Math.abs(o - tot[i].grand) < 0.005), `${owed.join(", ")} vs ${tot.map((t) => t.grand).join(", ")}`);
     rec.check("C26 the three bills have three different REMOTEIDs and three vouchers stand", new Set(bills.map((b) => b.remoteId)).size === 3 && (await census(l)).mine === 3);
+    return;
+  }
+
+  // ── C26R (D-M.203) ───────────────────────────────────────────────────────
+  if (part === "c26r") {
+    const s = c26r(stamp, day, kit);
+    for (const it of s.items) { const r = await makeItem(l, it); made.items.push(it.name); rec.check(`C26R item "${it.name}" made`, r.ok, r.detail); }
+    await freshMasters(l);
+    const amountOf = (v: string | null, pick: (name: string) => boolean): number | null => {
+      for (const m of (v ?? "").matchAll(/<ALLLEDGERENTRIES\.LIST>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/g)) if (pick(readTag(m[1], "LEDGERNAME"))) return num(readTag(m[1], "AMOUNT"));
+      return null;
+    };
+    for (const c of s.cases) {
+      rec.note(`${c.id} ${c.label}: exact totals ${c.exacts.join(", ")}; the order's rounded total ${c.orderTotal}; settled ${c.settled.join(", ")}`);
+      const held: number[] = [];
+      for (const [i, b] of c.bills.entries()) {
+        const sent = saleTotals(b);
+        const label = `${c.id} bill ${i + 1}: round-off ${sent.roundOff >= 0 ? "+" : ""}${sent.roundOff}, total ${sent.grand}`;
+        const over = Math.abs(sent.roundOff) > 0.5;
+        let r;
+        if (over) {   // D-M.203 asks for any refusal of a round-off above 0.50 to be NOTED, so either answer is recorded, not judged
+          made.track(b);
+          r = await push(l, b);
+          rec.check(`${label}: outcome recorded (${r.ok ? "accepted" : `refused at ${r.stage}`})`, true, r.ok ? `stage ${r.stage}` : [...r.errors, ...r.differences].join(" | ").slice(0, 260));
+        } else r = await send(`${label}: Tally accepts it`, b, true);
+        if (!r.ok) {
+          rec.note(`${c.id} bill ${i + 1} REFUSED at stage ${r.stage}: ${[...r.errors, ...r.differences].join(" | ").slice(0, 300)}${Math.abs(sent.roundOff) > 0.5 ? "  (a round-off above 0.50)" : ""}`);
+          continue;
+        }
+        const v = await stored(b);
+        fieldCheck(`${c.id} bill ${i + 1}`, b, v);
+        const ro = amountOf(v, (n) => /ROUNDED OFF/i.test(n));
+        rec.check(`${c.id} bill ${i + 1}: the ROUNDED OFF line reads back as sent (${sent.roundOff})`, ro !== null && Math.abs(ro - sent.roundOff) < 0.005, `stored ${ro}`);
+        const party = amountOf(v, (n) => n === kit.cash);
+        rec.check(`${c.id} bill ${i + 1}: the party line is the settled whole rupee ${c.settled[i]}`, party !== null && Math.abs(Math.abs(party) - c.settled[i]) < 0.005, `stored ${party}`);
+        if (party !== null) held.push(Math.abs(party));
+      }
+      if (held.length === c.bills.length) rec.check(`${c.id} the stored bills add up to the order's rounded total ${c.orderTotal}`, Math.abs(held.reduce((a, x) => a + x, 0) - c.orderTotal) < 0.005, `${held.join(" + ")}`);
+      else rec.note(`${c.id} FINDING: ${c.bills.length - held.length} bill(s) were refused, so the stored bills (${held.join(" + ")}) cannot add up to ${c.orderTotal}; this case is NOT proven`);
+    }
     return;
   }
 
@@ -344,7 +384,7 @@ async function cleanup(l: Live): Promise<number> {
   const pf = await preflight();
   console.log(`  preflight ok (dummy is the only company open, ${pf.listMs} ms)`);
   if (CLEANUP) { process.exit(await cleanup(makeLive(pf, indiaToday(), CLEANUP))); }
-  if (!(part_ok(PART))) { console.error(`usage: --part c22|c23|c25|c26|c26b|c29   (got "${PART}")`); process.exit(2); }
+  if (!(part_ok(PART))) { console.error(`usage: --part c22|c23|c25|c26|c26b|c26r|c29   (got "${PART}")`); process.exit(2); }
   const stamp = stampFrom();
   const l = makeLive(pf, indiaToday(), stamp);
   const expected = arg("--expect") ? Number(arg("--expect")) : EXPECTED[PART];
@@ -365,5 +405,5 @@ async function cleanup(l: Live): Promise<number> {
   process.exit(code);
 })().catch((e) => { console.error(`FAILED before the part started: ${(e as Error).message}`); process.exit(2); });
 
-function part_ok(p: string): boolean { return ["c22", "c23", "c25", "c26", "c26b", "c29"].includes(p); }
+function part_ok(p: string): boolean { return ["c22", "c23", "c25", "c26", "c26b", "c26r", "c29"].includes(p); }
 void zzItems; void zzParties; void asAlter; void asCancel;

@@ -21,7 +21,7 @@ import { fixtureMasters, fixtureOpenBills, OPEN_DATE, G_PARTS } from "./guardrai
 import { isSweepVoucher } from "./lib/testVoucherMatch.js";
 import { remoteIdGuesses } from "./find-stranded-test-vouchers.js";
 import { DUMMY_KIT, r2, saleTotals, zzItems, zzParties, fakeGstin } from "./rigs/lib/t11Kit.js";
-import { c23, c25, c26, c26b, c29 } from "./rigs/lib/t11Scenarios.js";
+import { c23, c25, c26, c26b, c26r, c29 } from "./rigs/lib/t11Scenarios.js";
 import { compareToPayload, failures } from "./rigs/lib/t11Check.js";
 import { stockJournalScenario } from "./rigs/lib/t11StockJournal.js";
 import { buildStockJournalXml } from "../src/services/stockJournal.js";
@@ -169,6 +169,27 @@ console.log("\nC26 one note split into cash bills and a ledger bill:");
   ok("C26 the ledger bill is the note's voucher", s.ledgerBill.remoteId === s.note.remoteId && s.ledgerBill.action === "Alter");
   ok("C26 every bill has its own REMOTEID", new Set(bills.map((b) => b.remoteId)).size === 3);
   ok("C26 a cash bill carries no bill allocation", s.cashBills.every((b) => !b.ledgerEntries[0].billAllocations));
+}
+
+console.log("\nC26R split cash bills with Sell's new rounding (D-M.203):");
+{
+  const s = c26r(STAMP, DAY, kit);
+  const want: Record<string, { settled: number[]; ro: number[]; total: number }> = {
+    Q1: { settled: [22, 33, 36], ro: [0.5, 0.5, -0.5], total: 91 },
+    Q2: { settled: [22, 32], ro: [0.74, -0.26], total: 54 },
+    Q3: { settled: [21, 33, 37, 48], ro: [-0.3, 0.3, 0.5, -0.5], total: 139 },
+  };
+  for (const c of s.cases) {
+    const w = want[c.id];
+    ok(`C26R ${c.id} settles to ${w.settled.join(", ")} and the bills add up to the order's rounded total ${w.total}`, JSON.stringify(c.settled) === JSON.stringify(w.settled) && c.settled.reduce((a, x) => a + x, 0) === w.total && c.orderTotal === w.total, JSON.stringify(c.settled));
+    ok(`C26R ${c.id} round-offs are ${w.ro.join(", ")}, each under a rupee`, JSON.stringify(c.bills.map((b) => saleTotals(b).roundOff)) === JSON.stringify(w.ro) && c.bills.every((b) => Math.abs(saleTotals(b).roundOff) < 1));
+    ok(`C26R ${c.id} each party line is the settled whole rupee`, c.bills.every((b, i) => saleTotals(b).grand === c.settled[i]));
+    for (const [i, b] of c.bills.entries()) {
+      const g = guardVoucher(b, M, {});
+      if (Math.abs(saleTotals(b).roundOff) <= 0.5) accepted(`C26R ${c.id} bill ${i + 1}`, b);
+      else ok(`C26R ${c.id} bill ${i + 1} (round-off ${saleTotals(b).roundOff}): TODAY the guard refuses a ROUNDED OFF above 0.50 (TG-P17)`, !g.ok && g.errors.some((e) => /ROUNDED OFF/.test(e)), g.errors.join(" | ").slice(0, 200));
+    }
+  }
 }
 
 console.log("\nC26b the split's edges:");

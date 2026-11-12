@@ -100,6 +100,8 @@ export interface SaleOpts {
   action?: VoucherPayload["action"];
   /** Overrides the REMOTEID (a converted note keeps the note's). */
   remoteId?: string;
+  /** The whole-rupee total this bill settles at when it is one of several bills of one order (D-M.203); default: its own exact total rounded. */
+  settledGrand?: number;
 }
 
 /**
@@ -120,7 +122,7 @@ export function buildSale(o: SaleOpts): VoucherPayload {
   }
   const cgst = o.inter ? 0 : r2(half), igst = o.inter ? r2(full) : 0;
   const exact = r2(gross + net + (o.inter ? igst : cgst * 2));
-  const grand = Math.round(exact), ro = r2(grand - exact);
+  const grand = o.settledGrand ?? Math.round(exact), ro = r2(grand - exact);
   const isInvoice = o.type === "Sales";
   const L: LedgerEntry[] = [{
     ledgerName: o.party.name, amount: grand, isDeemedPositive: true, isPartyLedger: true,

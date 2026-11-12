@@ -132,3 +132,54 @@ export function c29(stamp: string, day: string, kit: Kit) {
 }
 
 export { saleTotals };
+
+// ── C26R (D-M.203): split cash bills settled with Sell's new rounding ────────────────────────────────────────────────
+/**
+ * A copy of Sell's `settleWholeRupees` (web lane/sell 8bcedde1, engine/cashInvoice.ts), kept here only as the rig's oracle: the bills of one
+ * order add up to the order's rounded total T, and each bill is the floor or the ceiling of its own exact total; the bills with the largest
+ * paise go up, a tie to the earlier bill. The rig never uses it to decide what Tally should hold, only to build the bills Sell's code would send.
+ */
+export function settleWholeRupeesOracle(exactTotals: readonly number[]): number[] {
+  const paise = exactTotals.map((e) => Math.round(r2(e) * 100));
+  const out = paise.map((p) => Math.floor(p / 100));
+  const target = Math.round(paise.reduce((s, p) => s + p, 0) / 100);
+  let extra = target - out.reduce((s, g) => s + g, 0);
+  const order = paise.map((p, i) => ({ i, frac: p - out[i]! * 100 })).sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (const r of order) { if (extra <= 0) break; out[r.i]! += 1; extra -= 1; }
+  return out;
+}
+
+/** A one-line bill whose exact total ends in exactly `paiseEnd` paise (tax worked as buildSale works it). */
+function rateEndingIn(it: ZzItem, paiseEnd: number, from: number): { rate: number; exact: number } {
+  for (let c = Math.round(from * 100); c < Math.round(from * 100) + 100000; c++) {
+    const rate = c / 100;
+    const half = r2(rate * it.gstRate / 200), exact = r2(rate + 2 * half);
+    if (Math.round(exact * 100) % 100 === paiseEnd) return { rate, exact };
+  }
+  throw new Error(`no rate found for ${it.name} ending in ${paiseEnd} paise`);
+}
+
+export interface RoundCase { id: string; label: string; ends: number[]; bills: VoucherPayload[]; exacts: number[]; settled: number[]; orderTotal: number }
+
+export function c26r(stamp: string, day: string, kit: Kit): { items: ZzItem[]; cases: RoundCase[] } {
+  const [a, b] = zzItems(stamp, kit);
+  const mk = (id: string, label: string, ends: number[]): RoundCase => {
+    const picked = ends.map((e, i) => rateEndingIn(i % 2 === 0 ? b : a, e, 20 + i * 7));
+    const exacts = picked.map((p) => p.exact);
+    const settled = settleWholeRupeesOracle(exacts);
+    const bills = picked.map((p, i) => buildSale({
+      kit, type: "Sales", number: zzNumber(stamp, `${id}${i + 1}`), date: day, narration: zzNarration(stamp, `rounding ${id} bill ${i + 1}`),
+      party: { name: kit.cash }, lines: [lineOf(i % 2 === 0 ? b : a, 1, p.rate)], settledGrand: settled[i],
+      walkIn: { name: `ZZ TEST BUYER ${id}${i + 1} ${stamp}`, address: ["ZZ TEST BUYER ROAD", "KOLKATA 700003"] },
+    }));
+    return { id, label, ends, bills, exacts, settled, orderTotal: Math.round(r2(exacts.reduce((s, e) => s + e, 0))) };
+  };
+  return {
+    items: [a, b],
+    cases: [
+      mk("Q1", "three bills that each end .50", [50, 50, 50]),
+      mk("Q2", "two bills that each end .26 (one round-off of about +0.74)", [26, 26]),
+      mk("Q3", "four bills ending .30, .70, .50, .50", [30, 70, 50, 50]),
+    ],
+  };
+}
