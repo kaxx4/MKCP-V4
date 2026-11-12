@@ -27,6 +27,8 @@ import { stockJournalScenario } from "./rigs/lib/t11StockJournal.js";
 import { buildStockJournalXml } from "../src/services/stockJournal.js";
 import { moneyParties, moneyScenario, alteredCopy } from "./rigs/lib/t11Money.js";
 import { ledgerFlagsXml } from "./rigs/lib/t11Live.js";
+import { TallyGate, TallyDownError, minGapFromArgv } from "./rigs/lib/t11Gate.js";
+import { pickNamed } from "./rigs/lib/envByPath.js";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, detail = "") => {
@@ -244,6 +246,48 @@ console.log("\nC29 reverse-charge journals carry the tax-adjustment flag:");
   ok("the comparer names a wrong rate", failures(wrongRate).some((r) => /GST rate/.test(r)));
 }
 
+// ── The pace-and-liveness gate and the env-by-path picker (D-M.180) ──────────
+console.log("\nThe gate that paces a long rig and stops it cleanly when Tally goes away:");
+const gateDone = (async () => {
+  let t = 0; const slept: number[] = [];
+  const mk = (alive: () => boolean, gap = 120_000) => new TallyGate({ minGapMs: gap, now: () => t, sleep: async (ms) => { slept.push(ms); t += ms; }, ping: async () => alive(), retryPingMs: 15_000 });
+  // pacing: the second turn waits until 120 s after the first ENDED
+  const g = mk(() => true);
+  await g.run("first", async () => { t += 30_000; return 1; });          // takes 30 s
+  const endedAt = t;
+  await g.run("second", async () => 2);
+  ok("the second turn waits until two minutes after the first ended", t - endedAt === 120_000 && slept[0] === 120_000, `${t - endedAt}`);
+  slept.length = 0; t += 500_000;
+  await g.run("third", async () => 3);
+  ok("no wait when the gap has already passed", slept.length === 0);
+  { const h = mk(() => true); slept.length = 0; await h.run("x", async () => 0); ok("the first turn never waits", slept.length === 0); }
+  // 0 turns the pacing off
+  const z = mk(() => true, 0); slept.length = 0; await z.run("a", async () => 0); await z.run("b", async () => 0);
+  ok("a gap of 0 turns the pacing off", slept.length === 0);
+  // liveness before a turn: down twice -> TallyDownError, and it stays down without trying Tally again
+  let up = true; let ran = 0; const d = mk(() => up);
+  await d.run("fine", async () => { ran++; });
+  up = false; slept.length = 0;
+  let err: unknown = null;
+  try { await d.run("while down", async () => { ran++; }); } catch (e) { err = e; }
+  ok("Tally not answering before a turn stops the rig with TallyDownError and the turn never runs", err instanceof TallyDownError && ran === 1);
+  ok("it tried twice, 15 seconds apart, before giving up", slept.includes(15_000), slept.join(","));
+  let again: unknown = null; try { await d.run("later", async () => { ran++; }); } catch (e) { again = e; }
+  ok("once down, every later turn throws at once and sends nothing", again instanceof TallyDownError && ran === 1 && d.down !== null);
+  // a turn that throws while Tally still answers is Tally's refusal: rethrown as is, the gate stays up
+  const u = mk(() => true); let refusal: unknown = null;
+  try { await u.run("refused", async () => { throw new Error("Tally said no"); }); } catch (e) { refusal = e; }
+  ok("a refusal from a live Tally is rethrown unchanged and does not stop the rig", refusal instanceof Error && !(refusal instanceof TallyDownError) && u.down === null);
+  // a turn that throws because Tally went away is turned into TallyDownError
+  let live = true; const w = mk(() => live); let lost: unknown = null;
+  try { await w.run("request that kills Tally", async () => { live = false; throw new Error("socket hang up"); }); } catch (e) { lost = e; }
+  ok("a request during which Tally disappears becomes TallyDownError", lost instanceof TallyDownError && w.down !== null && /socket hang up/.test((lost as Error).message));
+  ok("--min-gap-sec: default 120 s, 0 allowed, junk falls back to 120 s", minGapFromArgv([]) === 120_000 && minGapFromArgv(["--min-gap-sec", "0"]) === 0 && minGapFromArgv(["--min-gap-sec", "30"]) === 30_000 && minGapFromArgv(["--min-gap-sec", "x"]) === 120_000);
+  const picked = pickNamed("A=1\nMKCP_AGENT_MACHINE_ID=sandbox-laptop-1\nMKCP_ERP_AGENT_KEY=abc\nSUPABASE_SERVICE_KEY=secret\n");
+  ok("the env picker takes only the two named settings and nothing else", Object.keys(picked).sort().join(",") === "MKCP_AGENT_MACHINE_ID,MKCP_ERP_AGENT_KEY" && !("SUPABASE_SERVICE_KEY" in picked));
+  ok("the env picker returns nothing for a file without them", Object.keys(pickNamed("X=1\n")).length === 0);
+})();
+
 // ── C22: Stock Journal ───────────────────────────────────────────────────────
 console.log("\nC22 Stock Journal from a count difference:");
 {
@@ -343,5 +387,7 @@ console.log("\nField-by-field comparer (t11Check.ts):");
   ok("it names an empty voucher as many failures", failures(compareToPayload(inv, "<VOUCHER></VOUCHER>")).length >= 10);
 }
 
-console.log(`\n  ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+void gateDone.then(() => {
+  console.log(`\n  ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+});

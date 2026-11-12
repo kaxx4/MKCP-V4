@@ -15,8 +15,11 @@
  * MKCP_ERP_TEST_QUEUE=on for this one process, and this machine's registered key.
  *
  *   $env:MKCP_ERP_TEST_QUEUE='on'; npx tsx scripts/rigs/erp-queue-dummy.ts --out <file.json> [--jobs 60]
+ *   or, to borrow the machine id and key from another worktree's .env without copying them:
+ *   npx tsx scripts/rigs/erp-queue-dummy.ts --env-file <path to that .env> --out <file.json> [--jobs 3] [--no-sales]
  */
 import "dotenv/config";
+import "./lib/envByPath.js"; // --env-file <path>: takes the machine id and key from that .env by name, in this process only
 import { spawnSync } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";

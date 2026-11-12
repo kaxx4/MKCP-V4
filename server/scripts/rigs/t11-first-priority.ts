@@ -32,7 +32,7 @@ import { stockJournalScenario } from "./lib/t11StockJournal.js";
 import { compareToPayload, failures, ledgerBrief } from "./lib/t11Check.js";
 import {
   Recorder, byKey, census, countStored, dropItem, dropParty, freshMasters, indiaToday, makeItem, makeLive, makeParty,
-  push, readStored, remove, stampFrom, sweepDay, asAlter, asCancel, type Live,
+  push, readStored, remove, stampFrom, sweepDay, asAlter, asCancel, turn, TallyDownError, stopForTallyDown, gate, type Live,
 } from "./lib/t11Live.js";
 import { storedInventoryLines } from "../../src/services/safePush.js";
 import { loadOpenBills } from "../../src/services/billSettlement.js";
@@ -233,7 +233,7 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
     const vb = await stored(s.bill);
     fieldCheck("C29 freight bill", s.bill, vb);
     rec.check("C29 the bill carries no GST line and no stock line (the tax is booked by the journal)", !!vb && !/OUTPUT|INPUT [CSI]GST/.test(vb) && !/<STOCKITEMNAME>[^<]/.test(vb));
-    let open = await loadOpenBills(l.url, l.company);
+    let open = await turn(l, "open bills", () => loadOpenBills(l.url, l.company));
     const mine = open.find((b) => b.name === s.billNo && b.party === s.parties.transport.name);
     rec.check("C29 the bill is open for the carrier as a payable of the full amount", !!mine && Math.abs(mine.closing - s.amount) < 0.011 && mine.closing > 0, mine ? `closing ${mine.closing}` : "not among the open bills");
     const half = r2(s.rcmTax / 2);
@@ -257,7 +257,7 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
     rec.check("C29 the payment read-back has no differences", rp.differences.length === 0, rp.differences.join(" | ").slice(0, 160));
     const vp = await stored(s.pay);
     fieldCheck("C29 payment", s.pay, vp, true);
-    open = await loadOpenBills(l.url, l.company);
+    open = await turn(l, "open bills", () => loadOpenBills(l.url, l.company));
     const left = open.find((b) => b.name === s.billNo && b.party === s.parties.transport.name);
     rec.check("C29 the bill is settled: no longer open for the carrier", !left || Math.abs(left.closing) < 0.011, left ? `still ${left.closing}` : "gone from the open bills");
     rec.check("C29 four vouchers of this run stand (bill, two journals, payment)", (await census(l)).mine === 4);
@@ -318,7 +318,7 @@ async function teardown(l: Live, rec: Recorder, made: Made, before: { total: num
 /** Remove what a crashed run left under `stamp`: vouchers by every REMOTEID spelling, then the masters. */
 async function cleanup(l: Live): Promise<number> {
   const rec = new Recorder("cleanup", -1);
-  const all = await pullAll(l.company);
+  const all = await turn(l, "census", () => pullAll(l.company));
   const mine = all.filter((v) => v.number.startsWith(`ZZTEST${l.stamp}/`));
   console.log(`  ${mine.length} voucher(s) of stamp ${l.stamp} in the books`);
   for (const v of mine) {
@@ -330,7 +330,7 @@ async function cleanup(l: Live): Promise<number> {
 <DATA><TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="${escapeXml(rid)}" VCHTYPE="${escapeXml(v.type)}" ACTION="Delete">
 <DATE>${v.date}</DATE><VOUCHERTYPENAME>${escapeXml(v.type)}</VOUCHERTYPENAME><VOUCHERNUMBER>${escapeXml(v.number)}</VOUCHERNUMBER></VOUCHER>
 </TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
-      try { const res = (await tallyPost(l.url, xml, 120_000, true)) as string; if (/<DELETED>[1-9]/.test(res)) { gone = true; break; } } catch { /* wrong spelling */ }
+      try { const res = (await turn(l, "delete by REMOTEID", () => tallyPost(l.url, xml, 120_000, true))) as string; if (/<DELETED>[1-9]/.test(res)) { gone = true; break; } } catch (e) { if (e instanceof TallyDownError) throw e; /* wrong spelling */ }
     }
     rec.check(`cleanup: ${v.type} ${v.number} deleted`, gone);
   }
@@ -352,9 +352,14 @@ async function cleanup(l: Live): Promise<number> {
   console.log(`\n  T11 ${PART.toUpperCase()} on the dummy (${l.day}, stamp ${stamp})${expected < 0 ? "  [CALIBRATION RUN: the expected check count is not set yet, so this exit code is by failures only]" : ""}\n`);
   const made = new Made();
   let before: { total: number; ours: number } | null = null;
+  let down: TallyDownError | null = null;
   try { before = await census(l); rec.note(`books before: ${before.total} vouchers, ${before.ours} ours`); await body(PART, l, rec, made); }
-  catch (e) { rec.check("the part finished without an error", false, (e as Error).message.slice(0, 300)); }
-  finally { await teardown(l, rec, made, before); }
+  catch (e) { if (e instanceof TallyDownError) down = e; else rec.check("the part finished without an error", false, (e as Error).message.slice(0, 300)); }
+  finally {
+    if (!down && !gate(l).down) { try { await teardown(l, rec, made, before); } catch (e) { if (e instanceof TallyDownError) down = e; else throw e; } }
+    else down = down ?? gate(l).down;
+    if (down) stopForTallyDown(rec, down, stamp, made.vouchers.map((p) => `${p.voucherType} ${p.voucherNumber ?? p.narration}`), `cd server; npx tsx scripts/rigs/t11-first-priority.ts --cleanup ${stamp}`);
+  }
   let code = rec.finish(OUT ?? undefined);
   if (expected < 0 && rec.failed === 0) { console.log(`  calibration: ${rec.passed} checks passed, set EXPECTED.${PART} = ${rec.passed}`); code = 0; }
   process.exit(code);

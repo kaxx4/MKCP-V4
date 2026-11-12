@@ -23,10 +23,34 @@ import { pull as pullAll } from "../../find-stranded-test-vouchers.js";
 import { rigExitCode, type RigCheck } from "../rigExit.js";
 import type { VoucherPayload } from "../../../src/types.js";
 import type { Preflight } from "./t11.js";
+import { TallyGate, TallyDownError, httpPing, minGapFromArgv } from "./t11Gate.js";
+export { TallyDownError };
 import type { ZzItem, ZzParty } from "./t11Kit.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const post = (url: string, xml: string, ms = 180_000) => tallyPost(url, xml, ms, true) as Promise<string>;
+
+/** One pace-and-liveness gate per process (D-M.180). `--min-gap-sec N` sets the rest between turns (default 120). */
+let theGate: TallyGate | null = null;
+export const gate = (l: Live): TallyGate =>
+  (theGate ??= new TallyGate({ minGapMs: minGapFromArgv(process.argv), ping: () => httpPing(l.url), log: (s) => console.log(s) }));
+/** Everything a rig asks of Tally goes through here: one turn at a time, paced, with a liveness check. */
+export const turn = <T>(l: Live, label: string, fn: () => Promise<T>): Promise<T> => gate(l).run(label, fn);
+
+/**
+ * Tally stopped answering: say exactly what happened and what is left, record it as a failed check (a stopped run is
+ * never a pass), and send nothing more. The caller skips teardown (it would only fail); the cleanup command removes
+ * everything of this stamp once Tally is open on the dummy again. Never restarts Tally.
+ */
+export function stopForTallyDown(rec: Recorder, e: TallyDownError, stamp: string, tracked: string[], cleanupCmd: string): void {
+  console.log(`
+  TALLY_DOWN: ${e.message}
+  Nothing more was sent. The run stopped cleanly; Tally was not restarted.`);
+  console.log(`  What this run may have left (stamp ${stamp}): ${tracked.length ? tracked.join("; ") : "nothing tracked"}, plus its ZZ TEST ledgers and items.`);
+  console.log(`  When someone has reopened TallyPrime with the dummy company only, run:  ${cleanupCmd}`);
+  rec.note(`TALLY_DOWN during "${e.during}"; may be left in the dummy: ${tracked.join("; ") || "nothing tracked"}; cleanup: ${cleanupCmd}`);
+  rec.check("Tally kept answering until the end of the part", false, e.message);
+}
 
 export interface Live { url: string; company: string; day: string; stamp: string }
 export const makeLive = (p: Preflight, day: string, stamp: string): Live => ({ url: p.tallyUrl, company: p.company, day, stamp });
@@ -71,7 +95,7 @@ export async function readStored(l: Live, day: string, by: { number?: string; na
 <FILTER>T11ReadF</FILTER></COLLECTION>
 <SYSTEM TYPE="Formulae" NAME="T11ReadF">${conds.join(" AND ")}</SYSTEM>
 </TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
-  const raw = await post(l.url, xml);
+  const raw = await turn(l, "read voucher", () => post(l.url, xml));
   /* Real voucher blocks only: the reply also carries a count element <VOUCHER>105</VOUCHER> (5-Nov-2026). */
   const all = [...raw.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0]).filter((b) => b.includes("<VOUCHERTYPENAME>"));
   return all.length ? all.join("\n") : null;
@@ -85,14 +109,14 @@ export const countStored = async (l: Live, day: string, by: Parameters<typeof re
 
 /** Total vouchers in the books and how many look like ours (the trimmed read the census uses). */
 export async function census(l: Live): Promise<{ total: number; ours: number; mine: number }> {
-  const all = await pullAll(l.company);
+  const all = await turn(l, "census", () => pullAll(l.company));
   const isOurs = (v: { number: string; narration: string }) => /^ZZTEST\d*\//.test(v.number) || /^ZZTEST\d+/.test(v.narration);
   const mark = `ZZTEST${l.stamp}`;
   return { total: all.length, ours: all.filter(isOurs).length, mine: all.filter((v) => v.number.startsWith(mark) || v.narration.includes(mark)).length };
 }
 
 /** safePush as production calls it (all three gates). */
-export const push = (l: Live, p: VoucherPayload, opts: { verify?: boolean } = {}): Promise<SafePushResult> => safePush(l.url, l.company, p, opts);
+export const push = (l: Live, p: VoucherPayload, opts: { verify?: boolean } = {}): Promise<SafePushResult> => turn(l, `push ${p.action ?? "Create"} ${p.voucherType} ${p.voucherNumber ?? ""}`, () => safePush(l.url, l.company, p, opts));
 
 /** How a voucher is found again: by number, except a Journal (the Journal type is numbered "None", so Tally keeps no number): by its narration. */
 export const byKey = (p: VoucherPayload): { number?: string; narration?: string; type: string } =>
@@ -110,7 +134,7 @@ export async function remove(l: Live, p: VoucherPayload): Promise<{ ok: boolean;
     const left = await countStored(l, p.date, byKey(p));
     /* Judge by the books (G7/P1): gone is gone, whether or not Tally had it to delete. */
     return { ok: left === 0, detail: r.ok ? `${left} left` : `${left} left (delete said: ${(r.errors[0] ?? "refused").slice(0, 90)})` };
-  } catch (e) { return { ok: false, detail: (e as Error).message.slice(0, 120) }; }
+  } catch (e) { if (e instanceof TallyDownError) throw e; return { ok: false, detail: (e as Error).message.slice(0, 120) }; }
 }
 
 /** The sweep as a backstop (it deletes only ZZTEST numbers whose narration carries ZZTEST). Returns its exit code. */
@@ -128,25 +152,25 @@ export function ledgerOf(p: ZzParty): NewLedger {
 }
 
 export async function makeParty(l: Live, p: ZzParty): Promise<{ ok: boolean; detail: string }> {
-  const r = await createLedger(l.url, l.company, ledgerOf(p));
+  const r = await turn(l, "create ledger", () => createLedger(l.url, l.company, ledgerOf(p)));
   return { ok: r.ok, detail: r.ok ? (r.notes[0] ?? "") : [...r.notes, ...r.lineErrors].join("; ").slice(0, 200) };
 }
 export async function makeItem(l: Live, i: ZzItem): Promise<{ ok: boolean; detail: string }> {
   const item: NewStockItem = { name: i.name, parent: i.parent, baseUnit: i.baseUnit, gstRate: i.gstRate, hsn: i.hsn };
-  const r = await createStockItem(l.url, l.company, item);
+  const r = await turn(l, "create item", () => createStockItem(l.url, l.company, item));
   return { ok: r.ok, detail: r.ok ? (r.notes[0] ?? "") : [...r.notes, ...r.lineErrors].join("; ").slice(0, 200) };
 }
 export async function dropParty(l: Live, name: string): Promise<{ ok: boolean; detail: string }> {
-  const r = await deleteLedger(l.url, l.company, name);
+  const r = await turn(l, "delete ledger", () => deleteLedger(l.url, l.company, name));
   return { ok: r.ok, detail: r.ok ? "deleted" : r.notes.join("; ").slice(0, 160) };
 }
 export async function dropItem(l: Live, name: string): Promise<{ ok: boolean; detail: string }> {
-  const r = await deleteStockItem(l.url, l.company, name);
+  const r = await turn(l, "delete item", () => deleteStockItem(l.url, l.company, name));
   return { ok: r.ok, detail: r.ok ? "deleted" : r.notes.join("; ").slice(0, 160) };
 }
 
 /** Fresh masters (the cache can be ten minutes old). */
-export const freshMasters = async (l: Live): Promise<TallyMasters> => { invalidateMasters(); return loadMasters(l.url, l.company, { force: true }); };
+export const freshMasters = (l: Live): Promise<TallyMasters> => turn(l, "read masters", async () => { invalidateMasters(); return loadMasters(l.url, l.company, { force: true }); });
 
 export const stampFrom = (): string => Date.now().toString().slice(-6);
 
@@ -167,7 +191,7 @@ export function ledgerFlagsXml(company: string, name: string): string {
 
 /** What Tally holds for one ledger: its parent group and whether it is bill-by-bill. Null when no such ledger. Never assumed. */
 export async function readLedgerFlags(l: Live, name: string): Promise<{ parent: string; billWise: boolean | null; raw: string } | null> {
-  const raw = await post(l.url, ledgerFlagsXml(l.company, name), 60_000);
+  const raw = await turn(l, "read ledger flags", () => post(l.url, ledgerFlagsXml(l.company, name), 60_000));
   const block = [...raw.matchAll(/<LEDGER\b[^>]*>[\s\S]*?<\/LEDGER>/g)].map((m) => m[0]).find((b) => b.includes("<PARENT"));
   if (!block) return null;
   const f = (t: string) => (new RegExp(`<${t}[^>]*>([^<]*)</${t}>`, "i").exec(block)?.[1] ?? "").replace(/&#4;\s*/g, "").trim();

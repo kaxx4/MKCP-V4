@@ -20,7 +20,7 @@ import { preflight } from "./lib/t11.js";
 import { DUMMY_KIT, r2 } from "./lib/t11Kit.js";
 import { alteredCopy, moneyScenario, variant, type BillExpect, type MoneyCase } from "./lib/t11Money.js";
 import { compareToPayload, failures, ledgerBrief } from "./lib/t11Check.js";
-import { Recorder, byKey, census, countStored, dropItem, dropParty, freshMasters, indiaToday, makeItem, makeLive, makeParty, push, readLedgerFlags, readStored, remove, stampFrom, sweepDay, asCancel, type Live } from "./lib/t11Live.js";
+import { Recorder, byKey, census, countStored, dropItem, dropParty, freshMasters, indiaToday, makeItem, makeLive, makeParty, push, readLedgerFlags, readStored, remove, stampFrom, sweepDay, asCancel, turn, TallyDownError, stopForTallyDown, gate, type Live } from "./lib/t11Live.js";
 import { loadOpenBills } from "../../src/services/billSettlement.js";
 import { readTag, parseTallyAmount } from "../../src/services/xml.js";
 import { pull as pullAll, remoteIdGuesses } from "../find-stranded-test-vouchers.js";
@@ -70,7 +70,7 @@ async function body(part: string, l: Live, rec: Recorder, made: Made): Promise<v
     rec.check(`${label}: every field we sent reads back as sent (${res.length} fields)`, bad.length === 0, bad.slice(0, 8).join(" | "));
     if (bad.length) rec.note(`${label} stored ledger lines: ${ledgerBrief(v)}`);
   };
-  const billsNow = async () => loadOpenBills(l.url, l.company);
+  const billsNow = async () => turn(l, "open bills", () => loadOpenBills(l.url, l.company));
   const judgeBills = async (id: string, expect: BillExpect[] | undefined) => {
     if (!expect?.length) return;
     const open = await billsNow();
@@ -195,7 +195,7 @@ async function teardown(l: Live, rec: Recorder, made: Made, before: { total: num
 
 async function cleanup(l: Live): Promise<number> {
   const rec = new Recorder("cleanup", -1);
-  const all = await pullAll(l.company);
+  const all = await turn(l, "census", () => pullAll(l.company));
   const mine = all.filter((v) => v.number.startsWith(`ZZTEST${l.stamp}/`));
   console.log(`  ${mine.length} voucher(s) of stamp ${l.stamp} in the books`);
   for (const v of mine) {
@@ -206,7 +206,7 @@ async function cleanup(l: Live): Promise<number> {
 <DATA><TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="${escapeXml(rid)}" VCHTYPE="${escapeXml(v.type)}" ACTION="Delete">
 <DATE>${v.date}</DATE><VOUCHERTYPENAME>${escapeXml(v.type)}</VOUCHERTYPENAME><VOUCHERNUMBER>${escapeXml(v.number)}</VOUCHERNUMBER></VOUCHER>
 </TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
-      try { const res = (await tallyPost(l.url, xml, 120_000, true)) as string; if (/<DELETED>[1-9]/.test(res)) { gone = true; break; } } catch { /* wrong spelling */ }
+      try { const res = (await turn(l, "delete by REMOTEID", () => tallyPost(l.url, xml, 120_000, true))) as string; if (/<DELETED>[1-9]/.test(res)) { gone = true; break; } } catch (e) { if (e instanceof TallyDownError) throw e; /* wrong spelling */ }
     }
     rec.check(`cleanup: ${v.type} ${v.number} deleted`, gone);
   }
@@ -228,9 +228,14 @@ async function cleanup(l: Live): Promise<number> {
   console.log(`\n  T11 MONEY ${PART.toUpperCase()} on the dummy (${l.day}, stamp ${stamp})${expected < 0 ? "  [CALIBRATION RUN: the expected check count is not set yet]" : ""}\n`);
   const made = new Made();
   let before: { total: number; ours: number } | null = null;
+  let down: TallyDownError | null = null;
   try { before = await census(l); rec.note(`books before: ${before.total} vouchers, ${before.ours} ours`); await body(PART, l, rec, made); }
-  catch (e) { rec.check("the part finished without an error", false, (e as Error).message.slice(0, 300)); }
-  finally { await teardown(l, rec, made, before); }
+  catch (e) { if (e instanceof TallyDownError) down = e; else rec.check("the part finished without an error", false, (e as Error).message.slice(0, 300)); }
+  finally {
+    if (!down && !gate(l).down) { try { await teardown(l, rec, made, before); } catch (e) { if (e instanceof TallyDownError) down = e; else throw e; } }
+    else down = down ?? gate(l).down;
+    if (down) stopForTallyDown(rec, down, stamp, made.vouchers.map((p) => `${p.voucherType} ${p.voucherNumber ?? p.narration}`), `cd server; npx tsx scripts/rigs/t11-money.ts --cleanup ${stamp}`);
+  }
   let code = rec.finish(OUT ?? undefined);
   if (expected < 0 && rec.failed === 0) { console.log(`  calibration: ${rec.passed} checks passed, set EXPECTED.${PART} = ${rec.passed}`); code = 0; }
   process.exit(code);
