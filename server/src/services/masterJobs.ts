@@ -20,6 +20,7 @@
  * No voucher is touched. The writes go through masterPusher, which sends through `tallyPost` and refuses a company the role does not allow.
  */
 import { tallyPost } from "../tally.js";
+import { PinRefused } from "./primaryMode.js";
 import { escapeXml, readTag } from "./xml.js";
 import { blocksOf } from "./tallyRequest.js";
 import { createLedger, createStockItem, createUnit, isValidUnitName, type NewLedger, type NewStockItem, type NewUnit } from "./masterPusher.js";
@@ -202,7 +203,13 @@ export async function createMasterJob(tallyUrl: string, company: string, plan: M
     if (!u.ok) return { ok: false, stage: "unit", reason: `Tally did not make the unit "${plan.unit.name}": ${said(u) || "no reason given"}. The item was not tried.`, masterId: null };
     unitMade = true;
   }
-  const r = await createStockItem(tallyUrl, company, plan.item);
+  let r: Awaited<ReturnType<typeof createStockItem>>;
+  try { r = await createStockItem(tallyUrl, company, plan.item); }
+  catch (e) {
+    /* D-M.263 item 3: the unit is already in Tally; a pin refusal of the item must say so, never "nothing reached Tally". */
+    if (unitMade && e instanceof PinRefused) e.unitMade = plan.unit!.name;
+    throw e;
+  }
   if (!r.ok) {
     const lead = unitMade ? `The unit "${plan.unit!.name}" was made, but the item was not. ` : "";
     return { ok: false, stage: "item", unitMade, reason: `${lead}Tally did not make the item "${plan.item.name}": ${said(r) || "no reason given"}.`, masterId: null, readBack: r.readBack ? { ...r.readBack } : undefined };

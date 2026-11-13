@@ -14,7 +14,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ErpJobAgent, Journal } from "../src/services/erpJobAgent.js";
-import { readPrimaryConfig, PrimaryQueueLoop, PrimaryMirrorLoop, PrimaryHousekeeping, supabaseMirrorPlanSource, startPrimaryMode, type MirrorRunners, type MirrorPlanSource } from "../src/services/primaryRunner.js";
+import { readPrimaryConfig, PrimaryQueueLoop, PrimaryMirrorLoop, PrimaryHousekeeping, guardedMirrorStore, guardedMirrorTally, supabaseMirrorPlanSource, startPrimaryMode, type MirrorRunners, type MirrorPlanSource } from "../src/services/primaryRunner.js";
 import type { SafePushResult } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
 import type { MirrorStore, MirrorTally } from "../src/services/erpMirrorSync.js";
@@ -290,6 +290,75 @@ const noop = () => {};
     let masters = 0, pinAsked = 0;
     await mk(plan({ fullDue: true }), runners(), { masters: async () => { masters++; return { ok: true, error: null }; }, pin: async () => (++pinAsked === 1 ? null : "refused: gone") }).tick();
     ok("the pin is asked again before the masters load that follows a full run", masters === 0 && calls.join() === "full", `${masters} ${calls.join()}`);
+  }
+
+  console.log("\n  D-M.263 item 2: the pin is asked FRESH right before the swap");
+  {
+    const calls: string[] = [];
+    const base = {
+      isTest: false, scrubSalt: null, companyKey: "ZZ",
+      swap: async (run: string, mark: number) => { calls.push(`swap ${run} ${mark}`); return { state: "swapped" }; },
+      swapAccepted: async (run: string) => { calls.push(`swapAccepted ${run}`); return { state: "swapped" }; },
+      checkDays: async () => { calls.push("checkDays"); return {}; },
+      step: async () => { calls.push("step"); },
+    } as unknown as import("../src/services/erpMirrorSync.js").MirrorStore;
+    let pinAnswer: string | null = null; let asked = 0; let throws = false;
+    const g = guardedMirrorStore(base, async () => { asked++; if (throws) throw new Error("socket hang up"); return pinAnswer; });
+    await g.swap("r1", 7);
+    ok("a swap with the pin holding goes through, after one fresh pin check", calls.join() === "swap r1 7" && asked === 1, `${calls.join()} ${asked}`);
+    ok("other store calls and fields are the real store's", g.isTest === false && g.companyKey === "ZZ" && typeof g.step === "function");
+    calls.length = 0; pinAnswer = "refused: another company is open";
+    let err = ""; try { await g.swap("r2", 8); } catch (e) { err = (e as Error).message; }
+    ok("a mismatch refuses the swap BEFORE the store is called", /refused: the pinned company is not confirmed right before the swap/.test(err) && calls.length === 0, `${err} | ${calls.join()}`);
+    err = ""; try { await g.swapAccepted("r3"); } catch (e) { err = (e as Error).message; }
+    ok("an accepted drop's swap is held to the same check", /an accepted swap/.test(err) && calls.length === 0);
+    err = ""; try { await g.checkDays(1, []); } catch (e) { err = (e as Error).message; }
+    ok("the nightly day check (which queues re-pulls from what Tally said) is too", /day check/.test(err) && calls.length === 0);
+    pinAnswer = null; throws = true; err = "";
+    try { await g.swap("r4", 9); } catch (e) { err = (e as Error).message; }
+    ok("a pin that cannot be checked refuses the swap as well", /could not be checked/.test(err) && calls.length === 0, err);
+    throws = false; asked = 0; calls.length = 0;
+    await g.swap("r5", 1); await g.swap("r6", 2);
+    ok("every swap asks again: the answer is never reused from before", asked === 2 && calls.length === 2, `${asked} ${calls.length}`);
+    /* The tally wrapper remembers a good answer for 60 s; the store wrapper must not. */
+    let t = 0; let tallyAsks = 0;
+    const gt = guardedMirrorTally({ highest: async () => ({ alterId: 1, vouchers: [] }), vouchersOn: async () => [], changedSince: async () => [], ledgers: async () => [], loadedPeriod: async () => ({}) } as any, async () => { tallyAsks++; return null; }, 60_000, () => t);
+    await gt.highest(); await gt.highest();
+    ok("(the reads remember a good answer for 60 s: that is why the swap needs its own fresh one)", tallyAsks === 1);
+    const src = readFileSync(new URL("../src/services/primaryRunner.ts", import.meta.url), "utf8");
+    ok("the mode builds its store through guardedMirrorStore", /const store = guardedMirrorStore[(]supabaseMirrorStore/.test(src));
+  }
+
+  console.log("\n  D-M.263 item 3: a restart does not prune again the same day");
+  {
+    const calls: string[] = [];
+    const client = { rpc: async (fn: string) => { calls.push(fn); return { data: 4, error: null }; } };
+    const jf = join(dir, "hk-restart.jsonl");
+    const j = new Journal(jf);
+    j.append({ kind: "housekeeping", task: "signals-prune", pruned: 9, error: null, at: new Date(Date.now() - 700).toISOString() });
+    const early = new PrimaryHousekeeping({ client, journal: j, firstMs: 20, everyMs: 1000, log: noop });
+    early.start();
+    ok("the last good prune is read from the journal on start", early.status.lastGoodPruneAt !== null);
+    await new Promise((r) => setTimeout(r, 120));
+    ok("a prune 0.7 s ago (of a 1 s interval): nothing yet after 0.12 s, not at the first-run wait", calls.length === 0, String(calls.length));
+    await new Promise((r) => setTimeout(r, 300));
+    early.stop();
+    ok("it runs when the full interval since the last good prune has passed", calls.length >= 1, String(calls.length));
+    calls.length = 0;
+    const j2 = new Journal(join(dir, "hk-restart2.jsonl"));
+    j2.append({ kind: "housekeeping", task: "signals-prune", pruned: null, error: "permission denied", at: new Date(Date.now() - 100).toISOString() });
+    const failedBefore = new PrimaryHousekeeping({ client, journal: j2, firstMs: 20, everyMs: 5000, log: noop });
+    failedBefore.start();
+    const knewBefore = failedBefore.status.lastGoodPruneAt;
+    await new Promise((r) => setTimeout(r, 120));
+    failedBefore.stop();
+    ok("a failed prune in the journal is no memory: the first run waits only the normal first wait", calls.length === 1 && knewBefore === null, `${calls.length}`);
+    calls.length = 0;
+    const blind = new PrimaryHousekeeping({ client, journal: { append() {}, entries() { throw new Error("unreadable"); } }, firstMs: 20, everyMs: 5000, log: noop });
+    blind.start();
+    await new Promise((r) => setTimeout(r, 120));
+    blind.stop();
+    ok("a journal that cannot be read means no memory, never a crash", calls.length === 1, `${calls.length}`);
   }
 
   console.log("\n  housekeeping: the once-a-day change-signal prune (D-M.262)");

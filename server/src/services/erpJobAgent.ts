@@ -358,10 +358,10 @@ export class ErpJobAgent {
   private claimsPausedUntil = 0;
   private holdSec = 0;
   /** Pause claiming for 15 s, doubling each time in a row up to 5 minutes. The database has no per-job "try again at" setter through `erp_finish_job`, so the delay lives here; the pause is global because an unreadable company list is global, never one job's fault. */
-  private holdClaims(): number {
+  private holdClaims(reason = "a job was put back because the pinned company could not be checked"): number {
     this.holdSec = this.holdSec === 0 ? 15 : Math.min(300, this.holdSec * 2);
     this.claimsPausedUntil = this.o.now() + this.holdSec * 1000;
-    this.status.claimsPaused = { until: new Date(this.claimsPausedUntil).toISOString(), seconds: this.holdSec, reason: "a job was put back because the pinned company could not be checked" };
+    this.status.claimsPaused = { until: new Date(this.claimsPausedUntil).toISOString(), seconds: this.holdSec, reason };
     return this.holdSec;
   }
 
@@ -377,7 +377,7 @@ export class ErpJobAgent {
       return { id: job.id, key, outcome: "failed", detail: why.reason };
     }
     await this.finishWithRetry(job, "queued");
-    const sec = this.holdClaims();
+    const sec = this.holdClaims(`a job was put back: ${why.reason}`);
     return { id: job.id, key, outcome: "not-sent", detail: `${why.reason} Back in the queue; claiming pauses ${sec} s.` };
   }
 
@@ -387,10 +387,11 @@ export class ErpJobAgent {
    * first. Never `uncertain`, and it does not count towards "Tally may be showing a message".
    */
   private async pinRefusedAfterSent(job: ErpJob, key: string, e: PinRefused): Promise<RunReport["results"][number]> {
-    const reason = e.definite ? e.message : `${e.message} Send it again when Tally answers.`;
+    const unit = e.unitMade ? ` The unit "${e.unitMade}" WAS made in Tally before this; the item was not.` : "";
+    const reason = (e.definite ? e.message : `${e.message} Send it again when Tally answers.`) + unit;
     this.journalOrStop({ kind: "reply", jobId: job.id, outcome: "failed", stage: "pin", masterId: null, bookedNumber: null, errors: [reason], differences: [], at: new Date().toISOString() });
-    await this.finishWithRetry(job, "failed", { error: reason, result: { stage: "guard", pin: e.definite ? "mismatch" : "unreadable", sent_to_tally: false } });
-    if (!e.definite) this.holdClaims();
+    await this.finishWithRetry(job, "failed", { error: reason, result: { stage: "guard", pin: e.definite ? "mismatch" : "unreadable", sent_to_tally: false, ...(e.unitMade ? { unit_made: true, unit: e.unitMade } : {}) } });
+    if (!e.definite) this.holdClaims(`a job failed after the pin could not be confirmed: ${e.message}`);
     return { id: job.id, key, outcome: "failed", detail: reason };
   }
 
@@ -473,6 +474,18 @@ export class ErpJobAgent {
     return t.ok ? t.company : this.o.company;
   }
 
+  /**
+   * D-M.263 item 1: does the job's OWN record prove the voucher was once posted by this system? True when the job carries the voucher's MASTERID,
+   * or the journal holds a reply of this job's push that named it. A Delete settled "done" from an empty read needs this (endState.ts).
+   */
+  private postedBySystem(job: ErpJob): boolean {
+    if (String(job.master_id ?? "").trim()) return true;
+    try {
+      const r = this.o.journal.lastReply(job.id);
+      return !!(r && r.masterId && String(r.masterId).trim());
+    } catch { return false; }
+  }
+
   /** A job that was sent with no reply in hand: read Tally, settle only on exactly one match. */
   private async readBack(job: ErpJob): Promise<{ state: JobOutcome; how: string; masterId?: string | null }> {
     let found: { masterId: string }[];
@@ -500,7 +513,14 @@ export class ErpJobAgent {
        settles when the voucher reads back cancelled, a Delete when it is gone. M3 (review, 5-Nov-2026): with no voucher number a match on date,
        type, party and amount may be a different voucher, so a read never settles it. Anything else stays uncertain for a person. */
     const action = action0(job);
-    const proof = endStateProof(job.payload, found);
+    const proof = endStateProof(job.payload, found, { postedBySystem: this.postedBySystem(job) });
+    if (proof.done && action === "Delete") {
+      /* D-M.263 item 1: "gone" is proved by an EMPTY read, and the pin check before the read is a separate hold of the lane: the company could have
+         been swapped or closed in between, and an empty answer from another company says nothing. The pin is asked again AFTER the read, and the Delete
+         is settled only if it still holds; otherwise the job stays as it is for the next round. */
+      const after = await this.pinProblem(this.recoveryCompany(job));
+      if (after) return { state: "uncertain", how: `the voucher read as gone, but the pinned company could not be confirmed afterwards (${after.reason}); left for the next run` };
+    }
     if (proof.done) {
       await this.finishWithRetry(job, "succeeded", { masterId: proof.masterId, bookedNumber: job.payload.voucherNumber ?? null,
         result: { settled: "read-back", matches: found.length, end_state: action } });
@@ -563,6 +583,8 @@ export class ErpJobAgent {
       /* D-M.258 item 2: a clean pre-claim check ends the growing pause once the pause is over and has stayed quiet for as long again; a pause that is
          still running, or one that just ended and failed again at once, keeps doubling (a reset at every clean check would make the doubling dead code). */
       if (this.holdSec > 0 && this.o.now() >= this.claimsPausedUntil + this.holdSec * 1000) { this.holdSec = 0; this.status.claimsPaused = null; }
+      /* D-M.263 item 3: the status shows a pause only while it runs; the growing delay (holdSec) is kept until a quiet spell ends it. */
+      if (this.status.claimsPaused && this.o.now() >= this.claimsPausedUntil) this.status.claimsPaused = null;
       report.settled = await this.settleOwn();
       if (this.o.now() < this.claimsPausedUntil) {
         report.stopped = `claiming is paused for ${Math.ceil((this.claimsPausedUntil - this.o.now()) / 1000)} s more: a job was put back because the pinned company could not be checked`;
@@ -730,7 +752,12 @@ export class ErpJobAgent {
       try { found = await this.o.find(company, job.payload); } catch { found = null; }
       /* D-M.258 item 1: what counts as "already done" depends on the action. A Cancel is done when the voucher reads back cancelled, a Delete when it
          is gone; "the voucher exists" is proof only for a Create or an Alter (endState.ts). The read was made just after the pin check above. */
-      const proof = found === null ? null : endStateProof(job.payload, found);
+      const proof = found === null ? null : endStateProof(job.payload, found, { postedBySystem: this.postedBySystem(job) });
+      if (proof?.done && action0(job) === "Delete") {
+        /* D-M.263 item 1: the same rule as readBack: a Delete settled by an empty read is settled only if the pin still holds AFTER the read. */
+        const after = await this.pinProblem(company);
+        if (after) return await this.pinStop(job, key, after);
+      }
       if (found === null || proof!.done || proof!.ambiguous) {
         const state: JobOutcome = proof?.done ? "succeeded" : "uncertain";
         const detail = proof === null ? "Tally could not be read before the resend; not pushed"

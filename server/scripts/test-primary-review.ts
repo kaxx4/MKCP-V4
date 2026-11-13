@@ -150,6 +150,26 @@ function setEnv(e: Record<string, string | undefined>): () => void {
     restore();
   }
 
+  console.log("\n  D-M.263 item 3: the pause shows its own reason, and shows only while it runs");
+  {
+    const restore = setEnv(env());
+    const m = memErpQueue(); m.add(pl(21), false);
+    const clock = { t: Date.now() };
+    let asked = 0;
+    const { a } = mk(m, { pin: async () => (++asked === 2 ? UNREAD : null) }, clock);
+    await a.runOnce(1);                                  // pre-claim ok (1), the job's early check fails (2): back in the queue, claiming pauses 15 s
+    const reason = a.status.claimsPaused?.reason ?? "";
+    ok("the pause's reason carries the pin's own words", /could not be read/.test(reason), reason);
+    const wasPin = a.status.pin?.problem ?? "";
+    clock.t += 5_000;
+    await a.runOnce(1);                                  // a clean pin check while the pause still runs
+    ok("a later clean pin check does not erase the pause or its reason", a.status.pin?.ok === true && !!a.status.claimsPaused && a.status.claimsPaused.reason === reason && wasPin.length > 0, JSON.stringify(a.status.claimsPaused));
+    clock.t += 15_000;                                   // the pause is over (15 s), but the quiet spell (as long again) is not
+    await a.runOnce(1);
+    ok("once its time has passed the status no longer shows a pause", a.status.claimsPaused === null, JSON.stringify(a.status.claimsPaused));
+    restore();
+  }
+
   console.log("\n  D-M.258 item 3: the pin is asked again while a full run reads, and a mismatch stops it");
   {
     const clock = { t: 1_000_000 };

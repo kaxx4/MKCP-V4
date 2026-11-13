@@ -35,14 +35,17 @@ type Found = { masterId: string; cancelled?: boolean }[];
 const okPush = async (): Promise<SafePushResult> => ({ ok: true, stage: "done", voucherId: "5001", errors: [], warnings: [], differences: [] });
 
 /** A resend of an earlier job (`resend_of` set), the Tally read answering `found`. Returns what the agent did. */
-async function resend(action: "Create" | "Alter" | "Cancel" | "Delete", found: Found | "unread", opts: { number?: boolean; lostReply?: boolean } = {}) {
+async function resend(action: "Create" | "Alter" | "Cancel" | "Delete", found: Found | "unread", opts: { number?: boolean; lostReply?: boolean; posted?: boolean; pin?: (call: number) => Promise<unknown> } = {}) {
   const m = memErpQueue();
   const payload = { ...rigPayload("RSD", 1, day), action, ...(opts.number === false ? { voucherNumber: "" } : {}) } as VoucherPayload & { label: string };
   const id = m.add(payload, false, opts.lostReply ? null : "job-original");
+  /* D-M.263 item 1: a Delete settled by an empty read needs the job's own record to show the voucher was posted by this system (its MASTERID). */
+  if (action === "Delete" && opts.posted !== false) m.rows.get(id)!.master_id = "5001";
   const pushed: string[] = [];
+  let pinCalls = 0;
   const a = new ErpJobAgent({
     queue: m.queue, journal: new Journal(join(dir, `j${++jn}.jsonl`)), company: NAME,
-    pin: async () => null,
+    pin: async () => (opts.pin ? ((await opts.pin(++pinCalls)) as null) : null),
     push: async (_c, p) => { pushed.push(String(p.remoteId)); if (opts.lostReply) throw new Error("socket closed after Tally accepted"); return okPush(); },
     find: async () => { if (found === "unread") throw new Error("Tally did not answer"); return found; },
     leaseSeconds: 90, jobLeaseSeconds: 120, wait: async () => {},
@@ -107,6 +110,29 @@ async function resend(action: "Create" | "Alter" | "Cancel" | "Delete", found: F
     ok("Delete, reply lost, voucher still there: NOT settled succeeded (uncertain)", dStill.state === "uncertain", `${dStill.state}`);
     const cr = await resend("Create", [{ masterId: "9" }], { lostReply: true });
     ok("Create, reply lost, found once: settled succeeded (unchanged)", cr.state === "succeeded");
+  }
+
+  console.log("\n  D-M.263 item 1: a Delete settled by an empty read");
+  {
+    const wrongNumber = await resend("Delete", [], { posted: false });
+    ok("a resent Delete whose voucher is not in Tally and was never recorded as posted is NOT settled done (uncertain, nothing sent)", wrongNumber.pushed === 0 && wrongNumber.state === "uncertain" && /posted by this system/.test(wrongNumber.error + wrongNumber.detail), `${wrongNumber.pushed} ${wrongNumber.state}: ${wrongNumber.detail}`);
+    const wrongLost = await resend("Delete", [], { posted: false, lostReply: true });
+    ok("Delete, reply lost, voucher not found, no record it was ever posted: uncertain, never succeeded", wrongLost.state === "uncertain" && /posted by this system/.test(wrongLost.error), `${wrongLost.state}: ${wrongLost.error}`);
+    const swapped = await resend("Delete", [], { pin: async (n) => (n >= 2 ? "refused: another company is open" : null) });
+    ok("resend: the pin is asked AGAIN after the empty read; a company that changed in between leaves the Delete unsettled (not succeeded, nothing sent)", swapped.pushed === 0 && swapped.state !== "succeeded", `${swapped.pushed} ${swapped.state}`);
+    const swappedHard = await resend("Delete", [], { pin: async (n) => (n >= 2 ? { reason: "refused: not the pinned company", definite: true } : null) });
+    ok("resend: a definite mismatch after the read ends the job failed, never succeeded", swappedHard.state === "failed" && swappedHard.pushed === 0, `${swappedHard.pushed} ${swappedHard.state}`);
+    const lostSwapped = await resend("Delete", [], { lostReply: true, pin: async (n) => (n >= 4 ? "refused: Tally is not answering the company list" : null) });
+    ok("lost reply: the pin is asked again after the read; a refusal then leaves the job as it is (not succeeded)", lostSwapped.pushed === 1 && lostSwapped.state !== "succeeded", `${lostSwapped.pushed} ${lostSwapped.state}`);
+    let asked = 0;
+    const steady = await resend("Delete", [], { pin: async () => { asked++; return null; } });
+    ok("the same Delete with a pin that keeps holding is settled succeeded, and the pin was asked one more time, after the read", steady.state === "succeeded" && steady.pushed === 0 && asked === 3, `${steady.state} asked ${asked}`);
+    let askedC = 0;
+    const cancelOk = await resend("Cancel", [{ masterId: "9", cancelled: true }], { pin: async () => { askedC++; return null; } });
+    ok("a Cancel is unchanged: the same two pin checks as before, none extra after its read", cancelOk.state === "succeeded" && askedC === 2, `asked ${askedC}`);
+    const P = { ...rigPayload("RSD", 1, day), action: "Delete" } as VoucherPayload;
+    const noCtx = endStateProof(P, []), withCtx = endStateProof(P, [], { postedBySystem: true });
+    ok("endStateProof: an empty read of a Delete is ambiguous without the record and done with it", !noCtx.done && (noCtx as { ambiguous: boolean }).ambiguous && withCtx.done);
   }
 
   console.log("\n  the pure rule and the read");

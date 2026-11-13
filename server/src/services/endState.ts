@@ -32,7 +32,15 @@ export function targetExistsBefore(p: VoucherPayload): boolean {
   return a === "Cancel" || a === "Delete" || a === "Alter";
 }
 
-export function endStateProof(p: VoucherPayload, found: FoundVoucher[]): EndStateProof {
+/**
+ * What the job's own record can say about the voucher beyond what this read shows (D-M.263 item 1).
+ * `postedBySystem`: the record proves the voucher was once posted by this system (the job carries the voucher's MASTERID, or the push's reply
+ * named it). A Delete is settled "done" on an empty read only when this is true: a wrong number reads empty too, and "nothing to delete" is not
+ * "deleted". Absent or false: an empty read of a Delete is ambiguous (a person checks).
+ */
+export interface ProofContext { postedBySystem?: boolean }
+
+export function endStateProof(p: VoucherPayload, found: FoundVoucher[], ctx: ProofContext = {}): EndStateProof {
   const action = actionOf(p);
   const hasNumber = !!String(p.voucherNumber ?? "").trim();
   if (action === "Cancel") {
@@ -44,7 +52,10 @@ export function endStateProof(p: VoucherPayload, found: FoundVoucher[]): EndStat
   }
   if (action === "Delete") {
     if (!hasNumber) return { done: false, ambiguous: true, how: "it carries no voucher number, so a read cannot tell that the voucher is gone" };
-    if (found.length === 0) return { done: true, masterId: null, how: "the voucher is no longer in Tally" };
+    if (found.length === 0) {
+      if (!ctx.postedBySystem) return { done: false, ambiguous: true, how: "the voucher is not in Tally, but nothing in this job's own record shows it was ever posted by this system (a wrong number reads the same), so it is not settled as deleted; a person must check" };
+      return { done: true, masterId: null, how: "the voucher is no longer in Tally" };
+    }
     return { done: false, ambiguous: false, how: `the voucher is still in Tally (${found.length} found), so the delete has not happened` };
   }
   // Create and Alter: the read matches the payload field by field, so one match is the end state.

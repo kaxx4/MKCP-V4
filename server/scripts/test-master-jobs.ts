@@ -281,6 +281,25 @@ const refusedWith = (kind: string, payload: unknown, re: RegExp, m = masters()) 
     ok("masters that cannot be read: failed, nothing sent, says to send again", m.rows.get(id)!.state === "failed" && /send it again when Tally answers/.test(String(m.rows.get(id)!.error)) && calls.created.length === 0);
   }
 
+  console.log("\n  D-M.263 item 3: a pin refusal after the unit was made says the unit WAS made");
+  {
+    const { PinRefused } = await import("../src/services/primaryMode.js");
+    const refuse = (unit: string | null) => async () => { const e = new PinRefused("refused: the company open in Tally is not the pinned one.", false); if (unit) e.unitMade = unit; throw e; };
+    const m1 = memErpQueue({ secondMs: 10 }); const c1: Calls = { created: [], read: 0, ids: 0 };
+    const id1 = addJob(m1, "new_item", ITEM_PAYLOAD);
+    await agent(m1, c1, { createMaster: refuse("ZZUNIT") }).runOnce(1);
+    const r1 = m1.rows.get(id1)!;
+    ok("unit made, then the pin refused the item: failed, the note says the unit WAS made and the item was not", r1.state === "failed" && /unit "ZZUNIT" WAS made in Tally/.test(String(r1.error)), `${r1.state}: ${r1.error}`);
+    ok("the result carries sent_to_tally false for the item and unit_made true with the unit's name", (r1.result as any)?.sent_to_tally === false && (r1.result as any)?.unit_made === true && (r1.result as any)?.unit === "ZZUNIT", JSON.stringify(r1.result));
+    const m2 = memErpQueue({ secondMs: 10 }); const c2: Calls = { created: [], read: 0, ids: 0 };
+    const id2 = addJob(m2, "new_item", ITEM_PAYLOAD);
+    await agent(m2, c2, { createMaster: refuse(null) }).runOnce(1);
+    const r2 = m2.rows.get(id2)!;
+    ok("nothing made before the refusal: no unit note, no unit_made", r2.state === "failed" && !/WAS made/.test(String(r2.error)) && (r2.result as any)?.unit_made === undefined, `${r2.error} ${JSON.stringify(r2.result)}`);
+    const src = (await import("node:fs")).readFileSync(new URL("../src/services/masterJobs.ts", import.meta.url), "utf8");
+    ok("createMasterJob marks the pin refusal with the unit it had made (the item request is wrapped after the unit)", /if \(unitMade && e instanceof PinRefused\) e\.unitMade = plan\.unit!\.name/.test(src));
+  }
+
   console.log(`\n  ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(2); });

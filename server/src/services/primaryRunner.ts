@@ -145,6 +145,25 @@ export function guardedMirrorTally(tally: MirrorTally, pin: () => Promise<string
   };
 }
 
+/**
+ * D-M.263 item 2: the pin is also asked FRESH (never from the 60-second memory of guardedMirrorTally) immediately before anything the run read from
+ * Tally is written into the mirror: the swap, an accepted drop's swap, and the nightly day check (which queues re-pulls from what Tally said). It
+ * comes after the run's last read, so it covers the last reads too. A mismatch, or a pin that cannot be checked, THROWS before the call: the swap
+ * is refused, runMirrorSync marks the run failed (the mark stays, the staged rows are kept), and nothing from that read reaches the mirror.
+ */
+export function guardedMirrorStore(store: MirrorStore, pinNow: () => Promise<string | null>): MirrorStore {
+  const fresh = async (what: string): Promise<void> => {
+    let why: string | null;
+    try { why = await pinNow(); } catch (e) { why = `the company pin could not be checked (${(e as Error).message.slice(0, 100)})`; }
+    if (why) throw new Error(`refused: the pinned company is not confirmed right before ${what}, so nothing the run read is written into the mirror. ${why}`);
+  };
+  const w = Object.create(store) as { -readonly [K in keyof MirrorStore]: MirrorStore[K] };
+  w.swap = async (run, mark) => { await fresh("the swap"); return store.swap(run, mark); };
+  w.swapAccepted = async (run) => { await fresh("an accepted swap"); return store.swapAccepted(run); };
+  w.checkDays = async (hi, vs) => { await fresh("the day check is stored"); return store.checkDays(hi, vs); };
+  return w;
+}
+
 /** What the planner needs from the database that the store does not already give. */
 export interface MirrorPlanSource {
   hasMark(): Promise<boolean>;
@@ -294,6 +313,8 @@ export interface HousekeepingStatus {
   running: boolean; rounds: number; lastAt: string | null; lastNote: string | null; errors: number;
   /** Change signals removed by the last good prune, and in all since this process started. Null until the first prune. */
   signalsPrunedLast: number | null; signalsPrunedTotal: number;
+  /** When the last good prune ran, read from the journal on start (so a restart does not prune again the same day), then kept up to date. */
+  lastGoodPruneAt: string | null;
 }
 
 /**
@@ -303,10 +324,10 @@ export interface HousekeepingStatus {
  * the next day; it never throws and never touches Tally. It exists only inside the single-primary mode, so it is off whenever the mode is off.
  */
 export class PrimaryHousekeeping {
-  readonly status: HousekeepingStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, signalsPrunedLast: null, signalsPrunedTotal: 0 };
+  readonly status: HousekeepingStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, signalsPrunedLast: null, signalsPrunedTotal: 0, lastGoodPruneAt: null };
   private timer: ReturnType<typeof setTimeout> | null = null;
   constructor(private o: {
-    client: Pick<Rpc, "rpc">; journal: { append(e: JournalEntry): void };
+    client: Pick<Rpc, "rpc">; journal: { append(e: JournalEntry): void; entries?(): JournalEntry[] };
     /** How long between prunes (default one day) and how long after start the first one waits (default 10 minutes). */
     everyMs?: number; firstMs?: number;
     /** What counts as old (default 7 days). The database refuses anything under one day. */
@@ -330,6 +351,7 @@ export class PrimaryHousekeeping {
       if (data === null || data === undefined || !Number.isFinite(n) || n < 0) throw new Error(`the database answered "${String(data)}", not a count`);
       this.status.signalsPrunedLast = n;
       this.status.signalsPrunedTotal += n;
+      this.status.lastGoodPruneAt = at;
       this.status.lastNote = `pruned ${n} change signal(s) older than ${this.o.older ?? "7 days"}`;
       note(n, null);
       log(this.status.lastNote);
@@ -350,7 +372,19 @@ export class PrimaryHousekeeping {
       await this.tick();
       if (this.status.running) { this.timer = setTimeout(loop, this.o.everyMs ?? 24 * 3_600_000); this.timer.unref?.(); }
     };
-    this.timer = setTimeout(loop, this.o.firstMs ?? 600_000);
+    /* D-M.263 item 3: a restart must not prune again the same day. The last good prune is read from the journal; the first run waits until a full
+       interval has passed since it (and never less than `firstMs`). A journal that cannot be read means no memory: the normal first wait. */
+    const every = this.o.everyMs ?? 24 * 3_600_000, first = this.o.firstMs ?? 600_000;
+    let wait = first;
+    try {
+      const last = (this.o.journal.entries?.() ?? []).filter((e): e is Extract<JournalEntry, { kind: "housekeeping" }> => e.kind === "housekeeping" && e.error === null && e.pruned !== null).pop();
+      if (last) {
+        this.status.lastGoodPruneAt = last.at;
+        const age = (this.o.now ?? Date.now)() - new Date(last.at).getTime();
+        if (Number.isFinite(age) && age >= 0) wait = Math.max(first, every - age);
+      }
+    } catch { /* no memory of an earlier prune */ }
+    this.timer = setTimeout(loop, wait);
     this.timer.unref?.();
   }
   stop(): void { this.status.running = false; if (this.timer) clearTimeout(this.timer); this.timer = null; }
@@ -393,7 +427,7 @@ function startPrimaryModeInner(tallyUrl: string, env: Env, deps: PrimaryDeps): P
     ...seams, companies: k.companies,
   } as ConstructorParameters<typeof ErpJobAgent>[0]);
   const queue = new PrimaryQueueLoop({ agent, pollMs: k.queuePollMs, busyMs: k.queueBusyMs, log: (l) => log(`[primary queue] ${l}`) });
-  const store = supabaseMirrorStore(c as any, k.machine, k.key, k.companyKey, false);
+  const store = guardedMirrorStore(supabaseMirrorStore(c as any, k.machine, k.key, k.companyKey, false), async () => (await seams.pin(k.company))?.reason ?? null);
   const mastersStore = supabaseMastersStore(c as any, k.machine, k.key, k.companyKey, false);
   const mirror = new PrimaryMirrorLoop({
     store, tally: tallyMirrorReads(k.tallyUrl, k.company), plan: supabaseMirrorPlanSource(c as any, k.companyKey), tickMs: k.mirrorTickMs,

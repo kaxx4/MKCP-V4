@@ -62,6 +62,8 @@ export function primaryModeRefusal(env: Env = process.env): string | null {
 /** A pin refusal as the transport throws it: nothing was sent to Tally. `definite` is true when the answer will not change by waiting. */
 export class PinRefused extends Error {
   readonly definite: boolean;
+  /** D-M.263 item 3: set when a job had already MADE something in Tally (a new item's unit) before the pin refused the next step. */
+  unitMade?: string;
   constructor(message: string, definite: boolean) {
     super(message);
     this.name = "PinRefused";
