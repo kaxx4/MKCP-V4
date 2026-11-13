@@ -142,7 +142,8 @@ function setEnv(e: Record<string, string | undefined>): () => void {
     await loop.tick();                                   // the job is put back, claiming pauses
     ok("the agent status carries the pause: until, seconds, reason", a.status.claimsPaused?.seconds === 15 && /put back/.test(a.status.claimsPaused?.reason ?? ""), JSON.stringify(a.status.claimsPaused));
     await loop.tick();                                   // the next round is inside the pause
-    ok("the queue loop's last note says the pause and why, not 'idle'", /paused for \d+ s more/.test(String(loop.status.lastNote)) && /could not be checked/.test(String(loop.status.lastNote)), String(loop.status.lastNote));
+    ok("the queue loop's last note says the pause and why, not 'idle'", /paused for \d+ s more/.test(String(loop.status.lastNote)) && /cannot be checked/.test(String(loop.status.lastNote)), String(loop.status.lastNote));
+    ok("the last note carries the SPECIFIC reason (the pin's own words), not a generic line", /put back: .*could not be read/.test(String(loop.status.lastNote)), String(loop.status.lastNote));
     // The pause ends; the company list stays readable for as long again: the next clean pre-claim check starts the pause over.
     clock.t += 15_000 + 15_000 + 1;
     await loop.tick();

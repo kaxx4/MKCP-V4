@@ -390,7 +390,7 @@ export class ErpJobAgent {
     const unit = e.unitMade ? ` The unit "${e.unitMade}" WAS made in Tally before this; the item was not.` : "";
     const reason = (e.definite ? e.message : `${e.message} Send it again when Tally answers.`) + unit;
     this.journalOrStop({ kind: "reply", jobId: job.id, outcome: "failed", stage: "pin", masterId: null, bookedNumber: null, errors: [reason], differences: [], at: new Date().toISOString() });
-    await this.finishWithRetry(job, "failed", { error: reason, result: { stage: "guard", pin: e.definite ? "mismatch" : "unreadable", sent_to_tally: false, ...(e.unitMade ? { unit_made: true, unit: e.unitMade } : {}) } });
+    await this.finishWithRetry(job, "failed", { error: reason, result: { stage: "guard", pin: e.definite ? "mismatch" : "unreadable", sent_to_tally: !!e.unitMade, ...(e.unitMade ? { unit_made: true, unit: e.unitMade } : {}) } });
     if (!e.definite) this.holdClaims(`a job failed after the pin could not be confirmed: ${e.message}`);
     return { id: job.id, key, outcome: "failed", detail: reason };
   }
@@ -480,6 +480,8 @@ export class ErpJobAgent {
    */
   private postedBySystem(job: ErpJob): boolean {
     if (String(job.master_id ?? "").trim()) return true;
+    /* D-M.266: no origin lookup. The ERP never enqueues a Delete (deletes are done in Tally by a person), so a Delete that reaches this check with no
+       MASTERID of its own is settled `uncertain` for a person, the safe direction. A Cancel settles on ISCANCELLED and never needs this. */
     try {
       const r = this.o.journal.lastReply(job.id);
       return !!(r && r.masterId && String(r.masterId).trim());
@@ -587,7 +589,7 @@ export class ErpJobAgent {
       if (this.status.claimsPaused && this.o.now() >= this.claimsPausedUntil) this.status.claimsPaused = null;
       report.settled = await this.settleOwn();
       if (this.o.now() < this.claimsPausedUntil) {
-        report.stopped = `claiming is paused for ${Math.ceil((this.claimsPausedUntil - this.o.now()) / 1000)} s more: a job was put back because the pinned company could not be checked`;
+        report.stopped = `claiming is paused for ${Math.ceil((this.claimsPausedUntil - this.o.now()) / 1000)} s more: ${this.status.claimsPaused?.reason ?? "a job was put back because the pinned company could not be checked"}`;
         return report;
       }
       await this.refreshFiledThrough();

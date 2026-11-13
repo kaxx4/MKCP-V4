@@ -104,6 +104,19 @@ async function resend(action: "Create" | "Alter" | "Cancel" | "Delete", found: F
     ok("Cancel, reply lost, voucher still live: NOT settled succeeded (uncertain, a person checks)", cLive.state === "uncertain" && cLive.pushed === 1, `${cLive.state}`);
     const cDone = await resend("Cancel", [{ masterId: "9", cancelled: true }], { lostReply: true });
     ok("Cancel, reply lost, voucher reads back cancelled: settled succeeded", cDone.state === "succeeded", `${cDone.state}`);
+    /* D-M.266: a Cancel after a lost reply settles on Tally's own ISCANCELLED flag and needs no MASTERID on the job row (the ERP's cancels are kind
+       cancel_voucher with payload.remoteId). The row below carries none: master_id is null. */
+    const cNoMaster = await (async () => {
+      const m = memErpQueue();
+      const payload = { ...rigPayload("RSD", 1, day), action: "Cancel" } as VoucherPayload & { label: string };
+      const id = m.add(payload, false, null);
+      const a = new ErpJobAgent({ queue: m.queue, journal: new Journal(join(dir, `j${++jn}.jsonl`)), company: NAME, pin: async () => null,
+        push: async () => { throw new Error("socket closed after Tally accepted"); }, find: async () => [{ masterId: "9", cancelled: true }],
+        leaseSeconds: 90, jobLeaseSeconds: 120, wait: async () => {} });
+      await a.runOnce(1);
+      return { state: m.rows.get(id)!.state, master: m.rows.get(id)!.master_id };
+    })();
+    ok("Cancel, reply lost, reads back ISCANCELLED=Yes, the job row has NO master_id: still settled succeeded", cNoMaster.state === "succeeded", `${cNoMaster.state} master_id=${cNoMaster.master}`);
     const dGone = await resend("Delete", [], { lostReply: true });
     ok("Delete, reply lost, voucher gone: settled succeeded", dGone.state === "succeeded", `${dGone.state}`);
     const dStill = await resend("Delete", [{ masterId: "9" }], { lostReply: true });
