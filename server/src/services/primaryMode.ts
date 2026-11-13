@@ -10,7 +10,8 @@
  *   MKCP_PRIMARY_COMPANY_GUID=...   the GUID of the one Tally company the primary may write to. FAIL CLOSED: with the mode on and this unset,
  *                                   nothing is posted and nothing is claimed.
  *   MKCP_PRIMARY_COMPANY=...        the company's name as Tally shows it (else the agent's usual company setting)
- *   MKCP_PRIMARY_COMPANY_KEY=...    the stable company key the mirror and the voucher counters use (else the name without its "(from ...)" part)
+ *   MKCP_PRIMARY_COMPANY_KEY=...    the key the mirror and the swap store write under (else the company's full Tally name: tally_* and the swap
+ *                                   store are keyed by Tally's own name, and parity compares them by it)
  *   MKCP_AGENT_MACHINE_ID, MKCP_ERP_AGENT_KEY   this machine's registration on the ERP queue (see scripts/primary-register.ts)
  *
  * Why a GUID and not the name: a copy of the company shares the real company's name (tallyRole.ts), and last year's company is a different
@@ -31,13 +32,13 @@ export function primaryCompanyName(env: Env = process.env): string {
   return (env.MKCP_PRIMARY_COMPANY ?? env.MKCP_COMPANY ?? env.TALLY_COMPANY ?? "").trim();
 }
 
-/** "Name - (from 1-Apr-26)" becomes "Name": the key the mirror and the counters use, the same for every year's company. */
+/** "Name - (from 1-Apr-26)" becomes "Name": the year-free key (the SQL twin is erp_company_key). Used by the voucher-series seed's mirror match, never by the mirror itself. */
 export function stableCompanyKey(name: string): string {
   return String(name ?? "").replace(/\s*-?\s*\(from [^)]*\)\s*$/i, "").trim();
 }
 export function primaryCompanyKey(env: Env = process.env): string {
   const k = (env.MKCP_PRIMARY_COMPANY_KEY ?? "").trim();
-  return k || stableCompanyKey(primaryCompanyName(env));
+  return k || primaryCompanyName(env);
 }
 
 /** Does this request write to Tally (an Import)? Reads, the company listing and the health check are not writes. */

@@ -63,7 +63,7 @@ function setEnv(e: Record<string, string | undefined>): () => void {
   ok("the pin with the GUID unset is refused even if the company is open", primaryPinProblem(NAME, listing([[NAME, GUID]]), { MKCP_PRIMARY_MODE: "on" }) !== null);
   ok("an Import is a write; an Export, the listing and the health check are not", isImportRequest(importXml("X")) && !isImportRequest(exportXml("X")));
   ok("the stable company key drops the year part", stableCompanyKey(NAME) === "ZZ OFFICE CO" && stableCompanyKey("ZZ OFFICE CO") === "ZZ OFFICE CO");
-  ok("the company key can be set outright", primaryCompanyKey({ MKCP_PRIMARY_COMPANY_KEY: "K1", MKCP_PRIMARY_COMPANY: NAME }) === "K1" && primaryCompanyKey({ MKCP_PRIMARY_COMPANY: NAME }) === "ZZ OFFICE CO");
+  ok("the company key can be set outright; by default it is Tally's full name (tally_* is keyed by it)", primaryCompanyKey({ MKCP_PRIMARY_COMPANY_KEY: "K1", MKCP_PRIMARY_COMPANY: NAME }) === "K1" && primaryCompanyKey({ MKCP_PRIMARY_COMPANY: NAME }) === NAME);
 
   console.log("\n  at the transport: tallyPost holds every write to the pin");
   const sent: string[] = [];

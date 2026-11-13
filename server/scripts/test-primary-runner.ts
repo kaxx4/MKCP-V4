@@ -40,7 +40,7 @@ const noop = () => {};
   console.log("\n  the configuration");
   {
     const c = readPrimaryConfig("http://t", good());
-    ok("a complete setting reads", c.ok && c.cfg.machine === "office-pc-1" && c.cfg.company === NAME && c.cfg.companyKey === "ZZ OFFICE CO");
+    ok("a complete setting reads", c.ok && c.cfg.machine === "office-pc-1" && c.cfg.company === NAME && c.cfg.companyKey === NAME);
     ok("the defaults are 10 s polling and a 5 minute mirror pass", c.ok && c.cfg.queuePollMs === 10_000 && c.cfg.mirrorTickMs === 300_000);
     const cases: Array<[string, string[], RegExp]> = [
       ["the mode off", ["MKCP_PRIMARY_MODE"], /MKCP_PRIMARY_MODE is not on/],
