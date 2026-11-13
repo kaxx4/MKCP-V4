@@ -11,7 +11,7 @@
  */
 import { isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
-import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams, tallyPinSeam, type RunReport } from "./erpJobAgent.js";
+import { ErpJobAgent, Journal, type JournalEntry, supabaseErpQueue, tallySeams, tallyPinSeam, type RunReport } from "./erpJobAgent.js";
 import {
   planMirrorWork, runMirrorSync, runDayCheck, runRepull, applyAcceptedDrops, supabaseMirrorStore, tallyMirrorReads,
   type MirrorStore, type MirrorTally, type MirrorWork,
@@ -289,10 +289,77 @@ export class PrimaryMirrorLoop {
   stop(): void { this.status.running = false; if (this.timer) clearTimeout(this.timer); this.timer = null; }
 }
 
+// ── Housekeeping (D-M.262) ────────────────────────────────────────────────────
+export interface HousekeepingStatus {
+  running: boolean; rounds: number; lastAt: string | null; lastNote: string | null; errors: number;
+  /** Change signals removed by the last good prune, and in all since this process started. Null until the first prune. */
+  signalsPrunedLast: number | null; signalsPrunedTotal: number;
+}
+
+/**
+ * D-M.262: once a day the primary asks the database to prune change signals older than 7 days (`erp_signals_prune`, migration 0124; the function
+ * itself refuses anything under a day, and only service_role may run it). Without this `erp_change_signals` grows for ever once go-live makes a
+ * signal for every change. The number removed goes to the journal and to /api/primary/status. A failed call is noted, journalled and tried again
+ * the next day; it never throws and never touches Tally. It exists only inside the single-primary mode, so it is off whenever the mode is off.
+ */
+export class PrimaryHousekeeping {
+  readonly status: HousekeepingStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, signalsPrunedLast: null, signalsPrunedTotal: 0 };
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  constructor(private o: {
+    client: Pick<Rpc, "rpc">; journal: { append(e: JournalEntry): void };
+    /** How long between prunes (default one day) and how long after start the first one waits (default 10 minutes). */
+    everyMs?: number; firstMs?: number;
+    /** What counts as old (default 7 days). The database refuses anything under one day. */
+    older?: string; log?: (l: string) => void; now?: () => number;
+  }) {}
+
+  /** One prune. Never throws. */
+  async tick(): Promise<void> {
+    const log = this.o.log ?? ((l: string) => console.log(`[primary housekeeping] ${l}`));
+    const at = new Date((this.o.now ?? Date.now)()).toISOString();
+    const note = (pruned: number | null, error: string | null) => {
+      try { this.o.journal.append({ kind: "housekeeping", task: "signals-prune", pruned, error, at }); }
+      catch (e) { log(`could not write the journal: ${(e as Error).message.slice(0, 120)}`); }
+    };
+    this.status.rounds++;
+    this.status.lastAt = at;
+    try {
+      const { data, error } = await this.o.client.rpc("erp_signals_prune", { p_older: this.o.older ?? "7 days" });
+      if (error) throw new Error(error.message ?? String(error));
+      const n = Number(data);
+      if (data === null || data === undefined || !Number.isFinite(n) || n < 0) throw new Error(`the database answered "${String(data)}", not a count`);
+      this.status.signalsPrunedLast = n;
+      this.status.signalsPrunedTotal += n;
+      this.status.lastNote = `pruned ${n} change signal(s) older than ${this.o.older ?? "7 days"}`;
+      note(n, null);
+      log(this.status.lastNote);
+    } catch (e) {
+      this.status.errors++;
+      const m = (e as Error).message.slice(0, 160);
+      this.status.lastNote = `signal prune failed: ${m}`;
+      note(null, m);
+      log(this.status.lastNote);
+    }
+  }
+
+  start(): void {
+    if (this.status.running) return;
+    this.status.running = true;
+    const loop = async () => {
+      if (!this.status.running) return;
+      await this.tick();
+      if (this.status.running) { this.timer = setTimeout(loop, this.o.everyMs ?? 24 * 3_600_000); this.timer.unref?.(); }
+    };
+    this.timer = setTimeout(loop, this.o.firstMs ?? 600_000);
+    this.timer.unref?.();
+  }
+  stop(): void { this.status.running = false; if (this.timer) clearTimeout(this.timer); this.timer = null; }
+}
+
 // ── Start it ──────────────────────────────────────────────────────────────────
 export interface PrimaryHandle {
   stop(): void;
-  status(): { mode: "primary"; company: string; machine: string; queue: LoopStatus; mirror: LoopStatus; agent: unknown };
+  status(): { mode: "primary"; company: string; machine: string; queue: LoopStatus; mirror: LoopStatus; housekeeping: HousekeepingStatus; agent: unknown };
 }
 
 export interface PrimaryDeps {
@@ -320,8 +387,9 @@ function startPrimaryModeInner(tallyUrl: string, env: Env, deps: PrimaryDeps): P
   const { cfg: k } = cfg;
   const post = deps.post ?? ((u: string, x: string, t?: number) => tallyPost(u, x, t ?? 300_000, true) as Promise<string>);
   const seams = { ...tallySeams(k.tallyUrl, post), pin: tallyPinSeam(k.tallyUrl, post) };
+  const journal = new Journal(k.journalPath);
   const agent = new ErpJobAgent({
-    queue: supabaseErpQueue(c, k.machine, k.key), journal: new Journal(k.journalPath), company: k.company,
+    queue: supabaseErpQueue(c, k.machine, k.key), journal, company: k.company,
     ...seams, companies: k.companies,
   } as ConstructorParameters<typeof ErpJobAgent>[0]);
   const queue = new PrimaryQueueLoop({ agent, pollMs: k.queuePollMs, busyMs: k.queueBusyMs, log: (l) => log(`[primary queue] ${l}`) });
@@ -339,12 +407,14 @@ function startPrimaryModeInner(tallyUrl: string, env: Env, deps: PrimaryDeps): P
       return { ok: rep.ok, error: rep.error };
     },
   });
+  const housekeeping = new PrimaryHousekeeping({ client: c, journal, log: (l) => log(`[primary housekeeping] ${l}`) });
   log(`📒 [primary] single-primary mode: machine ${k.machine}, company pinned by GUID ${primaryGuid(env).slice(0, 8)}..., queue every ${k.queuePollMs / 1000} s, mirror every ${k.mirrorTickMs / 60000} min. The database switches live_claims and live_mirror decide whether any work is handed out.`);
   queue.start();
   try { mirror.start(); } catch (e) { queue.stop(); throw e; }
+  housekeeping.start();
   return {
-    stop: () => { queue.stop(); mirror.stop(); },
-    status: () => ({ mode: "primary", company: k.company, machine: k.machine, queue: queue.status, mirror: mirror.status, agent: agent.status }),
+    stop: () => { queue.stop(); mirror.stop(); housekeeping.stop(); },
+    status: () => ({ mode: "primary", company: k.company, machine: k.machine, queue: queue.status, mirror: mirror.status, housekeeping: housekeeping.status, agent: agent.status }),
   };
 }
 

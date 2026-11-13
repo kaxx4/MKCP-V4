@@ -4,6 +4,7 @@
  *   - the queue loop drives the real job agent: works a real job when the pin holds, backs off on errors, stops when told;
  *   - the mirror loop asks the planner and runs the work in its order, waits for the queue, pauses when the database says the mirror is off;
  *   - the planner's inputs are read from the mirror's tables (a fake client);
+ *   - housekeeping: the once-a-day change-signal prune (D-M.262), counted in the status and the journal, off with the mode;
  *   - startPrimaryMode: off means nothing, a missing setting means nothing starts and the reasons are logged, a complete setting starts both loops.
  * No Tally, no database: fakes only.
  *
@@ -13,7 +14,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ErpJobAgent, Journal } from "../src/services/erpJobAgent.js";
-import { readPrimaryConfig, PrimaryQueueLoop, PrimaryMirrorLoop, supabaseMirrorPlanSource, startPrimaryMode, type MirrorRunners, type MirrorPlanSource } from "../src/services/primaryRunner.js";
+import { readPrimaryConfig, PrimaryQueueLoop, PrimaryMirrorLoop, PrimaryHousekeeping, supabaseMirrorPlanSource, startPrimaryMode, type MirrorRunners, type MirrorPlanSource } from "../src/services/primaryRunner.js";
 import type { SafePushResult } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
 import type { MirrorStore, MirrorTally } from "../src/services/erpMirrorSync.js";
@@ -289,6 +290,70 @@ const noop = () => {};
     let masters = 0, pinAsked = 0;
     await mk(plan({ fullDue: true }), runners(), { masters: async () => { masters++; return { ok: true, error: null }; }, pin: async () => (++pinAsked === 1 ? null : "refused: gone") }).tick();
     ok("the pin is asked again before the masters load that follows a full run", masters === 0 && calls.join() === "full", `${masters} ${calls.join()}`);
+  }
+
+  console.log("\n  housekeeping: the once-a-day change-signal prune (D-M.262)");
+  {
+    const calls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+    let answer: { data: unknown; error: { message: string } | null } = { data: 12, error: null };
+    const client = { rpc: async (fn: string, args: Record<string, unknown>) => { calls.push({ fn, args }); return answer; } };
+    const jf = join(dir, "hk.jsonl");
+    const journal = new Journal(jf);
+    const logs: string[] = [];
+    const hk = new PrimaryHousekeeping({ client, journal, log: (l) => logs.push(l), now: () => Date.parse("2026-12-01T03:00:00Z") });
+    await hk.tick();
+    ok("it calls erp_signals_prune with seven days", calls.length === 1 && calls[0].fn === "erp_signals_prune" && calls[0].args.p_older === "7 days", JSON.stringify(calls));
+    ok("the number pruned is in the status", hk.status.signalsPrunedLast === 12 && hk.status.signalsPrunedTotal === 12 && /pruned 12 change signal/.test(String(hk.status.lastNote)));
+    const e = journal.entries().filter((x) => x.kind === "housekeeping");
+    ok("the number pruned is in the journal, with the time", e.length === 1 && (e[0] as any).pruned === 12 && (e[0] as any).error === null && (e[0] as any).at === "2026-12-01T03:00:00.000Z");
+    answer = { data: "0", error: null };
+    await hk.tick();
+    ok("a count the database sends as text is read; zero is a good answer", hk.status.signalsPrunedLast === 0 && hk.status.signalsPrunedTotal === 12 && hk.status.errors === 0);
+    answer = { data: null, error: { message: "permission denied for function erp_signals_prune" } };
+    await hk.tick();
+    ok("a refused call is an error, not a prune: the last good number stays, the reason is shown and journalled", hk.status.errors === 1 && hk.status.signalsPrunedLast === 0 && /permission denied/.test(String(hk.status.lastNote)) && journal.entries().some((x) => x.kind === "housekeeping" && (x as any).error?.includes("permission denied")));
+    answer = { data: null, error: null };
+    await hk.tick();
+    ok("an answer that is not a count is an error (an empty answer never reads as zero)", hk.status.errors === 2 && /not a count/.test(String(hk.status.lastNote)));
+    const bad = new PrimaryHousekeeping({ client: { rpc: async () => { throw new Error("socket hang up"); } }, journal, log: noop });
+    await bad.tick();
+    ok("a thrown call never escapes the loop", bad.status.errors === 1 && /socket hang up/.test(String(bad.status.lastNote)));
+    const deaf = new PrimaryHousekeeping({ client: { rpc: async () => ({ data: 3, error: null }) }, journal: { append() { throw new Error("disk full"); } }, log: (l) => logs.push(l) });
+    await deaf.tick();
+    ok("a journal that cannot be written is said and does not stop the prune", deaf.status.signalsPrunedLast === 3 && logs.some((l) => /disk full/.test(l)));
+    ok("the journal reader still reads job replies beside the new kind", journal.lastReply("none") === null && journal.readFailures("none") === 0);
+
+    answer = { data: 5, error: null };
+    calls.length = 0;
+    const timed = new PrimaryHousekeeping({ client, journal, firstMs: 30, everyMs: 40, log: noop });
+    timed.start();
+    await new Promise((r) => setTimeout(r, 15));
+    ok("the first prune waits (not at the instant of start)", calls.length === 0);
+    await new Promise((r) => setTimeout(r, 160));
+    timed.stop();
+    const after = calls.length;
+    ok("then it repeats on its interval", after >= 2, String(after));
+    await new Promise((r) => setTimeout(r, 120));
+    ok("stop ends it", calls.length === after && !timed.status.running);
+
+    const src = readFileSync(new URL("../src/services/primaryRunner.ts", import.meta.url), "utf8");
+    ok("the default is one prune a day, first after ten minutes, seven days old", /everyMs \?\? 24 \* 3_600_000/.test(src) && /firstMs \?\? 600_000/.test(src) && /older \?\? "7 days"/.test(src));
+    ok("the prune is built only inside the single-primary start (off when the mode is off)", (src.match(/new PrimaryHousekeeping[(]/g) ?? []).length === 1 && src.indexOf("new PrimaryHousekeeping(") > src.indexOf("function startPrimaryModeInner"));
+
+    const seen: string[] = [];
+    const spy = { rpc: async (fn: string) => { seen.push(fn); return { data: fn === "erp_agent_take_lease" ? { held: false, holder: "other", db_now: new Date().toISOString(), conflict: false } : 0, error: null }; }, from: () => ({}) };
+    startPrimaryMode("http://t", {}, { log: noop, client: spy });
+    await new Promise((r) => setTimeout(r, 40));
+    ok("mode off: no prune call of any kind", seen.length === 0, seen.join());
+    const saved2 = process.env.MKCP_TALLY_ROLE; delete process.env.MKCP_TALLY_ROLE;
+    const h2 = startPrimaryMode("http://t", good(), { log: noop, client: spy, post: async () => listing([[NAME, GUID]]) });
+    await new Promise((r) => setTimeout(r, 60));
+    const st2 = h2!.status();
+    const hkRunning = st2.housekeeping.running, hkLast = st2.housekeeping.signalsPrunedLast;
+    h2!.stop();
+    if (saved2 !== undefined) process.env.MKCP_TALLY_ROLE = saved2;
+    ok("mode on: /api/primary/status carries the housekeeping block, running, and no prune yet at start", hkRunning && hkLast === null && !seen.includes("erp_signals_prune"));
+    ok("stop ends housekeeping too", !h2!.status().housekeeping.running);
   }
 
   console.log(`\n  ${pass} passed, ${fail} failed\n`);
