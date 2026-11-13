@@ -32,10 +32,7 @@ export function primaryCompanyName(env: Env = process.env): string {
   return (env.MKCP_PRIMARY_COMPANY ?? env.MKCP_COMPANY ?? env.TALLY_COMPANY ?? "").trim();
 }
 
-/** "Name - (from 1-Apr-26)" becomes "Name": the year-free key (the SQL twin is erp_company_key). Used by the voucher-series seed's mirror match, never by the mirror itself. */
-export function stableCompanyKey(name: string): string {
-  return String(name ?? "").replace(/\s*-?\s*\(from [^)]*\)\s*$/i, "").trim();
-}
+/** The key the mirror and the swap store write under: MKCP_PRIMARY_COMPANY_KEY, else the company's full Tally name (tally_* and the parity check compare by it). */
 export function primaryCompanyKey(env: Env = process.env): string {
   const k = (env.MKCP_PRIMARY_COMPANY_KEY ?? "").trim();
   return k || primaryCompanyName(env);
@@ -43,7 +40,9 @@ export function primaryCompanyKey(env: Env = process.env): string {
 
 /** Does this request write to Tally (an Import)? Reads, the company listing and the health check are not writes. */
 export function isImportRequest(xml: string): boolean {
-  return /<TALLYREQUEST>\s*Import/i.test(xml);
+  /* Whitespace inside the tag (`<TALLYREQUEST >`, a line break before `>`) and around the word is tolerated: a write must never slip past the
+     pin because of how its tag was spelled. */
+  return /<\s*TALLYREQUEST\b[^>]*>\s*Import/i.test(xml);
 }
 
 /**
@@ -60,24 +59,51 @@ export function primaryModeRefusal(env: Env = process.env): string | null {
   return null;
 }
 
+/** A pin refusal as the transport throws it: nothing was sent to Tally. `definite` is true when the answer will not change by waiting. */
+export class PinRefused extends Error {
+  readonly definite: boolean;
+  constructor(message: string, definite: boolean) {
+    super(message);
+    this.name = "PinRefused";
+    this.definite = definite;
+  }
+}
+
+/** The pin's verdict. `definite`: Tally gave a clear answer that will not change by waiting (another GUID, no company named). Otherwise the answer was missing or doubtful (not open, unreadable, setting missing) and may change. */
+export type PinFailure = { reason: string; definite: boolean };
+
 /**
  * Pure: the pin. Given the company listing Tally returned (HEALTH_XML) and the company this machine means to work on, null when that company
- * is open under exactly one GUID and it is the pinned one; else the reason, in plain words. Fails closed on every doubt: the GUID unset,
- * the company not open, open more than once under different GUIDs, or open under another GUID (the real books against a copy, or one year
- * against another).
+ * is open under exactly one GUID and it is the pinned one; else the reason, in plain words and whether it is a definite answer. Fails closed
+ * on every doubt: the GUID unset, the company not open, open more than once under different GUIDs, or open under another GUID (the real
+ * books against a copy, or one year against another). The name is matched exactly first; two open companies whose names differ only by case
+ * are a refusal, never a guess.
  */
-export function primaryPinProblem(company: string, listingXml: string, env: Env = process.env): string | null {
+export function primaryPinFailure(company: string, listingXml: string, env: Env = process.env): PinFailure | null {
   const why = primaryModeRefusal(env);
-  if (why) return why;
+  if (why) return { reason: why, definite: false };
   const named = String(company ?? "").trim();
-  if (!named) return "refused: no company is named, so the pinned company cannot be checked. Nothing was sent to Tally.";
+  if (!named) return { reason: "refused: no company is named, so the pinned company cannot be checked. Nothing was sent to Tally.", definite: true };
   const guids = companyGuidsFromListing(listingXml);
-  const key = [...guids.keys()].find((k) => k.toLowerCase() === named.toLowerCase());
+  const sameLetters = [...guids.keys()].filter((k) => k.trim().toLowerCase() === named.toLowerCase());
+  const exact = sameLetters.find((k) => k.trim() === named);
+  if (!exact && sameLetters.length > 1) {
+    return { reason: `refused: two open companies have names that differ only by capital letters (${sameLetters.length} of them look like "${named}"), so the pinned company cannot be told apart. Nothing was sent to Tally.`, definite: false };
+  }
+  if (exact && sameLetters.length > 1) {
+    return { reason: `refused: "${named}" and another open company differ only by capital letters, so the pinned company cannot be told apart. Nothing was sent to Tally.`, definite: false };
+  }
+  const key = exact ?? sameLetters[0];
   const found = key === undefined ? [] : guids.get(key) ?? [];
-  if (found.length === 0) return `refused: company "${named}" is not open in Tally, so its GUID cannot be checked. Nothing was sent to Tally.`;
-  if (found.length > 1) return `refused: company "${named}" is open more than once under different GUIDs, so the pinned company cannot be told apart. Nothing was sent to Tally.`;
+  if (found.length === 0) return { reason: `refused: company "${named}" is not open in Tally, so its GUID cannot be checked. Nothing was sent to Tally.`, definite: false };
+  if (found.length > 1) return { reason: `refused: company "${named}" is open more than once under different GUIDs, so the pinned company cannot be told apart. Nothing was sent to Tally.`, definite: false };
   if (found[0].trim().toLowerCase() !== primaryGuid(env).toLowerCase()) {
-    return `refused: company "${named}" is open under a GUID other than MKCP_PRIMARY_COMPANY_GUID. It is a copy or another year's books. Nothing was sent to Tally.`;
+    return { reason: `refused: not the pinned company. "${named}" is open under a GUID other than MKCP_PRIMARY_COMPANY_GUID. It is a copy or another year's books. Nothing was sent to Tally.`, definite: true };
   }
   return null;
+}
+
+/** The same verdict as plain text, or null (what the first version returned). */
+export function primaryPinProblem(company: string, listingXml: string, env: Env = process.env): string | null {
+  return primaryPinFailure(company, listingXml, env)?.reason ?? null;
 }

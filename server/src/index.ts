@@ -895,7 +895,7 @@ app.post("/api/bank/plan", async (req, res) => {
   }
 });
 
-app.post("/api/bank/push", async (req, res) => {
+app.post("/api/bank/push", primaryClosed, async (req, res) => {
   const { company, plan } = req.body as { company?: string; plan?: BankPlan };
   if (!company) return res.status(400).json({ error: "company required" });
   if (!plan || !Array.isArray(plan.rows)) return res.status(400).json({ error: "plan required" });
@@ -1024,14 +1024,14 @@ app.post("/api/local/push", primaryClosed, async (req, res) => {
   }
 });
 
-app.post("/api/push-agent/drain", (_req, res) => {
+app.post("/api/push-agent/drain", primaryClosed, (_req, res) => {
   drainNow();
   res.json({ ok: true, drainedAt: new Date().toISOString() });
 });
 
 // Re-queue a failed push_queue row so it can be retried immediately.
 // Only requeues rows with status='failed' — succeeded rows are immutable.
-app.post("/api/push-agent/requeue", async (req: express.Request, res: express.Response) => {
+app.post("/api/push-agent/requeue", primaryClosed, async (req: express.Request, res: express.Response) => {
   const { id } = req.body as { id?: string };
   if (!id) return res.status(400).json({ error: "id required" });
   const client = getAgentClient();
@@ -1053,7 +1053,7 @@ app.post("/api/push-agent/requeue", async (req: express.Request, res: express.Re
 
 // Start the drain loop only when explicitly enabled, so it can be turned off without
 // a code change.
-if (process.env.PUSH_AGENT_ENABLED === "true") {
+if (process.env.PUSH_AGENT_ENABLED === "true" && !primaryModeOn()) {   // D-M.256 item 7: never beside the single primary
   startPushAgent({ tallyUrl: TALLY });
 }
 

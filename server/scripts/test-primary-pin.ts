@@ -12,10 +12,10 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { primaryModeOn, primaryGuid, primaryModeRefusal, primaryPinProblem, isImportRequest, stableCompanyKey, primaryCompanyKey } from "../src/services/primaryMode.js";
+import { primaryModeOn, primaryGuid, primaryModeRefusal, primaryPinProblem, isImportRequest, primaryCompanyKey } from "../src/services/primaryMode.js";
 import { tallyPost, resetListingCache } from "../src/tally.js";
 import { installMock, uninstallMock } from "../src/services/tallyMock.js";
-import { ErpJobAgent, Journal, tallySeams } from "../src/services/erpJobAgent.js";
+import { ErpJobAgent, Journal, tallyPinSeam } from "../src/services/erpJobAgent.js";
 import type { SafePushResult } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
 import { memErpQueue } from "./rigs/lib/memErpQueue.js";
@@ -62,7 +62,6 @@ function setEnv(e: Record<string, string | undefined>): () => void {
   ok("no company named is refused", primaryPinProblem("  ", listing([[NAME, GUID]]), env()) !== null);
   ok("the pin with the GUID unset is refused even if the company is open", primaryPinProblem(NAME, listing([[NAME, GUID]]), { MKCP_PRIMARY_MODE: "on" }) !== null);
   ok("an Import is a write; an Export, the listing and the health check are not", isImportRequest(importXml("X")) && !isImportRequest(exportXml("X")));
-  ok("the stable company key drops the year part", stableCompanyKey(NAME) === "ZZ OFFICE CO" && stableCompanyKey("ZZ OFFICE CO") === "ZZ OFFICE CO");
   ok("the company key can be set outright; by default it is Tally's full name (tally_* is keyed by it)", primaryCompanyKey({ MKCP_PRIMARY_COMPANY_KEY: "K1", MKCP_PRIMARY_COMPANY: NAME }) === "K1" && primaryCompanyKey({ MKCP_PRIMARY_COMPANY: NAME }) === NAME);
 
   console.log("\n  at the transport: tallyPost holds every write to the pin");
@@ -148,7 +147,7 @@ function setEnv(e: Record<string, string | undefined>): () => void {
     const restore = setEnv(env());
     const m = memErpQueue(); const id = m.add(pl(3), false);
     let calls = 0;
-    const { a, pushed } = mk(m, { pin: async () => (++calls === 1 ? null : "refused: company \"X\" is not open in Tally, so its GUID cannot be checked. Nothing was sent to Tally.") });
+    const { a, pushed } = mk(m, { pin: async () => (++calls <= 2 ? null : "refused: company \"X\" is not open in Tally, so its GUID cannot be checked. Nothing was sent to Tally.") });
     const r = await a.runOnce(1);
     ok("the pin passes before the claim and fails right before `sent`: the job goes back to the queue", m.rows.get(id)!.state === "queued" && r.results[0]?.outcome === "not-sent" && pushed.length === 0, `${m.rows.get(id)!.state}`);
     ok("that is not a failure: the job is not marked failed and nothing was sent", m.rows.get(id)!.error === null || m.rows.get(id)!.error === undefined);
@@ -171,11 +170,12 @@ function setEnv(e: Record<string, string | undefined>): () => void {
     restore();
   }
   {
-    const seams = tallySeams("http://x", async () => listing([[NAME, GUID]]));
+    const pin1 = tallyPinSeam("http://x", async () => listing([[NAME, GUID]]));
     const restore = setEnv(env());
-    ok("tallySeams supplies the pin: open under the right GUID passes", (await seams.pin(NAME)) === null);
-    const seams2 = tallySeams("http://x", async () => listing([[NAME, OTHER]]));
-    ok("tallySeams supplies the pin: another GUID is refused", /other than MKCP_PRIMARY_COMPANY_GUID/.test((await seams2.pin(NAME)) ?? ""));
+    ok("tallyPinSeam: open under the right GUID passes", (await pin1(NAME)) === null);
+    const pin2 = tallyPinSeam("http://x", async () => listing([[NAME, OTHER]]));
+    const f2 = await pin2(NAME);
+    ok("tallyPinSeam: another GUID is refused, and it is a definite answer", /other than MKCP_PRIMARY_COMPANY_GUID/.test(f2?.reason ?? "") && f2?.definite === true);
     restore();
   }
 

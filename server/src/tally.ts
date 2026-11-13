@@ -4,8 +4,9 @@ import { XMLParser } from "fast-xml-parser";
 import { recordTallyCall, classify, truncateForLog } from "./services/tallyLog.js";
 import { mockTransport } from "./services/tallyMock.js";
 import { decodeTallyBody, decodeXmlEntities } from "./services/xml.js";
-import { companyRefusal, companyNamed, companyGuidsFromListing, practiceGuid, guidCheckRequired } from "./services/tallyRole.js";
-import { primaryModeOn, primaryPinProblem, isImportRequest } from "./services/primaryMode.js";
+import { companyRefusal, companyNamed, practiceGuidProblem, guidCheckRequired } from "./services/tallyRole.js";
+import { primaryModeOn, primaryPinFailure, isImportRequest, PinRefused } from "./services/primaryMode.js";
+import { tallyLane } from "./services/tallyLane.js";
 
 // ─────────────────────────────────────────────────────────────────────
 // XML Parser ───────────────────────────────────────────────────────────
@@ -178,11 +179,27 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
   /* D-M.248: the single-primary mode (primaryMode.ts, OFF unless MKCP_PRIMARY_MODE=on). Every WRITE names a company whose GUID is the pinned
      one, read from a fresh company listing (never the 45 s cache: a write is the one request that must not trust a stale answer). Reads are
      not held to the pin (last year's company may be read). With the mode on and the GUID unset, every write is refused. */
-  if (primaryModeOn() && isImportRequest(xml)) {
-    return (named === null
-      ? Promise.resolve("refused: this write names no company, so the pinned company cannot be checked. Nothing was sent to Tally.")
-      : freshListing(tallyUrl).then((listing) => primaryPinProblem(named, listing)))
-      .then((why) => (why ? Promise.reject(new Error(why)) : tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal)));
+  if (primaryModeOn()) {
+    /* D-M.256 item 5: in the primary mode every request goes through the one lane (tallyLane.ts): one at a time, a write ahead of any waiting
+       read. The pin check and the write are ONE hold of the lane, so no other request can come between the listing and the Import. */
+    const label = (xml.match(/<ID[^>]*>([^<]+)/)?.[1] || "request").trim();
+    if (isImportRequest(xml)) {
+      return tallyLane.run("write", label, async () => {
+        const refused = (m: string, definite: boolean): never => { throw new PinRefused(m, definite); };
+        if (((xml.match(/<SVCURRENTCOMPANY[ >]/gi) ?? []).length) > 1) refused("refused: this write names more than one company, so the pinned company cannot be checked. Nothing was sent to Tally.", true);
+        if (named === null) refused("refused: this write names no company, so the pinned company cannot be checked. Nothing was sent to Tally.", true);
+        let listing: string;
+        try { listing = await freshListing(tallyUrl); }
+        catch (e) { return refused(`refused: Tally's company list could not be read (${(e as Error).message.slice(0, 120)}), so the pinned company cannot be checked. Nothing was sent to Tally.`, false); }
+        const why = primaryPinFailure(named as string, listing);
+        if (why) refused(why.reason, why.definite);
+        return tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal);
+      }, signal);
+    }
+    return tallyLane.run("read", label, () => (named === null || !guidCheckRequired()
+      ? tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal)
+      : verifyPracticeGuid(tallyUrl, named).then((guidRefusal) =>
+        guidRefusal ? Promise.reject(new Error(guidRefusal)) : tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal))), signal);
   }
   if (named === null || !guidCheckRequired()) return tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal);
   return verifyPracticeGuid(tallyUrl, named).then((guidRefusal) =>
@@ -214,13 +231,7 @@ async function companyListing(tallyUrl: string): Promise<string> {
 }
 
 async function verifyPracticeGuid(tallyUrl: string, named: string): Promise<string | null> {
-  const guids = companyGuidsFromListing(await companyListing(tallyUrl));
-  const key = [...guids.keys()].find((k) => k.toLowerCase() === named.toLowerCase());
-  const found = key === undefined ? [] : guids.get(key) ?? [];
-  if (found.length === 0) return `refused: company "${named}" is not loaded in Tally, so its GUID cannot be checked. Nothing was sent to Tally.`;
-  if (found.length > 1) return `refused: company "${named}" is loaded more than once with different GUIDs, so the practice company cannot be told apart. Nothing was sent to Tally.`;
-  if (found[0] !== practiceGuid()) return `refused: company "${named}" carries a GUID other than the practice company's. It is the real books or another copy. Nothing was sent to Tally.`;
-  return null;
+  return practiceGuidProblem(named, await companyListing(tallyUrl));
 }
 
 function tallyPostNow(tallyUrl: string, xml: string, timeoutMs: number, rawMode: boolean, signal?: AbortSignal): Promise<any> {

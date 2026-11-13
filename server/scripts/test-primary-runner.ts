@@ -238,6 +238,57 @@ const noop = () => {};
     ok("/api/local/push and /api/tally/debug carry the closed-door guard", src.includes('app.post("/api/local/push", primaryClosed,') && src.includes('app.post("/api/tally/debug", primaryClosed,'));
     ok("the guard lets everything through when the mode is off", /const primaryClosed[^;]{0,120}=> [{][^}]{0,80}if [(]!primaryModeOn[(][)][)] return next[(][)];/.test(src));
     ok("the mode is started from index.ts through startPrimaryMode, once", (src.match(/startPrimaryMode[(]/g) ?? []).length === 1);
+    /* D-M.256 item 7: every other hand door to the live books is shut too, and the old push agent does not start beside the primary. */
+    ok("/api/bank/push, /api/push-agent/drain and /api/push-agent/requeue carry the closed-door guard",
+      src.includes('app.post("/api/bank/push", primaryClosed,') && src.includes('app.post("/api/push-agent/drain", primaryClosed,') && src.includes('app.post("/api/push-agent/requeue", primaryClosed,'));
+    ok("the old push agent is not started when the single-primary mode is on", /PUSH_AGENT_ENABLED === "true" && !primaryModeOn\(\)/.test(src));
+  }
+
+  console.log("\n  D-M.256 items 7 and 8: start-up refusals");
+  {
+    const c1 = readPrimaryConfig("http://t", good({ PUSH_AGENT_ENABLED: "true" }));
+    ok("PUSH_AGENT_ENABLED=true: the mode refuses to start, in plain words", !c1.ok && c1.problems.some((p) => /PUSH_AGENT_ENABLED=true/.test(p) && /ERP queue/.test(p)));
+    ok("PUSH_AGENT_ENABLED=false (or unset) is fine", readPrimaryConfig("http://t", good({ PUSH_AGENT_ENABLED: "false" })).ok && readPrimaryConfig("http://t", good()).ok);
+    const c2 = readPrimaryConfig("http://t", without(good(), "MKCP_ERP_JOURNAL_PATH"));
+    ok("no MKCP_ERP_JOURNAL_PATH: the mode refuses to start (no default folder)", !c2.ok && c2.problems.some((p) => /MKCP_ERP_JOURNAL_PATH is not set/.test(p)));
+    const c3 = readPrimaryConfig("http://t", good({ MKCP_ERP_JOURNAL_PATH: "data/journal.jsonl" }));
+    ok("a relative journal path is refused", !c3.ok && c3.problems.some((p) => /absolute path/.test(p)));
+
+    // A failure while starting is logged as "cannot start" and never thrown.
+    const logs: string[] = [];
+    const client = { rpc: async () => ({ data: null, error: null }), from: () => ({}) };
+    const file = join(dir, "a-file.txt");
+    (await import("node:fs")).writeFileSync(file, "x");
+    const saved = process.env.MKCP_TALLY_ROLE; delete process.env.MKCP_TALLY_ROLE;
+    let threw = false, h: ReturnType<typeof startPrimaryMode> = null;
+    try { h = startPrimaryMode("http://t", good({ MKCP_ERP_JOURNAL_PATH: join(file, "sub", "j.jsonl") }), { log: (l) => logs.push(l), client, post: async () => listing([[NAME, GUID]]) }); }
+    catch { threw = true; }
+    ok("a start-up failure (the journal folder cannot be made) does not throw", !threw && h === null);
+    ok("it is logged as 'cannot start: <reason>'", logs.some((l) => /cannot start: /.test(l)), logs.join("|").slice(0, 200));
+    if (saved !== undefined) process.env.MKCP_TALLY_ROLE = saved;
+  }
+
+  console.log("\n  D-M.256 item 6: the mirror loop checks the pin before each piece of work");
+  {
+    calls.length = 0;
+    let why: string | null = "refused: not the pinned company. Nothing was sent to Tally.";
+    const loop = mk(plan({ hasMark: false, lastCheck: null, repulls: 1 }), runners(), { pin: async () => why });
+    const t = await loop.tick();
+    ok("pin fails: no work runs at all (a full run in particular), and the pass says why", calls.length === 0 && /not confirmed/.test(t.skipped ?? "") && t.did.length === 0, calls.join());
+    why = null; calls.length = 0;
+    await mk(plan({ hasMark: false, lastCheck: null, repulls: 1 }), runners(), { pin: async () => why }).tick();
+    ok("pin holds: the work runs in order", calls.join() === "full,check,repull,repull", calls.join());
+    calls.length = 0;
+    let n = 0;
+    await mk(plan({ hasMark: false, lastCheck: null, repulls: 1 }), runners(), { pin: async () => (++n === 1 ? null : "refused: gone") }).tick();
+    ok("the pin is asked again before the NEXT piece of work: it changed after the full run, so the check does not run", calls.join() === "full", calls.join());
+    calls.length = 0;
+    await mk(plan(), runners(), { pin: async () => { throw new Error("socket hang up"); } }).tick();
+    ok("a pin check that cannot run is a refusal: nothing runs", calls.length === 0);
+    calls.length = 0;
+    let masters = 0, pinAsked = 0;
+    await mk(plan({ fullDue: true }), runners(), { masters: async () => { masters++; return { ok: true, error: null }; }, pin: async () => (++pinAsked === 1 ? null : "refused: gone") }).tick();
+    ok("the pin is asked again before the masters load that follows a full run", masters === 0 && calls.join() === "full", `${masters} ${calls.join()}`);
   }
 
   console.log(`\n  ${pass} passed, ${fail} failed\n`);

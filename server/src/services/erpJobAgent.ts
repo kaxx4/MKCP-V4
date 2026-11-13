@@ -41,7 +41,7 @@ import { seriesDefaultFor, isPartyKeyedType, numberTakenBy, type TakenVoucher } 
 import { setRecordedFiledThrough } from "./pushGuard.js";
 import { resolveTarget, targetOf, loadedProblem, type CompanyYear } from "./companyYears.js";
 import { HEALTH_XML } from "../tally.js";
-import { primaryModeOn, primaryPinProblem } from "./primaryMode.js";
+import { primaryModeOn, primaryPinFailure, PinRefused, type PinFailure } from "./primaryMode.js";
 
 export interface ErpJob {
   id: string;
@@ -239,10 +239,15 @@ export interface ErpJobAgentOpts {
   companyLoaded?: (entry: CompanyYear) => Promise<string | null>;
   /**
    * D-M.248, the company pin of the single-primary mode (primaryMode.ts): null when the company is open in Tally under the pinned GUID, else
-   * the reason. Checked before every claim batch (a failure claims nothing) and again right before each job is marked `sent` (a failure puts
-   * the job back in the queue, nothing sent). `tallySeams` supplies it when the mode is on. Absent: no pin check, as before.
+   * the reason. Checked before every claim batch (a failure claims nothing), before a job's first read of Tally, before any read that settles a
+   * job, and again right before each job is marked `sent`.
+   * D-M.256 item 1: a DEFINITE answer (the company is open under another GUID) ends the job `failed` with the reason on the job row; an answer that
+   * may change (the list could not be read, the company is not open) puts the job back in the queue and pauses claiming with a growing delay, so
+   * it cannot starve the queue. A plain string counts as "may change".
+   * D-M.256 item 2: NOT supplied by `tallySeams`. Only `startPrimaryMode` passes it (`tallyPinSeam`), so every rig that spreads `tallySeams`
+   * is unchanged. Absent: no pin check, as before.
    */
-  pin?: (company: string) => Promise<string | null>;
+  pin?: (company: string) => Promise<string | null | PinFailure>;
   /** How often to read the recorded filing boundary (default 300 s). */
   filedEverySec?: number;
   leaseSeconds?: number;
@@ -325,13 +330,56 @@ export class ErpJobAgent {
   }
 
   /** D-M.248: the company pin. Null when it holds or is not in use; else the reason. A check that cannot run is a refusal, never a pass. */
-  private async pinProblem(company: string): Promise<string | null> {
+  private async pinProblem(company: string): Promise<PinFailure | null> {
     if (!this.o.pin) return null;
-    let problem: string | null;
-    try { problem = await this.o.pin(company); }
-    catch (e) { problem = `refused: the company pin could not be checked (${(e as Error).message.slice(0, 120)}). Nothing was sent to Tally.`; }
-    this.status.pin = { ok: problem === null, problem, at: new Date(this.o.now()).toISOString() };
+    let problem: PinFailure | null;
+    try {
+      const r = await this.o.pin(company);
+      problem = r === null ? null : typeof r === "string" ? { reason: r, definite: false } : r;
+    } catch (e) {
+      problem = { reason: `refused: the company pin could not be checked (${(e as Error).message.slice(0, 120)}). Nothing was sent to Tally.`, definite: false };
+    }
+    this.status.pin = { ok: problem === null, problem: problem?.reason ?? null, at: new Date(this.o.now()).toISOString() };
     return problem;
+  }
+
+  /** D-M.256 item 1: claiming is paused until this time (ms) after a job was put back because the pin could not be read. */
+  private claimsPausedUntil = 0;
+  private holdSec = 0;
+  /** Pause claiming for 15 s, doubling each time in a row up to 5 minutes. The database has no per-job "try again at" setter through `erp_finish_job`, so the delay lives here; the pause is global because an unreadable company list is global, never one job's fault. */
+  private holdClaims(): number {
+    this.holdSec = this.holdSec === 0 ? 15 : Math.min(300, this.holdSec * 2);
+    this.claimsPausedUntil = this.o.now() + this.holdSec * 1000;
+    return this.holdSec;
+  }
+
+  /**
+   * The pin said no before this job was sent. A DEFINITE answer ends the job `failed` with the reason on the job row (it will not change by
+   * waiting, and a job put back would be claimed again first, since the claim is oldest first). An answer that may change puts the job back in the
+   * queue untouched and pauses claiming with a growing delay. Nothing was sent to Tally either way.
+   */
+  private async pinStop(job: ErpJob, key: string, why: PinFailure): Promise<RunReport["results"][number]> {
+    this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: why.reason, at: new Date().toISOString() });
+    if (why.definite) {
+      await this.finishWithRetry(job, "failed", { error: why.reason, result: { stage: "guard", pin: "mismatch" } });
+      return { id: job.id, key, outcome: "failed", detail: why.reason };
+    }
+    await this.finishWithRetry(job, "queued");
+    const sec = this.holdClaims();
+    return { id: job.id, key, outcome: "not-sent", detail: `${why.reason} Back in the queue; claiming pauses ${sec} s.` };
+  }
+
+  /**
+   * A pin refusal came out of the transport AFTER the job was marked `sent` (the company changed in the last instant). Nothing reached Tally. The
+   * database does not allow `sent` back to `queued`, so the job ends `failed` with the plain reason and "send it again"; a resend reads Tally
+   * first. Never `uncertain`, and it does not count towards "Tally may be showing a message".
+   */
+  private async pinRefusedAfterSent(job: ErpJob, key: string, e: PinRefused): Promise<RunReport["results"][number]> {
+    const reason = e.definite ? e.message : `${e.message} Send it again when Tally answers.`;
+    this.journalOrStop({ kind: "reply", jobId: job.id, outcome: "failed", stage: "pin", masterId: null, bookedNumber: null, errors: [reason], differences: [], at: new Date().toISOString() });
+    await this.finishWithRetry(job, "failed", { error: reason, result: { stage: "guard", pin: e.definite ? "mismatch" : "unreadable", sent_to_tally: false } });
+    if (!e.definite) this.holdClaims();
+    return { id: job.id, key, outcome: "failed", detail: reason };
   }
 
   /** Take or renew the lease; false means do not claim this round. */
@@ -416,6 +464,13 @@ export class ErpJobAgent {
   /** A job that was sent with no reply in hand: read Tally, settle only on exactly one match. */
   private async readBack(job: ErpJob): Promise<{ state: JobOutcome; how: string; masterId?: string | null }> {
     let found: { masterId: string }[];
+    /* D-M.256 item 6: a read of the wrong company must never settle a job. When the pin cannot be confirmed the job is left as it is (not read,
+       not counted as a failed read) for the next run. */
+    const pinWhy = await this.pinProblem(this.recoveryCompany(job));
+    if (pinWhy) {
+      /* Not journalled as a failed read: that count ends in `uncertain`, and a pin that cannot be confirmed says nothing about the job. */
+      return { state: "uncertain", how: `not read, because the pinned company could not be confirmed (${pinWhy.reason}); left for the next run` };
+    }
     try {
       found = await this.o.find(this.recoveryCompany(job), job.payload);
     } catch (e) {
@@ -491,10 +546,15 @@ export class ErpJobAgent {
       const report: RunReport = { held: false, settled: [], results: [] };
       report.held = await this.heartbeat();
       if (!report.held) { report.stopped = this.status.red.join("; "); return report; }
-      report.settled = await this.settleOwn();
-      /* D-M.248: nothing is claimed unless the pinned company is the one open in Tally. */
+      /* D-M.248: nothing is claimed unless the pinned company is the one open in Tally. D-M.256 item 6: and nothing is settled from a read of
+         Tally either (settleOwn decides a job's outcome from what Tally shows), so the pin is checked first. */
       const pinWhy = await this.pinProblem(this.o.company);
-      if (pinWhy) { report.held = false; report.stopped = pinWhy; return report; }
+      if (pinWhy) { report.held = false; report.stopped = pinWhy.reason; return report; }
+      report.settled = await this.settleOwn();
+      if (this.o.now() < this.claimsPausedUntil) {
+        report.stopped = `claiming is paused for ${Math.ceil((this.claimsPausedUntil - this.o.now()) / 1000)} s more: a job was put back because the pinned company could not be checked`;
+        return report;
+      }
       await this.refreshFiledThrough();
       const jobs = await this.o.queue.claim(this.nonce, limit, this.o.jobLeaseSeconds);
       for (const job of jobs) this.open.add(job.id);
@@ -559,7 +619,8 @@ export class ErpJobAgent {
       : setInterval(() => { void this.o.queue.renew(this.nonce, job.id, this.o.jobLeaseSeconds).catch(() => {}); }, this.o.renewEveryMs);
     try {
       const pinWhy = await this.pinProblem(company);
-      if (pinWhy) return await this.putBack(job, key, pinWhy);
+      if (pinWhy) return await this.pinStop(job, key, pinWhy);
+      this.holdSec = 0;       // a job got past the last check before `sent`: the growing pause starts over
       const sent = await this.o.queue.markSent(this.nonce, job.id, company);
       if (!sent.ok) {
         this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: sent.reason ?? "refused", at: new Date().toISOString() });
@@ -569,6 +630,7 @@ export class ErpJobAgent {
       let out: MasterOutcome;
       try { out = await this.o.createMaster(company, plan); this.timeouts = 0; }
       catch (e) {
+        if (e instanceof PinRefused) return await this.pinRefusedAfterSent(job, key, e);
         const msg = (e as Error).message;
         this.journalOrStop({ kind: "reply-lost", jobId: job.id, error: msg, at: new Date().toISOString() });
         this.noteTallyError(msg);
@@ -592,13 +654,6 @@ export class ErpJobAgent {
     }
   }
 
-  /** The pin failed after the claim: the job goes back to the queue untouched (nothing was sent), and the reason is kept in the journal. */
-  private async putBack(job: ErpJob, key: string, why: string): Promise<RunReport["results"][number]> {
-    this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: why, at: new Date().toISOString() });
-    await this.finishWithRetry(job, "queued");
-    return { id: job.id, key, outcome: "not-sent", detail: why };
-  }
-
   /** A master job sent with no reply in hand: read the masters; settle `succeeded` only when Tally shows exactly what the plan says. */
   private async readBackMaster(job: ErpJob): Promise<{ state: JobOutcome; how: string; masterId?: string | null }> {
     const company = this.recoveryCompany(job);
@@ -607,6 +662,9 @@ export class ErpJobAgent {
       return { state: "uncertain", how };
     };
     if (!this.o.masters) return leave("this machine cannot read Tally's masters; a person must check it");
+    /* D-M.256 item 6: not settled from a read of a company that is not confirmed as the pinned one; the job is left as it is for the next run. */
+    const pinWhy = await this.pinProblem(company);
+    if (pinWhy) return { state: "uncertain", how: `not read, because the pinned company could not be confirmed (${pinWhy.reason}); left for the next run` };
     let m: TallyMasters;
     try { m = await this.o.masters(company); }
     catch (e) { return leave(`Tally could not be read (${(e as Error).message.slice(0, 100)}); a person must check it`); }
@@ -645,6 +703,10 @@ export class ErpJobAgent {
       await this.finishWithRetry(job, "failed", { error: refusal, result: { stage: "guard" } });
       return { id: job.id, key, outcome: "failed", detail: refusal };
     }
+    /* D-M.256 items 1 and 6: before this job's first read of Tally (the masters, the numbers, a resend's look) the pinned company is confirmed, so
+       no read of another company can decide this job's fate. A definite mismatch ends the job failed; an unreadable answer puts it back. */
+    const early = await this.pinProblem(company);
+    if (early) return await this.pinStop(job, key, early);
     this.journalOrStop({ kind: "claimed", jobId: job.id, key, at: new Date().toISOString() });
     if (isMasterKind(job.kind)) return this.processMasterJob(job, company, key);
     /* D21: a resend keeps its REMOTEID, so a Create would alter in place if the
@@ -683,7 +745,8 @@ export class ErpJobAgent {
     try {
       /* D-M.248: right before `sent`, the pinned company is checked again. A failure puts the job back, with nothing sent. */
       const pinWhy = await this.pinProblem(company);
-      if (pinWhy) return await this.putBack(job, key, pinWhy);
+      if (pinWhy) return await this.pinStop(job, key, pinWhy);
+      this.holdSec = 0;       // a job got past the last check before `sent`: the growing pause starts over
       const m = await this.o.queue.markSent(this.nonce, job.id, company);
       if (!m.ok) {
         this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: m.reason ?? "refused", at: new Date().toISOString() });
@@ -695,6 +758,7 @@ export class ErpJobAgent {
         res = await this.o.push(company, job.payload);
         this.timeouts = 0;
       } catch (e) {
+        if (e instanceof PinRefused) return await this.pinRefusedAfterSent(job, key, e);
         const msg = (e as Error).message;
         this.journalOrStop({ kind: "reply-lost", jobId: job.id, error: msg, at: new Date().toISOString() });
         this.noteTallyError(msg);
@@ -764,8 +828,6 @@ export function tallySeams(tallyUrl: string, post: (url: string, xml: string, ti
       : takenNumbersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x)),
     /* F17: a company other than the agent's own is only sent to when Tally has it open under the recorded GUID. One company-list read. */
     companyLoaded: async (entry: CompanyYear) => loadedProblem(await post(tallyUrl, HEALTH_XML, 10_000), entry),
-    /* D-M.248: the company pin of the single-primary mode; one fresh company-list read per check. Supplied always, used only when passed to the agent. */
-    pin: async (company: string) => primaryPinProblem(company, await post(tallyUrl, HEALTH_XML, 10_000)),
     /* D-M.206: the master worker. A fresh read of the masters (never the cache), the writes through masterPusher, and the master's id. */
     masters: (company: string) => loadMasters(tallyUrl, company, { force: true }),
     createMaster: (company: string, plan: MasterPlan) => createMasterJob(tallyUrl, company, plan),
@@ -791,5 +853,19 @@ export function supabaseErpQueue(c: { rpc: (fn: string, args: Record<string, unk
     }),
     myOpenJobs: () => call<ErpJob[]>("erp_my_open_jobs", {}),
     filedThrough: async (kind) => { const d = await call<string | null>("erp_agent_filed_through", { p_kind: kind ?? null }); return d ? String(d).slice(0, 10) : null; },
+  };
+}
+
+/**
+ * D-M.248 / D-M.256 item 2: the company pin as the agent's `pin` option. One fresh company-list read per check; the verdict says whether it is
+ * definite (another GUID) or may change (list unreadable, company not open). Deliberately NOT part of `tallySeams`: only `startPrimaryMode`
+ * passes it, so the dummy rigs that spread `tallySeams` are unchanged.
+ */
+export function tallyPinSeam(tallyUrl: string, post: (url: string, xml: string, timeoutMs?: number) => Promise<string>): (company: string) => Promise<PinFailure | null> {
+  return async (company: string) => {
+    let listing: string;
+    try { listing = await post(tallyUrl, HEALTH_XML, 10_000); }
+    catch (e) { return { reason: `refused: Tally's company list could not be read (${(e as Error).message.slice(0, 120)}), so the pinned company cannot be checked. Nothing was sent to Tally.`, definite: false }; }
+    return primaryPinFailure(company, listing);
   };
 }

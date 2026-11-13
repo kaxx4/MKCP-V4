@@ -180,3 +180,18 @@ export function decodeEntities(s: string): string {
 export function guidCheckRequired(): boolean {
   return isSandbox() || (process.env.MKCP_PRACTICE_COMPANY ?? "").trim() !== "";
 }
+
+/**
+ * Pure twin of tallyPost's practice-company GUID check, for a script that already holds a company listing: null when `named` is open under exactly one
+ * GUID and it is MKCP_PRACTICE_COMPANY_GUID; else the reason. (companyRefusal judges a REQUEST, never a listing: given a listing it would see no
+ * company and refuse or pass for the wrong reason.)
+ */
+export function practiceGuidProblem(named: string, listingXml: string): string | null {
+  const guids = companyGuidsFromListing(listingXml);
+  const key = [...guids.keys()].find((k) => k.toLowerCase() === named.toLowerCase());
+  const found = key === undefined ? [] : guids.get(key) ?? [];
+  if (found.length === 0) return `refused: company "${named}" is not loaded in Tally, so its GUID cannot be checked. Nothing was sent to Tally.`;
+  if (found.length > 1) return `refused: company "${named}" is loaded more than once with different GUIDs, so the practice company cannot be told apart. Nothing was sent to Tally.`;
+  if (found[0] !== practiceGuid()) return `refused: company "${named}" carries a GUID other than the practice company's. It is the real books or another copy. Nothing was sent to Tally.`;
+  return null;
+}

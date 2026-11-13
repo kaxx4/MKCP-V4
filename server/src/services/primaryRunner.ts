@@ -9,9 +9,9 @@
  * Fail closed: the mode starts only when every line of `readPrimaryConfig` is satisfied (pinned GUID, machine id and key, database key, a company).
  * Posting still goes only through safePush, pushGuard and tallyPost; tallyPost holds every write to the pinned company again (tally.ts).
  */
-import { join } from "node:path";
+import { isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
-import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams, type RunReport } from "./erpJobAgent.js";
+import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams, tallyPinSeam, type RunReport } from "./erpJobAgent.js";
 import {
   planMirrorWork, runMirrorSync, runDayCheck, runRepull, applyAcceptedDrops, supabaseMirrorStore, tallyMirrorReads,
   type MirrorStore, type MirrorTally, type MirrorWork,
@@ -55,6 +55,10 @@ export function readPrimaryConfig(tallyUrl: string, env: Env = process.env): { o
   if (!key) problems.push("MKCP_ERP_AGENT_KEY is not set (the machine's own key; only its sha-256 is registered in the database)");
   if (!(env.SUPABASE_SERVICE_KEY ?? "").trim()) problems.push("SUPABASE_SERVICE_KEY is not set, so the agent cannot reach the database");
   if ((env.MKCP_OFFLINE ?? "").trim().toLowerCase() === "true") problems.push("MKCP_OFFLINE=true: the database is switched off for this process");
+  const journalPath = (env.MKCP_ERP_JOURNAL_PATH ?? "").trim();
+  if (!journalPath) problems.push("MKCP_ERP_JOURNAL_PATH is not set (an absolute path to the agent's own journal file; the journal is what settles a job after a crash, so it must not depend on the folder the program was started from)");
+  else if (!isAbsolute(journalPath)) problems.push(`MKCP_ERP_JOURNAL_PATH must be an absolute path (got "${journalPath}")`);
+  if ((env.PUSH_AGENT_ENABLED ?? "").trim().toLowerCase() === "true") problems.push("PUSH_AGENT_ENABLED=true: the old push agent would also write to the live books. Set it to false; in the single-primary mode everything to the books goes through the ERP queue");
   const company = primaryCompanyName(env) || tallyCompany();
   if (!company) problems.push("no company name is set (MKCP_PRIMARY_COMPANY)");
   const years = loadCompanyYears(env as NodeJS.ProcessEnv);
@@ -63,7 +67,7 @@ export function readPrimaryConfig(tallyUrl: string, env: Env = process.env): { o
   const num = (v: string | undefined, d: number) => { const n = Number(v); return Number.isFinite(n) && n >= 1000 ? n : d; };
   return { ok: true, cfg: {
     tallyUrl, company, companyKey: primaryCompanyKey({ ...env, MKCP_PRIMARY_COMPANY: company }), machine, key,
-    journalPath: (env.MKCP_ERP_JOURNAL_PATH ?? "").trim() || join(process.cwd(), "server", "data", "erp-job-journal.jsonl"),
+    journalPath,
     companies: years.list,
     queuePollMs: num(env.MKCP_PRIMARY_POLL_MS, 10_000), queueBusyMs: 2_000, mirrorTickMs: num(env.MKCP_PRIMARY_MIRROR_TICK_MS, 300_000),
   } };
@@ -171,6 +175,11 @@ export class PrimaryMirrorLoop {
     masters?: () => Promise<{ ok: boolean; error: string | null }>;
     /** True while the queue loop is mid-round: the mirror waits its turn rather than starting a read beside a push. */
     queueBusy?: () => boolean;
+    /**
+     * D-M.256 item 6: null when the pinned company is the one open in Tally (a fresh company list), else the reason. Checked before every piece of
+     * work a pass does (so always before a full run); on a failure that work does not run and nothing is read or swapped from it.
+     */
+    pin?: () => Promise<string | null>;
     tickMs: number; log?: (l: string) => void; now?: () => number; runners?: MirrorRunners;
   }) {}
 
@@ -191,6 +200,11 @@ export class PrimaryMirrorLoop {
       rep.planned = planMirrorWork({ now, hasMark, fullDue, lastFullAt: last ? new Date(last.finished_at) : null, lastCheckAt, queuedRepulls, acceptedDrops: accepted.length });
       for (const w of rep.planned) {
         if (this.o.queueBusy?.()) { rep.skipped = "the queue became busy; the rest waits for the next pass"; break; }
+        if (this.o.pin && w !== "apply_accepted") {
+          let why: string | null;
+          try { why = await this.o.pin(); } catch (e) { why = `the company pin could not be checked (${(e as Error).message.slice(0, 100)})`; }
+          if (why) { rep.skipped = `not run, the pinned company is not confirmed: ${why}`; log(rep.skipped); break; }
+        }
         if (w === "apply_accepted") {
           const r = await run.accepted(this.o.store, log);
           rep.did.push({ work: w, state: r.every((x) => x.state === "swapped") ? "ok" : "failed", note: `${r.length} accepted drop(s)` });
@@ -199,6 +213,9 @@ export class PrimaryMirrorLoop {
           rep.did.push({ work: w, state: r.state, note: r.error ?? undefined });
           if (r.state === "failed" && /off until go-live/i.test(r.error ?? "")) { this.pausedUntil = now.getTime() + 15 * 60_000; break; }
           if (w === "full" && r.state === "swapped" && this.o.masters) {
+            let why: string | null = null;
+            if (this.o.pin) { try { why = await this.o.pin(); } catch (e) { why = `the company pin could not be checked (${(e as Error).message.slice(0, 100)})`; } }
+            if (why) { rep.skipped = `masters not run, the pinned company is not confirmed: ${why}`; log(rep.skipped); break; }
             const m = await this.o.masters();
             rep.did.push({ work: "masters", state: m.ok ? "ok" : "failed", note: m.error ?? undefined });
           }
@@ -261,7 +278,7 @@ export interface PrimaryDeps {
  * Start the single-primary mode, or say why not. Returns null (with the reasons logged) when the mode is off or any setting is missing: it
  * never half-starts. Called once from index.ts, after the HTTP server is up.
  */
-export function startPrimaryMode(tallyUrl: string, env: Env = process.env, deps: PrimaryDeps = {}): PrimaryHandle | null {
+function startPrimaryModeInner(tallyUrl: string, env: Env, deps: PrimaryDeps): PrimaryHandle | null {
   const log = deps.log ?? ((l: string) => console.log(l));
   if (!primaryModeOn(env)) return null;
   const cfg = readPrimaryConfig(tallyUrl, env);
@@ -273,7 +290,7 @@ export function startPrimaryMode(tallyUrl: string, env: Env = process.env, deps:
   if (!c) { log("🛑 [primary] no database client (offline, or no service key). Nothing is claimed and nothing is posted."); return null; }
   const { cfg: k } = cfg;
   const post = deps.post ?? ((u: string, x: string, t?: number) => tallyPost(u, x, t ?? 300_000, true) as Promise<string>);
-  const seams = tallySeams(k.tallyUrl, post);
+  const seams = { ...tallySeams(k.tallyUrl, post), pin: tallyPinSeam(k.tallyUrl, post) };
   const agent = new ErpJobAgent({
     queue: supabaseErpQueue(c, k.machine, k.key), journal: new Journal(k.journalPath), company: k.company,
     ...seams, companies: k.companies,
@@ -284,6 +301,7 @@ export function startPrimaryMode(tallyUrl: string, env: Env = process.env, deps:
   const mirror = new PrimaryMirrorLoop({
     store, tally: tallyMirrorReads(k.tallyUrl, k.company), plan: supabaseMirrorPlanSource(c as any, k.companyKey), tickMs: k.mirrorTickMs,
     queueBusy: () => queue.status.busy, log: (l) => log(`[primary mirror] ${l}`),
+    pin: async () => (await seams.pin(k.company))?.reason ?? null,
     masters: async () => {
       const rep = await runMasters({
         post: async (xml, ms) => tallyPost(k.tallyUrl, xml, ms, false), fetchGst: () => fetchGstWithinLimit(k.tallyUrl, k.company),
@@ -294,7 +312,7 @@ export function startPrimaryMode(tallyUrl: string, env: Env = process.env, deps:
   });
   log(`📒 [primary] single-primary mode: machine ${k.machine}, company pinned by GUID ${primaryGuid(env).slice(0, 8)}..., queue every ${k.queuePollMs / 1000} s, mirror every ${k.mirrorTickMs / 60000} min. The database switches live_claims and live_mirror decide whether any work is handed out.`);
   queue.start();
-  mirror.start();
+  try { mirror.start(); } catch (e) { queue.stop(); throw e; }
   return {
     stop: () => { queue.stop(); mirror.stop(); },
     status: () => ({ mode: "primary", company: k.company, machine: k.machine, queue: queue.status, mirror: mirror.status, agent: agent.status }),
@@ -302,3 +320,17 @@ export function startPrimaryMode(tallyUrl: string, env: Env = process.env, deps:
 }
 
 function supabaseClientOrNull() { try { return supabaseClient(); } catch { return null; } }
+
+/**
+ * Start the single-primary mode, or say why not (D-M.256 item 8). Whatever goes wrong while starting is logged as "cannot start: <reason>" and the
+ * process carries on without the mode: a failure here never crashes the agent, and it never leaves one loop running without the other.
+ */
+export function startPrimaryMode(tallyUrl: string, env: Env = process.env, deps: PrimaryDeps = {}): PrimaryHandle | null {
+  const log = deps.log ?? ((l: string) => console.log(l));
+  try {
+    return startPrimaryModeInner(tallyUrl, env, deps);
+  } catch (e) {
+    log(`🛑 [primary] cannot start: ${(e as Error).message}. Nothing is claimed and nothing is posted.`);
+    return null;
+  }
+}

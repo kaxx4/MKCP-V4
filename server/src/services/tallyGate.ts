@@ -19,6 +19,7 @@
  */
 import { tallyPost, HEALTH_XML } from "../tally.js";
 import { isTallyBusy } from "./tallyBusy.js";
+import { primaryModeOn, PinRefused } from "./primaryMode.js";
 
 export type GateState = "closed" | "open" | "probing";
 
@@ -141,10 +142,13 @@ export async function withTally<T>(tallyUrl: string, label: string, fn: () => Pr
       consecutiveFailures = 0;
       return out;
     } catch (e) {
+      /* D-M.256 item 4: a company-pin refusal means NOTHING was sent. It is no evidence about the port and never counts towards the breaker. */
+      if (e instanceof PinRefused) throw e;
       // TALLY-6: a failure while a pull is running is "busy", not breaker evidence.
       // The pull marks tallyBusy for exactly as long as it holds the port, so this
       // is checked at the moment of failure, not at the start of the push.
-      if (isTallyBusy() && !(e instanceof TallyUnavailableError)) {
+      // D-M.256 item 5: in the primary mode a pull can never overlap a write (tallyLane.ts), so a failure is real evidence and is never excused as "busy".
+      if (isTallyBusy() && !primaryModeOn() && !(e instanceof TallyUnavailableError)) {
         throw e instanceof TallyBusyError ? e : new TallyBusyError((e as Error).message);
       }
       consecutiveFailures++;
