@@ -20,6 +20,7 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { convertCompanies } from "../src/converters/convert.js";
 import { remoteIdGuesses } from "./find-stranded-test-vouchers.js";
 import { isSweepVoucher, sweepPrefixAllowed } from "./lib/testVoucherMatch.js";
+import { voucherDeleteXml, reportedRemoteId } from "./lib/voucherDeleteXml.js";
 import { guardScriptWrites } from "../src/services/scriptWriteGuard.js";
 guardScriptWrites("sweep-test-vouchers"); // #104: writes only on a sandbox role against a local Tally
 
@@ -71,7 +72,7 @@ const fld = (v: string, t: string) => {
   if (!found.length) { console.log("Nothing matching. Books are clean.\n"); return; }
 
   for (const v of found) {
-    console.log(`  ${fld(v, "VOUCHERTYPENAME").padEnd(18)} ${fld(v, "VOUCHERNUMBER").padEnd(20)} ${fld(v, "PARTYLEDGERNAME")}`);
+    console.log(`  ${fld(v, "VOUCHERTYPENAME").padEnd(18)} ${fld(v, "VOUCHERNUMBER").padEnd(20)} ${fld(v, "PARTYLEDGERNAME")}  (Tally's REMOTEID: ${reportedRemoteId(v) || "not in this read"})`);
   }
   if (!DO) { console.log(`\n${found.length} voucher(s). Dry run. Pass --yes to remove them.\n`); return; }
 
@@ -83,19 +84,16 @@ const fld = (v: string, t: string) => {
        a wrong guess reads as "Voucher does not exist!". Every spelling the test
        scripts use lives in find-stranded-test-vouchers.ts (one list, G1); the
        old two-spelling list here missed 73 vouchers on 2-Nov. */
-    const remoteIds = remoteIdGuesses(type, number);
-    const remoteId = remoteIds[0];
-    const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Import</TALLYREQUEST><TYPE>Data</TYPE><ID>Vouchers</ID></HEADER>
-<BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>${esc(company)}</SVCURRENTCOMPANY></STATICVARIABLES></DESC>
-<DATA><TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="${esc(remoteId)}" VCHTYPE="${esc(type)}" ACTION="Delete"><DATE>${DAY}</DATE><VOUCHERTYPENAME>${esc(type)}</VOUCHERTYPENAME><VOUCHERNUMBER>${esc(number)}</VOUCHERNUMBER></VOUCHER></TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
-    let res: string = await tallyPost(U, xml, 60_000, true);
-    let n = parseInt(fld(res, "DELETED") || "0", 10) || 0;
-    if (!n) {
-      for (const alt of remoteIds.slice(1)) {
-        res = await tallyPost(U, xml.replace(remoteId, esc(alt)), 60_000, true);
-        n = parseInt(fld(res, "DELETED") || "0", 10) || 0;
-        if (n) break;
-      }
+    /* D-M.266: Tally's own REMOTEID for the voucher first (its voucher block carries it when asked in full), then the spellings the harnesses use.
+       The delete message is built in one place, lib/voucherDeleteXml.ts, shared with rigs/p1-cleanup.ts. */
+    const reported = reportedRemoteId(v);
+    const remoteIds = [...new Set([...(reported ? [reported] : []), ...remoteIdGuesses(type, number)])];
+    let res = "";
+    let n = 0;
+    for (const remoteId of remoteIds) {
+      res = await tallyPost(U, voucherDeleteXml({ company, remoteId, type, day: DAY, number }), 60_000, true);
+      n = parseInt(fld(res, "DELETED") || "0", 10) || 0;
+      if (n) break;
     }
     console.log(`  ${n ? "\x1b[32m✓\x1b[0m removed" : "\x1b[31m✗\x1b[0m FAILED "} ${number}${n ? "" : ` — ${fld(res, "LINEERROR") || "no DELETED in response"}`}`);
     gone += n;
