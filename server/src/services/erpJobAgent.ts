@@ -36,7 +36,8 @@ import { testJobRefusal, outcomeOf, type TestOutcome } from "./erpTestQueueAgent
 import type { VoucherPayload } from "../types.js";
 import { isMasterKind, planMasterJob, settleMasterJob, createMasterJob, readMasterId, masterTestRefusal, type MasterOutcome, type MasterPlan } from "./masterJobs.js";
 import { loadMasters, type TallyMasters } from "./tallyMasters.js";
-import { takenNumbersOrThrow, takenVouchersOrThrow } from "./voucherNumbering.js";
+import { takenNumbersOrThrow, takenVouchersOrThrow, assertCollectionReply } from "./voucherNumbering.js";
+import { endStateProof, type FoundVoucher } from "./endState.js";
 import { seriesDefaultFor, isPartyKeyedType, numberTakenBy, type TakenVoucher } from "./voucherSeries.js";
 import { setRecordedFiledThrough } from "./pushGuard.js";
 import { resolveTarget, targetOf, loadedProblem, type CompanyYear } from "./companyYears.js";
@@ -153,14 +154,20 @@ export { sameVoucherType };
  * amount. Tally never returns REMOTEID on a read (file 18 section 2.1), so this
  * is the identity. The day's read is filtered in the request by date, type and number.
  */
-export async function findInTally(post: (xml: string) => Promise<string>, company: string, p: VoucherPayload): Promise<{ masterId: string }[]> {
-  const xml = await post(vouchersOnDateXml(company, p.date, { voucherType: p.voucherType, voucherNumber: p.voucherNumber || undefined }));
+const action0 = (job: ErpJob): "Create" | "Alter" | "Cancel" | "Delete" => job.payload.action ?? "Create";
+
+export async function findInTally(post: (xml: string) => Promise<string>, company: string, p: VoucherPayload): Promise<FoundVoucher[]> {
+  /* D-M.258: an error-shaped reply is a failed read. Without this an error read as "nothing found", and a Delete would look done. */
+  const xml = assertCollectionReply(await post(vouchersOnDateXml(company, p.date, { voucherType: p.voucherType, voucherNumber: p.voucherNumber || undefined })));
+  /* A Cancel or a Delete is matched by IDENTITY (type and number; the day, type and number are also in the request). A cancelled voucher keeps its
+     number but loses its lines and its party, so matching it field by field would never find it (safePush.ts: a cancel is verified by the flag). */
+  const identityOnly = p.action === "Cancel" || p.action === "Delete";
   return [...xml.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0])
     .filter((v) => sameVoucherType(readTag(v, "VOUCHERTYPENAME"), p.voucherType)
       && (!p.voucherNumber || readTag(v, "VOUCHERNUMBER") === p.voucherNumber)
-      && (!p.partyLedgerName || partyMatchesStored(p, v))
-      && diffStored(p, v).length === 0)
-    .map((v) => ({ masterId: readTag(v, "MASTERID") }));
+      && (identityOnly ? !!p.voucherNumber
+        : (!p.partyLedgerName || partyMatchesStored(p, v)) && diffStored(p, v).length === 0))
+    .map((v) => ({ masterId: readTag(v, "MASTERID"), cancelled: /^yes$/i.test(readTag(v, "ISCANCELLED") ?? "") }));
 }
 
 /**
@@ -219,6 +226,8 @@ export interface AgentStatus {
   tallyMayShowMessage: boolean;
   /** D-M.248: the last company-pin check (single-primary mode); null when the pin is not in use. */
   pin?: { ok: boolean; problem: string | null; at: string } | null;
+  /** D-M.258 item 2: claiming is paused until this time because a job was put back (the pinned company could not be checked); null when not paused. */
+  claimsPaused?: { until: string; seconds: number; reason: string } | null;
 }
 
 export interface ErpJobAgentOpts {
@@ -228,7 +237,7 @@ export interface ErpJobAgentOpts {
   /** Book one payload; defaults to safePush against tallyUrl. */
   push: (company: string, payload: VoucherPayload) => Promise<SafePushResult>;
   /** Read Tally for a payload; defaults to findInTally. */
-  find: (company: string, payload: VoucherPayload) => Promise<{ masterId: string }[]>;
+  find: (company: string, payload: VoucherPayload) => Promise<FoundVoucher[]>;
   nonce?: string;
   /**
    * F17: the recorded list of {company, financial year, GUID}. A job that names a target other than `company` is sent
@@ -350,6 +359,7 @@ export class ErpJobAgent {
   private holdClaims(): number {
     this.holdSec = this.holdSec === 0 ? 15 : Math.min(300, this.holdSec * 2);
     this.claimsPausedUntil = this.o.now() + this.holdSec * 1000;
+    this.status.claimsPaused = { until: new Date(this.claimsPausedUntil).toISOString(), seconds: this.holdSec, reason: "a job was put back because the pinned company could not be checked" };
     return this.holdSec;
   }
 
@@ -484,23 +494,21 @@ export class ErpJobAgent {
       await this.finishWithRetry(job, "uncertain", { result: { settled: "read-back", readFailures: this.o.readTries }, error: `This may already be in the books: ${how}` });
       return { state: "uncertain", how };
     }
-    /* M3 (review, 5-Nov-2026): with no voucher number, one match on date, type,
-       party and amount may be a different voucher (a hand-typed twin), so a read
-       never settles it as succeeded. It stays uncertain for a person. */
-    if (!job.payload.voucherNumber && found.length > 0) {
-      const how = `it carries no voucher number; ${found.length} voucher(s) in Tally match on date, type, party and amount, and a read cannot tell which is this one`;
-      await this.finishWithRetry(job, "uncertain", { result: { settled: "read-back", matches: found.length, no_number: true }, error: `This may already be in the books: ${how}` });
-      return { state: "uncertain", how };
+    /* D-M.258 item 1: the same end-state rule as a resend (endState.ts). A voucher that merely EXISTS settles only a Create or an Alter; a Cancel
+       settles when the voucher reads back cancelled, a Delete when it is gone. M3 (review, 5-Nov-2026): with no voucher number a match on date,
+       type, party and amount may be a different voucher, so a read never settles it. Anything else stays uncertain for a person. */
+    const action = action0(job);
+    const proof = endStateProof(job.payload, found);
+    if (proof.done) {
+      await this.finishWithRetry(job, "succeeded", { masterId: proof.masterId, bookedNumber: job.payload.voucherNumber ?? null,
+        result: { settled: "read-back", matches: found.length, end_state: action } });
+      return { state: "succeeded", how: proof.how, masterId: proof.masterId };
     }
-    if (found.length === 1) {
-      await this.finishWithRetry(job, "succeeded", { masterId: found[0].masterId, bookedNumber: job.payload.voucherNumber ?? null,
-        result: { settled: "read-back", matches: 1 } });
-      return { state: "succeeded", how: "found exactly once in Tally by type, date, number, party and amount", masterId: found[0].masterId };
-    }
-    const how = found.length === 0
+    const how = !proof.ambiguous && found.length === 0 && (action === "Create" || action === "Alter")
       ? "sent, but not found in Tally; it may not have arrived. Check it before sending again"
-      : `found ${found.length} times in Tally; a person must decide`;
-    await this.finishWithRetry(job, "uncertain", { result: { settled: "read-back", matches: found.length }, error: `This may already be in the books: ${how}` });
+      : action === "Create" || action === "Alter" ? proof.how : `${proof.how}; a person must check it before anything is sent again`;
+    const lead = action === "Create" || action === "Alter" ? "This may already be in the books: " : `The ${action.toLowerCase()} is not confirmed in Tally: `;
+    await this.finishWithRetry(job, "uncertain", { result: { settled: "read-back", matches: found.length, ...(!job.payload.voucherNumber ? { no_number: true } : {}) }, error: lead + how });
     return { state: "uncertain", how };
   }
 
@@ -550,6 +558,9 @@ export class ErpJobAgent {
          Tally either (settleOwn decides a job's outcome from what Tally shows), so the pin is checked first. */
       const pinWhy = await this.pinProblem(this.o.company);
       if (pinWhy) { report.held = false; report.stopped = pinWhy.reason; return report; }
+      /* D-M.258 item 2: a clean pre-claim check ends the growing pause once the pause is over and has stayed quiet for as long again; a pause that is
+         still running, or one that just ended and failed again at once, keeps doubling (a reset at every clean check would make the doubling dead code). */
+      if (this.holdSec > 0 && this.o.now() >= this.claimsPausedUntil + this.holdSec * 1000) { this.holdSec = 0; this.status.claimsPaused = null; }
       report.settled = await this.settleOwn();
       if (this.o.now() < this.claimsPausedUntil) {
         report.stopped = `claiming is paused for ${Math.ceil((this.claimsPausedUntil - this.o.now()) / 1000)} s more: a job was put back because the pinned company could not be checked`;
@@ -620,7 +631,7 @@ export class ErpJobAgent {
     try {
       const pinWhy = await this.pinProblem(company);
       if (pinWhy) return await this.pinStop(job, key, pinWhy);
-      this.holdSec = 0;       // a job got past the last check before `sent`: the growing pause starts over
+      this.holdSec = 0; this.status.claimsPaused = null;       // a job got past the last check before `sent`: the growing pause starts over
       const sent = await this.o.queue.markSent(this.nonce, job.id, company);
       if (!sent.ok) {
         this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: sent.reason ?? "refused", at: new Date().toISOString() });
@@ -713,16 +724,19 @@ export class ErpJobAgent {
        old one landed. Read Tally first: exactly that voucher found, it is
        already in the books; more than one, a person decides; none, push. */
     if (job.resend_of) {
-      let found: { masterId: string }[] | null = null;
+      let found: FoundVoucher[] | null = null;
       try { found = await this.o.find(company, job.payload); } catch { found = null; }
-      if (found === null || found.length > 0) {
-        const one = found?.length === 1 && !!job.payload.voucherNumber; // M3: no number, never settled by a read
-        const state: JobOutcome = one ? "succeeded" : "uncertain";
-        const detail = found === null ? "Tally could not be read before the resend; not pushed"
-          : one ? "the earlier attempt is already in the books; settled without pushing again"
-          : `found ${found.length} times in Tally before the resend; not pushed, a person must decide`;
-        await this.finishWithRetry(job, state, { masterId: one ? found![0].masterId : null, result: { resend_check: found?.length ?? null }, error: one ? null : detail });
-        return { id: job.id, key, outcome: state, detail, masterId: one ? found![0].masterId : null };
+      /* D-M.258 item 1: what counts as "already done" depends on the action. A Cancel is done when the voucher reads back cancelled, a Delete when it
+         is gone; "the voucher exists" is proof only for a Create or an Alter (endState.ts). The read was made just after the pin check above. */
+      const proof = found === null ? null : endStateProof(job.payload, found);
+      if (found === null || proof!.done || proof!.ambiguous) {
+        const state: JobOutcome = proof?.done ? "succeeded" : "uncertain";
+        const detail = proof === null ? "Tally could not be read before the resend; not pushed"
+          : proof.done ? (action0(job) === "Create" || action0(job) === "Alter" ? "the earlier attempt is already in the books; settled without pushing again" : `${proof.how}; settled without sending again`)
+          : `${proof.how}; not pushed, a person must decide`;
+        const masterId = proof?.done ? proof.masterId : null;
+        await this.finishWithRetry(job, state, { masterId, result: { resend_check: found?.length ?? null, end_state: action0(job) }, error: state === "succeeded" ? null : detail });
+        return { id: job.id, key, outcome: state, detail, masterId };
       }
     }
     /* 1-4: a number Tally already holds blocks a Create. The REMOTEID is built
@@ -746,7 +760,7 @@ export class ErpJobAgent {
       /* D-M.248: right before `sent`, the pinned company is checked again. A failure puts the job back, with nothing sent. */
       const pinWhy = await this.pinProblem(company);
       if (pinWhy) return await this.pinStop(job, key, pinWhy);
-      this.holdSec = 0;       // a job got past the last check before `sent`: the growing pause starts over
+      this.holdSec = 0; this.status.claimsPaused = null;       // a job got past the last check before `sent`: the growing pause starts over
       const m = await this.o.queue.markSent(this.nonce, job.id, company);
       if (!m.ok) {
         this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: m.reason ?? "refused", at: new Date().toISOString() });

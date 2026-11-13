@@ -203,6 +203,32 @@ const refusedWith = (kind: string, payload: unknown, re: RegExp, m = masters()) 
     await a.runOnce(1);
     const row = m.rows.get(id)!;
     ok("Tally refuses the item after the unit: failed, the reason says the unit stays", row.state === "failed" && /unit "ZZUNIT" was made, but the item was not/.test(String(row.error)));
+    ok("the report says the unit WAS made, never that it was not (error text and result flag)", !/unit[^.]*was not made/i.test(String(row.error)) && JSON.stringify(row.result).includes("unit_made"), `${row.error} ${JSON.stringify(row.result)}`);
+  }
+  {
+    // D-M.258 item 1: the resend of that job re-plans from FRESH masters. The unit is in Tally now, so only the item is made.
+    const m = memErpQueue({ secondMs: 10 }); const calls: Calls = { created: [], read: 0, ids: 0 };
+    const id1 = addJob(m, "new_item", ITEM_PAYLOAD);
+    let attempt = 0;
+    const withUnit = (): TallyMasters => { const x = masters(); x.units.add("ZZUNIT"); return x; };
+    const a = agent(m, calls, {
+      createMaster: async (_c, plan) => {
+        calls.created.push(plan);
+        if (++attempt === 1) return { ok: false, stage: "item", unitMade: true, reason: 'The unit "ZZUNIT" was made, but the item was not. Tally did not make the item "ZZ TEST RIM 29 X 2.1": EXCEPTIONS=1.', masterId: null } satisfies MasterOutcome;
+        return { ok: true, stage: "item", unitMade: false, reason: "Made and read back: unit ZZUNIT, IGST 18%, HSN 87149290.", masterId: "4242", readBack: { igst: "18" } } satisfies MasterOutcome;
+      },
+    }, () => (attempt === 0 ? masters() : withUnit()));
+    await a.runOnce(1);
+    const first = calls.created[0] as Extract<MasterPlan, { kind: "new_item" }>;
+    const readsBefore = calls.read;
+    const id2 = addJob(m, "new_item", ITEM_PAYLOAD);
+    m.rows.get(id2)!.resend_of = id1;
+    await a.runOnce(1);
+    const second = calls.created[1] as Extract<MasterPlan, { kind: "new_item" }>;
+    ok("the first attempt planned a new unit and the item", first.unit?.name === "ZZUNIT");
+    ok("the resend read the masters again (fresh), not the first attempt's plan", calls.read > readsBefore);
+    ok("the resend plans the ITEM ONLY: the unit the first attempt made is in Tally now, so it is not made again", second && second.unit === null && second.item.name === "ZZ TEST RIM 29 X 2.1", JSON.stringify(second?.unit));
+    ok("the resend succeeds with the master's id", m.rows.get(id2)!.state === "succeeded" && m.rows.get(id2)!.master_id === "4242", m.rows.get(id2)!.state);
   }
   {
     const m = memErpQueue({ secondMs: 10 }); const calls: Calls = { created: [], read: 0, ids: 0 };

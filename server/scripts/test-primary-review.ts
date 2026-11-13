@@ -19,6 +19,8 @@ import { tallyPost, resetListingCache } from "../src/tally.js";
 import { installMock, uninstallMock } from "../src/services/tallyMock.js";
 import { ErpJobAgent, Journal, tallySeams, tallyPinSeam } from "../src/services/erpJobAgent.js";
 import { TallyLane } from "../src/services/tallyLane.js";
+import { PrimaryQueueLoop, PrimaryMirrorLoop, guardedMirrorTally, type MirrorRunners, type MirrorPlanSource } from "../src/services/primaryRunner.js";
+import type { MirrorStore, MirrorTally } from "../src/services/erpMirrorSync.js";
 import { withTally, gateState, resetGate } from "../src/services/tallyGate.js";
 import type { SafePushResult } from "../src/services/safePush.js";
 import type { VoucherPayload } from "../src/types.js";
@@ -127,6 +129,64 @@ function setEnv(e: Record<string, string | undefined>): () => void {
     const p2 = (a as any).claimsPausedUntil - clock.t;
     ok("the pause is 15 s, then 30 s", p1 === 15_000 && p2 === 30_000, `${p1} ${p2}`);
     restore();
+  }
+
+  console.log("\n  D-M.258 item 2: the claim pause is shown, and ends after a quiet spell");
+  {
+    const restore = setEnv(env());
+    const m = memErpQueue(); m.add(pl(20), false);
+    const clock = { t: Date.now() };
+    let asked = 0;
+    const { a } = mk(m, { pin: async () => (++asked === 2 ? UNREAD : null) }, clock);
+    const loop = new PrimaryQueueLoop({ agent: a, pollMs: 10_000, busyMs: 2_000, log: () => {} });
+    await loop.tick();                                   // the job is put back, claiming pauses
+    ok("the agent status carries the pause: until, seconds, reason", a.status.claimsPaused?.seconds === 15 && /put back/.test(a.status.claimsPaused?.reason ?? ""), JSON.stringify(a.status.claimsPaused));
+    await loop.tick();                                   // the next round is inside the pause
+    ok("the queue loop's last note says the pause and why, not 'idle'", /paused for \d+ s more/.test(String(loop.status.lastNote)) && /could not be checked/.test(String(loop.status.lastNote)), String(loop.status.lastNote));
+    // The pause ends; the company list stays readable for as long again: the next clean pre-claim check starts the pause over.
+    clock.t += 15_000 + 15_000 + 1;
+    await loop.tick();
+    ok("after a quiet spell a clean pre-claim check ends the growing pause", (a as any).holdSec === 0 && a.status.claimsPaused === null, String((a as any).holdSec));
+    restore();
+  }
+
+  console.log("\n  D-M.258 item 3: the pin is asked again while a full run reads, and a mismatch stops it");
+  {
+    const clock = { t: 1_000_000 };
+    let pinCalls = 0; let lost = false;
+    const reads: string[] = [];
+    const tally: MirrorTally = {
+      highest: async () => { reads.push("highest"); return { alterId: 1, latestDate: null, count: 0, byDay: {} }; },
+      vouchersOn: async (d: string) => { reads.push(d); return []; },
+      changedSince: async () => [], ledgers: async () => [], loadedPeriod: async () => ({ from: null, to: null, lastVoucherDate: null } as any),
+    };
+    const g = guardedMirrorTally(tally, async () => { pinCalls++; return lost ? "refused: not the pinned company. Nothing was sent to Tally." : null; }, 60_000, () => clock.t);
+    await g.highest();
+    for (let i = 1; i <= 5; i++) { clock.t += 10_000; await g.vouchersOn(`2026-04-0${i}`); }
+    ok("the pin is asked at the start and then only about once a minute, not before every day", pinCalls >= 1 && pinCalls <= 2, String(pinCalls));
+    clock.t += 60_000; lost = true;
+    const e = await g.vouchersOn("2026-04-09").then(() => null, (x: Error) => x);
+    ok("a mismatch stops the read: it throws 'stopped: the pinned company is no longer confirmed' and the day is not read", !!e && /stopped: the pinned company is no longer confirmed/.test(e.message) && !reads.includes("2026-04-09"), e?.message);
+    const e2 = await g.ledgers().then(() => null, (x: Error) => x);
+    ok("and the next read is refused too (the pin is asked again and still fails)", !!e2);
+    lost = false;
+    ok("when the pin holds again, reading carries on", (await g.vouchersOn("2026-04-10").then(() => "read", () => "refused")) === "read");
+    const bad = guardedMirrorTally(tally, async () => { throw new Error("socket hang up"); }, 60_000, () => clock.t);
+    ok("a pin that cannot be checked also stops the run", /could not be checked/.test((await bad.vouchersOn("2026-04-11").then(() => "", (x: Error) => x.message))));
+
+    // Through the loop: a runner that reads many days; the pin fails part-way; the run reports failed with the reason and the pass stops.
+    const calls: string[] = [];
+    let mirrorLost = false; let n = 0;
+    const runners: MirrorRunners = {
+      mirror: async (_s, t) => { try { for (let i = 0; i < 6; i++) { n++; if (n === 4) mirrorLost = true; clock.t += 61_000; await t.vouchersOn(`d${i}`); } calls.push("full-done"); return { state: "swapped", error: null }; } catch (x) { calls.push("full-stopped"); return { state: "failed", error: (x as Error).message }; } },
+      check: async () => { calls.push("check"); return { state: "ok", error: null }; }, repull: async () => null, accepted: async () => [],
+    };
+    const plan: MirrorPlanSource = { hasMark: async () => false, fullDue: async () => false, lastCheckAt: async () => null, queuedRepulls: async () => 0 };
+    const store = { isTest: false, scrubSalt: null, acceptedRuns: async () => [], lastFullRun: async () => null } as unknown as MirrorStore;
+    const loop = new PrimaryMirrorLoop({ store, tally, plan, tickMs: 1000, log: () => {}, runners, pin: async () => (mirrorLost ? "refused: not the pinned company." : null), now: () => clock.t, pinEveryMs: 60_000 });
+    const rep = await loop.tick();
+    ok("a full run whose pin is lost part-way is stopped and reported failed with the reason", calls[0] === "full-stopped" && rep.did[0]?.state === "failed" && /no longer confirmed/.test(rep.did[0]?.note ?? ""), JSON.stringify(rep.did));
+    ok("nothing else runs in that pass (no check, no masters)", calls.join() === "full-stopped");
   }
 
   console.log("\n  item 2: tallySeams carries no pin; a mode-OFF agent built like the rigs still claims");

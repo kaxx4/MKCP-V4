@@ -92,6 +92,8 @@ export class PrimaryQueueLoop {
       this.status.rounds++;
       this.status.lastAt = new Date((this.o.now ?? Date.now)()).toISOString();
       if (!r.held) { this.status.lastNote = r.stopped ?? "not holding the queue lease"; return this.o.pollMs; }
+      /* D-M.258 item 2: a round that stopped for a reason (the claim pause and why) says so, never "idle". */
+      if (r.stopped && r.results.length === 0 && r.settled.length === 0) { this.status.lastNote = r.stopped; return this.o.pollMs; }
       const n = r.results.length + r.settled.length;
       this.status.lastNote = n ? `${r.results.length} job(s) worked, ${r.settled.length} settled` : "idle";
       if (n) log(this.status.lastNote);
@@ -119,6 +121,30 @@ export class PrimaryQueueLoop {
 }
 
 // ── The mirror loop ───────────────────────────────────────────────────────────
+/**
+ * D-M.258 item 3: a full run reads for many minutes (one day per request), so the pin cannot be checked only between pieces of work. This wraps the
+ * run's Tally reads: before any read, if the last good pin answer is older than `everyMs`, the pin is asked again (a fresh company list); on a
+ * mismatch, or a pin that cannot be checked, the read throws "stopped: ..." and the run FAILS where it stands. Nothing is swapped from a failed run
+ * (the mark stays, the staged rows are kept for a person), and the loop's report says why.
+ */
+export function guardedMirrorTally(tally: MirrorTally, pin: () => Promise<string | null>, everyMs: number, now: () => number = Date.now): MirrorTally {
+  let okAt = -Infinity;
+  const guard = async (): Promise<void> => {
+    if (now() - okAt < everyMs) return;
+    let why: string | null;
+    try { why = await pin(); } catch (e) { why = `the company pin could not be checked (${(e as Error).message.slice(0, 100)})`; }
+    if (why) { okAt = -Infinity; throw new Error(`stopped: the pinned company is no longer confirmed, so the run reads no further and nothing is swapped from it. ${why}`); }
+    okAt = now();
+  };
+  return {
+    highest: async () => { await guard(); return tally.highest(); },
+    vouchersOn: async (day) => { await guard(); return tally.vouchersOn(day); },
+    changedSince: async (mark, upTo) => { await guard(); return tally.changedSince(mark, upTo); },
+    ledgers: async () => { await guard(); return tally.ledgers(); },
+    loadedPeriod: async () => { await guard(); return tally.loadedPeriod(); },
+  };
+}
+
 /** What the planner needs from the database that the store does not already give. */
 export interface MirrorPlanSource {
   hasMark(): Promise<boolean>;
@@ -180,6 +206,8 @@ export class PrimaryMirrorLoop {
      * work a pass does (so always before a full run); on a failure that work does not run and nothing is read or swapped from it.
      */
     pin?: () => Promise<string | null>;
+    /** D-M.258 item 3: while a run is reading, the pin is asked again when this long has passed since the last good answer (default 60 s). */
+    pinEveryMs?: number;
     tickMs: number; log?: (l: string) => void; now?: () => number; runners?: MirrorRunners;
   }) {}
 
@@ -192,6 +220,7 @@ export class PrimaryMirrorLoop {
     if (now.getTime() < this.pausedUntil) { rep.skipped = "paused: the database said the mirror is off"; return rep; }
     if (this.o.queueBusy?.()) { rep.skipped = "the queue is mid-round; the mirror waits"; return rep; }
     this.status.busy = true;
+    const tally = this.o.pin ? guardedMirrorTally(this.o.tally, this.o.pin, this.o.pinEveryMs ?? 60_000, this.o.now ?? Date.now) : this.o.tally;
     try {
       const [hasMark, fullDue, lastCheckAt, queuedRepulls, accepted, last] = await Promise.all([
         this.o.plan.hasMark(), this.o.plan.fullDue(), this.o.plan.lastCheckAt(), this.o.plan.queuedRepulls(),
@@ -209,7 +238,7 @@ export class PrimaryMirrorLoop {
           const r = await run.accepted(this.o.store, log);
           rep.did.push({ work: w, state: r.every((x) => x.state === "swapped") ? "ok" : "failed", note: `${r.length} accepted drop(s)` });
         } else if (w === "full" || w === "incremental") {
-          const r = await run.mirror(this.o.store, this.o.tally, w, log);
+          const r = await run.mirror(this.o.store, tally, w, log);
           rep.did.push({ work: w, state: r.state, note: r.error ?? undefined });
           if (r.state === "failed" && /off until go-live/i.test(r.error ?? "")) { this.pausedUntil = now.getTime() + 15 * 60_000; break; }
           if (w === "full" && r.state === "swapped" && this.o.masters) {
@@ -221,11 +250,11 @@ export class PrimaryMirrorLoop {
           }
           if (r.state !== "swapped") break;     // a refused or failed run stops the pass; the next pass plans again
         } else if (w === "check") {
-          const r = await run.check(this.o.store, this.o.tally, log);
+          const r = await run.check(this.o.store, tally, log);
           rep.did.push({ work: w, state: r.state, note: r.error ?? undefined });
         } else if (w === "repull") {
           for (let i = 0; i < 7; i++) {
-            const r = await run.repull(this.o.store, this.o.tally, log);
+            const r = await run.repull(this.o.store, tally, log);
             if (!r) break;
             rep.did.push({ work: "repull", state: r.state, note: r.error ?? undefined });
             if (r.state !== "swapped") break;
