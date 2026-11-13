@@ -73,7 +73,8 @@ from Tally and compares it with what was sent; the live rigs run it on every vou
 | M3 | Unit | yes | builder exists, not wired | yes | `:422, 515, 530` | - | `test-batch04-dummy` (C14) | Alter not wired |
 | M4 | Godown | yes | builder exists, not wired | yes | `:431, 540, 548` | - | `test-batch04-dummy` (C14) | Alter not wired |
 | M6 | New item / new party from a queue job (`new_item`, `new_party`) | yes, through M1/M2/M3 builders | - | no (the rig tears down by name) | `src/services/masterJobs.ts`, `erpJobAgent.ts` | `test-master-jobs` (59) | `rigs/master-jobs-dummy` (21 of 21, 13-Nov) | The sandbox claim rule does not hand out master jobs, so the real queue path is not run on the dummy |
-| M5 | Stock group, ledger group, voucher type, cost centre, currency | not built | - | - | - | - | - | The agent never writes these; reads only (section 3) |
+| M7 | Cost centre (top level and child) | yes (`createCostCentre`) | - | yes | `masterPusher.ts` | `test-master-jobs` (3) | `rigs/cost-centre-dummy` (13 of 13, 13-Nov): name, parent, category, GUID read back through the sync's own request and converter | Not wired into any job; the agent has no reason to make one yet |
+| M5 | Stock group, ledger group, voucher type, currency | not built | - | - | - | - | - | The agent never writes these; reads only (section 3) |
 
 ## 3. Reads (everything the agent pulls)
 
@@ -174,6 +175,6 @@ Recorded as D-T11.n in `rebuild-plan/decisions-log.md`.
 ## 8. Status at the end of the lane (13-Nov-2026)
 
 Proven on the dummy: C22, C23, C25, C26, C26b, C29 (now with the reverse-charge flag, 29 checks), H-14 (without the four Sales steps), the money receipts, payments and contras matrix (contras 61 checks including Alter, Cancel and Delete), the bank transfer modes Cheque, UPI, NEFT and RTGS (read back with identical spelling, 74 checks), the go-live rigs for F11, F6 and F17, B1 to B7, and the master-jobs worker for new items and new parties (21 checks). Offline: all suites pass.
-Not proven: cost centre fields (the dummy has none and there is no builder); the real queue claim of a master job (sandbox rule). Open: A7 fails with inherited lines in tracked files (none from this lane).
+Cost centre fields are now proven (a ZZ TEST centre and child were made, pulled with the sync's own request and swept). Not proven: the real queue claim of a master job (sandbox rule). A7 passes: the inherited lines were replaced with fakes or allowed one by one in `scripts/name-allowlist.json`.
 The dummy holds no ZZ TEST rows; the books read 3,371 vouchers, 5 of them ours.
 Full table, failures and causes: `rebuild-plan/reports/T11-tally-coverage.md`.

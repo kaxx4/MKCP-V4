@@ -27,7 +27,7 @@ const arg = (k: string) => { const i = process.argv.indexOf(k); return i >= 0 ? 
 const OUT = arg("--out");
 const CLEANUP = arg("--cleanup");
 /** First full run's check count; -1 = not calibrated yet. */
-const EXPECTED = -1;
+const EXPECTED = 13;
 const names = (stamp: string) => ({ parent: `ZZ TEST CC ${stamp} P`, child: `ZZ TEST CC ${stamp} C` });
 const def = MASTER_COLLECTIONS.find((d) => d.name === "costCentres")!;
 
