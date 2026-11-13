@@ -16,7 +16,7 @@ import {
   planMirrorWork, runMirrorSync, runDayCheck, runRepull, applyAcceptedDrops, supabaseMirrorStore, tallyMirrorReads,
   type MirrorStore, type MirrorTally, type MirrorWork,
 } from "./erpMirrorSync.js";
-import { runMasters, supabaseMastersStore, fetchGstWithinLimit } from "./erpMasters.js";
+import { runMasters, supabaseMastersStore, fetchGstWithinLimit, type MastersStore } from "./erpMasters.js";
 import { loadCompanyYears, type CompanyYear } from "./companyYears.js";
 import { primaryModeOn, primaryModeRefusal, primaryGuid, primaryCompanyName, primaryCompanyKey } from "./primaryMode.js";
 import { agentMachineId, supabaseClient } from "./supabaseClient.js";
@@ -152,16 +152,45 @@ export function guardedMirrorTally(tally: MirrorTally, pin: () => Promise<string
  * is refused, runMirrorSync marks the run failed (the mark stays, the staged rows are kept), and nothing from that read reaches the mirror.
  */
 export function guardedMirrorStore(store: MirrorStore, pinNow: () => Promise<string | null>): MirrorStore {
-  const fresh = async (what: string): Promise<void> => {
-    let why: string | null;
-    try { why = await pinNow(); } catch (e) { why = `the company pin could not be checked (${(e as Error).message.slice(0, 100)})`; }
-    if (why) throw new Error(`refused: the pinned company is not confirmed right before ${what}, so nothing the run read is written into the mirror. ${why}`);
-  };
-  const w = Object.create(store) as { -readonly [K in keyof MirrorStore]: MirrorStore[K] };
-  w.swap = async (run, mark) => { await fresh("the swap"); return store.swap(run, mark); };
-  w.swapAccepted = async (run) => { await fresh("an accepted swap"); return store.swapAccepted(run); };
-  w.checkDays = async (hi, vs) => { await fresh("the day check is stored"); return store.checkDays(hi, vs); };
-  return w;
+  return guardStoreCalls(store, pinNow, { swap: "the swap", swapAccepted: "an accepted swap", checkDays: "the day check is stored" });
+}
+
+/**
+ * D-M.270: the SAME helper for the masters of the go-live swap store (runMasters). The pin is asked fresh before the first rows of each table are
+ * staged (a marker not seen yet) and before every `finish`, which is the swap. All reads come first, so both asks come after the read; a mismatch or
+ * an unreadable pin throws before the database is called, the run fails with the reason, and the swap store keeps what it held.
+ */
+export function guardedMastersStore(store: MastersStore, pinNow: () => Promise<string | null>): MastersStore {
+  let lastMarker = "";
+  return guardStoreCalls(store, pinNow, {
+    put: { what: "the masters are staged", when: (_t: unknown, marker: unknown) => { const first = marker !== lastMarker; lastMarker = String(marker); return first; } },
+    finish: "the masters swap",
+  });
+}
+
+/**
+ * The one wrapper behind guardedMirrorStore and guardedMastersStore (D-M.270: no second copy). Each named method of the store first asks the pin
+ * FRESH (never from a remembered answer); a mismatch, or a pin that cannot be checked, throws "refused: ..." before the store is called.
+ * `when` limits a check to the calls that need it (the first stage of a table, not every chunk).
+ */
+export const PIN_REFUSAL = /^refused: the pinned company is not confirmed right before /;
+function guardStoreCalls<S extends object>(store: S, pinNow: () => Promise<string | null>,
+  calls: Record<string, string | { what: string; when?: (...args: any[]) => boolean }>): S {
+  const w = Object.create(store) as Record<string, unknown>;
+  for (const [name, spec] of Object.entries(calls)) {
+    const what = typeof spec === "string" ? spec : spec.what;
+    const when = typeof spec === "string" ? undefined : spec.when;
+    const real = (store as Record<string, unknown>)[name] as (...args: unknown[]) => Promise<unknown>;
+    w[name] = async (...args: unknown[]) => {
+      if (!when || when(...args)) {
+        let why: string | null;
+        try { why = await pinNow(); } catch (e) { why = `the company pin could not be checked (${(e as Error).message.slice(0, 100)})`; }
+        if (why) throw new Error(`refused: the pinned company is not confirmed right before ${what}, so nothing the run read is written. ${why}`);
+      }
+      return real.apply(store, args);
+    };
+  }
+  return w as S;
 }
 
 /** What the planner needs from the database that the store does not already give. */
@@ -225,6 +254,8 @@ export class PrimaryMirrorLoop {
      * work a pass does (so always before a full run); on a failure that work does not run and nothing is read or swapped from it.
      */
     pin?: () => Promise<string | null>;
+    /** D-M.270: where a refused masters swap is written down (the agent's own journal). Absent: not journalled. */
+    journal?: { append(e: JournalEntry): void };
     /** D-M.258 item 3: while a run is reading, the pin is asked again when this long has passed since the last good answer (default 60 s). */
     pinEveryMs?: number;
     tickMs: number; log?: (l: string) => void; now?: () => number; runners?: MirrorRunners;
@@ -266,6 +297,14 @@ export class PrimaryMirrorLoop {
             if (why) { rep.skipped = `masters not run, the pinned company is not confirmed: ${why}`; log(rep.skipped); break; }
             const m = await this.o.masters();
             rep.did.push({ work: "masters", state: m.ok ? "ok" : "failed", note: m.error ?? undefined });
+            if (!m.ok && PIN_REFUSAL.test(m.error ?? "")) {
+              /* D-M.270: the pin check refused the masters swap: the swap store keeps what it held, the reason is journalled, and the pass holds (like a
+                 refused voucher swap, the next pass plans again). */
+              rep.skipped = `masters not swapped: ${m.error}`;
+              try { this.o.journal?.append({ kind: "swap-refused", what: "masters", reason: String(m.error).slice(0, 300), at: now.toISOString() }); } catch { /* the note below still shows it */ }
+              log(rep.skipped);
+              break;
+            }
           }
           if (r.state !== "swapped") break;     // a refused or failed run stops the pass; the next pass plans again
         } else if (w === "check") {
@@ -428,10 +467,11 @@ function startPrimaryModeInner(tallyUrl: string, env: Env, deps: PrimaryDeps): P
   } as ConstructorParameters<typeof ErpJobAgent>[0]);
   const queue = new PrimaryQueueLoop({ agent, pollMs: k.queuePollMs, busyMs: k.queueBusyMs, log: (l) => log(`[primary queue] ${l}`) });
   const store = guardedMirrorStore(supabaseMirrorStore(c as any, k.machine, k.key, k.companyKey, false), async () => (await seams.pin(k.company))?.reason ?? null);
-  const mastersStore = supabaseMastersStore(c as any, k.machine, k.key, k.companyKey, false);
+  const pinNow = async () => (await seams.pin(k.company))?.reason ?? null;
+  const mastersStore = guardedMastersStore(supabaseMastersStore(c as any, k.machine, k.key, k.companyKey, false), pinNow);
   const mirror = new PrimaryMirrorLoop({
     store, tally: tallyMirrorReads(k.tallyUrl, k.company), plan: supabaseMirrorPlanSource(c as any, k.companyKey), tickMs: k.mirrorTickMs,
-    queueBusy: () => queue.status.busy, log: (l) => log(`[primary mirror] ${l}`),
+    queueBusy: () => queue.status.busy, log: (l) => log(`[primary mirror] ${l}`), journal,
     pin: async () => (await seams.pin(k.company))?.reason ?? null,
     masters: async () => {
       const rep = await runMasters({

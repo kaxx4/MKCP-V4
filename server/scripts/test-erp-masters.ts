@@ -7,6 +7,7 @@ import {
   ITEM_PIECES, LEDGER_PIECES, GROUP_PIECE, MASTERS_READ_LIMIT_MS, MASTER_TABLES, PERSONAL_LEDGER_COLUMNS, assertUniqueKeys, mergePieces, recordsOf, runMasters,
   type MasterRow, type MasterTable, type MastersStore,
 } from "../src/services/erpMasters.js";
+import { guardedMastersStore, PIN_REFUSAL } from "../src/services/primaryRunner.js";
 import { scrubName, scrubSaltFrom } from "../src/services/erpMirrorSync.js";
 import { SupabaseSync } from "../src/services/supabaseSync.js";
 import { convertLedgers } from "../src/converters/convert.js";
@@ -104,6 +105,29 @@ const GST = [{ scope: "stock_group" as const, name: "Rims", effectiveFrom: "2026
 
   // the split ledger read against one whole read of the same fields
   const t = rig(); const f = fakeStore();
+  // D-M.270: the pin is asked fresh after the read and before the swap; a flip in between leaves the swap store as it was
+  {
+    const run = async (pin: (afterReads: boolean, call: number) => Promise<string | null>) => {
+      const tt = rig(); const ff = fakeStore(); let readsDone = false; let calls = 0;
+      const guarded = guardedMastersStore(ff.store, async () => pin(readsDone, ++calls));
+      const rr = await runMasters({ post: tt.post, fetchGst: async () => { readsDone = true; return GST; }, store: guarded, mastersOpts: real, company: "ZZ REAL CO", newMarker: marker, log: noLog });
+      return { rr, ff, asks: calls };
+    };
+    const steady = await run(async () => null);
+    ok("a pin that keeps holding: the run is ok and the pin was asked before each table's staging and each swap (5 tables, 10 asks)", steady.rr.ok && steady.asks === 10, `${steady.rr.ok} ${steady.asks}`);
+    const flipped = await run(async (after) => (after ? "refused: another company is open" : null));
+    ok("a pin that flips between the read and the swap: the run fails with the refusal", !flipped.rr.ok && PIN_REFUSAL.test(flipped.rr.error ?? ""), flipped.rr.error ?? "");
+    ok("and the masters store is UNCHANGED: nothing was staged and nothing swapped", flipped.ff.calls.length === 0 && Object.keys(flipped.ff.rows).length === 0, flipped.ff.calls.join());
+    const midway = await run(async (_a, call) => (call >= 2 ? "refused: Tally is not answering the company list" : null));
+    ok("a pin that fails after the first table's rows were staged refuses that table's swap (no finish was sent)", !midway.rr.ok && !midway.ff.calls.some((c) => c.startsWith("finish")), midway.ff.calls.join());
+    const unreadable = await (async () => {
+      const tt = rig(); const ff = fakeStore();
+      const g2 = guardedMastersStore(ff.store, async () => { throw new Error("socket hang up"); });
+      return { rr: await runMasters({ post: tt.post, fetchGst: async () => GST, store: g2, mastersOpts: real, company: "ZZ REAL CO", newMarker: marker, log: noLog }), ff };
+    })();
+    ok("a pin that cannot be read refuses the swap too, store unchanged", !unreadable.rr.ok && /could not be checked/.test(unreadable.rr.error ?? "") && unreadable.ff.calls.length === 0, unreadable.rr.error ?? "");
+  }
+
   const rep = await runMasters({ post: t.post, fetchGst: async () => GST, store: f.store, mastersOpts: real, company: "ZZ REAL CO", newMarker: marker, log: noLog });
   ok("a clean run is ok", rep.ok && !rep.error, rep.error ?? "");
   ok("every Tally request is held to 120 s or less", t.asked.length > 0 && t.asked.every((a) => a.ms <= MASTERS_READ_LIMIT_MS && a.ms <= 120_000), JSON.stringify(t.asked.map((a) => a.ms)));

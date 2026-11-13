@@ -97,7 +97,9 @@ export type JournalEntry =
   | { kind: "finished"; jobId: string; state: string; by: string; at: string }
   | { kind: "finish-pending"; jobId: string; state: string; error: string; at: string }
   /** D-M.262: the primary runner's once-a-day housekeeping (today only the change-signal prune). Not about any job. */
-  | { kind: "housekeeping"; task: "signals-prune"; pruned: number | null; error: string | null; at: string };
+  | { kind: "housekeeping"; task: "signals-prune"; pruned: number | null; error: string | null; at: string }
+  /** D-M.270: a swap the pin check refused (the masters of the swap store), so a person can see why the store did not move. */
+  | { kind: "swap-refused"; what: "masters"; reason: string; at: string };
 
 /** Append-only, one JSON line per step, flushed to disk before the call returns. */
 export class Journal {

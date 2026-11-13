@@ -290,6 +290,15 @@ const noop = () => {};
     let masters = 0, pinAsked = 0;
     await mk(plan({ fullDue: true }), runners(), { masters: async () => { masters++; return { ok: true, error: null }; }, pin: async () => (++pinAsked === 1 ? null : "refused: gone") }).tick();
     ok("the pin is asked again before the masters load that follows a full run", masters === 0 && calls.join() === "full", `${masters} ${calls.join()}`);
+    calls.length = 0;
+    const entries: any[] = [];
+    const refusal = "refused: the pinned company is not confirmed right before the masters swap, so nothing the run read is written. refused: gone";
+    const held = await mk(plan({ hasMark: false, lastCheck: null, repulls: 2 }), runners(), { masters: async () => ({ ok: false, error: refusal }), journal: { append: (e) => { entries.push(e); } } }).tick();
+    ok("D-M.270: a masters swap the pin refused holds the pass (no check or re-pull after it) and says why", calls.join() === "full" && /masters not swapped: refused: the pinned company is not confirmed/.test(String(held.skipped)), `${calls.join()} | ${held.skipped}`);
+    ok("D-M.270: and it is journalled with the reason", entries.length === 1 && entries[0].kind === "swap-refused" && entries[0].what === "masters" && /right before the masters swap/.test(entries[0].reason), JSON.stringify(entries));
+    calls.length = 0;
+    const plain = await mk(plan({ hasMark: false, lastCheck: null, repulls: 2 }), runners(), { masters: async () => ({ ok: false, error: "erp_tally_put: boom" }), journal: { append: (e) => { entries.push(e); } } }).tick();
+    ok("D-M.270: any other masters failure behaves as before (the pass goes on, nothing journalled as a refused swap)", calls.join() === "full,check,repull,repull" && entries.length === 1 && !plain.skipped, `${calls.join()}`);
   }
 
   console.log("\n  D-M.263 item 2: the pin is asked FRESH right before the swap");
