@@ -76,6 +76,28 @@ export function planSeriesSeeds(taken: Record<string, string[]>, fy: string): Se
   });
 }
 
+export interface SeedRefusal { voucherType: string; reason: string }
+/**
+ * Pure (D-M.256 item 11): the types for which NO seed may be printed. An empty or unreadable Tally list is never read as "start at 1" (a failed read
+ * looks the same as an empty book, G7): it is refused unless a person names the type in `emptyOk` after checking it really is empty. And when the
+ * mirror already holds a higher counter for the type than Tally's list does, the list is short of what the books held (a partial read, the wrong
+ * company, a year mix-up): refused. `mirrorHighest` is null when the mirror could not be consulted; that is not a refusal here (the script says it
+ * did not run the check and does not exit clean).
+ */
+export function seedRefusals(seeds: SeriesSeed[], o: { unreadable: string[]; emptyOk: string[]; mirrorHighest: Record<string, number> | null }): SeedRefusal[] {
+  const key = (t: string) => t.trim().toLowerCase();
+  const unreadable = new Set(o.unreadable.map(key)), ok = new Set(o.emptyOk.map(key));
+  const out: SeedRefusal[] = [];
+  for (const sd of seeds) {
+    const k = key(sd.voucherType);
+    if (unreadable.has(k)) { out.push({ voucherType: sd.voucherType, reason: "Tally's list of this type could not be read, so no seed is printed" }); continue; }
+    if (sd.inTally === 0 && !ok.has(k)) { out.push({ voucherType: sd.voucherType, reason: "Tally's list is empty; an empty list looks the same as a failed read. If a person has checked there are really no vouchers of this type, run again with --empty-ok=" + k }); continue; }
+    const m = o.mirrorHighest?.[k];
+    if (m !== undefined && m > sd.highest) out.push({ voucherType: sd.voucherType, reason: `the mirror already holds counter ${m} for this type but Tally's list only reaches ${sd.highest}; Tally's list is short, so no seed is printed` });
+  }
+  return out;
+}
+
 /** The statements that seed the series, undo them, and read them back. `seriesKey` is the company key the new app sends in a job (default MKCP). */
 export function seedSql(seeds: SeriesSeed[], o: { seriesKey: string; mirrorCompany: string }): { up: string; down: string; check: string } {
   const note = "go-live seed from Tally";
@@ -96,6 +118,10 @@ export function parityVerdict(r: unknown): ParityVerdict {
   const lines: string[] = [];
   if (typeof o.passed !== "boolean" || typeof o.tables !== "object" || o.tables === null) {
     return { pass: false, lines: ["the database gave no usable parity answer; treat it as NOT passed"] };
+  }
+  /* D-M.256 item 9: a pass over nothing is no pass. */
+  if (Object.keys(o.tables).length === 0) {
+    return { pass: false, lines: ["the database compared no tables at all, so \"passed\" proves nothing; treat it as NOT passed"] };
   }
   for (const [t, v] of Object.entries<any>(o.tables)) {
     lines.push(`${t}: ${v.old_rows} rows in tally_*, ${v.new_rows} in the views${v.only_in_old || v.only_in_new ? `, ${v.only_in_old} only in tally_*, ${v.only_in_new} only in the views` : ""}`);

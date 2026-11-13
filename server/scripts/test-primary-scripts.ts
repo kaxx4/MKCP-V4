@@ -12,7 +12,7 @@
  */
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +36,7 @@ const voucher = `<VOUCHER><VOUCHERTYPENAME>Contra</VOUCHERTYPENAME><VOUCHERNUMBE
 /* Each child is awaited asynchronously so the fake server keeps answering. */
 function runScript(script: string, args: string[], env: Record<string, string>): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    const c = spawn("npx", ["tsx", join(here, script), ...args], { shell: true, cwd: join(here, ".."), env: { ...process.env, MKCP_OFFLINE: "true", MKCP_PRACTICE_COMPANY: "", MKCP_PRACTICE_COMPANY_GUID: "", ...env } });
+    const c = spawn("npx", ["tsx", join(here, script), ...args.map((a) => (/\s/.test(a) ? `"${a}"` : a))], { shell: true, cwd: join(here, ".."), env: { ...process.env, MKCP_OFFLINE: "true", MKCP_PRACTICE_COMPANY: "", MKCP_PRACTICE_COMPANY_GUID: "", ...env } });
     let out = "";
     c.stdout.on("data", (d) => (out += d)); c.stderr.on("data", (d) => (out += d));
     c.on("close", (code) => resolve({ code: code ?? -1, out }));
@@ -83,14 +83,28 @@ async function serve(guid: string) {
   console.log("\n  seed series against the fake Tally (right GUID)");
   {
     const s = await serve(GUID);
-    const r = await runScript("primary-seed-series.ts", ["--fy", "2026-27"], primaryEnv(s.url));
+    const r = await runScript("primary-seed-series.ts", ["--fy", "2026-27", "--skip-mirror-check", "--empty-ok=payment", "--empty-ok=receipt", "--empty-ok=contra", "--empty-ok=journal", "--empty-ok=stock journal"], primaryEnv(s.url));
     await s.close();
-    ok("seed exits 0", r.code === 0, `${r.code} ${r.out.slice(-300)}`);
+    ok("seed exits 0 when every empty type is vouched for by a person and the mirror check is skipped on purpose", r.code === 0, `${r.code} ${r.out.slice(-300)}`);
     ok("seed reads all six voucher types, once each", ["Sales", "Payment", "Receipt", "Contra", "Journal", "Stock Journal"].every((t) => s.log.filter((k) => k === `numbers:${t}`).length === 1), s.log.join(","));
     ok("seed sends no Import", !s.log.includes("IMPORT"));
     ok("seed says the next Sales number is 26-27/0008", /26-27\/0008/.test(r.out), r.out.slice(-400));
     ok("seed prints the insert, the undo and the read-back", /insert into public\.erp_voucher_series/.test(r.out) && /delete from public\.erp_voucher_series/.test(r.out) && /erp_series_format/.test(r.out));
     ok("seed prints no key and no secret", !/service|MKCP_ERP_AGENT_KEY=/i.test(r.out));
+  }
+
+  console.log("\n  D-M.256 item 11: seed refusals");
+  {
+    const s = await serve(GUID);
+    const r = await runScript("primary-seed-series.ts", ["--fy", "2026-27", "--skip-mirror-check"], primaryEnv(s.url));
+    await s.close();
+    const up = r.out.split("-- 1. seed")[1]?.split("-- 2.")[0] ?? "";
+    ok("empty lists are refused without --empty-ok: exit 1, the REFUSED lines name the type and the flag", r.code === 1 && /REFUSED Payment: Tally's list is empty/.test(r.out) && /--empty-ok=payment/.test(r.out), `${r.code}`);
+    ok("the Sales seed is still printed, and no refused type is in the SQL", /'Sales'/.test(up) && !/'Payment'/.test(up) && !/'Stock Journal'/.test(up), up.slice(0, 200));
+    const s2 = await serve(GUID);
+    const r2 = await runScript("primary-seed-series.ts", ["--fy", "2026-27", "--empty-ok=payment", "--empty-ok=receipt", "--empty-ok=contra", "--empty-ok=journal", "--empty-ok=stock journal"], primaryEnv(s2.url));
+    await s2.close();
+    ok("with no database the mirror cross-check is reported NOT RUN and the exit is not clean", /MIRROR CROSS-CHECK NOT RUN/.test(r2.out) && r2.code === 1, `${r2.code}`);
   }
 
   console.log("\n  seed series with another company open (wrong GUID)");
@@ -125,6 +139,21 @@ async function serve(guid: string) {
     ok("wrong GUID: the voucher is never asked for, the pin check FAILs", !s.log.includes("voucher") && /FAIL\s+the voucher was read from the pinned company/.test(r.out) && r.code === 1, s.log.join(","));
   }
 
+  console.log("\n  D-M.256 item 10: the proof on a sandbox uses the practice GUID, not a request check");
+  {
+    const sbx = (url: string) => ({ MKCP_TALLY_ROLE: "sandbox", MKCP_PRACTICE_COMPANY: NAME, MKCP_PRACTICE_COMPANY_GUID: GUID, TALLY_URL: url });
+    const s = await serve(GUID);
+    const r = await runScript("primary-voucher-proof.ts", ["--payload-file", payloadFile], sbx(s.url));
+    await s.close();
+    ok("sandbox, right GUID: the pin line passes and the voucher is found once", /PASS\s+the voucher was read from the pinned company/.test(r.out) && /PASS\s+Tally holds exactly one voucher/.test(r.out), r.out.slice(-700));
+    const s2 = await serve(OTHER);
+    const r2 = await runScript("primary-voucher-proof.ts", ["--payload-file", payloadFile], sbx(s2.url));
+    await s2.close();
+    ok("sandbox, another GUID: the voucher is never asked for", !s2.log.includes("voucher") && /FAIL\s+the voucher was read from the pinned company/.test(r2.out));
+    const src = readFileSync(join(here, "primary-voucher-proof.ts"), "utf8");
+    ok("with --job the voucher is looked up by the booked number", /jobId \? bookedNumber \?\? payload\?\.voucherNumber/.test(src));
+  }
+
   console.log("\n  the print-only scripts");
   {
     const r = await runScript("primary-register.ts", ["--machine", "office-pc-1", "--generate"], { MKCP_TALLY_ROLE: "primary" });
@@ -145,7 +174,7 @@ async function serve(guid: string) {
   console.log("\n  parity");
   {
     const dry = await runScript("primary-parity.ts", ["--company", NAME], {});
-    ok("parity without --run is a dry run, exit 0, prints the console statement", dry.code === 0 && /Dry run/.test(dry.out) && /erp_tally_parity/.test(dry.out));
+    ok("parity without --run is a dry run that exits 3 (not run), never 0, and prints the console statement", dry.code === 3 && /Dry run/.test(dry.out) && /erp_tally_parity/.test(dry.out), `${dry.code}`);
     const run = await runScript("primary-parity.ts", ["--company", NAME, "--run"], { MKCP_TALLY_ROLE: "sandbox" });
     ok("parity --run with no database says CANNOT RUN and exits 2 (never a pass)", run.code === 2 && /CANNOT RUN/.test(run.out));
   }

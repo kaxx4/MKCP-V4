@@ -1,7 +1,11 @@
 /**
  * D-M.248 item 3 (runbook D4): the preflight for the office PC. READ-ONLY: it reads the settings, asks Tally for its company list (one request),
- * and asks the database whether this machine's key is registered as a primary (erp_my_open_jobs, a read; it takes no lease and claims nothing).
- * It never starts the mode and never prints a key.
+ * and asks the database for THIS machine's role with its own id and key (erp_agent_role(p_machine, p_key): a read; it takes no lease and claims
+ * nothing). A key the database does not know, or one registered as a sandbox, is NOT READY. It never starts the mode and never prints a key.
+ *
+ * HOW TO USE IT (D-M.256 item 3): put every setting in the office PC's .env first (MKCP_PRIMARY_MODE=on, MKCP_PRIMARY_COMPANY_GUID,
+ * MKCP_AGENT_MACHINE_ID, MKCP_ERP_AGENT_KEY, an absolute MKCP_ERP_JOURNAL_PATH), then run this with the agent STOPPED. "MKCP_PRIMARY_MODE is not
+ * on" is deliberately a failure: a preflight that passes with the mode off proves nothing about the mode.
  *
  *   npx tsx scripts/primary-preflight.ts
  *
@@ -12,7 +16,7 @@ import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { readPrimaryConfig } from "../src/services/primaryRunner.js";
 import { primaryPinProblem, primaryCompanyName } from "../src/services/primaryMode.js";
 import { tallyCompany } from "../src/config/company.js";
-import { supabaseClient } from "../src/services/supabaseClient.js";
+import { supabaseClient, agentMachineId } from "../src/services/supabaseClient.js";
 import { preflightText, type PreflightLine } from "../src/services/primaryTools.js";
 
 (async () => {
@@ -34,8 +38,15 @@ import { preflightText, type PreflightLine } from "../src/services/primaryTools.
   const c = supabaseClient();
   if (!c) lines.push({ name: "the database is reachable and this machine's key is registered as primary", ok: false, detail: "no database client on this machine (sandbox, offline or no service key)" });
   else {
-    const { error } = await c.rpc("erp_my_open_jobs", {});
-    lines.push({ name: "the database is reachable and this machine's key is registered as primary", ok: !error, detail: error ? error.message.slice(0, 120) : "" });
+    const machine = agentMachineId();
+    const key = (process.env.MKCP_ERP_AGENT_KEY ?? "").trim();
+    if (machine === "unnamed-machine" || !key) lines.push({ name: "the database is reachable and this machine's key is registered as primary", ok: false, detail: "no machine id or key to ask with" });
+    else {
+      const { data, error } = await c.rpc("erp_agent_role", { p_machine: machine, p_key: key });
+      const role = typeof data === "string" ? data : null;
+      lines.push({ name: "the database is reachable and this machine's key is registered as primary", ok: !error && role === "primary",
+        detail: error ? error.message.slice(0, 120) : role === "primary" ? "" : `the database says role "${role ?? "none"}", not primary` });
+    }
   }
 
   const r = preflightText(lines);

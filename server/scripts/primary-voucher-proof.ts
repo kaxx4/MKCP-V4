@@ -15,7 +15,7 @@ import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
 import { vouchersOnDateXml, diffStored } from "../src/services/safePush.js";
-import { isSandbox, practiceCompany, companyRefusal } from "../src/services/tallyRole.js";
+import { isSandbox, practiceCompany, practiceGuidProblem } from "../src/services/tallyRole.js";
 import { primaryPinProblem, primaryCompanyName } from "../src/services/primaryMode.js";
 import { tallyCompany } from "../src/config/company.js";
 import { supabaseClient } from "../src/services/supabaseClient.js";
@@ -61,12 +61,13 @@ const sameType = (a: string, b: string) => a.trim().toLowerCase() === b.trim().t
 
   const type = arg("--type") ?? payload?.voucherType;
   const date = arg("--date") ?? payload?.date;
-  const number = arg("--number") ?? payload?.voucherNumber ?? bookedNumber ?? undefined;
+  /* With a job, the voucher is looked up under the number it was BOOKED as (a renumbered voucher is in Tally under that number), else the number sent. */
+  const number = arg("--number") ?? (jobId ? bookedNumber ?? payload?.voucherNumber : payload?.voucherNumber) ?? undefined;
   if (!type || !date || !number) { console.error("Need the voucher's --type, --date and --number (or a --job / --payload-file that carries them)."); process.exit(2); }
 
   // The pin, then ONE read.
   const listing = (await tallyPost(URL_, HEALTH_XML, 10_000, true)) as string;
-  const pinWhy = sandbox ? companyRefusal(listing) : primaryPinProblem(company, listing);
+  const pinWhy = sandbox ? practiceGuidProblem(company, listing) : primaryPinProblem(company, listing);
   if (pinWhy) console.log(`  PIN: ${pinWhy}`);
   const xml = pinWhy ? "" : ((await tallyPost(URL_, vouchersOnDateXml(company, date, { voucherType: type, voucherNumber: number }), 120_000, true)) as string);
   const blocks = [...xml.matchAll(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/g)].map((m) => m[0])

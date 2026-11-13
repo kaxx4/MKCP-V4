@@ -7,7 +7,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { keyHashOf, validMachineId, sqlStr, registerSql, switchSql, switchCheckSql, planSeriesSeeds, seedSql, parityVerdict, proofChecks, preflightText, type ProofInput } from "../src/services/primaryTools.js";
+import { keyHashOf, validMachineId, sqlStr, registerSql, switchSql, switchCheckSql, planSeriesSeeds, seedSql, seedRefusals, parityVerdict, proofChecks, preflightText, type ProofInput } from "../src/services/primaryTools.js";
 
 let pass = 0, fail = 0;
 const ok = (label: string, cond: boolean, detail = "") => {
@@ -89,6 +89,29 @@ const throws = (f: () => unknown) => { try { f(); return false; } catch { return
   ok("one failing line is not ready, and says how many", !pf.ready && /1 line\(s\) not ready/.test(pf.text) && /NOT READY {2}b {2}\(why\)/.test(pf.text));
   ok("all ready is ready", preflightText([{ name: "a", ok: true, detail: "" }]).ready);
   ok("an empty list is ready only vacuously (the script always adds lines)", preflightText([]).ready);
+
+  console.log("\n  D-M.256 items 9 and 11: parity over nothing, and the seed refusals");
+  ok("parity: passed:true with ZERO tables compared is not a pass", !parityVerdict({ passed: true, reasons: [], tables: {}, test_rows_in_store: 0 }).pass && /compared no tables/.test(parityVerdict({ passed: true, reasons: [], tables: {} }).lines.join(" ")));
+  {
+    const s6 = planSeriesSeeds({ sales: ["26-27/0003"], payment: [], receipt: [], contra: [], journal: [], "stock journal": [] }, "2026-27");
+    const none = { unreadable: [] as string[], emptyOk: [] as string[], mirrorHighest: null as Record<string, number> | null };
+    const names = (r: ReturnType<typeof seedRefusals>) => r.map((x) => x.voucherType).join();
+    ok("an empty Tally list for a type is refused unless a person names the type", names(seedRefusals(s6, none)) === "Payment,Receipt,Contra,Journal,Stock Journal");
+    ok("--empty-ok=<type> lifts it for that type only (case does not matter)", names(seedRefusals(s6, { ...none, emptyOk: ["Payment", "stock journal"] })) === "Receipt,Contra,Journal");
+    ok("an unreadable list is refused even when the type is named empty-ok", names(seedRefusals(s6, { ...none, unreadable: ["payment"], emptyOk: ["payment"] })).startsWith("Payment"));
+    const all = { ...none, emptyOk: ["payment", "receipt", "contra", "journal", "stock journal"] };
+    ok("a mirror that holds a higher counter than Tally's list refuses that type", names(seedRefusals(s6, { ...all, mirrorHighest: { sales: 9, payment: 0, receipt: 0, contra: 0, journal: 0, "stock journal": 0 } })) === "Sales");
+    ok("a mirror at or below Tally's highest does not refuse", seedRefusals(s6, { ...all, mirrorHighest: { sales: 3, payment: 0, receipt: 0, contra: 0, journal: 0, "stock journal": 0 } }).length === 0);
+    ok("no mirror (null) refuses nothing here; the script reports the check as NOT RUN", seedRefusals(s6, all).length === 0);
+  }
+
+  console.log("\n  D-M.256 item 3: the preflight asks with the machine's own id and key");
+  {
+    const pf2 = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "primary-preflight.ts"), "utf8");
+    ok("it calls erp_agent_role with p_machine and p_key, not erp_my_open_jobs with no arguments", /erp_agent_role", \{ p_machine: machine, p_key: key \}/.test(pf2) && !/erp_my_open_jobs/.test(pf2.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")));
+    ok("only role 'primary' passes", /role === "primary"/.test(pf2));
+    ok("the help says: set the .env first, run it with the agent stopped, and 'mode not on' is a failure", /STOPPED/.test(pf2) && /MKCP_PRIMARY_MODE is not\s+[*]?\s*on/.test(pf2));
+  }
 
   console.log("\n  the six scripts only read or print");
   const dir = join(dirname(fileURLToPath(import.meta.url)));
