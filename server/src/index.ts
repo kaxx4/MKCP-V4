@@ -19,6 +19,8 @@ import { startNightlySync } from "./services/nightlySync.js";
 import { startScheduledSyncs, noteDaybookSync } from "./services/scheduledSyncs.js";
 import { startHousekeeping } from "./services/housekeeping.js";
 import { announceRole, tallyRole } from "./services/tallyRole.js";
+import { primaryModeOn } from "./services/primaryMode.js";
+import { startPrimaryMode, type PrimaryHandle } from "./services/primaryRunner.js";
 import { filedThroughOn } from "./services/pushGuard.js";
 import { checkDebugXml } from "./services/debugGuard.js";
 import { isOffline, offlineReason } from "./services/supabaseClient.js";
@@ -614,8 +616,15 @@ app.post("/api/tally/import", express.text({ type: "application/xml" }), async (
   return res.status(410).json({ error: "Endpoint retired.", detail: WRITE_PATH_MESSAGE });
 });
 
+/* D-M.248 (file 19): on the single primary (MKCP_PRIMARY_MODE=on) the two doors that put a voucher or arbitrary XML into the live books by hand are
+   shut. Everything the live books receive comes through the ERP queue. Off by default: with the mode off these routes are exactly as before. */
+const primaryClosed: express.RequestHandler = (_req, res, next) => {
+  if (!primaryModeOn()) return next();
+  res.status(403).json({ error: "This door is closed on the office PC. Everything that goes into the live books goes through the ERP queue." });
+};
+
 // ── Debug endpoints ─────────────────────────────────────────────────────────────
-app.post("/api/tally/debug", async (req, res) => {
+app.post("/api/tally/debug", primaryClosed, async (req, res) => {
   const { company, xml: customXml } = req.body;
   if (!company && !customXml) return res.status(400).json({ error: "company or xml required" });
   if (customXml !== undefined && typeof customXml !== "string") {
@@ -698,6 +707,7 @@ app.get("/api/distance", async (req, res) => {
 const BIND_HOST = process.env.MKCP_BIND_HOST || "127.0.0.1";
 
 // ── Start ──────────────────────────────────────────────────────────────────────
+let primary: PrimaryHandle | null = null;
 const httpServer = app.listen(PORT, BIND_HOST, () => {
   console.log(`\n✓ MKCP Tally Proxy → http://${BIND_HOST}:${PORT}`);
   if (BIND_HOST !== "127.0.0.1") {
@@ -737,6 +747,9 @@ const httpServer = app.listen(PORT, BIND_HOST, () => {
   startHousekeeping();
   // Outbound half: anything dropped in the watch folder is sent up automatically.
   startWatchFolder(company);
+  /* D-M.248: the single-primary mode (queue loop and mirror loop). OFF unless MKCP_PRIMARY_MODE=on; refuses to start, saying why, on any
+     missing setting. The database switches live_claims and live_mirror still decide whether any work is handed out. */
+  primary = startPrimaryMode(TALLY);
 });
 
 httpServer.on('error', (err: NodeJS.ErrnoException) => {
@@ -813,6 +826,7 @@ app.get("/api/whoami", (_req, res) =>
 );
 
 app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()));
+app.get("/api/primary/status", (_req, res) => res.json(primary ? primary.status() : { mode: primaryModeOn() ? "on-but-not-running" : "off" }));
 
 /* ── What the agent can tell you about the mirror, without a browser ──────
  *
@@ -984,7 +998,7 @@ app.get("/api/local/masters", async (req, res) => {
  * dummy session is to exercise the REAL path; a route that posted raw XML would
  * be testing something the app never does.
  */
-app.post("/api/local/push", async (req, res) => {
+app.post("/api/local/push", primaryClosed, async (req, res) => {
   const payload = req.body?.payload as VoucherPayload | undefined;
   if (!payload || !payload.voucherType) {
     return res.status(400).json({ error: "payload required" });

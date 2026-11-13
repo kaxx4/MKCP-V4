@@ -717,7 +717,10 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   const walk = (d: string) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith(".ts")) files.push(p); } };
   walk(src);
   const importers = files.filter((p) => !p.endsWith("erpMirrorSync.ts") && /erpMirrorSync/.test(readFileSync(p, "utf8")));
-  ok("nothing in the agent's src imports the ERP mirror sync (the office agent never starts it)", importers.length === 0, importers.join(", "));
+  /* D-M.248: the single-primary mode (OFF unless MKCP_PRIMARY_MODE=on) is the one place that starts it, and index.ts reaches it only through startPrimaryMode. */
+  const allowed = importers.filter((p) => !p.endsWith("primaryRunner.ts"));
+  ok("nothing in the agent's src imports the ERP mirror sync except the single-primary runner (off unless MKCP_PRIMARY_MODE=on)", allowed.length === 0, allowed.join(", "));
+  ok("the runner is started from index.ts only through startPrimaryMode, which does nothing unless the mode is on", /startPrimaryMode\(TALLY\)/.test(readFileSync(join(src, "index.ts"), "utf8")) && /if \(!primaryModeOn\(env\)\) return null;/.test(readFileSync(join(src, "services", "primaryRunner.ts"), "utf8")));
   const mine = readFileSync(join(src, "services", "erpMirrorSync.ts"), "utf8");
   ok("it never names a tally_* table or today's SupabaseSync", !/["'`]tally_[a-z_]+["'`]|SupabaseSync|supabaseClient\(/.test(mine));
 

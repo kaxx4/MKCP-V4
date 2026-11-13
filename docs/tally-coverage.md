@@ -178,3 +178,7 @@ Proven on the dummy: C22, C23, C25, C26, C26b, C29 (now with the reverse-charge 
 Cost centre fields are now proven (a ZZ TEST centre and child were made, pulled with the sync's own request and swept). Not proven: the real queue claim of a master job (sandbox rule). A7 passes: the inherited lines were replaced with fakes or allowed one by one in `scripts/name-allowlist.json`.
 The dummy holds no ZZ TEST rows; the books read 3,371 vouchers, 5 of them ours.
 Full table, failures and causes: `rebuild-plan/reports/T11-tally-coverage.md`.
+
+## 9. Single-primary mode (D-M.248, 13-Nov-2026), and what is deliberately not built yet
+
+The office PC's single-primary mode is OFF unless `MKCP_PRIMARY_MODE=on`. Its company pin is one GUID, `MKCP_PRIMARY_COMPANY_GUID`, and every write is held to it. **Not built, by ruling D-M.253:** before 1 April the pin becomes an explicit allow-list of company GUIDs (this year's and last year's company of the same business, each typed by a person, never discovered), and a write is allowed only when its job's own `targetGuid` (stamped by F17, D-FIX.12) is in the list and equals the open company's GUID. That belongs with the F17 agent half and the P8 rollover dummy run, after go-live and before 1 April; until then a write to last year's company is refused by the single pin.
