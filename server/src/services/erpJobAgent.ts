@@ -41,6 +41,7 @@ import { seriesDefaultFor, isPartyKeyedType, numberTakenBy, type TakenVoucher } 
 import { setRecordedFiledThrough } from "./pushGuard.js";
 import { resolveTarget, targetOf, loadedProblem, type CompanyYear } from "./companyYears.js";
 import { HEALTH_XML } from "../tally.js";
+import { primaryModeOn, primaryPinProblem } from "./primaryMode.js";
 
 export interface ErpJob {
   id: string;
@@ -216,6 +217,8 @@ export interface AgentStatus {
   lastHeartbeat: string | null;
   skewMs: number | null;
   tallyMayShowMessage: boolean;
+  /** D-M.248: the last company-pin check (single-primary mode); null when the pin is not in use. */
+  pin?: { ok: boolean; problem: string | null; at: string } | null;
 }
 
 export interface ErpJobAgentOpts {
@@ -234,6 +237,12 @@ export interface ErpJobAgentOpts {
   companies?: CompanyYear[];
   /** F17: is this listed company open in Tally under its GUID? Null when yes; the reason when not. `tallySeams` supplies it. */
   companyLoaded?: (entry: CompanyYear) => Promise<string | null>;
+  /**
+   * D-M.248, the company pin of the single-primary mode (primaryMode.ts): null when the company is open in Tally under the pinned GUID, else
+   * the reason. Checked before every claim batch (a failure claims nothing) and again right before each job is marked `sent` (a failure puts
+   * the job back in the queue, nothing sent). `tallySeams` supplies it when the mode is on. Absent: no pin check, as before.
+   */
+  pin?: (company: string) => Promise<string | null>;
   /** How often to read the recorded filing boundary (default 300 s). */
   filedEverySec?: number;
   leaseSeconds?: number;
@@ -282,7 +291,7 @@ export interface RunReport {
 export class ErpJobAgent {
   readonly nonce: string;
   readonly status: AgentStatus = { red: [], holder: null, lastHeartbeat: null, skewMs: null, tallyMayShowMessage: false };
-  private o: Required<Omit<ErpJobAgentOpts, "nonce" | "refuse" | "probe" | "taken" | "stamp" | "masters" | "createMaster" | "masterIdOf">> & { refuse: NonNullable<ErpJobAgentOpts["refuse"]>; probe?: ErpJobAgentOpts["probe"]; taken?: ErpJobAgentOpts["taken"]; stamp?: ErpJobAgentOpts["stamp"]; masters?: ErpJobAgentOpts["masters"]; createMaster?: ErpJobAgentOpts["createMaster"]; masterIdOf?: ErpJobAgentOpts["masterIdOf"] };
+  private o: Required<Omit<ErpJobAgentOpts, "nonce" | "refuse" | "pin" | "probe" | "taken" | "stamp" | "masters" | "createMaster" | "masterIdOf">> & { refuse: NonNullable<ErpJobAgentOpts["refuse"]>; pin?: ErpJobAgentOpts["pin"]; probe?: ErpJobAgentOpts["probe"]; taken?: ErpJobAgentOpts["taken"]; stamp?: ErpJobAgentOpts["stamp"]; masters?: ErpJobAgentOpts["masters"]; createMaster?: ErpJobAgentOpts["createMaster"]; masterIdOf?: ErpJobAgentOpts["masterIdOf"] };
   private timeouts = 0;
 
   constructor(opts: ErpJobAgentOpts) {
@@ -294,7 +303,7 @@ export class ErpJobAgent {
         ? (isMasterKind(job.kind)
           ? masterTestRefusal({ company, payload: job.payload, label: String(job.payload.label ?? "") })
           : testJobRefusal({ company, payload: job.payload, label: String(job.payload.label ?? "") }))
-        : "refused: real ERP jobs are claimed only by the office agent after go-live"),
+        : (primaryModeOn() ? null : "refused: real ERP jobs are claimed only by the office agent after go-live")),
       ...opts,
     } as any;
     this.journalOrStop({ kind: "boot", nonce: this.nonce, at: new Date().toISOString() });
@@ -313,6 +322,16 @@ export class ErpJobAgent {
       if (!this.status.red.includes(why)) this.status.red.push(why);
       throw new Error(why);
     }
+  }
+
+  /** D-M.248: the company pin. Null when it holds or is not in use; else the reason. A check that cannot run is a refusal, never a pass. */
+  private async pinProblem(company: string): Promise<string | null> {
+    if (!this.o.pin) return null;
+    let problem: string | null;
+    try { problem = await this.o.pin(company); }
+    catch (e) { problem = `refused: the company pin could not be checked (${(e as Error).message.slice(0, 120)}). Nothing was sent to Tally.`; }
+    this.status.pin = { ok: problem === null, problem, at: new Date(this.o.now()).toISOString() };
+    return problem;
   }
 
   /** Take or renew the lease; false means do not claim this round. */
@@ -473,6 +492,9 @@ export class ErpJobAgent {
       report.held = await this.heartbeat();
       if (!report.held) { report.stopped = this.status.red.join("; "); return report; }
       report.settled = await this.settleOwn();
+      /* D-M.248: nothing is claimed unless the pinned company is the one open in Tally. */
+      const pinWhy = await this.pinProblem(this.o.company);
+      if (pinWhy) { report.held = false; report.stopped = pinWhy; return report; }
       await this.refreshFiledThrough();
       const jobs = await this.o.queue.claim(this.nonce, limit, this.o.jobLeaseSeconds);
       for (const job of jobs) this.open.add(job.id);
@@ -536,6 +558,8 @@ export class ErpJobAgent {
     const renew = this.open.has(job.id) ? null
       : setInterval(() => { void this.o.queue.renew(this.nonce, job.id, this.o.jobLeaseSeconds).catch(() => {}); }, this.o.renewEveryMs);
     try {
+      const pinWhy = await this.pinProblem(company);
+      if (pinWhy) return await this.putBack(job, key, pinWhy);
       const sent = await this.o.queue.markSent(this.nonce, job.id, company);
       if (!sent.ok) {
         this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: sent.reason ?? "refused", at: new Date().toISOString() });
@@ -566,6 +590,13 @@ export class ErpJobAgent {
     } finally {
       if (renew) clearInterval(renew);
     }
+  }
+
+  /** The pin failed after the claim: the job goes back to the queue untouched (nothing was sent), and the reason is kept in the journal. */
+  private async putBack(job: ErpJob, key: string, why: string): Promise<RunReport["results"][number]> {
+    this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: why, at: new Date().toISOString() });
+    await this.finishWithRetry(job, "queued");
+    return { id: job.id, key, outcome: "not-sent", detail: why };
   }
 
   /** A master job sent with no reply in hand: read the masters; settle `succeeded` only when Tally shows exactly what the plan says. */
@@ -650,6 +681,9 @@ export class ErpJobAgent {
     const renew = this.open.has(job.id) ? null
       : setInterval(() => { void this.o.queue.renew(this.nonce, job.id, this.o.jobLeaseSeconds).catch(() => {}); }, this.o.renewEveryMs);
     try {
+      /* D-M.248: right before `sent`, the pinned company is checked again. A failure puts the job back, with nothing sent. */
+      const pinWhy = await this.pinProblem(company);
+      if (pinWhy) return await this.putBack(job, key, pinWhy);
       const m = await this.o.queue.markSent(this.nonce, job.id, company);
       if (!m.ok) {
         this.journalOrStop({ kind: "not-sent", jobId: job.id, reason: m.reason ?? "refused", at: new Date().toISOString() });
@@ -730,6 +764,8 @@ export function tallySeams(tallyUrl: string, post: (url: string, xml: string, ti
       : takenNumbersOrThrow(tallyUrl, company, voucherType, (u, x) => post(u, x)),
     /* F17: a company other than the agent's own is only sent to when Tally has it open under the recorded GUID. One company-list read. */
     companyLoaded: async (entry: CompanyYear) => loadedProblem(await post(tallyUrl, HEALTH_XML, 10_000), entry),
+    /* D-M.248: the company pin of the single-primary mode; one fresh company-list read per check. Supplied always, used only when passed to the agent. */
+    pin: async (company: string) => primaryPinProblem(company, await post(tallyUrl, HEALTH_XML, 10_000)),
     /* D-M.206: the master worker. A fresh read of the masters (never the cache), the writes through masterPusher, and the master's id. */
     masters: (company: string) => loadMasters(tallyUrl, company, { force: true }),
     createMaster: (company: string, plan: MasterPlan) => createMasterJob(tallyUrl, company, plan),

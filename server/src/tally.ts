@@ -5,6 +5,7 @@ import { recordTallyCall, classify, truncateForLog } from "./services/tallyLog.j
 import { mockTransport } from "./services/tallyMock.js";
 import { decodeTallyBody, decodeXmlEntities } from "./services/xml.js";
 import { companyRefusal, companyNamed, companyGuidsFromListing, practiceGuid, guidCheckRequired } from "./services/tallyRole.js";
+import { primaryModeOn, primaryPinProblem, isImportRequest } from "./services/primaryMode.js";
 
 // ─────────────────────────────────────────────────────────────────────
 // XML Parser ───────────────────────────────────────────────────────────
@@ -174,6 +175,15 @@ export function tallyPost(tallyUrl: string, xml: string, timeoutMs = 300_000, ra
   const refusal = companyRefusal(xml);
   if (refusal) return Promise.reject(new Error(refusal));
   const named = companyNamed(xml);
+  /* D-M.248: the single-primary mode (primaryMode.ts, OFF unless MKCP_PRIMARY_MODE=on). Every WRITE names a company whose GUID is the pinned
+     one, read from a fresh company listing (never the 45 s cache: a write is the one request that must not trust a stale answer). Reads are
+     not held to the pin (last year's company may be read). With the mode on and the GUID unset, every write is refused. */
+  if (primaryModeOn() && isImportRequest(xml)) {
+    return (named === null
+      ? Promise.resolve("refused: this write names no company, so the pinned company cannot be checked. Nothing was sent to Tally.")
+      : freshListing(tallyUrl).then((listing) => primaryPinProblem(named, listing)))
+      .then((why) => (why ? Promise.reject(new Error(why)) : tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal)));
+  }
   if (named === null || !guidCheckRequired()) return tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal);
   return verifyPracticeGuid(tallyUrl, named).then((guidRefusal) =>
     guidRefusal ? Promise.reject(new Error(guidRefusal)) : tallyPostNow(tallyUrl, xml, timeoutMs, rawMode, signal));
@@ -187,6 +197,13 @@ const LISTING_TTL_MS = 45_000;
 let listingCache: { url: string; at: number; xml: string } | null = null;
 
 export function resetListingCache(): void { listingCache = null; }
+
+/** A company listing read now, never from the cache (and it refreshes the cache). */
+async function freshListing(tallyUrl: string): Promise<string> {
+  const xml: string = await tallyPostNow(tallyUrl, HEALTH_XML, 10_000, true);
+  listingCache = { url: tallyUrl, at: Date.now(), xml };
+  return xml;
+}
 
 async function companyListing(tallyUrl: string): Promise<string> {
   const now = Date.now();
