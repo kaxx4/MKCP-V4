@@ -11,7 +11,7 @@ import { SyncOrchestrator } from "./services/syncOrchestrator.js";
 import { ChangeDetector } from "./services/changeDetector.js";
 import { SupabaseSync } from "./services/supabaseSync.js";
 import { RealtimeSync } from "./services/realtimeSync.js";
-import { startPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
+import { startPushAgent, stopPushAgent, getPushAgentStatus, drainNow, getAgentClient } from "./services/pushAgent.js";
 import { beginTallyWork, endTallyWork, isTallyBusy } from "./services/tallyBusy.js";
 import { startRefreshListener } from "./services/refreshListener.js";
 import { startReportRunner } from "./services/reportRunner.js";
@@ -21,6 +21,9 @@ import { startHousekeeping } from "./services/housekeeping.js";
 import { announceRole, tallyRole } from "./services/tallyRole.js";
 import { primaryModeOn } from "./services/primaryMode.js";
 import { startPrimaryMode, type PrimaryHandle } from "./services/primaryRunner.js";
+import { startOfficeProvisioning } from "./services/officeProvision.js";
+import { PreflightReporter, runPreflightLines } from "./services/primaryPreflight.js";
+import { agentMachineId, supabaseClient as dbClient } from "./services/supabaseClient.js";
 import { filedThroughOn } from "./services/pushGuard.js";
 import { checkDebugXml } from "./services/debugGuard.js";
 import { isOffline, offlineReason } from "./services/supabaseClient.js";
@@ -708,6 +711,44 @@ const BIND_HOST = process.env.MKCP_BIND_HOST || "127.0.0.1";
 
 // ── Start ──────────────────────────────────────────────────────────────────────
 let primary: PrimaryHandle | null = null;
+let preflightReporter: PreflightReporter | null = null;
+
+/**
+ * D-M.286: the office PC provisions itself (officeProvision.ts) and reports its own preflight (primaryPreflight.ts). Both are OFF on a sandbox and
+ * whenever MKCP_PRIMARY_MODE is explicitly off. Nobody types anything on the office PC: if the primary mode is not on yet, the agent proves it is the
+ * office PC (the company open in Tally carries the office GUID), writes its own settings into the app's .env, stops the old push agent and starts the
+ * primary mode in this process. The machine key is made here once and never leaves the machine.
+ */
+function startOfficeBoot(): void {
+  const readListing = async (): Promise<string> => (await tallyPost(TALLY, HEALTH_XML, 10_000, true)) as string;
+  const startReporter = (): void => {
+    if (preflightReporter || tallyRole() === "sandbox") return;
+    const c = dbClient();
+    const machine = agentMachineId();
+    const key = (process.env.MKCP_ERP_AGENT_KEY ?? "").trim();
+    if (!c || machine === "unnamed-machine" || !key) return;
+    preflightReporter = new PreflightReporter({
+      run: () => runPreflightLines({ tallyUrl: TALLY, env: process.env, readListing, client: c as any }),
+      send: async (args) => { const { error } = await (c as any).rpc("erp_agent_preflight_report", args); if (error) throw new Error(error.message); },
+      machine, key, version: process.env.MKCP_APP_VERSION ?? null,
+      log: (l) => console.log(`[preflight] ${l}`),
+    });
+    preflightReporter.start();
+  };
+  if (primary) { startReporter(); return; }
+  if ((process.env.MKCP_PRIMARY_MODE ?? "").trim().toLowerCase() === "off" || tallyRole() === "sandbox") return;
+  startOfficeProvisioning({
+    env: process.env, userDataDir: (process.env.MKCP_USER_DATA_DIR ?? "").trim() || null,
+    hasClient: () => dbClient() !== null, readListing, shouldRun: () => !primary,
+    onReady: () => {
+      stopPushAgent();                       // the old push agent never runs beside the primary
+      primary = startPrimaryMode(TALLY);
+      startReporter();
+    },
+  });
+  // a machine whose settings are written but whose mode could not start still reports why
+  startReporter();
+}
 const httpServer = app.listen(PORT, BIND_HOST, () => {
   console.log(`\n✓ MKCP Tally Proxy → http://${BIND_HOST}:${PORT}`);
   if (BIND_HOST !== "127.0.0.1") {
@@ -750,6 +791,7 @@ const httpServer = app.listen(PORT, BIND_HOST, () => {
   /* D-M.248: the single-primary mode (queue loop and mirror loop). OFF unless MKCP_PRIMARY_MODE=on; refuses to start, saying why, on any
      missing setting. The database switches live_claims and live_mirror still decide whether any work is handed out. */
   primary = startPrimaryMode(TALLY);
+  startOfficeBoot();
 });
 
 httpServer.on('error', (err: NodeJS.ErrnoException) => {

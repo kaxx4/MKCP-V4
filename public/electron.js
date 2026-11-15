@@ -411,6 +411,10 @@ async function startExpressServer() {
     }
   }
 
+  /* D-M.286: the server provisions the office PC's own .env (and reports its version) and so must know where userData is. */
+  process.env.MKCP_USER_DATA_DIR = app.getPath('userData');
+  process.env.MKCP_APP_VERSION = app.getVersion();
+
   // require() loads the CJS server bundle directly — no dynamic import(), no Windows API issues
   require(serverDist);
 

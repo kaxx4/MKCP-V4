@@ -17,6 +17,7 @@ import {
   type MirrorStore, type MirrorTally, type MirrorWork,
 } from "./erpMirrorSync.js";
 import { pendingVanishAcks, normType, type MirrorAlarm } from "./mirrorGuards.js";
+import { firePreflightNudge } from "./preflightNudge.js";
 import { runMasters, supabaseMastersStore, fetchGstWithinLimit, type MastersStore } from "./erpMasters.js";
 import { loadCompanyYears, type CompanyYear } from "./companyYears.js";
 import { primaryModeOn, primaryModeRefusal, primaryGuid, primaryCompanyName, primaryCompanyKey } from "./primaryMode.js";
@@ -546,7 +547,9 @@ function startPrimaryModeInner(tallyUrl: string, env: Env, deps: PrimaryDeps): P
   if (!c) { log("🛑 [primary] no database client (offline, or no service key). Nothing is claimed and nothing is posted."); return null; }
   const { cfg: k } = cfg;
   const post = deps.post ?? ((u: string, x: string, t?: number) => tallyPost(u, x, t ?? 300_000, true) as Promise<string>);
-  const seams = { ...tallySeams(k.tallyUrl, post), pin: tallyPinSeam(k.tallyUrl, post) };
+  /* D-M.286: a failed company pin also asks the preflight reporter to report (the reporter throttles itself). */
+  const basePin = tallyPinSeam(k.tallyUrl, post);
+  const seams = { ...tallySeams(k.tallyUrl, post), pin: async (company: string) => { const r = await basePin(company); if (r) firePreflightNudge(); return r; } };
   const journal = new Journal(k.journalPath);
   const agent = new ErpJobAgent({
     queue: supabaseErpQueue(c, k.machine, k.key), journal, company: k.company,

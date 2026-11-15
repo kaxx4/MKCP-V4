@@ -238,7 +238,7 @@ const noop = () => {};
     const src = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
     ok("/api/local/push and /api/tally/debug carry the closed-door guard", src.includes('app.post("/api/local/push", primaryClosed,') && src.includes('app.post("/api/tally/debug", primaryClosed,'));
     ok("the guard lets everything through when the mode is off", /const primaryClosed[^;]{0,120}=> [{][^}]{0,80}if [(]!primaryModeOn[(][)][)] return next[(][)];/.test(src));
-    ok("the mode is started from index.ts through startPrimaryMode, once", (src.match(/startPrimaryMode[(]/g) ?? []).length === 1);
+    ok("the mode is started from index.ts through startPrimaryMode: at boot, and once more after the office PC has provisioned itself (D-M.286)", (src.match(/startPrimaryMode[(]/g) ?? []).length === 2 && /onReady: [(][)] => [{][^}]*stopPushAgent[(][)];[^}]*primary = startPrimaryMode[(]TALLY[)]/.test(src));
     /* D-M.256 item 7: every other hand door to the live books is shut too, and the old push agent does not start beside the primary. */
     ok("/api/bank/push, /api/push-agent/drain and /api/push-agent/requeue carry the closed-door guard",
       src.includes('app.post("/api/bank/push", primaryClosed,') && src.includes('app.post("/api/push-agent/drain", primaryClosed,') && src.includes('app.post("/api/push-agent/requeue", primaryClosed,'));

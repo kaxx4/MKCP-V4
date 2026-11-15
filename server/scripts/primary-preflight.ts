@@ -13,7 +13,7 @@
  */
 import "dotenv/config";
 import { tallyPost, HEALTH_XML } from "../src/tally.js";
-import { readPrimaryConfig } from "../src/services/primaryRunner.js";
+import { runPreflightLines } from "../src/services/primaryPreflight.js";
 import { primaryPinProblem, primaryCompanyName } from "../src/services/primaryMode.js";
 import { tallyCompany } from "../src/config/company.js";
 import { supabaseClient, agentMachineId } from "../src/services/supabaseClient.js";
@@ -21,34 +21,10 @@ import { preflightText, type PreflightLine } from "../src/services/primaryTools.
 
 (async () => {
   const tallyUrl = process.env.TALLY_URL || "http://localhost:9000";
-  const lines: PreflightLine[] = [];
-  const cfg = readPrimaryConfig(tallyUrl);
-  if (cfg.ok) lines.push({ name: "the primary settings are complete", ok: true, detail: "" });
-  else for (const p of cfg.problems) lines.push({ name: "setting", ok: false, detail: p });
-
-  let listing = "";
-  try { listing = (await tallyPost(tallyUrl, HEALTH_XML, 10_000, true)) as string; lines.push({ name: "Tally answers on its port", ok: true, detail: "" }); }
-  catch (e) { lines.push({ name: "Tally answers on its port", ok: false, detail: (e as Error).message.slice(0, 120) }); }
-
-  if (listing) {
-    const why = primaryPinProblem(primaryCompanyName() || tallyCompany(), listing);
-    lines.push({ name: "the open company carries the pinned GUID", ok: !why, detail: why ? why.replace(/\s*Nothing was sent to Tally\.?$/, "") : "" });
-  }
-
-  const c = supabaseClient();
-  if (!c) lines.push({ name: "the database is reachable and this machine's key is registered as primary", ok: false, detail: "no database client on this machine (sandbox, offline or no service key)" });
-  else {
-    const machine = agentMachineId();
-    const key = (process.env.MKCP_ERP_AGENT_KEY ?? "").trim();
-    if (machine === "unnamed-machine" || !key) lines.push({ name: "the database is reachable and this machine's key is registered as primary", ok: false, detail: "no machine id or key to ask with" });
-    else {
-      const { data, error } = await c.rpc("erp_agent_role", { p_machine: machine, p_key: key });
-      const role = typeof data === "string" ? data : null;
-      lines.push({ name: "the database is reachable and this machine's key is registered as primary", ok: !error && role === "primary",
-        detail: error ? error.message.slice(0, 120) : role === "primary" ? "" : `the database says role "${role ?? "none"}", not primary` });
-    }
-  }
-
+  // the same checks the agent reports about itself on each start (D-M.286)
+  const lines: PreflightLine[] = await runPreflightLines({
+    tallyUrl, env: process.env, readListing: async () => (await tallyPost(tallyUrl, HEALTH_XML, 10_000, true)) as string, client: supabaseClient() as any,
+  });
   const r = preflightText(lines);
   console.log(`\nPrimary preflight\n\n${r.text}\n`);
   process.exit(r.ready ? 0 : 1);

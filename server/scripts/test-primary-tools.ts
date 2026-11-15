@@ -107,10 +107,11 @@ const throws = (f: () => unknown) => { try { f(); return false; } catch { return
 
   console.log("\n  D-M.256 item 3: the preflight asks with the machine's own id and key");
   {
-    const pf2 = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "primary-preflight.ts"), "utf8");
+    const pf2 = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "services", "primaryPreflight.ts"), "utf8"); // the checks moved there (D-M.286); the script calls them
     ok("it calls erp_agent_role with p_machine and p_key, not erp_my_open_jobs with no arguments", /erp_agent_role", \{ p_machine: machine, p_key: key \}/.test(pf2) && !/erp_my_open_jobs/.test(pf2.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")));
     ok("only role 'primary' passes", /role === "primary"/.test(pf2));
-    ok("the help says: set the .env first, run it with the agent stopped, and 'mode not on' is a failure", /STOPPED/.test(pf2) && /MKCP_PRIMARY_MODE is not\s+[*]?\s*on/.test(pf2));
+    const pfScript = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "primary-preflight.ts"), "utf8");
+    ok("the help says: set the .env first, run it with the agent stopped, and 'mode not on' is a failure", /STOPPED/.test(pfScript) && /MKCP_PRIMARY_MODE is not\s+[*]?\s*on/.test(pfScript));
   }
 
   console.log("\n  the six scripts only read or print");
