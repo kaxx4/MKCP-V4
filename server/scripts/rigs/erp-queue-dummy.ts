@@ -10,6 +10,9 @@
  *        a dropped connection after Tally accepted ends succeeded
  *   H-14 a second job with a used REMOTEID is refused before Tally
  *   M3   the database refuses a wrong machine key and an unregistered machine
+ *   H1/M1/D21 the four Sales steps. With --zz-party they run on a made-up customer and item (ZZ TEST names, a ZZZ GSTIN, built
+ *        with the production master builders) that the run creates first and deletes at the end, never on a real ledger.
+ *        --only-sales runs just those four (plus the three cheap database checks), so a short run does not repeat C19, D2 and D4.
  *
  * PACE AND LIVENESS (D-M.180, T11 task 2): every request to Tally goes through one gate. A "turn" is one thing the rig asks of Tally
  * (one boot processing a job with its read-back, one read of the day's vouchers, one killed boot, the sweep). The next turn starts at
@@ -37,7 +40,9 @@ import { tallyPost } from "../../src/tally.js";
 import { erpTestQueueClient, agentMachineId, agentMachineKey } from "../../src/services/supabaseClient.js";
 import { practiceCompany } from "../../src/services/tallyRole.js";
 import { safePush, vouchersOnDateXml } from "../../src/services/safePush.js";
-import { loadMasters, gstRateFor } from "../../src/services/tallyMasters.js";
+import { loadMasters, gstRateFor, invalidateMasters } from "../../src/services/tallyMasters.js";
+import { createLedger, deleteLedger, createStockItem, deleteStockItem } from "../../src/services/masterPusher.js";
+import { DUMMY_KIT, buildSale, zzParties, zzItems } from "./lib/t11Kit.js";
 import { readTag } from "../../src/services/xml.js";
 import { ErpJobAgent, Journal, supabaseErpQueue, tallySeams, type ErpJob } from "../../src/services/erpJobAgent.js";
 import { rigPayload, indiaToday } from "./lib/simTally.js";
@@ -51,6 +56,10 @@ const OUT = arg("--out");
 const JOBS = Number(arg("--jobs") ?? 60);
 /** T11: skip the four Sales steps (H1/M1, D21). They take a REAL debtor ledger from the dummy as the voucher's party, which the tallycheck lane's rule forbids ("no real ledger as party"). Everything else, H-14 included, runs. */
 const NO_SALES = process.argv.includes("--no-sales");
+/** The Sales steps use a made-up customer and item that this run creates and deletes (never a real ledger). Without it they take the first debtor of the dummy, as before. */
+const ZZ_PARTY = process.argv.includes("--zz-party");
+/** Run only the Sales steps (after the three cheap database checks). */
+const ONLY_SALES = process.argv.includes("--only-sales");
 const CHILD = arg("--child");             // "after-accept" | "before-send": a boot that dies mid-push
 const JOURNAL = arg("--journal") ?? join(tmpdir(), `erp-queue-dummy-${Date.now()}.jsonl`);
 const company = practiceCompany();
@@ -141,7 +150,23 @@ async function main() {
      a West Bengal debtor, one rated item, CGST and SGST. Number ZZTEST<digits>/S<n>,
      so the sweep removes it; REMOTEID MKCP|SALES|<number>, a spelling the sweep tries. */
   let saleBase: ((n: number) => VoucherPayload) | null = null;
+  /** The made-up customer and item of --zz-party, once created. Deleted in the cleanup, after the vouchers are swept. */
+  const zzMasters: { party: string | null; item: string | null } = { party: null, item: null };
   async function salePayload(n: number): Promise<VoucherPayload> {
+    if (!saleBase && ZZ_PARTY) {
+      const party = zzParties(stamp).local, item = zzItems(stamp)[0];
+      const lg = await T("create the ZZ TEST customer", () => createLedger(TALLY_URL, company!, { name: party.name, parent: party.parent, state: party.state, country: "India", pincode: party.pincode, address: party.address, gstin: party.gstin, gstRegistrationType: party.gstRegistrationType, billWise: true }));
+      if (!lg.ok) throw new Error(`could not create the ZZ TEST customer: ${[...lg.notes, ...lg.lineErrors].join("; ").slice(0, 160)}`);
+      zzMasters.party = party.name;
+      const it = await T("create the ZZ TEST item", () => createStockItem(TALLY_URL, company!, { name: item.name, parent: item.parent, baseUnit: item.baseUnit, gstRate: item.gstRate, hsn: item.hsn }));
+      if (!it.ok) throw new Error(`could not create the ZZ TEST item: ${[...it.notes, ...it.lineErrors].join("; ").slice(0, 160)}`);
+      zzMasters.item = item.name;
+      step("H1 the Sales steps use a made-up customer and item, created here with the production builders", true, `${party.name}, ${item.name}`);
+      saleBase = (k: number) => ({
+        ...buildSale({ kit: DUMMY_KIT, type: "Sales", number: `ZZTEST${stamp}/S${k}`, date: day, narration: `ZZTEST${stamp} rig sale`, party, lines: [{ item: item.name, unit: item.baseUnit, qty: 1, rate: 800 + k, gstRate: item.gstRate }] }),
+        label: "ZZ TEST 1-3 queue",
+      }) as unknown as VoucherPayload;
+    }
     if (!saleBase) {
       const m = await T("load masters", () => loadMasters(TALLY_URL, company!, { force: true }));
       const led = (re: RegExp) => [...m.ledgers.keys()].find((x) => re.test(x));
@@ -202,6 +227,11 @@ async function main() {
     const old = await c.rpc("claim_erp_test_jobs", { p_agent: `${machine}#x`, p_limit: 1, p_lease_seconds: 10 });
     step("M3 the old test-queue claim with only the service key is refused", !!old.error && /machine key/.test(old.error.message));
 
+    let salesAgent: ErpJobAgent | null = null;
+    if (ONLY_SALES) {
+      salesAgent = agent();
+      if (!(await untilHeld(salesAgent, 90_000))) throw new Error("the Sales boot never took the lease");
+    } else {
     // C19: 60 jobs, two boots racing
     const ids: string[] = [];
     for (let n = 1; n <= JOBS; n++) ids.push((await enqueue(n)).id);
@@ -279,8 +309,11 @@ async function main() {
     await T("the uncertain job is left alone", () => R2.runOnce(5));
     step("D4 an uncertain job never retries itself", (await job(k2.id)).state === "uncertain" && (await inTally(k2.p)) === 0);
 
+    salesAgent = R2;
+    }
     if (NO_SALES) step("H1/M1/D21 Sales steps skipped by --no-sales (they use a real debtor ledger as the party)", true, "not run");
     else {
+    const R2 = salesAgent!;
     // H1 and M1 with Sales: payload "Sales", master "SALES"
     const s1 = await enqueueSale(1);
     await T("a Sales job", () => R2.runOnce(1));
@@ -345,6 +378,17 @@ async function main() {
       }
     } catch (e) { left = [`read failed: ${(e as Error).message}`]; }
     step("swept from the dummy: none of this run's numbers is left", sweep.status === 0 && left.length === 0, `sweep exit ${sweep.status}, left ${left.length}${left.length ? `: ${left.slice(0, 5).join(", ")}` : ""}`);
+    /* The made-up customer and item (--zz-party): deleted only after their vouchers are swept, and only if the sweep left none of this run's. */
+    if (zzMasters.party || zzMasters.item) {
+      const dels: string[] = [];
+      try {
+        if (gate.down) throw new Error("Tally stopped answering, nothing more is sent");
+        if (zzMasters.party) { const r = await T("delete the ZZ TEST customer", () => deleteLedger(TALLY_URL, company!, zzMasters.party!)); dels.push(`customer ${r.ok ? "deleted" : `NOT deleted: ${r.notes.join("; ").slice(0, 80)}`}`); }
+        if (zzMasters.item) { const r = await T("delete the ZZ TEST item", () => deleteStockItem(TALLY_URL, company!, zzMasters.item!)); dels.push(`item ${r.ok ? "deleted" : `NOT deleted: ${r.notes.join("; ").slice(0, 80)}`}`); }
+      } catch (e) { dels.push(`stopped: ${(e as Error).message}`); }
+      invalidateMasters();
+      step("the made-up customer and item are deleted from the dummy", dels.length === (zzMasters.party ? 1 : 0) + (zzMasters.item ? 1 : 0) && dels.every((d) => /deleted$/.test(d) && !/NOT/.test(d)), dels.join("; "));
+    }
     const ids = made.map((m) => m.job).filter(Boolean);
     const d1 = ids.length ? await c.from("erp_jobs").delete().in("id", ids).eq("is_test", true) : { error: null };
     const d2 = made.length ? await c.from("erp_proposal_requests").delete().in("request_id", made.map((m) => m.request)).eq("is_test", true) : { error: null };
