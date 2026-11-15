@@ -16,7 +16,7 @@ import {
   planMirrorWork, runMirrorSync, runDayCheck, runRepull, applyAcceptedDrops, supabaseMirrorStore, tallyMirrorReads,
   type MirrorStore, type MirrorTally, type MirrorWork,
 } from "./erpMirrorSync.js";
-import type { MirrorAlarm } from "./mirrorGuards.js";
+import { pendingVanishAcks, normType, type MirrorAlarm } from "./mirrorGuards.js";
 import { runMasters, supabaseMastersStore, fetchGstWithinLimit, type MastersStore } from "./erpMasters.js";
 import { loadCompanyYears, type CompanyYear } from "./companyYears.js";
 import { primaryModeOn, primaryModeRefusal, primaryGuid, primaryCompanyName, primaryCompanyKey } from "./primaryMode.js";
@@ -225,17 +225,24 @@ export function supabaseMirrorPlanSource(c: Required<Pick<Rpc, "from">>, company
 }
 
 /** The pieces of work the mirror loop can run. The defaults are the real ones; a test passes its own. */
-export type RunnerResult = { state: string; error: string | null; /** D-M.279: a voucher type vanished from the read; the run was held */ alarms?: MirrorAlarm[] };
+export type RunnerResult = {
+  state: string; error: string | null;
+  /** D-M.279: a voucher type vanished from the read; the run was held */
+  alarms?: MirrorAlarm[];
+  /** D-M.281: voucher types an Owner's acknowledgement let this run prune (the acknowledgement is used up once the run swapped) */
+  released?: string[];
+};
 export interface MirrorRunners {
-  mirror(store: MirrorStore, tally: MirrorTally, kind: "full" | "incremental", log: (l: string) => void): Promise<RunnerResult>;
-  check(store: MirrorStore, tally: MirrorTally, log: (l: string) => void): Promise<RunnerResult>;
-  repull(store: MirrorStore, tally: MirrorTally, log: (l: string) => void): Promise<RunnerResult | null>;
+  /** `released`: the voucher types an Owner has acknowledged as vanished (D-M.281); a run may prune them. */
+  mirror(store: MirrorStore, tally: MirrorTally, kind: "full" | "incremental", log: (l: string) => void, released?: string[]): Promise<RunnerResult>;
+  check(store: MirrorStore, tally: MirrorTally, log: (l: string) => void, released?: string[]): Promise<RunnerResult>;
+  repull(store: MirrorStore, tally: MirrorTally, log: (l: string) => void, released?: string[]): Promise<RunnerResult | null>;
   accepted(store: MirrorStore, log: (l: string) => void): Promise<{ state: string }[]>;
 }
 export const REAL_MIRROR_RUNNERS: MirrorRunners = {
-  mirror: (store, tally, kind, log) => runMirrorSync({ store, tally, kind, log }),
-  check: (store, tally, log) => runDayCheck({ store, tally, log }),
-  repull: (store, tally, log) => runRepull({ store, tally, log }),
+  mirror: (store, tally, kind, log, released) => runMirrorSync({ store, tally, kind, log, released }),
+  check: (store, tally, log, released) => runDayCheck({ store, tally, log, released }),
+  repull: (store, tally, log, released) => runRepull({ store, tally, log, released }),
   accepted: (store, log) => applyAcceptedDrops({ store, log }),
 };
 
@@ -243,10 +250,33 @@ export interface MirrorTickReport { skipped: string | null; planned: MirrorWork[
 
 /** D-M.279: what /api/primary/status shows of a mirror alarm (the last 20, newest last). */
 export interface MirrorAlarmNote extends MirrorAlarm { at: string }
-export interface MirrorLoopStatus extends LoopStatus { alarms: MirrorAlarmNote[] }
+/**
+ * D-M.281: a voucher type the mirror is holding back from pruning, for the Owner to read on /api/primary/status. `line` is the sentence to show:
+ * the type, how many vouchers, how long, and the one command that releases it once.
+ */
+export interface MirrorHold {
+  type: string; storeRows: number; where: MirrorAlarm["where"]; since: string; lastAt: string;
+  /** Held runs in a row (a run that did not trip clears the hold). */
+  consecutive: number;
+  line: string;
+  /** When the alarm last reached the ERP's sync-health row (tally_sync_history), if it has. */
+  healthAt?: string;
+}
+export interface MirrorLoopStatus extends LoopStatus { alarms: MirrorAlarmNote[]; holds: MirrorHold[] }
+
+/** D-M.281: a hold that lasts this many runs in a row also reaches the ERP's sync-health signal (the web's sync log), so it is never silent. */
+export const MIRROR_HOLD_HEALTH_AFTER = 2;
+/** While a hold lasts, the sync-health row is written again at most this often. */
+export const MIRROR_HOLD_HEALTH_EVERY_MS = 60 * 60_000;
+
+/** What the sync-health signal is told: one row for the web's sync log (tally_sync_history). */
+export interface MirrorHealthNote { syncType: string; startedAt: string; errors: string[]; counts: Record<string, unknown> }
+
+const holdLine = (h: Pick<MirrorHold, "type" | "storeRows" | "consecutive" | "since">): string =>
+  `${h.type}: ${h.storeRows} voucher(s) of this type vanished from Tally's read, so the mirror is NOT pruning them (held ${h.consecutive} run(s) in a row since ${h.since}). If they really are gone from Tally, release it once with: npx tsx scripts/primary-switches.ts ack-vanish "${h.type}"`;
 
 export class PrimaryMirrorLoop {
-  readonly status: MirrorLoopStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, busy: false, alarms: [] };
+  readonly status: MirrorLoopStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, busy: false, alarms: [], holds: [] };
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pausedUntil = 0;
   constructor(private o: {
@@ -261,18 +291,57 @@ export class PrimaryMirrorLoop {
      */
     pin?: () => Promise<string | null>;
     /** D-M.270: where a refused masters swap is written down (the agent's own journal). Absent: not journalled. */
-    journal?: { append(e: JournalEntry): void };
+    journal?: { append(e: JournalEntry): void; entries?(): JournalEntry[] };
+    /** D-M.281: where a hold that lasts MIRROR_HOLD_HEALTH_AFTER runs is told to the ERP's sync-health signal. Absent: only the status and journal show it. */
+    health?: (n: MirrorHealthNote) => Promise<void>;
     /** D-M.258 item 3: while a run is reading, the pin is asked again when this long has passed since the last good answer (default 60 s). */
     pinEveryMs?: number;
     tickMs: number; log?: (l: string) => void; now?: () => number; runners?: MirrorRunners;
   }) {}
 
-  /** D-M.279: write each alarm of a held run to the status and the journal. Never throws. */
-  private noteAlarms(alarms: MirrorAlarm[] | undefined, at: string): void {
-    for (const a of alarms ?? []) {
+  /** D-M.281: the voucher types an Owner has acknowledged and no run has used up yet (read from the journal; none when there is no journal). */
+  private releasedNow(nowMs: number): string[] {
+    try { return pendingVanishAcks((this.o.journal?.entries?.() ?? []) as { kind: string; type?: string; at?: string }[], nowMs); } catch { return []; }
+  }
+
+  /**
+   * D-M.279 and D-M.281: after one piece of work, write what it held to the status (alarms and holds) and the journal, tell the ERP's sync-health
+   * signal when a hold has lasted MIRROR_HOLD_HEALTH_AFTER runs, clear holds that did not trip again, and use up an acknowledgement that a swapped
+   * run pruned. Never throws.
+   */
+  private async settleRun(where: MirrorAlarm["where"], r: RunnerResult, at: string): Promise<void> {
+    const alarms = r.alarms ?? [];
+    for (const a of alarms) {
       this.status.alarms.push({ ...a, at });
       if (this.status.alarms.length > 20) this.status.alarms.shift();
       try { this.o.journal?.append({ kind: "mirror-alarm", alarm: `${a.kind}: ${a.type}`, where: a.where, reason: a.reason.slice(0, 400), at }); } catch { /* the status still shows it */ }
+      const key = normType(a.type);
+      const old = this.status.holds.find((h) => normType(h.type) === key && h.where === a.where);
+      const hold: MirrorHold = old
+        ? { ...old, storeRows: a.storeRows, lastAt: at, consecutive: old.consecutive + 1 }
+        : { type: a.type, storeRows: a.storeRows, where: a.where, since: at, lastAt: at, consecutive: 1, line: "" };
+      hold.line = holdLine(hold);
+      this.status.holds = [...this.status.holds.filter((h) => h !== old), hold];
+    }
+    /* a run that finished without tripping clears this kind of hold; a run that failed for another reason says nothing about it */
+    const finished = /^(swapped|ok|gaps)$/.test(r.state);
+    const tripped = new Set(alarms.map((a) => normType(a.type)));
+    if (finished) this.status.holds = this.status.holds.filter((h) => h.where !== where || tripped.has(normType(h.type)));
+    /* an acknowledgement is used up only by a run that swapped (so pruned) the type it released */
+    if (r.state === "swapped" && r.released?.length) {
+      for (const t of r.released) {
+        try { this.o.journal?.append({ kind: "vanish-ack-used", type: t, at }); } catch { /* a missing note only means the next run may release it again */ }
+        this.status.holds = this.status.holds.filter((h) => normType(h.type) !== normType(t));
+      }
+    }
+    if (!this.o.health) return;
+    for (const h of this.status.holds) {
+      if (h.consecutive < MIRROR_HOLD_HEALTH_AFTER) continue;
+      if (h.healthAt && new Date(at).getTime() - new Date(h.healthAt).getTime() < MIRROR_HOLD_HEALTH_EVERY_MS) continue;
+      try {
+        await this.o.health({ syncType: "mirror-held", startedAt: at, errors: [h.line.slice(0, 500)], counts: { held_runs: h.consecutive, type: h.type, rows: h.storeRows, where: h.where } });
+        h.healthAt = at;
+      } catch (e) { (this.o.log ?? (() => {}))(`could not tell the sync-health signal about the held ${h.type}: ${(e as Error).message.slice(0, 120)}`); }
     }
   }
 
@@ -303,8 +372,8 @@ export class PrimaryMirrorLoop {
           const r = await run.accepted(this.o.store, log);
           rep.did.push({ work: w, state: r.every((x) => x.state === "swapped") ? "ok" : "failed", note: `${r.length} accepted drop(s)` });
         } else if (w === "full" || w === "incremental") {
-          const r = await run.mirror(this.o.store, tally, w, log);
-          this.noteAlarms(r.alarms, now.toISOString());
+          const r = await run.mirror(this.o.store, tally, w, log, w === "full" ? this.releasedNow(now.getTime()) : []);
+          await this.settleRun("full", r, now.toISOString());
           rep.did.push({ work: w, state: r.state, note: r.error ?? undefined });
           if (r.state === "failed" && /off until go-live/i.test(r.error ?? "")) { this.pausedUntil = now.getTime() + 15 * 60_000; break; }
           if (w === "full" && r.state === "swapped" && this.o.masters) {
@@ -324,14 +393,14 @@ export class PrimaryMirrorLoop {
           }
           if (r.state !== "swapped") break;     // a refused or failed run stops the pass; the next pass plans again
         } else if (w === "check") {
-          const r = await run.check(this.o.store, tally, log);
-          this.noteAlarms(r.alarms, now.toISOString());
+          const r = await run.check(this.o.store, tally, log, this.releasedNow(now.getTime()));
+          await this.settleRun("day_check", r, now.toISOString());
           rep.did.push({ work: w, state: r.state, note: r.error ?? undefined });
         } else if (w === "repull") {
           for (let i = 0; i < 7; i++) {
-            const r = await run.repull(this.o.store, tally, log);
+            const r = await run.repull(this.o.store, tally, log, this.releasedNow(now.getTime()));
             if (!r) break;
-            this.noteAlarms(r.alarms, now.toISOString());
+            await this.settleRun("repull", r, now.toISOString());
             rep.did.push({ work: "repull", state: r.state, note: r.error ?? undefined });
             if (r.state !== "swapped") break;
           }
@@ -490,6 +559,13 @@ function startPrimaryModeInner(tallyUrl: string, env: Env, deps: PrimaryDeps): P
   const mirror = new PrimaryMirrorLoop({
     store, tally: tallyMirrorReads(k.tallyUrl, k.company), plan: supabaseMirrorPlanSource(c as any, k.companyKey), tickMs: k.mirrorTickMs,
     queueBusy: () => queue.status.busy, log: (l) => log(`[primary mirror] ${l}`), journal,
+    /* D-M.281: the sync-health row the web's sync log already reads (tally_sync_history, success false), so a hold is seen in the app. */
+    health: async (n) => {
+      const { error } = await (c as any).from("tally_sync_history").insert({
+        company: k.company, sync_type: n.syncType, started_at: n.startedAt, completed_at: n.startedAt, row_counts: n.counts, errors: n.errors, success: false, duration_ms: 0,
+      });
+      if (error) throw new Error(error.message);
+    },
     pin: async () => (await seams.pin(k.company))?.reason ?? null,
     masters: async () => {
       const rep = await runMasters({

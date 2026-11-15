@@ -727,6 +727,8 @@ export interface MirrorSyncReport {
   tallyError?: string | null;
   /** D-M.279: alarms raised by the run (a voucher type that vanished from the read). The swap is held when there is one. */
   alarms?: MirrorAlarm[];
+  /** D-M.281: types the guard would have held but an Owner's acknowledgement let through; the run pruned them, so the acknowledgement is used up. */
+  released?: string[];
   /** The biggest single staging request of this run (item 15): its rows and its bytes of JSON. */
   largestBatchRows?: number;
   largestBatchBytes?: number;
@@ -734,8 +736,8 @@ export interface MirrorSyncReport {
 
 const STAGE_BATCH = 500;
 export { STAGE_MAX_BYTES, stageChunks } from "./stageChunks.js";
-export { mirrorFullScope, MIRROR_FORWARD_DAYS, vanishedTypes, type MirrorAlarm } from "./mirrorGuards.js";
-import { mirrorFullScope, vanishedTypes, countByType, type MirrorAlarm } from "./mirrorGuards.js";
+export { mirrorFullScope, MIRROR_FORWARD_DAYS, MIRROR_VANISH_MIN, vanishedTypes, judgeVanished, type MirrorAlarm } from "./mirrorGuards.js";
+import { mirrorFullScope, judgeVanished, countByType, type MirrorAlarm } from "./mirrorGuards.js";
 import { STAGE_MAX_BYTES, stageChunks } from "./stageChunks.js";
 
 /** L3 (task 1-5): vouchers per incremental request at most. The busiest dummy day (245 vouchers with their lines) read in one request in 79 s. */
@@ -773,13 +775,15 @@ export async function runMirrorSync(opts: {
   ledgers?: boolean;
   /** Today, for judging Tally's loaded period (default today in India). */
   today?: string;
+  /** D-M.281: voucher types an Owner has acknowledged as vanished; this run may prune them. */
+  released?: string[];
   log?: (line: string) => void;
 }): Promise<MirrorSyncReport> {
   return (await runMirror({ ...opts }))!;
 }
 
 /** One queued one-day re-pull (A11, 0119): a full read of that day that keeps the mark. Null when none is queued. */
-export async function runRepull(opts: { store: MirrorStore; tally: MirrorTally; log?: (line: string) => void }): Promise<MirrorSyncReport | null> {
+export async function runRepull(opts: { store: MirrorStore; tally: MirrorTally; released?: string[]; log?: (line: string) => void }): Promise<MirrorSyncReport | null> {
   return runMirror({ ...opts, kind: "repull" });
 }
 
@@ -824,6 +828,7 @@ async function runMirror(opts: {
   scope?: { from: string; to: string };
   ledgers?: boolean;
   today?: string;
+  released?: string[];
   log?: (line: string) => void;
 }): Promise<MirrorSyncReport | null> {
   const { store, tally, kind } = opts;
@@ -986,7 +991,9 @@ async function runMirror(opts: {
     }
     /* D-M.279: a whole voucher type missing from the read is held, never pruned. Only a run that prunes a window (full or a re-pull) is judged. */
     if ((kind === "full" || kind === "repull") && store.typeCounts) {
-      const held = vanishedTypes(await store.typeCounts(run.scope_from, run.scope_to), pulledByType, { from: run.scope_from, to: run.scope_to, where: kind });
+      const judged = judgeVanished(await store.typeCounts(run.scope_from, run.scope_to), pulledByType, { from: run.scope_from, to: run.scope_to, where: kind }, opts.released ?? []);
+      const held = judged.held;
+      if (judged.released.length) { report.released = judged.released.map((a) => a.type); log(`${kind} run ${run.run_id}: an Owner's acknowledgement lets this run prune ${report.released.join(", ")}`); }
       if (held.length) {
         const why = `${held.length} voucher type(s) vanished from the read (${held.map((a) => a.type).join(", ")}); nothing was swapped or pruned. ${held[0].reason}`;
         report.alarms = held;
@@ -1015,14 +1022,14 @@ async function runMirror(opts: {
   }
 }
 
-export interface DayCheckReport { state: "ok" | "gaps" | "refused" | "failed"; result: Record<string, any> | null; error: string | null; vouchers: number; tallyHighest: number | null; alarms?: MirrorAlarm[] }
+export interface DayCheckReport { state: "ok" | "gaps" | "refused" | "failed"; result: Record<string, any> | null; error: string | null; vouchers: number; tallyHighest: number | null; alarms?: MirrorAlarm[]; released?: string[] }
 
 /**
  * The nightly check (A11, 0119): one cheap read of every voucher's key, date
  * and AlterID, compared with the mirror in the database. Days that differ are
  * queued there for a one-day re-pull. A failed read is "failed", never "ok".
  */
-export async function runDayCheck(opts: { store: MirrorStore; tally: MirrorTally; log?: (line: string) => void }): Promise<DayCheckReport> {
+export async function runDayCheck(opts: { store: MirrorStore; tally: MirrorTally; released?: string[]; log?: (line: string) => void }): Promise<DayCheckReport> {
   const log = opts.log ?? ((l: string) => console.log(`[erpMirror] ${l}`));
   try {
     const top = await opts.tally.highest();
@@ -1031,7 +1038,8 @@ export async function runDayCheck(opts: { store: MirrorStore; tally: MirrorTally
     if (opts.store.typeCounts) {
       const dates = top.vouchers.map((v) => v.d).filter((d): d is string => !!d).sort();
       if (dates.length && top.vouchers.every((v) => v.t !== undefined)) {
-        const held = vanishedTypes(await opts.store.typeCounts(dates[0], dates[dates.length - 1]), countByType(top.vouchers.map((v) => ({ type: v.t }))), { from: dates[0], to: dates[dates.length - 1], where: "day_check" });
+        const judged = judgeVanished(await opts.store.typeCounts(dates[0], dates[dates.length - 1]), countByType(top.vouchers.map((v) => ({ type: v.t }))), { from: dates[0], to: dates[dates.length - 1], where: "day_check" }, opts.released ?? []);
+        const held = judged.held;
         if (held.length) {
           const error = `refused: ${held.length} voucher type(s) vanished from Tally's list (${held.map((a) => a.type).join(", ")}); the day check was not stored. ${held[0].reason}`;
           log(`day check: ${error}`);

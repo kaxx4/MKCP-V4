@@ -17,9 +17,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMirrorSync, runDayCheck, scrubSaltFrom, type MirrorStore, type MirrorTally, type MirrorRow, type DayCheckVoucher, type SwapResult } from "../src/services/erpMirrorSync.js";
-import { mirrorFullScope, vanishedTypes, countByType, MIRROR_FORWARD_DAYS } from "../src/services/mirrorGuards.js";
-import { PrimaryMirrorLoop, type MirrorRunners } from "../src/services/primaryRunner.js";
+import { mirrorFullScope, vanishedTypes, countByType, pendingVanishAcks, vanishAckFor, MIRROR_FORWARD_DAYS, MIRROR_VANISH_MIN, VANISH_ACK_MAX_AGE_MS } from "../src/services/mirrorGuards.js";
+import { PrimaryMirrorLoop, MIRROR_HOLD_HEALTH_AFTER, type MirrorRunners, type MirrorHealthNote } from "../src/services/primaryRunner.js";
 import { Journal } from "../src/services/erpJobAgent.js";
+import { spawnSync } from "node:child_process";
+import { dirname } from "node:path";
 
 let pass = 0, fail = 0;
 const ok = (label: string, cond: boolean, detail = "") => {
@@ -123,9 +125,14 @@ function storeOf(initial: { key: string; date: string; type: string }[], opts: {
     const old = storeOf(mirrorNow, { typeCounts: false });
     await runMirrorSync({ store: old.store, tally: tallyOf(() => [sales, noteAfter], today), kind: "full", scope: { from: "2026-04-01", to: today }, today, log: noop });
     ok("BEFORE the fix (window ends today, no type guard): the re-dated note is pruned off its old day and its new day is never read: it is gone", !old.rows.has("N-1"), [...old.rows.keys()].join());
-    const guarded = storeOf(mirrorNow);
-    const gRep = await runMirrorSync({ store: guarded.store, tally: tallyOf(() => [sales, noteAfter], today), kind: "full", scope: { from: "2026-04-01", to: today }, today, log: noop });
-    ok("even with the old window, the type guard now holds that prune (the notes were the only ones of their type) and alarms", gRep.state === "refused" && guarded.rows.has("N-1") && gRep.alarms?.[0]?.type === "Sales Order Note");
+    const threeNow = [...mirrorNow, { key: "N-2", date: "2026-11-14", type: "Sales Order Note" }, { key: "N-3", date: "2026-11-14", type: "Sales Order Note" }];
+    const threeAfter: V[] = [sales, noteAfter, { ...noteAfter, guid: "N-2" }, { ...noteAfter, guid: "N-3" }];
+    const guarded = storeOf(threeNow);
+    const gRep = await runMirrorSync({ store: guarded.store, tally: tallyOf(() => threeAfter, today), kind: "full", scope: { from: "2026-04-01", to: today }, today, log: noop });
+    ok("even with the old window, when 3 or more notes are re-dated at once the type guard holds that prune and alarms", gRep.state === "refused" && guarded.rows.has("N-1") && gRep.alarms?.[0]?.type === "Sales Order Note");
+    const one = storeOf(mirrorNow);
+    await runMirrorSync({ store: one.store, tally: tallyOf(() => [sales, noteAfter], today), kind: "full", scope: { from: "2026-04-01", to: today }, today, log: noop });
+    ok("one or two notes re-dated with the old window are NOT held by the guard (a deletion like any other): only the forward window protects them", !one.rows.has("N-1"));
 
     // AFTER: the default full window reaches forward
     const fresh = storeOf(mirrorNow);
@@ -183,18 +190,20 @@ function storeOf(initial: { key: string; date: string; type: string }[], opts: {
   console.log("\n  the pure rule");
   {
     const w = { from: "2026-11-01", to: "2026-11-30", where: "full" as const };
-    ok("a type the store holds and the pull lacks, with other types present: one alarm", vanishedTypes({ Sales: 4, Receipt: 2 }, { Sales: 6 }, w).length === 1);
-    ok("case and spaces do not matter", vanishedTypes({ "sales order note": 2 }, { "SALES ORDER NOTE ": 1, Sales: 3 }, w).length === 0);
+    ok("a type the store holds (3 or more) and the pull lacks, with other types present: one alarm", vanishedTypes({ Sales: 4, Receipt: 3 }, { Sales: 6 }, w).length === 1);
+    ok("MIRROR_VANISH_MIN is 3: one or two rows of a type going to zero is a normal deletion", MIRROR_VANISH_MIN === 3 && vanishedTypes({ "Sales Order Note": 2, Sales: 4 }, { Sales: 6 }, w).length === 0 && vanishedTypes({ "Sales Order Note": 1, Sales: 4 }, { Sales: 6 }, w).length === 0 && vanishedTypes({ "Sales Order Note": 3, Sales: 4 }, { Sales: 6 }, w).length === 1);
+    ok("case and spaces do not matter", vanishedTypes({ "sales order note": 3 }, { "SALES ORDER NOTE ": 1, Sales: 3 }, w).length === 0);
     ok("a pull with nothing at all raises no alarm here", vanishedTypes({ Sales: 4 }, {}, w).length === 0);
     ok("a type the store holds none of raises none", vanishedTypes({ Sales: 4, Receipt: 0 }, { Sales: 1 }, w).length === 0);
-    ok("two types gone give two alarms", vanishedTypes({ Sales: 4, Receipt: 2, Payment: 1 }, { Sales: 1 }, w).length === 2);
+    ok("two types gone give two alarms", vanishedTypes({ Sales: 4, Receipt: 3, Payment: 5 }, { Sales: 1 }, w).length === 2);
+    ok("an acknowledged type is not held (and is named as released)", vanishedTypes({ Sales: 4, Receipt: 3 }, { Sales: 1 }, w, ["receipt"]).length === 0);
     ok("countByType counts a voucher with no type under one name", JSON.stringify(countByType([{ voucher_type: "Sales" }, { voucher_type: null }, { type: "Sales" }])) === JSON.stringify({ Sales: 2, "(no type)": 1 }));
   }
 
   console.log("\n  the nightly day check uses the same helper");
   {
     const today = "2026-11-15";
-    const initial = [{ key: "S-1", date: "2026-11-10", type: "Sales" }, { key: "N-1", date: "2026-11-12", type: "Sales Order Note" }, { key: "N-2", date: "2026-11-12", type: "Sales Order Note" }];
+    const initial = [{ key: "S-1", date: "2026-11-10", type: "Sales" }, { key: "N-1", date: "2026-11-12", type: "Sales Order Note" }, { key: "N-2", date: "2026-11-12", type: "Sales Order Note" }, { key: "N-3", date: "2026-11-12", type: "Sales Order Note" }];
     const salesOnly: V[] = [{ guid: "S-1", date: "2026-11-10", alterid: 1, type: "Sales", number: "1" }, { guid: "S-2", date: "2026-11-14", alterid: 2, type: "Sales", number: "2" }];
     const s = storeOf(initial);
     const r = await runDayCheck({ store: s.store, tally: tallyOf(() => salesOnly, today), log: noop });
@@ -226,6 +235,86 @@ function storeOf(initial: { key: string; date: string; type: string }[], opts: {
     ok("the journal has it, with the kind and the reason", j.length === 1 && /type_vanished: Sales Order Note/.test(j[0].alarm) && j[0].where === "full" && /3 Sales Order Note/.test(j[0].reason));
     for (let i = 0; i < 25; i++) await loop.tick();
     ok("the status keeps the last 20 alarms only", loop.status.alarms.length === 20);
+  }
+
+  console.log("\n  D-M.281: only a mass disappearance holds, and a hold can be released once");
+  {
+    const today = "2026-11-15";
+    const sales: V[] = [1, 2, 3, 4].map((i) => ({ guid: `S-${i}`, date: "2026-11-1" + (i % 3), alterid: i, type: "Sales", number: `X/${i}` }));
+    const rowsOf = (n: number) => [...sales.map((v) => ({ key: v.guid, date: v.date, type: v.type })), ...Array.from({ length: n }, (_, i) => ({ key: `N-${i + 1}`, date: "2026-11-12", type: "Sales Order Note" }))];
+    // 2 notes deleted: normal
+    const two = storeOf(rowsOf(2));
+    const r2n = await runMirrorSync({ store: two.store, tally: tallyOf(() => sales, today), kind: "full", today, log: noop });
+    ok("2 notes deleted after billing prune normally: swapped, no alarm, the notes gone, the other vouchers still updated", r2n.state === "swapped" && !r2n.alarms && two.rows.size === 4);
+    // 5 vanishing: hold + alarm
+    const five = storeOf(rowsOf(5));
+    const r5 = await runMirrorSync({ store: five.store, tally: tallyOf(() => sales, today), kind: "full", today, log: noop });
+    ok("5 notes vanishing hold the swap and alarm, naming the type and the count", r5.state === "refused" && r5.alarms?.[0]?.storeRows === 5 && r5.alarms[0].type === "Sales Order Note" && five.rows.size === 9);
+    // ack: exactly one run, through the loop and the journal
+    const dir = mkdtempSync(join(tmpdir(), "mirror-ack-"));
+    const jpath = join(dir, "j.jsonl");
+    const journal = new Journal(jpath);
+    const st = storeOf(rowsOf(5));
+    const health: MirrorHealthNote[] = [];
+    const runners: MirrorRunners = {
+      mirror: (store, tally, kind, log, released) => runMirrorSync({ store, tally, kind, today, log, released }),
+      check: async () => ({ state: "ok", error: null }), repull: async () => null, accepted: async () => [],
+    };
+    const loop = new PrimaryMirrorLoop({
+      store: st.store, tally: tallyOf(() => sales, today),
+      plan: { hasMark: async () => false, fullDue: async () => false, lastCheckAt: async () => new Date(), queuedRepulls: async () => 0 },
+      tickMs: 1000, log: noop, runners, journal, health: async (n) => { health.push(n); },
+    });
+    await loop.tick();
+    ok("run 1 is held: one hold on the status, with the type, the count and the release command in one line", loop.status.holds.length === 1 && loop.status.holds[0].type === "Sales Order Note" && loop.status.holds[0].storeRows === 5 && /5 voucher/.test(loop.status.holds[0].line) && /ack-vanish "Sales Order Note"/.test(loop.status.holds[0].line));
+    ok("after ONE held run the sync-health signal is not told yet", health.length === 0);
+    await loop.tick();
+    ok(`after ${MIRROR_HOLD_HEALTH_AFTER} held runs in a row the sync-health signal is told (a failed row for the web's sync log, naming the type)`, health.length === 1 && health[0].syncType === "mirror-held" && /Sales Order Note/.test(health[0].errors[0]) && health[0].counts.held_runs === 2 && health[0].counts.rows === 5);
+    await loop.tick();
+    ok("a third held run inside the hour does not write another health row", health.length === 1 && loop.status.holds[0].consecutive === 3);
+    ok("nothing was pruned while held", st.rows.size === 9);
+    // the acknowledgement, written the way the script writes it
+    const refused = vanishAckFor(journal.entries() as { kind: string; alarm?: string }[], "Sales Orderr Note", new Date().toISOString());
+    ok("an acknowledgement for a type nobody is holding is refused", !refused.ok && /no vanished-type alarm/.test(refused.reason));
+    const good = vanishAckFor(journal.entries() as { kind: string; alarm?: string }[], "sales order note", new Date().toISOString());
+    ok("an acknowledgement for the held type (any case) is accepted", good.ok);
+    if (good.ok) journal.append(good.entry);
+    await loop.tick();
+    ok("the next run prunes the type: swapped, the notes gone, the hold cleared", st.rows.size === 4 && loop.status.holds.length === 0);
+    ok("the acknowledgement is used up (journalled once)", journal.entries().filter((e) => e.kind === "vanish-ack-used").length === 1 && pendingVanishAcks(journal.entries() as { kind: string; type?: string; at?: string }[], Date.now()).length === 0);
+    // the type reappears and vanishes again: held again, the old ack does not release it
+    for (let i = 1; i <= 4; i++) st.rows.set(`N-${i}`, { key: `N-${i}`, date: "2026-11-12", type: "Sales Order Note" });
+    await loop.tick();
+    ok("a later vanishing holds again (one acknowledgement released exactly one run)", st.rows.size === 8 && loop.status.holds.length === 1 && loop.status.holds[0].consecutive === 1);
+    // a clean run clears a hold
+    const sales5: V[] = [...sales, ...[1, 2, 3, 4].map((i) => ({ guid: `N-${i}`, date: "2026-11-12", alterid: 20 + i, type: "Sales Order Note", number: `SO-${i}` }))];
+    const loop2 = new PrimaryMirrorLoop({
+      store: st.store, tally: tallyOf(() => sales5, today),
+      plan: { hasMark: async () => false, fullDue: async () => false, lastCheckAt: async () => new Date(), queuedRepulls: async () => 0 },
+      tickMs: 1000, log: noop, runners, journal,
+    });
+    loop2.status.holds.push({ type: "Sales Order Note", storeRows: 4, where: "full", since: "x", lastAt: "x", consecutive: 4, line: "x" });
+    await loop2.tick();
+    ok("a run that finds the type again clears the hold", loop2.status.holds.length === 0);
+    // pure acknowledgement rules
+    const nowMs = Date.parse("2026-11-15T10:00:00Z");
+    const at = (ms: number) => new Date(nowMs - ms).toISOString();
+    ok("an acknowledgement older than a day is ignored", pendingVanishAcks([{ kind: "vanish-ack", type: "Sales Order Note", at: at(VANISH_ACK_MAX_AGE_MS + 60_000) }], nowMs).length === 0);
+    ok("a fresh one counts, and a later 'used' cancels it", pendingVanishAcks([{ kind: "vanish-ack", type: "A", at: at(1000) }], nowMs).length === 1 && pendingVanishAcks([{ kind: "vanish-ack", type: "A", at: at(2000) }, { kind: "vanish-ack-used", type: "a", at: at(1000) }], nowMs).length === 0);
+    ok("two acknowledgements release two runs (each 'used' cancels one)", pendingVanishAcks([{ kind: "vanish-ack", type: "A", at: at(3000) }, { kind: "vanish-ack", type: "A", at: at(2500) }, { kind: "vanish-ack-used", type: "A", at: at(1000) }], nowMs).length === 1);
+    // the script, end to end
+    const jp2 = join(dir, "script.jsonl");
+    const j2 = new Journal(jp2);
+    j2.append({ kind: "mirror-alarm", alarm: "type_vanished: Sales Order Note", where: "full", reason: "x", at: new Date().toISOString() });
+    const tsx = join(dirname(process.argv[1]), "..", "node_modules", "tsx", "dist", "cli.mjs");
+    const script = join(dirname(process.argv[1]), "primary-switches.ts");
+    const run = (args: string[], env: Record<string, string>) => spawnSync(process.execPath, [tsx, script, ...args], { encoding: "utf8", env: { ...process.env, ...env }, timeout: 120_000 });
+    const bad = run(["ack-vanish", "Receipt"], { MKCP_ERP_JOURNAL_PATH: jp2 });
+    ok("the script refuses a type with no alarm on record, and writes nothing", bad.status === 2 && /no vanished-type alarm/.test(bad.stderr) && j2.entries().filter((e) => e.kind === "vanish-ack").length === 0, bad.stderr.slice(0, 120));
+    const noPath = run(["ack-vanish", "Sales Order Note"], { MKCP_ERP_JOURNAL_PATH: "" });
+    ok("the script refuses without the agent's journal path", noPath.status === 2 && /MKCP_ERP_JOURNAL_PATH/.test(noPath.stderr));
+    const good2 = run(["ack-vanish", "Sales Order Note"], { MKCP_ERP_JOURNAL_PATH: jp2 });
+    ok("the script writes one vanish-ack line to the journal", good2.status === 0 && j2.entries().filter((e) => e.kind === "vanish-ack").length === 1, good2.stderr.slice(0, 120));
   }
 
   console.log(`\n  ${pass} passed, ${fail} failed\n`);

@@ -101,7 +101,11 @@ export type JournalEntry =
   /** D-M.270: a swap the pin check refused (the masters of the swap store), so a person can see why the store did not move. */
   | { kind: "swap-refused"; what: "masters"; reason: string; at: string }
   /** D-M.279: the mirror held a run because a whole voucher type vanished from the read; a person must look. */
-  | { kind: "mirror-alarm"; alarm: string; where: string; reason: string; at: string };
+  | { kind: "mirror-alarm"; alarm: string; where: string; reason: string; at: string }
+  /** D-M.281: an Owner's one-shot release of a held voucher type (written by primary-switches ack-vanish); the next run that prunes it uses it up. */
+  | { kind: "vanish-ack"; type: string; at: string }
+  /** D-M.281: a run used up one vanish-ack (it pruned that type). */
+  | { kind: "vanish-ack-used"; type: string; at: string };
 
 /** Append-only, one JSON line per step, flushed to disk before the call returns. */
 export class Journal {
