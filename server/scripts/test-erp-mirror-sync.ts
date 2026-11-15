@@ -161,6 +161,10 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("D-M.292: ... also with an empty amount", voucherProblem(voucher("G", "20261103", 1, { allledgerentries: [{ ledgername: "", amount: "" }], iscancelled: true })) === null);
   ok("D-M.292: a nameless line WITH an amount on a cancelled voucher still fails", voucherProblem(voucher("G", "20261103", 1, { allledgerentries: [{ ledgername: "", amount: "-1180.00" }], iscancelled: true })) === "an empty ledger line (a placeholder)");
   ok("D-M.292: a nameless line of 0 on a voucher that is NOT cancelled still fails", voucherProblem(voucher("G", "20261103", 1, { allledgerentries: [{ ledgername: "", amount: "0" }] })) === "an empty ledger line (a placeholder)");
+  ok("D-M.297: a Stock Journal's one nameless line of 0 is the voucher as stored", voucherProblem(voucher("G", "20261030", 1, { vouchertypename: "Stock Journal", allledgerentries: [{ ledgername: "", amount: "0" }] })) === null);
+  ok("D-M.297: ... a Stock Journal's nameless line WITH an amount still fails", voucherProblem(voucher("G", "20261030", 1, { vouchertypename: "Stock Journal", allledgerentries: [{ ledgername: "", amount: "250.00" }] })) === "an empty ledger line (a placeholder)");
+  ok("D-M.297: ... a Stock Journal with a nameless line beside a named one still fails", voucherProblem(voucher("G", "20261030", 1, { vouchertypename: "Stock Journal", allledgerentries: [{ ledgername: "ZZ TEST STOCK", amount: "0" }, { ledgername: "", amount: "0" }] })) === "an empty ledger line (a placeholder)");
+  ok("D-M.297: ... the same shape on a Journal (an accounting type) still fails", voucherProblem(voucher("G", "20261030", 1, { vouchertypename: "Journal", allledgerentries: [{ ledgername: "", amount: "0" }] })) === "an empty ledger line (a placeholder)");
   ok("review M4: inventory-only types may have no ledger lines", ["Stock Journal", "Sales Order", "Delivery Note", "Receipt Note", "Physical Stock", "Purchase Order"].every((t) => !isAccountingType(t))
     && ["Sales", "SALES GST", "Purchase", "Receipt", "Payment", "Contra", "Journal", "Credit Note", "Debit Note"].every((t) => isAccountingType(t)));
 
