@@ -1,43 +1,25 @@
 /*
- * Quick Sync, rebuilt from 0 on the web dashboard's idiom.
+ * The Quick sync card: the first thing on the window after the version, because it is the thing a person comes here to press.
+ * It holds, top to bottom: the three quick syncs (which are also the three AUTOMATIC syncs), what the last run did, the other reads a person can
+ * start from Tally (PullButtons), how fresh the data is, and the runs on record (PullHistory).
  *
- * ── What was wrong with the old one ───────────────────────────────────────
+ * ── What the buttons say, and why ─────────────────────────────────────────
  *
- * The three buttons never said that they are also the three AUTOMATIC syncs.
- * `hooks/useScheduledSyncs.ts` runs exactly these three windows on exactly
- * these three intervals — Today every 30 minutes by default, the other two off
- * — and the only place that was written down was a paragraph inside the
- * collapsed Settings panel. So the panel showed a "Today" button with no hint
- * that Today had already run four times while the operator was at lunch, and
- * "Last 7 days" with no hint that it never runs unless pressed.
+ * `hooks/useScheduledSyncs.ts` runs exactly these three windows on exactly these three intervals (Today every 30 minutes by default, the other two
+ * off), so each tile says whether its window also runs by itself and how often. That fact used to live only inside the collapsed Settings card.
  *
- * Its buttons went flat-disabled with no reason given. Four different things
- * disable them — Tally down, no company set, another sync holding the global
- * lock, this quick sync already running — and the button looked identical for
- * all four, which turns a two-second fix into a hunt through the log.
+ * Four different things disable a button (Tally down, no company set, another sync holding the global lock, this quick sync already running) and
+ * a flat grey button says none of them, which turns a two-second fix into a hunt through the log. So ONE reason, the first that applies, is
+ * written in a note above the buttons and also travels with each button as its tooltip.
  *
- * Its two phase boxes were hand-built `border border-neutral-200` cards using
- * `text-accent-700`, `text-success-700`, `text-danger-700`, `text-warn-700` — five
- * raw palette colours for the same four states the rest of the app already has
- * semantic tokens for.
- *
- * And it dropped the one result that needs a person. `PullResult` carries
- * `incompleteVoucherIds`: vouchers Tally answered with fewer lines than it has,
- * still short after the automatic retry. Those are silently wrong rows in the
- * mirror, not a failed sync — the old panel rendered a green tick over them.
- *
- * ── What this shows instead ───────────────────────────────────────────────
- *
- * What the button will do and when it does it by itself; why it is disabled
- * when it is; then the run as two ordered steps, with the incomplete-voucher
- * warning where it cannot be mistaken for success.
+ * The result that needs a person is not a failure. `PullResult.incompleteVoucherIds` lists vouchers Tally answered with fewer lines than it has,
+ * still short after the automatic retry: silently wrong rows in the mirror, not a failed sync. It gets its own warning where it cannot be read as
+ * success.
  */
-import {
-  AlertTriangle, CheckCircle2, Clock, CloudUpload, Loader2, RefreshCw,
-} from "lucide-react";
-import clsx from "clsx";
+import { AlertTriangle, CheckCircle2, Clock, Loader2, RefreshCw } from "lucide-react";
 import type { QuickSyncState } from "../store/quickSyncStore";
-import { StatusRow, RowGroupHeading } from "./StatusRow";
+import { Card, Chip, Note, Row, RowList, Tile, type ChipTone } from "./ui";
+import { PullButtons, PullHistory, type PullAction, type SyncHistoryRowLike } from "./PullSyncPanel";
 
 export interface QuickSyncRange {
   label: string;
@@ -52,103 +34,123 @@ interface Props {
   qsync: QuickSyncState;
   /** Tally reachable right now. */
   connected: boolean;
-  /** Why it is not, when it is not — so the panel does not blame TallyPrime for
-   *  this app's own server being down. Falls back to the Tally wording. */
+  /** Why it is not, when it is not, so the card does not blame TallyPrime for this app's own server being down. */
   notConnectedReason?: string | null;
   /** Company configured in this app. */
   company: string;
   /** Some other sync holds the global lock. */
   otherSyncRunning: boolean;
   onRun: (r: QuickSyncRange) => void;
+  /* the other reads, and the history behind them */
+  pullActions: PullAction[];
+  pullWindows: Array<{ label: string; run: () => void }>;
+  pullRunningLabel: string | null;
+  pullBusy: boolean;
+  history: SyncHistoryRowLike[];
+  canReadHistory: boolean;
 }
 
 const everyLabel = (m: number) =>
-  m <= 0 ? "only when you press it"
-  : m < 60 ? `by itself every ${m} minutes`
-  : `by itself every ${(m / 60).toFixed(m % 60 === 0 ? 0 : 1)} hours`;
+  m <= 0 ? "Runs only when you press it"
+  : m < 60 ? `Also runs by itself every ${m} minutes`
+  : `Also runs by itself every ${(m / 60).toFixed(m % 60 === 0 ? 0 : 1)} hours`;
 
-export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, company, otherSyncRunning, onRun }: Props) {
-  /* One reason, the first that applies — not a disabled button with no note. */
+export function QuickSyncCard({
+  ranges, qsync, connected, notConnectedReason, company, otherSyncRunning, onRun,
+  pullActions, pullWindows, pullRunningLabel, pullBusy, history, canReadHistory,
+}: Props) {
+  /* One reason, the first that applies. */
   const blocked =
     !connected ? (notConnectedReason ?? "Tally is not answering, so there is nothing to pull from.")
     : !company.trim() ? "No company is set in Settings, so there is nothing to sync as."
     : qsync.running ? `The ${qsync.running} sync is running.`
     : otherSyncRunning ? "Another sync is holding the Tally connection."
     : null;
+  /* What the manual reads need on their own: the reasons above that are about connecting, not about this quick sync running. */
+  const pullBlocked =
+    !connected ? (notConnectedReason ?? "Tally is not answering, so there is nothing to pull from.")
+    : !company.trim() ? "No company is set in Settings, so there is nothing to sync as."
+    : null;
 
   const tally = qsync.tally;
   const push = qsync.push;
   const incomplete = tally?.incompleteVoucherIds?.length ?? 0;
-  const skipped =
-    qsync.lastSkipped && (!qsync.finishedAt || qsync.lastSkipped.at > qsync.finishedAt)
-      ? qsync.lastSkipped
-      : null;
+  const skipped = qsync.lastSkipped && (!qsync.finishedAt || qsync.lastSkipped.at > qsync.finishedAt) ? qsync.lastSkipped : null;
+
+  const headChip: { tone: ChipTone; text: string } =
+    qsync.running ? { tone: "info", text: `Running: ${qsync.running}` }
+    : qsync.finishedAt ? (qsync.ok ? { tone: "good", text: "Last run worked" } : { tone: "bad", text: "Last run failed" })
+    : { tone: "neutral", text: "Not run since this app started" };
+
+  const stepChip = (running: boolean, done: { ok: boolean } | undefined, waiting: string): ReturnType<typeof Chip> =>
+    running ? <Chip tone="info">Working</Chip>
+    : done ? (done.ok ? <Chip tone="good">Done</Chip> : <Chip tone="bad">Failed</Chip>)
+    : <Chip>{waiting}</Chip>;
 
   return (
-    <div className="space-y-3">
-      <p className="text-sm text-neutral-700">
-        Reads the chosen days from Tally one day at a time, then sends them to the online database. The two steps never
-        overlap, so the sending never picks up a half-finished day.
-      </p>
-
-      <div className="flex flex-wrap gap-2">
-        {ranges.map((r) => {
-          const running = qsync.running === r.label;
-          return (
-            <button
-              key={r.label}
-              onClick={() => onRun(r)}
-              disabled={!!blocked}
-              /* The reason travels with the control, not only with the note
-                 below it — a pointer resting on a grey button should answer
-                 the question it just raised. */
-              title={blocked ?? `Read ${r.label} from Tally, then send it to the online database.`}
-              className={clsx("btn-secondary !flex-col !items-start !gap-0 !rounded-md !py-2")}
-            >
-              <span className="flex items-center gap-2">
-                {running ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                {running ? (qsync.phase === "push" ? "Sending" : "Reading") : r.label}
-              </span>
-              {/* The fact the old panel hid in Settings: whether this window
-                  also runs on its own, and how often. */}
-              <span className="text-xs text-neutral-700">{everyLabel(r.everyMinutes)}</span>
-            </button>
-          );
-        })}
-      </div>
-
+    <Card
+      icon={RefreshCw}
+      title="Quick sync"
+      sub="Reads days from Tally one at a time, then sends them to the online database."
+      chip={<Chip tone={headChip.tone}>{headChip.text}</Chip>}
+    >
       {blocked && (
-        <p className="flex items-start gap-2 text-sm text-warn-700">
-          <AlertTriangle size={16} className="mt-1 shrink-0" />
-          {blocked}
-        </p>
+        <Note tone="warn" icon={AlertTriangle}>
+          <p>{blocked}</p>
+        </Note>
       )}
 
-      {/* A scheduled run that never happened. Without this the indicator is
-          identical to the scheduler simply not having fired. */}
+      {/* A scheduled run that never happened. Without this the indicator is identical to the scheduler simply not having fired. */}
       {skipped && (
-        <div className="note note-warn">
-          <AlertTriangle size={16} className="mt-1 shrink-0" />
-          <span>
+        <Note tone="warn" icon={AlertTriangle}>
+          <p>
             The automatic <strong className="font-medium">{skipped.label}</strong> sync was skipped because{" "}
             {skipped.reason === "sync-in-progress" ? "another sync was already running"
               : skipped.reason === "not-connected" ? "Tally was not connected"
               : "no company is set"}
             . It will try again at the next time it is due.
-          </span>
-        </div>
+          </p>
+        </Note>
       )}
 
+      {/* The three quick syncs. The first is the one pressed most, so it is the one blue button on the card. */}
+      <div className="grid gap-2 sm:grid-cols-3">
+        {ranges.map((r, i) => {
+          const running = qsync.running === r.label;
+          return (
+            <div key={r.label} className="tile flex flex-col gap-3">
+              <div>
+                <div className="text-sm font-medium text-neutral-900">{r.label}</div>
+                {/* The fact the old panel hid in Settings: whether this window also runs on its own, and how often. */}
+                <div className="text-xs text-neutral-700">{everyLabel(r.everyMinutes)}</div>
+              </div>
+              <button
+                onClick={() => onRun(r)}
+                disabled={!!blocked}
+                aria-label={`Sync ${r.label} now`}
+                /* The reason travels with the control, not only with the note above it. */
+                title={blocked ?? `Read ${r.label} from Tally, then send it to the online database.`}
+                className={i === 0 ? "btn-primary w-full" : "btn-secondary w-full"}
+              >
+                {running ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                {running ? (qsync.phase === "push" ? "Sending" : "Reading") : "Sync now"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <p className="px-3 text-xs text-neutral-700">
+        The two steps never overlap, so the sending never picks up a half-finished day.
+      </p>
+
       {/* The run itself, in the order it happens. */}
-      {(tally || qsync.running) && (
-        <section>
-          <RowGroupHeading>
-            {qsync.running
-              ? `Running: ${qsync.running}`
-              : `Last run${qsync.auto ? " (automatic)" : ""}`}
-          </RowGroupHeading>
-          <ul className="tray flex flex-col gap-2">
-            <StatusRow
+      <Tile
+        title={qsync.running ? `Running: ${qsync.running}` : tally ? `Last run${qsync.auto ? " (automatic)" : ""}` : "Last run"}
+        aside={qsync.finishedAt && !qsync.running ? `Finished ${new Date(qsync.finishedAt).toLocaleString("en-IN")}` : undefined}
+      >
+        {tally || qsync.running ? (
+          <RowList>
+            <Row
               icon={qsync.running && qsync.phase === "sync" ? Loader2 : tally?.ok ? CheckCircle2 : tally ? AlertTriangle : Clock}
               tone={qsync.running && qsync.phase === "sync" ? "accent" : tally?.ok ? "success" : tally ? "danger" : "neutral"}
               spinning={!!qsync.running && qsync.phase === "sync"}
@@ -159,6 +161,7 @@ export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, c
                   ? `${tally.chunksSucceeded} of ${tally.chunksTotal} days read${tally.chunksFailed > 0 ? `, ${tally.chunksFailed} failed` : ""}, in ${tally.elapsedSeconds} seconds`
                   : undefined
               }
+              chip={stepChip(!!qsync.running && qsync.phase === "sync", tally, "Waiting")}
               detail={
                 tally?.ok ? (
                   <>
@@ -176,13 +179,13 @@ export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, c
               }
               error={tally && !tally.ok ? tally.error ?? "The read from Tally failed and gave no reason." : null}
             />
-
-            <StatusRow
+            <Row
               icon={qsync.running && qsync.phase === "push" ? Loader2 : push?.ok ? CheckCircle2 : push ? AlertTriangle : Clock}
               tone={qsync.running && qsync.phase === "push" ? "accent" : push?.ok ? "success" : push ? "danger" : "neutral"}
               spinning={!!qsync.running && qsync.phase === "push"}
               title="Step 2: send to the online database"
               subject={push ? undefined : qsync.phase === "push" ? "sending" : qsync.running ? "waiting for the read to finish" : "not started"}
+              chip={stepChip(!!qsync.running && qsync.phase === "push", push, "Waiting")}
               detail={
                 push ? (
                   <span className="tabular-nums">
@@ -194,41 +197,31 @@ export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, c
               }
               error={push && !push.ok ? push.vouchersErr || push.configErr || "The send had errors and gave no reason." : null}
             />
-          </ul>
+          </RowList>
+        ) : (
+          <p className="text-sm text-neutral-700">No quick sync has run since this app started.</p>
+        )}
 
-          {/* Neither a failure nor a success. The sync completed; some of what
-              it wrote is short of what Tally holds. */}
-          {incomplete > 0 && (
-            <div className="mt-2 note note-warn">
-              <AlertTriangle size={16} className="mt-1 shrink-0" />
-              <div>
-                <p className="font-medium">
-                  {incomplete} voucher{incomplete === 1 ? "" : "s"} came back from Tally with fewer lines than {incomplete === 1 ? "it has" : "they have"}, and {incomplete === 1 ? "was" : "were"} still short after a second try.
-                </p>
-                <p className="mt-1">
-                  Every day was read, so the sync says it worked. But {incomplete === 1 ? "that voucher is" : "those vouchers are"} now
-                  wrong in the copy rather than missing from it. Running this window again is the fix. Tally usually
-                  answers in full when it is not busy.
-                </p>
-              </div>
-            </div>
-          )}
-        </section>
-      )}
+        {/* Neither a failure nor a success. The sync completed; some of what it wrote is short of what Tally holds. */}
+        {incomplete > 0 && (
+          <Note tone="warn" icon={AlertTriangle} className="mt-3">
+            <p className="font-medium">
+              {incomplete} voucher{incomplete === 1 ? "" : "s"} came back from Tally with fewer lines than {incomplete === 1 ? "it has" : "they have"}, and {incomplete === 1 ? "was" : "were"} still short after a second try.
+            </p>
+            <p>
+              Every day was read, so the sync says it worked. But {incomplete === 1 ? "that voucher is" : "those vouchers are"} now
+              wrong in the copy rather than missing from it. Running this window again is the fix. Tally usually
+              answers in full when it is not busy.
+            </p>
+          </Note>
+        )}
+      </Tile>
 
-      {!tally && !qsync.running && (
-        <p className="flex items-center gap-2 text-xs text-neutral-700">
-          <CloudUpload size={16} /> No quick sync has run since this app started.
-        </p>
-      )}
+      <PullButtons actions={pullActions} windows={pullWindows} runningLabel={pullRunningLabel} busy={pullBusy} blocked={pullBlocked} />
 
-      {qsync.finishedAt && !qsync.running && (
-        <p className="flex items-center gap-2 text-xs text-neutral-700">
-          <Clock size={16} /> Finished {new Date(qsync.finishedAt).toLocaleString("en-IN")}
-        </p>
-      )}
-    </div>
+      <PullHistory history={history} canReadHistory={canReadHistory} />
+    </Card>
   );
 }
 
-export default QuickSyncPanel;
+export default QuickSyncCard;

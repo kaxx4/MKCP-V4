@@ -7,13 +7,17 @@
  *   scenario: office-ready (default) | office-notready | office-notstarted | office-off | down
  *   Switch while it runs:  GET http://localhost:3100/__scenario?name=office-notready
  *
+ * It also answers the window's read-only database calls (GET /rest/v1/...) with fake rows, so the history, send log and failed-job lists fill in.
+ * Point the window at it with VITE_SUPABASE_URL=http://127.0.0.1:<port> and VITE_SUPABASE_PUBLISHABLE_KEY=mock (never a real key).
+ *
  * Then `npx vite` and open http://localhost:5173/ (the main window) or http://localhost:5173/#/pip (Quick View).
  * Not packaged (scripts/ is not part of the installer).
  */
 import http from "node:http";
 
 let scenario = process.argv[2] || "office-ready";
-const PORT = 3100;
+/* MOCK_PORT lets a second copy run beside a real agent without touching its port 3100. */
+const PORT = Number(process.env.MOCK_PORT) || 3100;
 const minsAgo = (m) => new Date(Date.now() - m * 60_000).toISOString();
 
 const KEY_HASH = "5d41402abc4b2a76b9719d911017c592a0b1c2d3e4f5061728394a5b6c7d8e9f";
@@ -96,13 +100,39 @@ const routes = {
   }),
 };
 
+
+/* The window's own read-only calls to the online database (supabase-js sends GET /rest/v1/<table>). Fake rows, ZZ TEST names only. */
+const REST = {
+  tally_sync_history: () => [
+    { id: "h1", sync_type: "vouchers", started_at: minsAgo(18), completed_at: minsAgo(17), success: true, duration_ms: 42000, chunk_count: 1, row_counts: { vouchers: 214, ledger_entries: 640 }, errors: null },
+    { id: "h2", sync_type: "masters", started_at: minsAgo(60 * 3), completed_at: minsAgo(60 * 3), success: true, duration_ms: 8200, chunk_count: 1, row_counts: { items: 2310, ledgers: 840 }, errors: null },
+    { id: "h3", sync_type: "vouchers", started_at: minsAgo(60 * 20), completed_at: minsAgo(60 * 19), success: true, duration_ms: 540000, chunk_count: 365, row_counts: { vouchers: 9120 }, errors: null },
+    { id: "h4", sync_type: "masters", started_at: minsAgo(60 * 21), completed_at: minsAgo(60 * 21), success: false, duration_ms: 900, chunk_count: null, row_counts: null, errors: ["a ZZ TEST ledger was refused: the name differs by a capital letter from the one in Tally"] },
+    { id: "h5", sync_type: "vouchers", started_at: minsAgo(60 * 26), completed_at: minsAgo(60 * 26), success: true, duration_ms: 31000, chunk_count: 1, row_counts: { vouchers: 188 }, errors: null },
+    { id: "h6", sync_type: "vouchers", started_at: minsAgo(60 * 30), completed_at: minsAgo(60 * 30), success: true, duration_ms: 29000, chunk_count: 1, row_counts: { vouchers: 171 }, errors: null },
+    { id: "h7", sync_type: "vouchers", started_at: minsAgo(60 * 34), completed_at: minsAgo(60 * 34), success: true, duration_ms: 27000, chunk_count: 1, row_counts: { vouchers: 166 }, errors: null },
+    { id: "h8", sync_type: "vouchers", started_at: minsAgo(60 * 40), completed_at: minsAgo(60 * 40), success: true, duration_ms: 26000, chunk_count: 1, row_counts: { vouchers: 152 }, errors: null },
+  ],
+  push_sync_log: () => [
+    { id: "p1", push_queue_id: "q1", idempotency_key: "k1", voucher_type: "Sales", party: "ZZ TEST PARTY 042", date: "2026-11-14", status: "succeeded", tally_vch_id: "ZZTEST001/1", attempts: 1, last_error: null, line_errors: null, resolved_at: minsAgo(29) },
+    { id: "p2", push_queue_id: "q2", idempotency_key: "k2", voucher_type: "Receipt", party: "ZZ TEST PARTY 043", date: "2026-11-14", status: "failed", tally_vch_id: null, attempts: 3, last_error: "the ledger name differs by a capital letter from the one in Tally", line_errors: null, resolved_at: minsAgo(90) },
+  ],
+  push_queue: () => [
+    { id: "q9", idempotency_key: "k9", company: "ZZ TEST COMPANY", payload: { voucherType: "Receipt", partyLedgerName: "ZZ TEST PARTY 043" }, attempts: 3, last_error: "the ledger name differs by a capital letter from the one in Tally", created_at: minsAgo(95) },
+  ],
+  file_transfers: () => [],
+};
+
 http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
   if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
   if (url.pathname === "/__scenario") { scenario = url.searchParams.get("name") || scenario; res.writeHead(200); return res.end(`scenario: ${scenario}\n`); }
   if (scenario === "down") { req.socket.destroy(); return; }
+  const rest = url.pathname.startsWith("/rest/v1/") ? REST[url.pathname.slice(9)] : null;
+  if (rest) { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify(req.method === "GET" ? rest() : [])); }
   const f = routes[url.pathname];
   if (!f) { res.writeHead(404, { "Content-Type": "application/json" }); return res.end("{}"); }
   res.writeHead(200, { "Content-Type": "application/json" });

@@ -40,8 +40,8 @@ import { SERVER_BASE } from "./config/serverUrl";
  * counted".
  */
 import { useCallback, useEffect, useState } from "react";
-import clsx from "clsx";
 import { RefreshCw } from "lucide-react";
+import { Chip, chipToneOf } from "./components/ui";
 import {
   tallyFact, drainFact, queueFact,
   type AgentFact, type HealthLike, type PushStatusLike,
@@ -55,30 +55,16 @@ const BASE_LABEL = BASE.replace(/^https?:\/\//, "");
 /** Same 10 s cadence as the main window: the two should not disagree about how old a reading is because one looked more recently. */
 const POLL_MS = 10_000;
 
-const TONE_TEXT: Record<AgentFact["tone"], string> = {
-  good: "text-success-700",
-  bad: "text-danger-700",
-  warn: "text-warn-700",
-  unknown: "text-warn-700",
-};
-
-const TONE_TINT: Record<AgentFact["tone"], string> = {
-  good: "bg-success-soft",
-  bad: "bg-danger-soft",
-  warn: "bg-warn-soft",
-  unknown: "bg-warn-soft",
-};
-
-/** One fact, sized to be read at a glance rather than studied. Label and figure sit on one line when they fit and stack when they do not. */
+/** One reading, sized to be read at a glance rather than studied: the label, its status as a chip with words, and where the reading came from. */
 function FactRow({ fact }: { fact: AgentFact }) {
   return (
-    <li className={clsx("rounded-md p-3", fact.attention ? TONE_TINT[fact.tone] : "bg-white shadow-card")}>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-        <span className="text-xs text-neutral-700">{fact.label}</span>
-        <span className={clsx("font-display text-xl tabular-nums wrap-anywhere", TONE_TEXT[fact.tone])}>{fact.value}</span>
+    <li className="card">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 pt-3">
+        <span className="text-sm font-medium text-neutral-900">{fact.label}</span>
+        <Chip tone={chipToneOf(fact.tone)}>{fact.value}</Chip>
       </div>
       {/* Never shortened. The sub-line is where "never counted" lives, and cutting it turns an honest unknown back into a bare figure. */}
-      <p className="mt-1 text-xs text-neutral-700">{fact.sub}</p>
+      <p className="px-3 pb-3 pt-2 text-xs text-neutral-700 wrap-anywhere">{fact.sub}</p>
     </li>
   );
 }

@@ -126,21 +126,35 @@
   .filter-chip:active { transform: scale(var(--press)); }
   .filter-chip-active { background: var(--ink); color: var(--on-ink); box-shadow: none; }
 
-  /* ── the panel: a white card with a quiet header; its body is a tray of rows ── */
-  .panel {
-    background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow-card); overflow: hidden;
-  }
-  .panel-head {
-    display: flex; align-items: center; gap: var(--sp-3); width: 100%; min-height: var(--tap);
-    padding: var(--sp-2) var(--sp-4); border: 0; background: none; text-align: left; cursor: pointer;
+  /* ── the card system ────────────────────────────────────────────────────────────────────────────────
+     Every section of the window is a card. The corners are concentric: a card is 20 px, it holds its parts 12 px in, so a tile or a note
+     inside it is 8 px (20 minus 12), and a white tile inside a tile (12 px in again, floor 4) is 4 px. The head carries the same 12 px, so
+     the text of the head, of a tile and of a row all start 24 px in from the card's edge and line up down the page.
+     Spacing is 4 8 12 16 24: 8 between tiles, 16 between cards. */
+  .card { background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow-card); padding: var(--sp-3); }
+  .card-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-2) var(--sp-3); padding: var(--sp-3); }
+  .card-body { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .card-title { font-family: var(--font-display); font-size: var(--fs-18); line-height: var(--lh-18); font-weight: var(--fw-medium); letter-spacing: var(--ls-display); color: var(--ink); }
+  /* a collapsible card's whole head is one 44 px button */
+  .card-toggle {
+    display: flex; align-items: flex-start; gap: var(--sp-3); width: 100%; min-height: var(--tap); padding: var(--sp-3);
+    border: 0; border-radius: var(--r-sm); background: none; text-align: left; cursor: pointer;
     transition: background-color var(--dur) var(--ease);
   }
-  @media (hover: hover) { .panel-head:hover { background: var(--soft); } }
-  .panel-title { flex: 1; min-width: 0; font-family: var(--font-display); font-size: var(--fs-18); line-height: var(--lh-18); font-weight: var(--fw-medium); letter-spacing: var(--ls-display); color: var(--ink); }
-  .panel-body { padding: var(--sp-2) var(--sp-4) var(--sp-4); }
-
-  /* a row tray inside a card: 8 px in from the card's 20 px corner, so its own corner is 12 */
-  .tray { background: var(--soft); border-radius: var(--r-md); padding: var(--sp-2); }
+  @media (hover: hover) { .card-toggle:hover { background: var(--soft); } }
+  .tile { background: var(--soft); border-radius: var(--r-sm); padding: var(--sp-3); }
+  .tile-white { background: var(--card); border-radius: var(--r-xs); padding: var(--sp-3); box-shadow: var(--shadow-card); }
+  .tile-title { font-family: var(--font); font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-medium); color: var(--ink); letter-spacing: 0; }
+  .row-list { margin: calc(var(--sp-2) * -1) 0; padding: 0; list-style: none; }
+  .row-list > li { padding: var(--sp-2) 0; }
+  .row-list > li + li { border-top: var(--bw) solid var(--line); }
+  /* a chip alone on the right of a row is centred on the first text line (20 px line, 24 px chip) */
+  .row-chip { margin-top: calc((var(--lh-14) - var(--sp-5)) / 2); }
+  /* a read-only value that sits beside a button: the same shape as a field */
+  .field-read {
+    display: flex; align-items: center; min-height: var(--tap); padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--r-md); background: var(--soft-2); color: var(--text); font-size: var(--fs-14); line-height: var(--lh-14);
+  }
 
   /* ── a pill that tells a state ── */
   .pill {
@@ -154,9 +168,11 @@
   .pill-warn { background: var(--warn-bg); color: var(--warn); }
   .pill-bad  { background: var(--bad-bg);  color: var(--bad); }
   .pill-live { background: var(--b100);    color: var(--b700); }
+  /* a chip that names a thing (a version) rather than a state: no status dot */
+  .pill-plain::before { display: none; }
 
   /* ── a note: a flat tint with its reason in full ── */
-  .note { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); font-size: var(--fs-14); line-height: var(--lh-14); }
+  .note { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3); border-radius: var(--r-sm); font-size: var(--fs-14); line-height: var(--lh-14); }
   .note-good { background: var(--good-bg); color: var(--good-ink); }
   .note-warn { background: var(--warn-bg); color: var(--warn-ink); }
   .note-bad  { background: var(--bad-bg);  color: var(--bad-ink); }
@@ -175,4 +191,9 @@
   @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
   @keyframes slide-in { from { opacity: 0; transform: translateY(var(--sp-1)); } to { opacity: 1; transform: translateY(0); } }
   @keyframes spin { to { transform: rotate(360deg); } }
+}
+
+@layer components {
+  /* a note inside a tile is one step further in: 8 px minus the 12 px of the tile, floor 4 */
+  .tile .note { border-radius: var(--r-xs); }
 }

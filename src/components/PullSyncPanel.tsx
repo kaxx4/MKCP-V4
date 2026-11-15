@@ -1,63 +1,22 @@
 /*
- * Pull Sync, rebuilt from 0 on the web dashboard's idiom.
+ * The manual pulls from Tally and what the history says about them. Two parts, both drawn inside the Quick sync card (QuickSyncPanel.tsx):
  *
- * ── What was wrong with the old one ───────────────────────────────────────
+ *   PullButtons   the reads a person can start: whole year, parties and items, all vouchers, price list, and vouchers for a window.
+ *   PullHistory   how fresh the data is, the runs that FAILED with their reasons open and in full, and a short tail of the ones that worked.
  *
- * Its four freshness tiles read from the local zustand store, and three of the
- * four could not tell the truth:
+ * ── Why the history is read the way it is ─────────────────────────────────
  *
- *   · "Masters"     — `lastMastersSyncAt`. `setLastMastersSync` exists in
- *                     store/tallyStore.ts and is called from NOWHERE in the
- *                     codebase. The tile has always rendered "—", on every
- *                     machine, since it was written.
- *   · "Full sync"   — `lastSyncAt`, which `triggerSync` stamps after ANY
- *                     successful manual pull: masters, daybook, a one-day
- *                     voucher window, even the price list. A tile labelled
- *                     "Full sync" that lights up after a 0.4s price-list
- *                     fetch is worse than no tile, because a full sweep is
- *                     the one pull that catches backdated entry and 61% of
- *                     the vouchers here are backdated.
- *   · "Last voucher"— the newest date the LAST PULL happened to see. Press
- *                     "Today" and it becomes today, whatever else is in the
- *                     books.
- *
- * And each printed `fmt(val).split(" ")[0]` — the date with the clock cut off.
- * On a panel that refreshes every ten seconds, "15/09/2026" reads as fresh
- * whether it ran four minutes or nineteen hours ago, and nineteen hours is
- * exactly the failure a freshness tile exists to catch.
- *
- * Its history was a six-column `<table>` whose error cell you had to click a
- * chevron to open — and the same runs are already listed below in MirrorPanel,
- * so the screen carried them twice in two shapes and neither showed the reason
- * without a click. Its rows column printed `items:412 ledgers:295` as one
- * unspaced run of text. The whole thing was painted in `bg-neutral-50` tiles,
- * `bg-danger-soft` error boxes and the green/red `Pill`.
- *
- * ── What this shows instead ───────────────────────────────────────────────
- *
- * Freshness is derived from `tally_sync_history` — the rows the server actually
- * writes, which carry a real type and a real row count — not from local flags
- * nobody sets. A full sweep is recognised the same way the server recognises
- * one (see server/src/services/mirrorPanel.ts: a voucher run of 500+ rows), so
- * this panel and that one cannot disagree.
- *
- * Then: the pulls a person can start, the heavy one still behind a confirm and
- * the reason spelled out when they are disabled; the runs that FAILED with
- * their reasons open and in full; and a short tail of the ones that worked. The
- * complete chronological list stays in MirrorPanel — one list, and this is the
- * panel that owns the reasons.
+ * Freshness comes from `tally_sync_history`, the rows the server actually writes, which carry a real type and a real row count, and not from
+ * local flags nobody sets (`setLastMastersSync` is called from nowhere, and `lastSyncAt` is stamped by ANY manual pull, a 0.4 s price-list
+ * fetch included). A full sweep is recognised the way the server recognises one (server/src/services/mirrorPanel.ts: a voucher run of 500 or
+ * more rows), so this card and the Mirror card cannot disagree about whether the books have been swept. A time is told in words with its unit,
+ * never a bare date, because a date reads as fresh whether the run was four minutes or nineteen hours ago.
  */
 import { useState } from "react";
-import {
-  AlertTriangle, CalendarClock, CheckCircle2, Database, History, Loader2,
-  PackageSearch, RefreshCw, Tag,
-} from "lucide-react";
-import { StatusRow, RowGroupHeading, EmptyNote } from "./StatusRow";
+import { AlertTriangle, CalendarClock, CheckCircle2, Database, History, Loader2, PackageSearch, RefreshCw } from "lucide-react";
+import { Chip, Disclosure, Note, Row, RowList, Tile, EmptyNote } from "./ui";
 
-/** Same threshold the server uses to call a voucher run a full sweep
- *  (server/src/services/mirrorPanel.ts, FULL_SYNC_MIN_VOUCHERS). Keep in step:
- *  if the two drift, this panel and MirrorPanel will disagree about whether the
- *  books have been swept, and there is no third opinion to break the tie. */
+/** Same threshold the server uses to call a voucher run a full sweep (server/src/services/mirrorPanel.ts, FULL_SYNC_MIN_VOUCHERS). Keep in step. */
 const FULL_SWEEP_MIN_VOUCHERS = 500;
 
 export interface SyncHistoryRowLike {
@@ -76,32 +35,14 @@ export interface PullAction {
   key: string;
   label: string;
   icon: typeof RefreshCw;
-  /** Shown under the label — what this one actually costs. */
+  /** Shown under the label: what this one actually costs. */
   note: string;
   /** Text of the confirm, or omitted for no confirm. */
   confirm?: string | null;
   run: () => void;
 }
 
-interface Props {
-  actions: PullAction[];
-  /** Voucher windows — same endpoint, different date range. */
-  windows: Array<{ label: string; run: () => void }>;
-  /** Label of the pull currently running, if any. */
-  runningLabel: string | null;
-  /** Any sync at all holds the global lock. */
-  busy: boolean;
-  /** Why nothing can be started, or null. */
-  blocked: string | null;
-  history: SyncHistoryRowLike[];
-  /** False when the renderer has no Supabase read client — an empty list then
-   *  means "could not ask", which must never be shown as "nothing happened". */
-  canReadHistory: boolean;
-}
-
-/** Elapsed time, said the way a person says it. The old tiles printed a bare
- *  date and dropped the clock, which is the part that tells you whether the
- *  number on screen is this morning's. */
+/** Elapsed time, said the way a person says it. */
 function ago(iso: string | null): string {
   if (!iso) return "none";
   const ms = Date.now() - new Date(iso).getTime();
@@ -130,73 +71,62 @@ function counts(rc: Record<string, number> | null): string | null {
   return parts.length ? parts.join(", ") : null;
 }
 
-/** The first reason that applies, so a grey button answers the question it
- *  raises — the note below the row says the same thing, but only for whichever
- *  reason came first, and a pointer is already on the button. */
+/** The first reason that applies, so a grey button answers the question it raises. */
 function whyOff(blocked: string | null, busy: boolean, runningLabel: string | null): string | null {
   if (blocked) return blocked;
   if (busy) return runningLabel ? `The ${runningLabel} sync is still running.` : "Another sync is holding the Tally connection.";
   return null;
 }
 
-export function PullSyncPanel({
-  actions, windows, runningLabel, busy, blocked, history, canReadHistory,
-}: Props) {
-  const [showAllRuns, setShowAllRuns] = useState(false);
+/* ── the buttons ──────────────────────────────────────────────────────────────────────────────── */
+interface ButtonsProps {
+  actions: PullAction[];
+  /** Voucher windows: same endpoint, different date range. */
+  windows: Array<{ label: string; run: () => void }>;
+  /** Label of the pull currently running, if any. */
+  runningLabel: string | null;
+  /** Any sync at all holds the global lock. */
+  busy: boolean;
+  /** Why nothing can be started, or null. */
+  blocked: string | null;
+}
 
-  const failed = history.filter((h) => !h.success);
-  const succeeded = history.filter((h) => h.success);
-  const shownOk = showAllRuns ? succeeded : succeeded.slice(0, 5);
-
-  /* `history` arrives newest-first, so the first match is the newest. */
-  const newestMasters = succeeded.find((h) => h.sync_type === "masters") ?? null;
-  const newestVouchers = succeeded.find((h) => h.sync_type === "vouchers") ?? null;
-  const newestSweep =
-    succeeded.find(
-      (h) => h.sync_type === "vouchers" && Number(h.row_counts?.vouchers ?? 0) >= FULL_SWEEP_MIN_VOUCHERS,
-    ) ?? null;
-
-  /* "Not in the runs we can see" is not "never". The fetch is capped, so a
-     sweep older than the window is invisible here, and saying "never" about it
-     would send someone to re-pull a year they already have. */
-  const sweepMeta = newestSweep
-    ? ago(newestSweep.started_at)
-    : history.length === 0
-      /* "Not in the last 0 runs" is not a sentence. With nothing on record at
-         all there is nothing to have looked through. */
-      ? "no run on record"
-      : `not in the last ${history.length} runs on record`;
-
+export function PullButtons({ actions, windows, runningLabel, busy, blocked }: ButtonsProps) {
   return (
-    <div className="space-y-4">
-      {/* The things that DO something, at the top. */}
-      <div className="flex flex-wrap gap-2">
+    <Tile title="Read something else from Tally">
+      <ul className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
         {actions.map((a) => {
           const running = runningLabel === a.label;
           const Icon = a.icon;
           return (
-            <button
-              key={a.key}
-              onClick={() => {
-                if (a.confirm && !window.confirm(a.confirm)) return;
-                a.run();
-              }}
-              disabled={busy || !!blocked}
-              title={whyOff(blocked, busy, runningLabel) ?? `${a.label}: ${a.note}${a.confirm ? " (asks first)" : ""}`}
-              className="btn-secondary !flex-col !items-start !gap-0 !rounded-md !py-2"
-            >
-              <span className="flex items-center gap-2">
-                {running ? <Loader2 size={16} className="animate-spin" /> : <Icon size={16} />}
-                {a.label}
+            <li key={a.key} className="flex items-center gap-3">
+              <span className="grid h-5 w-5 shrink-0 place-items-center">
+                <Icon size={16} className="text-neutral-600" aria-hidden="true" />
               </span>
-              <span className="text-xs text-neutral-700">{a.note}</span>
-            </button>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-neutral-900">{a.label}</div>
+                <div className="text-xs text-neutral-700">{a.note}</div>
+              </div>
+              <button
+                onClick={() => {
+                  if (a.confirm && !window.confirm(a.confirm)) return;
+                  a.run();
+                }}
+                disabled={busy || !!blocked}
+                aria-label={`Read ${a.label} from Tally`}
+                title={whyOff(blocked, busy, runningLabel) ?? `${a.label}: ${a.note}${a.confirm ? " (asks first)" : ""}`}
+                className="btn-secondary shrink-0"
+              >
+                {running && <Loader2 size={16} className="animate-spin" />}
+                {running ? "Reading" : "Read"}
+              </button>
+            </li>
           );
         })}
-      </div>
+      </ul>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm text-neutral-700">Vouchers only, for</span>
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-neutral-200 pt-3">
+        <span className="mr-1 text-sm text-neutral-700">Vouchers only, for</span>
         {windows.map((w) => {
           const running = runningLabel === `Vouchers ${w.label}`;
           return (
@@ -214,123 +144,125 @@ export function PullSyncPanel({
         })}
       </div>
 
-      {/* A flat-disabled button with no reason turns a two-second fix into a
-          hunt through the log. */}
-      {blocked && (
-        <p className="flex items-start gap-2 text-sm text-warn-700">
-          <AlertTriangle size={16} className="mt-1 shrink-0" />
-          {blocked}
-        </p>
-      )}
+      <p className="mt-3 text-xs text-neutral-700">
+        The price list is read in one go for the whole catalogue, so it does not need a parties and items sync first.
+      </p>
+    </Tile>
+  );
+}
 
-      {/* 1 — what needs a person */}
+/* ── the history ──────────────────────────────────────────────────────────────────────────────── */
+interface HistoryProps {
+  history: SyncHistoryRowLike[];
+  /** False when the renderer has no Supabase read client: an empty list then means "could not ask", which must never read as "nothing happened". */
+  canReadHistory: boolean;
+}
+
+export function PullHistory({ history, canReadHistory }: HistoryProps) {
+  const [showAllRuns, setShowAllRuns] = useState(false);
+
+  if (!canReadHistory) {
+    return (
+      <Note tone="warn" icon={AlertTriangle}>
+        <p className="font-medium">This version cannot read how fresh the data is or what ran before.</p>
+        <p>
+          Both come from the history kept in the online database, and this window has no read-only access to it. See the Online database card.
+          Nothing below is old or missing. It is simply not known. Reading from Tally itself is not affected.
+        </p>
+      </Note>
+    );
+  }
+
+  const failed = history.filter((h) => !h.success);
+  const succeeded = history.filter((h) => h.success);
+  const shownOk = showAllRuns ? succeeded : succeeded.slice(0, 5);
+
+  /* `history` arrives newest-first, so the first match is the newest. */
+  const newestMasters = succeeded.find((h) => h.sync_type === "masters") ?? null;
+  const newestVouchers = succeeded.find((h) => h.sync_type === "vouchers") ?? null;
+  const newestSweep =
+    succeeded.find((h) => h.sync_type === "vouchers" && Number(h.row_counts?.vouchers ?? 0) >= FULL_SWEEP_MIN_VOUCHERS) ?? null;
+
+  /* "Not in the runs we can see" is not "never": the fetch is capped, so a sweep older than the window is invisible here. */
+  const sweepMissing = history.length === 0 ? "no run on record" : `not in the last ${history.length} runs on record`;
+
+  const fresh: Array<{ key: string; icon: typeof Database; title: string; at: string | null; sub: string; missing: string }> = [
+    { key: "m", icon: PackageSearch, title: "Parties and items", at: newestMasters?.started_at ?? null, sub: newestMasters ? (counts(newestMasters.row_counts) ?? "no rows changed") : "", missing: "no run on record" },
+    { key: "v", icon: Database, title: "Vouchers", at: newestVouchers?.started_at ?? null, sub: newestVouchers ? (counts(newestVouchers.row_counts) ?? "no rows changed") : "", missing: "no run on record" },
+    {
+      /* A run of small syncs makes the copy look fresh while backdated entry never arrives. Most of the entry here is backdated, so this is the
+         one that matters. */
+      key: "s", icon: CalendarClock, title: "Whole-year check", at: newestSweep?.started_at ?? null,
+      sub: `A voucher run of ${FULL_SWEEP_MIN_VOUCHERS.toLocaleString("en-IN")} or more rows. It is the only kind that catches entries made for an earlier date.`,
+      missing: sweepMissing,
+    },
+  ];
+
+  return (
+    <>
+      {/* 1: what needs a person */}
       {failed.length > 0 && (
-        <section>
-          <RowGroupHeading tone="danger" icon={AlertTriangle}>
-            Needs you: {failed.length} run{failed.length === 1 ? "" : "s"} failed
-          </RowGroupHeading>
-          <ul className="tray flex flex-col gap-2">
+        <Tile title={<span className="text-danger-700">Needs you: {failed.length} run{failed.length === 1 ? "" : "s"} failed</span>}>
+          <RowList>
             {failed.map((h) => (
-              <StatusRow
+              <Row
                 key={h.id}
                 icon={AlertTriangle}
                 tone="danger"
                 title={h.sync_type === "masters" ? "Parties and items" : "Vouchers"}
                 subject={counts(h.row_counts) ?? "nothing reached the online database"}
-                meta={`${new Date(h.started_at).toLocaleString("en-IN")}. Took ${dur(h.duration_ms)}${h.chunk_count ? `, in ${h.chunk_count} parts` : ""}.`}
-                /* Open, and in full. This used to be behind a chevron in a
-                   table cell, and the reason is the only useful part. */
+                meta={`${new Date(h.started_at).toLocaleString("en-IN")}. Took ${dur(h.duration_ms)}${h.chunk_count ? `, in ${h.chunk_count} part${h.chunk_count === 1 ? "" : "s"}` : ""}.`}
+                /* Open, and in full: the reason is the only useful part. */
                 error={h.errors?.length ? h.errors.join(". ") : "It failed and recorded no reason."}
               />
             ))}
-          </ul>
-        </section>
+          </RowList>
+        </Tile>
       )}
 
-      {/* 2 and 3 — how stale the data is, then what already happened. Both
-             read the same table, so when that read is unavailable they collapse
-             into ONE notice rather than saying the same thing twice. */}
-      {!canReadHistory ? (
-        <div className="note note-warn">
-          <AlertTriangle size={16} className="mt-1 shrink-0" />
-          <div>
-            <p className="font-medium">This version cannot read how fresh the data is or what ran before.</p>
-            <p className="mt-1">
-              Both come from the history kept in the online database, and this window has no read-only access to it. See the
-              Online database panel. Nothing below is old or missing. It is simply not known. Reading from Tally itself is not affected.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <>
-          <section>
-            <RowGroupHeading>How fresh the data is</RowGroupHeading>
-            <ul className="tray flex flex-col gap-2">
-              <StatusRow
-                icon={PackageSearch}
-                tone={newestMasters ? "neutral" : "warn"}
-                title="Parties and items"
-                subject={newestMasters ? (counts(newestMasters.row_counts) ?? "no rows changed") : "no run on record"}
-                meta={ago(newestMasters?.started_at ?? null)}
-              />
-              <StatusRow
-                icon={Database}
-                tone={newestVouchers ? "neutral" : "warn"}
-                title="Vouchers"
-                subject={newestVouchers ? (counts(newestVouchers.row_counts) ?? "no rows changed") : "no run on record"}
-                meta={ago(newestVouchers?.started_at ?? null)}
-              />
-              <StatusRow
-                icon={CalendarClock}
-                tone={newestSweep ? "neutral" : "warn"}
-                title="Whole-year check"
-                /* A run of small syncs makes the mirror look fresh while
-                   backdated entry never arrives. Most of the entry here is
-                   backdated, so this is the row that matters. */
-                subject={`a voucher run of ${FULL_SWEEP_MIN_VOUCHERS.toLocaleString("en-IN")} or more rows. It is the only kind that catches entries made for an earlier date`}
-                meta={sweepMeta}
-              />
-            </ul>
-          </section>
+      {/* 2: how stale the data is */}
+      <div className="grid gap-2 sm:grid-cols-3">
+        {fresh.map((f) => {
+          const Icon = f.icon;
+          return (
+            <div key={f.key} className="tile flex flex-col items-start gap-1">
+              <span className="flex items-center gap-2 text-sm font-medium text-neutral-900">
+                <Icon size={16} className="text-neutral-600" aria-hidden="true" />
+                {f.title}
+              </span>
+              {f.at ? <span className="font-display text-lg text-neutral-950">{ago(f.at)}</span> : <Chip tone="warn">{f.missing}</Chip>}
+              {f.sub && <span className="text-xs text-neutral-700">{f.sub}</span>}
+            </div>
+          );
+        })}
+      </div>
 
-          <section>
-            <RowGroupHeading icon={History}>Recent runs that worked</RowGroupHeading>
-            {succeeded.length === 0 ? (
-              <EmptyNote icon={History}>No run that worked is on record yet.</EmptyNote>
-            ) : (
-              <>
-                <ul className="tray flex flex-col gap-2">
-                  {shownOk.map((h) => (
-                    <StatusRow
-                      key={h.id}
-                      icon={CheckCircle2}
-                      tone="success"
-                      title={h.sync_type === "masters" ? "Parties and items" : "Vouchers"}
-                      subject={counts(h.row_counts) ?? "no rows changed"}
-                      meta={`${new Date(h.started_at).toLocaleString("en-IN")}. Took ${dur(h.duration_ms)}${h.chunk_count ? `, in ${h.chunk_count} parts` : ""}.`}
-                    />
-                  ))}
-                </ul>
-                {succeeded.length > shownOk.length && (
-                  <button
-                    onClick={() => setShowAllRuns(true)}
-                    className="btn-ghost mt-2 w-full"
-                  >
-                    Show {succeeded.length - shownOk.length} more
-                  </button>
-                )}
-              </>
+      {/* 3: what already happened */}
+      <Disclosure title="Recent runs that worked" badge={succeeded.length ? <Chip plain>{succeeded.length}</Chip> : undefined}>
+        {succeeded.length === 0 ? (
+          <EmptyNote icon={History}>No run that worked is on record yet.</EmptyNote>
+        ) : (
+          <>
+            <RowList>
+              {shownOk.map((h) => (
+                <Row
+                  key={h.id}
+                  icon={CheckCircle2}
+                  tone="success"
+                  title={h.sync_type === "masters" ? "Parties and items" : "Vouchers"}
+                  subject={counts(h.row_counts) ?? "no rows changed"}
+                  meta={`${new Date(h.started_at).toLocaleString("en-IN")}. Took ${dur(h.duration_ms)}${h.chunk_count ? `, in ${h.chunk_count} part${h.chunk_count === 1 ? "" : "s"}` : ""}.`}
+                />
+              ))}
+            </RowList>
+            {succeeded.length > shownOk.length && (
+              <button onClick={() => setShowAllRuns(true)} className="btn-ghost mt-2 w-full">
+                Show {succeeded.length - shownOk.length} more
+              </button>
             )}
-          </section>
-        </>
-      )}
-
-      <p className="flex items-start gap-2 text-xs text-neutral-700">
-        <Tag size={16} className="mt-1 shrink-0" />
-        The price list is read in one go for the whole catalogue, so it does not need a parties and items sync first.
-      </p>
-    </div>
+          </>
+        )}
+      </Disclosure>
+    </>
   );
 }
-
-export default PullSyncPanel;

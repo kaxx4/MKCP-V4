@@ -2,9 +2,7 @@ import { SERVER_BASE } from "./config/serverUrl";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 import {
-  Wifi, WifiOff, RefreshCw, Cloud, CloudOff, CheckCircle, XCircle,
-  Clock, Activity, ChevronDown, ChevronUp, Settings, Database,
-  AlertTriangle, Loader2, Send, Upload, Download, Tag, CalendarRange, PackageSearch, Building2,
+  RefreshCw, XCircle, Settings, AlertTriangle, Loader2, Send, Upload, Download, Tag, CalendarRange, PackageSearch, Terminal,
 } from "lucide-react";
 import { useTallyStore } from "./store/tallyStore";
 import { useSupabaseSyncStatusStore } from "./store/supabaseSyncStatusStore";
@@ -14,22 +12,20 @@ import { runQuickSync } from "./services/quickSync";
 import { useQuickSyncStore } from "./store/quickSyncStore";
 import { MirrorPanel } from "./MirrorPanel";
 import { PageHeader } from "./components/PageHeader";
-import { StatTile } from "./components/StatTile";
-import { PushQueuePanel } from "./components/PushQueuePanel";
+import { Card, Chip, Note, Row, RowList, Tile } from "./components/ui";
+/* Every section below is a card from components/ui.tsx. The panels were once inline in this file; each now lives in its own file, built from the
+   same parts, so the window reads as one system. See each file's header for what it shows and why. */
+import { PushQueueCard } from "./components/PushQueuePanel";
 import { PrimaryCard } from "./components/PrimaryCard";
-/* The five panels below were inline in this file. Each is rebuilt on the web
-   dashboard's idiom the way PushQueuePanel was — see each file's header for
-   what the old version got wrong and why the new one is shaped as it is. */
-import { TallyPanel } from "./components/TallyPanel";
-import { SupabaseCloudPanel } from "./components/SupabaseCloudPanel";
-import { QuickSyncPanel } from "./components/QuickSyncPanel";
-import { PullSyncPanel, type PullAction } from "./components/PullSyncPanel";
+import { TallyCard } from "./components/TallyPanel";
+import { SupabaseCloudCard } from "./components/SupabaseCloudPanel";
+import { QuickSyncCard } from "./components/QuickSyncPanel";
+import { type PullAction } from "./components/PullSyncPanel";
 import { LogsPanel, isErrorLine } from "./components/LogsPanel";
-import { UpdatesPanel } from "./components/UpdatesPanel";
-/* The four KPI facts are derived here AND in QuickView.tsx, so the reasoning
-   lives in one module rather than in whichever window was edited last. The part
-   that must not drift is telling "zero" apart from "never counted". */
-import { tallyFact, drainFact, queueFact, cloudFact, toneToStatTile } from "./status/agentFacts";
+import { UpdatesCard } from "./components/UpdatesPanel";
+/* The readings are derived here AND in QuickView.tsx, so the reasoning lives in one module rather than in whichever window was edited last. The
+   part that must not drift is telling "zero" apart from "never counted". */
+import { tallyFact, drainFact, queueFact, cloudFact } from "./status/agentFacts";
 /* After go-live the office agent runs in primary mode. These are the same plain-English facts the Quick View window reads. */
 import { officeFact, claimFact, mirrorRunFact, primaryIsOn, type PrimarySummaryLike } from "./status/primaryFacts";
 
@@ -142,166 +138,6 @@ function fmt(iso: string | null | undefined): string {
  *  failed(actual error). Reads only from stores already populated by every sync path
  *  (quickSyncStore for quick-sync, tallyStore.isSyncing for manual full/masters/daybook
  *  triggers) — no new store. */
-/**
- * What the updater is doing, in the header, permanently.
- *
- * Only `ready` and `error` are worth interrupting for, so everything else is
- * quiet or absent: "current" says nothing at all rather than adding a green
- * tick nobody needs. `ready` is deliberately not a button — this process holds
- * Tally's single-threaded port and drains the push queue, so it installs on the
- * next ordinary quit rather than offering to restart mid-push.
- */
-interface UpdateState {
-  phase: string;
-  version?: string;
-  percent?: number;
-  message?: string;
-  notes?: string | null;
-  releaseName?: string | null;
-  releaseDate?: string | null;
-}
-
-/**
- * The update control: what is available, what is in it, and install it now. It is not only a status chip, because this process owns Tally's
- * single-threaded port and works the job queue, so "the next time you close it" can be days away.
- *
- *   - it says WHAT is in the release, so accepting a restart is not an act of faith in a version number;
- *   - it installs on demand;
- *   - it refuses while a voucher is being sent to Tally (see `installNow` in autoUpdate.js): quitting then ends the send between "Tally made it"
- *     and "the queue says so".
- */
-function UpdateChip({ state, currentVersion }: { state: UpdateState | null; currentVersion?: string }) {
-  const [open, setOpen] = useState(false);
-  const [busyMsg, setBusyMsg] = useState<string | null>(null);
-  const [working, setWorking] = useState(false);
-  const boxRef = useRef<HTMLDivElement>(null);
-
-  /* Close on an outside click or Escape: a panel that can only be dismissed by the control that opened it traps a mis-tap. */
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
-  }, [open]);
-
-  if (!state) return null;
-  const { phase, version, percent } = state;
-  if (phase === "idle" || phase === "disabled") return null;
-
-  const api = (window as any).electronAPI?.update;
-
-  async function install(force: boolean) {
-    setWorking(true);
-    setBusyMsg(null);
-    try {
-      const r = await api?.installNow({ force });
-      if (r && !r.ok) {
-        setBusyMsg(
-          r.reason === "busy"
-            ? "A voucher is being sent to Tally right now. Installing would cut it off halfway."
-            : r.reason,
-        );
-      }
-    } catch (e) {
-      setBusyMsg(e instanceof Error ? e.message : "The install could not be started.");
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  const tone =
-    phase === "ready" ? "bg-success-soft text-success-700"
-    : phase === "error" ? "bg-warn-soft text-warn-700"
-    : "bg-white text-neutral-900";
-
-  const label =
-    phase === "downloading" ? `Update${typeof percent === "number" ? ` ${percent}%` : " downloading"}`
-    : phase === "ready" ? (version ? `Version ${version} ready` : "Update ready")
-    : phase === "installing" ? "Restarting"
-    : phase === "checking" ? "Checking for updates"
-    : phase === "current" ? (currentVersion ? `Version ${currentVersion}` : "Up to date")
-    : "Update check failed";
-
-  return (
-    <div className="relative" ref={boxRef}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        className={`filter-chip ${tone}`}
-        title="Updates: what is available and what is in it"
-      >
-        {label}
-        <ChevronDown size={16} className={open ? "rotate-180 transition-transform" : "transition-transform"} />
-      </button>
-
-      {open && (
-        <div
-          role="dialog"
-          aria-label="Updates"
-          className="absolute right-0 z-modal mt-2 w-80 rounded-lg bg-white p-4 shadow-menu animate-fade-in"
-        >
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="font-display text-lg text-neutral-950">
-              {phase === "ready" || phase === "downloading" ? `Version ${version ?? "unknown"}` : "Updates"}
-            </span>
-            {currentVersion && <span className="text-xs text-neutral-600">running version {currentVersion}</span>}
-          </div>
-
-          {state.releaseDate && (
-            <div className="mt-1 text-xs text-neutral-600">published {new Date(state.releaseDate).toLocaleDateString("en-IN")}</div>
-          )}
-
-          {/* What is in it. Rendered as TEXT, never as markup: release notes are written outside this app. */}
-          {state.notes && (
-            <div className="mt-3 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-bg-sub p-3 text-sm text-neutral-700">
-              {state.notes.replace(/<[^>]+>/g, "").trim()}
-            </div>
-          )}
-
-          {state.message && !state.notes && <p className="mt-3 text-sm text-neutral-700">{state.message}</p>}
-
-          {busyMsg && <p className="note note-warn mt-3">{busyMsg}</p>}
-
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            {phase === "ready" && (
-              <button
-                onClick={() => void install(false)}
-                disabled={working}
-                className="btn-primary flex-1"
-                title="Closes the agent, installs, and starts it again."
-              >
-                {working ? "Starting" : "Install and restart"}
-              </button>
-            )}
-            {phase !== "ready" && (
-              <button onClick={() => { setBusyMsg(null); void api?.checkNow(); }} className="btn-secondary flex-1">
-                Check for updates
-              </button>
-            )}
-          </div>
-
-          {/* The override, offered only once a refusal has actually happened. An "install anyway" shown up front invites the very thing the
-              refusal exists to prevent. */}
-          {busyMsg?.startsWith("A voucher") && (
-            <button onClick={() => void install(true)} className="btn-ghost mt-2 w-full text-warn-700">
-              Install anyway, and accept that the voucher may be cut off
-            </button>
-          )}
-
-          {phase === "ready" && (
-            <p className="mt-3 text-xs text-neutral-600">It installs on its own the next time you close the app. Nothing is lost by waiting.</p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** What the agent is doing right now, in one pill: idle, syncing (and which part), done, skipped or failed (with the actual reason, in full). */
 function SyncStateIndicator({
   isSyncing, syncingLabel, qsync,
@@ -344,42 +180,6 @@ function SyncStateIndicator({
     return <span className="pill pill-bad wrap-anywhere max-w-sm">Failed: {errMsg}</span>;
   }
   return <span className="pill">Idle</span>;
-}
-
-/**
- * The collapsible panel, one definition. A white card (20 px corner) whose header is a 44 px tap target; the body holds the panel's own rows.
- * `badge` is the one small thing worth seeing while the panel is still shut (an error count, a "new" pill).
- */
-function SectionCard({ title, icon, children, badge, defaultOpen = true, bodyClassName = "", open: openProp, onOpenChange }: {
-  title: string;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-  badge?: React.ReactNode;
-  defaultOpen?: boolean;
-  bodyClassName?: string;
-  /** Controlled mode. Three panels poll a server only while they are open, so the parent has to know. */
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-}) {
-  const [openState, setOpenState] = useState(defaultOpen);
-  const open = openProp ?? openState;
-  const setOpen = (next: boolean) => { setOpenState(next); onOpenChange?.(next); };
-  return (
-    <div className="panel">
-      <button
-        className="panel-head"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        title={open ? `Hide ${title}` : `Show ${title}`}
-      >
-        <span className="text-neutral-700">{icon}</span>
-        <h2 className="panel-title">{title}</h2>
-        {badge}
-        {open ? <ChevronUp size={16} className="text-neutral-600" /> : <ChevronDown size={16} className="text-neutral-600" />}
-      </button>
-      {open && <div className={`panel-body ${bodyClassName}`}>{children}</div>}
-    </div>
-  );
 }
 
 /**
@@ -635,20 +435,8 @@ export default function AgentStatus() {
     return () => clearInterval(id);
   }, [showFileTransfer, fetchTransfers]);
 
-  /* Over-the-air update state.
-     Read once AND subscribed: a check can resolve before this component mounts,
-     and an updater whose result nobody ever sees is the failure this feature is
-     supposed to remove, not introduce. */
-  const [update, setUpdate] = useState<UpdateState | null>(null);
-  useEffect(() => {
-    const api = (window as any).electronAPI?.update;
-    if (!api) return;               // browser/dev. There is no updater to report
-    void api.getState().then(setUpdate).catch(() => {});
-    return api.onState(setUpdate);
-  }, []);
-
-  /* The version actually RUNNING, so the panel can say "v1.4.4 ready, running
-     v1.4.3" rather than naming one number and leaving the other to memory. */
+  /* The version actually RUNNING, shown beside the title and handed to the Updates card, so "1.5.18 is ready" is always read against the version
+     that is running. */
   const [appVersion, setAppVersion] = useState<string | undefined>();
   useEffect(() => {
     void (window as any).electronAPI?.getVersion?.().then(setAppVersion).catch(() => {});
@@ -841,25 +629,16 @@ export default function AgentStatus() {
   const localServerDown = health == null;
   const company = companyName || "none";
 
-  /* The four facts, from status/agentFacts.ts — the same functions the Quick
-     View window renders from. Each knows the difference between a measured
-     value and one that was never read; the reasoning for each sits in that
-     module, next to the field it reads. */
-  /* In office (primary) mode the old push drain and its queue depth describe a queue nothing uses, so they give way to the office facts.
-     When the mode is off, the strip is exactly what it was. */
+  /* The readings, from status/agentFacts.ts and status/primaryFacts.ts: the same functions the Quick View window renders from. Each knows the
+     difference between a measured value and one that was never read; the reasoning for each sits in that module, next to the field it reads.
+     Each one now sits in the card it is about: Tally's and the online database's in their own cards, the sender's or the office computer's in the
+     sending card. In office (primary) mode the old push drain and its queue depth describe a queue nothing uses, so they give way to the office
+     readings. When the mode is off, the readings are exactly what they were. */
   const officeOn = primaryIsOn(primary);
-  const facts = officeOn
-    ? [tallyFact(health, BASE_LABEL), officeFact(primary), claimFact(primary), mirrorRunFact(primary)]
-    : [
-        tallyFact(health, BASE_LABEL),
-        drainFact(pushStatus),
-        queueFact(pushStatus),
-        cloudFact(cloudConfig, cloudMasters, cloudVouchers),
-      ];
-
-  /* Still needed below: the Supabase panel lists every channel individually,
-     and the push-queue panel says whether a depth was ever counted. */
-  const cloudOk = ![cloudConfig, cloudMasters, cloudVouchers].some((c) => c.success === false);
+  const tallyFactNow = tallyFact(health, BASE_LABEL);
+  const cloudFactNow = cloudFact(cloudConfig, cloudMasters, cloudVouchers);
+  const officeFacts = [officeFact(primary), claimFact(primary), mirrorRunFact(primary)];
+  const oldSenderFacts = [drainFact(pushStatus), queueFact(pushStatus)];
 
   /* Inbound files still waiting for this machine. Named once, because it is
      both the header badge and the thing the badge is counting. */
@@ -942,355 +721,304 @@ export default function AgentStatus() {
 
   return (
     <div className="min-h-screen bg-bg-page p-4 md:p-5">
-      <div className="mx-auto max-w-page">
-        <PageHeader
-          title="Sync agent"
-          subtitle={<>{company} · the only program here that talks to Tally</>}
-          actions={
-            <>
-              <UpdateChip state={update} currentVersion={appVersion} />
-              <SyncStateIndicator isSyncing={isSyncing} syncingLabel={syncing} qsync={qsync} />
-              <button
-                onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
-                disabled={polling}
-                title={polling ? "Already reading." : "Read everything again now. It refreshes on its own every 10 seconds."}
-                className="btn-secondary"
-              >
-                <RefreshCw size={16} className={polling ? "animate-spin" : ""} />
-                Refresh
-              </button>
-            </>
-          }
+      <div className="mx-auto flex max-w-page flex-col gap-4">
+        {/* ── The header band: the app and its version, what it is doing now, a refresh, and the Updates card right under it ───────────────── */}
+        <header className="flex flex-col gap-4">
+          <PageHeader
+            className="!mb-0"
+            title={
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                Sync agent
+                {appVersion && <Chip plain>Version {appVersion}</Chip>}
+              </span>
+            }
+            subtitle={<>{company} · the only program here that talks to Tally</>}
+            actions={
+              <>
+                <SyncStateIndicator isSyncing={isSyncing} syncingLabel={syncing} qsync={qsync} />
+                <button
+                  onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
+                  disabled={polling}
+                  title={polling ? "Already reading." : "Read everything again now. It refreshes on its own every 10 seconds."}
+                  className="btn-secondary"
+                >
+                  <RefreshCw size={16} className={polling ? "animate-spin" : ""} />
+                  Refresh
+                </button>
+              </>
+            }
+          />
+          <UpdatesCard currentVersion={appVersion} />
+        </header>
+
+        {/* ── Quick sync, with the other reads from Tally and the history behind them ─────────────────────────────────────────────────────── */}
+        <QuickSyncCard
+          ranges={quickRanges}
+          qsync={qsync}
+          connected={connected}
+          notConnectedReason={notConnectedReason}
+          company={companyName}
+          otherSyncRunning={!!syncing || isSyncing}
+          onRun={(r) => quickSync(r.label, r.from, r.to)}
+          pullActions={pullActions}
+          pullWindows={voucherWindows}
+          pullRunningLabel={syncing}
+          pullBusy={!!syncing || isSyncing || !!qsync.running}
+          history={syncHistory}
+          canReadHistory={!!sbRead}
         />
 
-        {/* The four figures worth reading before anything else. After go-live the second and third say whether the office computer is ready and
-            when it last took a job; before that they are the old push drain and queue. */}
-        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-          {facts.map((f) => (
-            <StatTile
-              key={f.label}
-              label={f.label}
-              value={f.value}
-              tone={toneToStatTile(f.tone)}
-              tint={f.attention}
-              sub={f.sub}
-            />
-          ))}
-        </div>
-
+        {/* ── The two things everything depends on: the online database and Tally ─────────────────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-
-          {/* ── The office computer (primary mode) ─────────────────────
-              Shown only when office mode is on. The old push-queue card below describes a queue nothing uses after go-live, so it is kept only
-              for a machine where office mode is off. Until the first answer arrives neither card is drawn, so a reading in progress never looks
-              like the other mode. */}
-          {officeOn && (
-            <div className="md:col-span-2">
-              <SectionCard title="Office computer" icon={<Building2 size={16} />}>
-                <PrimaryCard
-                  summary={primary}
-                  baseLabel={BASE_LABEL}
-                  onRefresh={() => void poll()}
-                  refreshing={polling}
-                  onCopy={(text) =>
-                    navigator.clipboard?.writeText(text).then(
-                      () => toast("Fingerprint copied", "success"),
-                      () => toast("It could not be copied", "error"),
-                    )
-                  }
-                />
-              </SectionCard>
-            </div>
-          )}
-
-          {/* ── Cloud / Supabase ──────────────────────────────────── */}
-          <SectionCard title="Online database" icon={cloudOk ? <Cloud size={16} /> : <CloudOff size={16} />}>
-            <SupabaseCloudPanel
-              config={cloudConfig}
-              masters={cloudMasters}
-              vouchers={cloudVouchers}
-              canRead={!!sbRead}
-              readHost={SUPA_URL ? new URL(SUPA_URL).host : null}
-              fmtTime={fmt}
-            />
-          </SectionCard>
-
-          {/* ── Tally ─────────────────────────────────────────────── */}
-          <SectionCard title="Tally" icon={connected ? <Wifi size={16} /> : <WifiOff size={16} />}>
-            <TallyPanel health={health} configuredCompany={companyName} base={BASE} />
-          </SectionCard>
-
-          {/* ── Quick Sync (Tally, then the online database) ──────── */}
-          <div className="md:col-span-2">
-            <SectionCard title="Quick sync" icon={<RefreshCw size={16} />}>
-              <QuickSyncPanel
-                ranges={quickRanges}
-                qsync={qsync}
-                connected={connected}
-                notConnectedReason={notConnectedReason}
-                company={companyName}
-                otherSyncRunning={!!syncing || isSyncing}
-                onRun={(r) => quickSync(r.label, r.from, r.to)}
-              />
-            </SectionCard>
-          </div>
-
-          {/* ── Manual sync buttons ───────────────────────────────── */}
-          <div className="md:col-span-2">
-            <SectionCard title="Manual sync from Tally" icon={<Database size={16} />}>
-              <PullSyncPanel
-                actions={pullActions}
-                windows={voucherWindows}
-                runningLabel={syncing}
-                busy={!!syncing || isSyncing || !!qsync.running}
-                blocked={pullBlocked}
-                history={syncHistory}
-                canReadHistory={!!sbRead}
-              />
-            </SectionCard>
-          </div>
-
-          {/* ── The old push queue ─────────────────────────────────
-              Only when office mode is off. It lists, drains and re-queues rows of the old push queue, which nothing feeds after go-live. */}
-          {!officeOn && primaryRead && (
-            <div className="md:col-span-2">
-              <SectionCard title="Push queue: online database to Tally" icon={<Activity size={16} />}>
-                <PushQueuePanel
-                  status={pushStatus}
-                  unreachable={pushStatusUnreachable}
-                  baseLabel={BASE_LABEL}
-                  log={pushLog}
-                  failedJobs={failedJobs}
-                  draining={draining}
-                  onDrain={drainQueue}
-                  requeueingId={requeueing}
-                  onRequeue={requeueJob}
-                  fmtTime={fmt}
-                />
-              </SectionCard>
-            </div>
-          )}
-
-          {/* ── The mirror, as this machine sees it ──────────────── */}
-          <div className="md:col-span-2">
-            <MirrorPanel showOldQueue={!officeOn} />
-          </div>
-
-          {/* ── Logs ─────────────────────────────────────────────── */}
-          <div className="md:col-span-2">
-            <SectionCard
-              title={`Logs${logs.length > 0 ? ` (${logs.length})` : ""}`}
-              icon={<Activity size={16} />}
-              open={showLogs}
-              onOpenChange={setShowLogs}
-              badge={logErrorCount > 0 ? (
-                <span className="pill pill-bad">
-                  {logErrorCount} error{logErrorCount === 1 ? "" : "s"}
-                </span>
-              ) : undefined}
-            >
-              <LogsPanel
-                logs={logs}
-                base={BASE}
-                onCopy={(text) =>
-                  navigator.clipboard?.writeText(text).then(
-                    () => toast("Logs copied", "success"),
-                    () => toast("They could not be copied", "error"),
-                  )
-                }
-              />
-            </SectionCard>
-          </div>
-
-          {/* ── Settings ─────────────────────────────────────────── */}
-          <div className="md:col-span-2">
-            <SectionCard title="Settings" icon={<Settings size={16} />} open={showSettings} onOpenChange={setShowSettings}>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {([
-                  ["Company name",                    editCompany, setEditCompany],
-                  ["Local server address",            editProxy,   setEditProxy],
-                  ["Financial year starts (YYYYMMDD)", editFyFrom,  setEditFyFrom],
-                  ["Financial year ends (YYYYMMDD)",   editFyTo,    setEditFyTo],
-                ] as [string, string, (v: string) => void][]).map(([label, val, set]) => (
-                  <label key={label} className="block">
-                    <span className="mb-1 block text-xs text-neutral-700">{label}</span>
-                    <input className="form-input" value={val} onChange={e => set(e.target.value)} />
-                  </label>
-                ))}
-
-                {/* The scheduled quick syncs are the only automatic syncs. 0 turns one off. */}
-                <div className="sm:col-span-2 mt-2">
-                  <p className="text-sm text-neutral-900">Automatic sync timing</p>
-                  <p className="text-xs text-neutral-700">
-                    Each one runs the matching quick sync: read the days from Tally, then send them to the online database. Only "Today" runs by
-                    default. Type 0 to turn one off. Nothing else syncs by itself.
-                  </p>
-                </div>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-neutral-700">Today: every how many minutes</span>
-                  <input type="number" min={0} step={1} className="form-input" value={editTodayMins} onChange={e => setEditTodayMins(e.target.value)} />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-neutral-700">Last 7 days: every how many minutes (0 is off)</span>
-                  <input type="number" min={0} step={1} className="form-input" value={editWeekMins} onChange={e => setEditWeekMins(e.target.value)} />
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-neutral-700">This financial year: every how many minutes (0 is off, heavy, use the button instead)</span>
-                  <input type="number" min={0} step={1} className="form-input" value={editFyMins} onChange={e => setEditFyMins(e.target.value)} />
-                </label>
-
-                <div className="sm:col-span-2">
-                  <Btn variant="primary" onClick={applySettings} title="Keep these on this computer and use them from now on.">
-                    Save settings
-                  </Btn>
-                </div>
-              </div>
-            </SectionCard>
-          </div>
-
-          {/* ── File transfer ────────────────────────────────────── */}
-          <div className="md:col-span-2">
-            <SectionCard
-              title="File transfer"
-              icon={<Send size={16} />}
-              open={showFileTransfer}
-              onOpenChange={setShowFileTransfer}
-              bodyClassName="space-y-4"
-              badge={incomingWaiting > 0 ? <span className="pill pill-live">{incomingWaiting} new</span> : undefined}
-            >
-              <>
-                {noBridgeReason && (
-                  <p className="note note-warn">
-                    <AlertTriangle size={16} className="mt-1 shrink-0" />
-                    <span>{noBridgeReason} The list below is still live.</span>
-                  </p>
-                )}
-
-                <div>
-                  <p className="mb-1 text-xs text-neutral-700">Incoming files are saved to</p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <code className="min-w-0 flex-1 basis-48 rounded-md bg-bg-sub px-4 py-3 text-sm wrap-anywhere">
-                      {syncFolder || "not chosen yet, so files will wait until you choose a folder"}
-                    </code>
-                    <Btn onClick={() => void chooseSyncFolder()} disabledReason={noBridgeReason}>Choose folder</Btn>
-                  </div>
-                </div>
-
-                <div>
-                  <p className="mb-1 text-xs text-neutral-700">
-                    Watch folder: drop a Tally export here and it uploads by itself
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <code className="min-w-0 flex-1 basis-48 rounded-md bg-bg-sub px-4 py-3 text-sm wrap-anywhere">
-                      {watchStatus?.dir || watchFolder || "not chosen yet, so nothing is being watched"}
-                    </code>
-                    <Btn onClick={() => void chooseWatchFolder()} disabledReason={noBridgeReason}>Choose folder</Btn>
-                  </div>
-                  {/* The path above is only the folder last CHOSEN. Whether anything is actually being watched is decided by the server. */}
-                  {watchStatus && (
-                    <p className={`mt-2 text-xs ${watchStatus.watching ? "text-neutral-700" : "text-warn-700"}`}>
-                      {watchStatus.watching
-                        ? "The server is watching this folder now."
-                        : "The server is NOT watching anything. A file dropped in this folder will just sit there."}
-                    </p>
-                  )}
-                  <p className="mt-1 text-xs text-neutral-700">
-                    It must be a different folder from the one above, or files would go back and forth forever.
-                  </p>
-                </div>
-
-                <div>
-                  <p className="mb-1 text-xs text-neutral-700">Send a file to the web dashboard</p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <input
-                      className="form-input min-w-0 flex-1 basis-48"
-                      placeholder="A note to go with it (optional)"
-                      value={transferNote}
-                      onChange={e => setTransferNote(e.target.value)}
-                    />
-                    <Btn
-                      variant="primary"
-                      onClick={() => void pushFileToWeb()}
-                      disabled={pushingFile}
-                      disabledReason={noBridgeReason ?? (companyName.trim() ? null : "No company is set in Settings, so a file has nothing to be filed under.")}
-                    >
-                      {pushingFile ? "Sending" : "Choose a file and send it"}
-                    </Btn>
-                  </div>
-                </div>
-
-                <div>
-                  <p className="mb-2 text-xs text-neutral-700">Recent transfers</p>
-                  {/* "None" was once printed for three different answers: there are none, this computer cannot read the list, and the read
-                      failed. The server now says which. */}
-                  {transfersError ? (
-                    <p className="note note-warn">
-                      <AlertTriangle size={16} className="mt-1 shrink-0" />
-                      <span>
-                        The transfer list could not be read: {transfersError}. That is not the same as there being none
-                        {transfersReadAt ? `. The last list that did come back was at ${new Date(transfersReadAt).toLocaleTimeString("en-IN")}` : ""}.
-                      </span>
-                    </p>
-                  ) : transfers.length === 0 ? (
-                    <p className="text-sm text-neutral-700">No transfers in either direction yet.</p>
-                  ) : (
-                    <ul className="tray flex max-h-72 flex-col gap-2 overflow-y-auto">
-                      {transfers.map(t => (
-                        <li key={t.id} className="flex items-center gap-3 rounded-md bg-white p-2 shadow-card">
-                          {/* Direction is a CATEGORY, not a state, so it gets no status colour: incoming takes the accent because it is the only
-                              one that can still need you; outgoing is neutral because it is done. */}
-                          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-sm bg-bg-sub">
-                            {t.direction === "web_to_desktop"
-                              ? <Download size={16} className="text-accent" />
-                              : <Upload size={16} className="text-neutral-700" />}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm wrap-anywhere">{t.filename}</div>
-                            <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-700">
-                              {t.kind && t.kind !== "unknown" && <span className="rounded-xs bg-bg-sub px-2">{KIND_LABEL[t.kind]}</span>}
-                              <span>{fmt(t.created_at)}</span>
-                            </div>
-                          </div>
-                          <span className={`pill ${
-                            t.status === "pending" ? "pill-warn"
-                            : t.status === "downloaded" ? "pill-good"
-                            : ""
-                          }`}>{t.status === "pending" ? "waiting" : t.status === "downloaded" ? "received" : "put aside"}</span>
-                          {t.direction === "web_to_desktop" && t.status === "pending" && (
-                            <button
-                              className="btn-icon shrink-0"
-                              onClick={() => void dismissTransfer(t.id)}
-                              disabled={transferBusy === t.id || !sbRead}
-                              title={sbRead ? "Put this one aside" : "This build has no read access to the online database, so it cannot put a transfer aside."}
-                              aria-label="Put this transfer aside"
-                            >
-                              {transferBusy === t.id
-                                ? <Loader2 size={16} className="animate-spin" />
-                                : <XCircle size={16} />}
-                            </button>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </>
-            </SectionCard>
-          </div>
-
-          {/* ── Updates ───────────────────────────────────────────────
-              Last, and full width: it is the only section that is not about today's work. It answers "which build am I on". */}
-          <div className="md:col-span-2">
-            <SectionCard title="Updates" icon={<Download size={16} />}>
-              <UpdatesPanel />
-            </SectionCard>
-          </div>
-
+          <SupabaseCloudCard
+            config={cloudConfig}
+            masters={cloudMasters}
+            vouchers={cloudVouchers}
+            fact={cloudFactNow}
+            canRead={!!sbRead}
+            readHost={SUPA_URL ? new URL(SUPA_URL).host : null}
+            fmtTime={fmt}
+          />
+          <TallyCard health={health} fact={tallyFactNow} configuredCompany={companyName} base={BASE} />
         </div>
+
+        {/* ── Sending to Tally ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+            Office mode: the office computer's card, which carries the office readings. Otherwise the old push queue, which lists, drains and
+            re-queues rows of a queue nothing feeds after go-live. Until the first answer arrives neither card is drawn, so a reading in progress
+            never looks like the other mode. */}
+        {officeOn ? (
+          <PrimaryCard
+            summary={primary}
+            facts={officeFacts}
+            baseLabel={BASE_LABEL}
+            onRefresh={() => void poll()}
+            refreshing={polling}
+            onCopy={(text) =>
+              navigator.clipboard?.writeText(text).then(
+                () => toast("Fingerprint copied", "success"),
+                () => toast("It could not be copied", "error"),
+              )
+            }
+          />
+        ) : primaryRead ? (
+          <PushQueueCard
+            status={pushStatus}
+            unreachable={pushStatusUnreachable}
+            baseLabel={BASE_LABEL}
+            log={pushLog}
+            failedJobs={failedJobs}
+            draining={draining}
+            onDrain={drainQueue}
+            requeueingId={requeueing}
+            onRequeue={requeueJob}
+            fmtTime={fmt}
+            facts={oldSenderFacts}
+          />
+        ) : null}
+
+        {/* ── The mirror, as this machine sees it ─────────────────────────────────────────────────────────────────────────────────────── */}
+        <MirrorPanel showOldQueue={!officeOn} />
+
+        {/* ── File transfer ───────────────────────────────────────────────────────────────────────────────────────────────────────────── */}
+        <Card
+          collapsible
+          icon={Send}
+          title="File transfer"
+          sub="Files that move between this computer and the web dashboard."
+          chip={incomingWaiting > 0 ? <Chip tone="info">{incomingWaiting} new</Chip> : undefined}
+          defaultOpen={false}
+          open={showFileTransfer}
+          onOpenChange={setShowFileTransfer}
+        >
+          {noBridgeReason && (
+            <Note tone="warn" icon={AlertTriangle}>
+              <p>{noBridgeReason} The list below is still live.</p>
+            </Note>
+          )}
+
+          <Tile title="Incoming files are saved to">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="field-read min-w-0 flex-1 basis-48 wrap-anywhere">
+                {syncFolder || "not chosen yet, so files will wait until you choose a folder"}
+              </div>
+              <Btn onClick={() => void chooseSyncFolder()} disabledReason={noBridgeReason}>Choose folder</Btn>
+            </div>
+          </Tile>
+
+          <Tile title="Watch folder" aside="drop a Tally export here and it uploads by itself">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="field-read min-w-0 flex-1 basis-48 wrap-anywhere">
+                {watchStatus?.dir || watchFolder || "not chosen yet, so nothing is being watched"}
+              </div>
+              <Btn onClick={() => void chooseWatchFolder()} disabledReason={noBridgeReason}>Choose folder</Btn>
+            </div>
+            {/* The path above is only the folder last CHOSEN. Whether anything is actually being watched is decided by the server. */}
+            {watchStatus && (
+              <p className="mt-3 flex items-center gap-2">
+                <Chip tone={watchStatus.watching ? "good" : "warn"}>{watchStatus.watching ? "Watching" : "Not watching"}</Chip>
+                <span className={`text-xs ${watchStatus.watching ? "text-neutral-700" : "text-warn-700"}`}>
+                  {watchStatus.watching
+                    ? "The server is watching this folder now."
+                    : "The server is NOT watching anything. A file dropped in this folder will just sit there."}
+                </span>
+              </p>
+            )}
+            <p className="mt-2 text-xs text-neutral-700">
+              It must be a different folder from the one above, or files would go back and forth forever.
+            </p>
+          </Tile>
+
+          <Tile title="Send a file to the web dashboard">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className="form-input min-w-0 flex-1 basis-48"
+                placeholder="A note to go with it (optional)"
+                aria-label="A note to go with the file"
+                value={transferNote}
+                onChange={e => setTransferNote(e.target.value)}
+              />
+              <Btn
+                variant="primary"
+                onClick={() => void pushFileToWeb()}
+                disabled={pushingFile}
+                disabledReason={noBridgeReason ?? (companyName.trim() ? null : "No company is set in Settings, so a file has nothing to be filed under.")}
+              >
+                {pushingFile ? "Sending" : "Choose a file and send it"}
+              </Btn>
+            </div>
+          </Tile>
+
+          <Tile title="Recent transfers">
+            {/* "None" was once printed for three different answers: there are none, this computer cannot read the list, and the read failed.
+                The server now says which. */}
+            {transfersError ? (
+              <Note tone="warn" icon={AlertTriangle}>
+                <p>
+                  The transfer list could not be read: {transfersError}. That is not the same as there being none
+                  {transfersReadAt ? `. The last list that did come back was at ${new Date(transfersReadAt).toLocaleTimeString("en-IN")}` : ""}.
+                </p>
+              </Note>
+            ) : transfers.length === 0 ? (
+              <p className="text-sm text-neutral-700">No transfers in either direction yet.</p>
+            ) : (
+              <div className="max-h-72 overflow-y-auto">
+                <RowList>
+                  {transfers.map(t => (
+                    <Row
+                      key={t.id}
+                      /* Direction is a CATEGORY, not a state, so it gets no status colour: incoming takes the accent because it is the only one
+                         that can still need you; outgoing is neutral because it is done. */
+                      icon={t.direction === "web_to_desktop" ? Download : Upload}
+                      tone={t.direction === "web_to_desktop" ? "accent" : "neutral"}
+                      title={t.filename}
+                      meta={<>{t.kind && t.kind !== "unknown" ? `${KIND_LABEL[t.kind]}, ` : ""}{fmt(t.created_at)}</>}
+                      chip={
+                        <Chip tone={t.status === "pending" ? "warn" : t.status === "downloaded" ? "good" : "neutral"}>
+                          {t.status === "pending" ? "waiting" : t.status === "downloaded" ? "received" : "put aside"}
+                        </Chip>
+                      }
+                      action={
+                        t.direction === "web_to_desktop" && t.status === "pending" ? (
+                          <button
+                            className="btn-icon shrink-0"
+                            onClick={() => void dismissTransfer(t.id)}
+                            disabled={transferBusy === t.id || !sbRead}
+                            title={sbRead ? "Put this one aside" : "This build has no read access to the online database, so it cannot put a transfer aside."}
+                            aria-label="Put this transfer aside"
+                          >
+                            {transferBusy === t.id ? <Loader2 size={16} className="animate-spin" /> : <XCircle size={16} />}
+                          </button>
+                        ) : undefined
+                      }
+                    />
+                  ))}
+                </RowList>
+              </div>
+            )}
+          </Tile>
+        </Card>
+
+        {/* ── Settings ────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */}
+        <Card
+          collapsible
+          icon={Settings}
+          title="Settings"
+          sub="The company this computer syncs as, the financial year, and how often it syncs by itself."
+          defaultOpen={false}
+          open={showSettings}
+          onOpenChange={setShowSettings}
+        >
+          <Tile title="Company and financial year">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {([
+                ["Company name",                     editCompany, setEditCompany],
+                ["Local server address",             editProxy,   setEditProxy],
+                ["Financial year starts (YYYYMMDD)", editFyFrom,  setEditFyFrom],
+                ["Financial year ends (YYYYMMDD)",   editFyTo,    setEditFyTo],
+              ] as [string, string, (v: string) => void][]).map(([label, val, set]) => (
+                <label key={label} className="block">
+                  <span className="mb-1 block text-sm text-neutral-700">{label}</span>
+                  <input className="form-input" value={val} onChange={e => set(e.target.value)} />
+                </label>
+              ))}
+            </div>
+          </Tile>
+
+          {/* The scheduled quick syncs are the only automatic syncs. 0 turns one off. */}
+          <Tile title="Automatic sync timing">
+            <p className="mb-3 text-sm text-neutral-700">
+              Each one runs the matching quick sync: read the days from Tally, then send them to the online database. Only "Today" runs by
+              default. Type 0 to turn one off. Nothing else syncs by itself.
+            </p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <label className="flex flex-col">
+                <span className="mb-1 block text-sm text-neutral-700">Today: every how many minutes</span>
+                <input type="number" min={0} step={1} className="form-input mt-auto" value={editTodayMins} onChange={e => setEditTodayMins(e.target.value)} />
+              </label>
+              <label className="flex flex-col">
+                <span className="mb-1 block text-sm text-neutral-700">Last 7 days: every how many minutes (0 is off)</span>
+                <input type="number" min={0} step={1} className="form-input mt-auto" value={editWeekMins} onChange={e => setEditWeekMins(e.target.value)} />
+              </label>
+              <label className="flex flex-col">
+                <span className="mb-1 block text-sm text-neutral-700">This financial year: every how many minutes (0 is off, heavy, use the button instead)</span>
+                <input type="number" min={0} step={1} className="form-input mt-auto" value={editFyMins} onChange={e => setEditFyMins(e.target.value)} />
+              </label>
+            </div>
+          </Tile>
+
+          <div className="px-3 pb-1 pt-1">
+            <Btn variant="primary" onClick={applySettings} title="Keep these on this computer and use them from now on.">
+              Save settings
+            </Btn>
+          </div>
+        </Card>
+
+        {/* ── Logs, last ──────────────────────────────────────────────────────────────────────────────────────────────────────────────── */}
+        <Card
+          collapsible
+          icon={Terminal}
+          title={`Logs${logs.length > 0 ? ` (${logs.length})` : ""}`}
+          sub="What this app's server has been doing, line by line."
+          defaultOpen={false}
+          open={showLogs}
+          onOpenChange={setShowLogs}
+          chip={logErrorCount > 0 ? <Chip tone="bad">{logErrorCount} error{logErrorCount === 1 ? "" : "s"}</Chip> : undefined}
+        >
+          <LogsPanel
+            logs={logs}
+            base={BASE}
+            onCopy={(text) =>
+              navigator.clipboard?.writeText(text).then(
+                () => toast("Logs copied", "success"),
+                () => toast("They could not be copied", "error"),
+              )
+            }
+          />
+        </Card>
 
         {/* `agentId` is the computer's name and a number, from the server. When it is missing the server did not answer, which is a fact about
             this app and not an agent named "none". */}
-        <p className="mt-6 text-center text-xs text-neutral-700">
+        <p className="text-center text-xs text-neutral-700">
           {pushStatus?.agentId
             ? `Agent: ${pushStatus.agentId}`
             : "The local server is not answering, so this window cannot name the agent."}

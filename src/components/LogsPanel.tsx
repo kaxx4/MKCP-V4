@@ -35,6 +35,7 @@
 import { useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import { AlertTriangle, ClipboardCopy, Terminal } from "lucide-react";
+import { Note, Tile } from "./ui";
 
 export type LogFilter = "all" | "errors" | "tally" | "supabase" | "remote" | "auto";
 
@@ -91,27 +92,26 @@ export function LogsPanel({ logs, base, onCopy }: Props) {
   }, [logs, filter]);
 
   return (
-    <div className="space-y-4">
-      {/* 1 — what needs a person */}
+    <>
+      {/* 1: what needs a person */}
       {errorCount > 0 && filter !== "errors" && (
-        <div className="note note-bad">
-          <AlertTriangle size={16} className="mt-1 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <p className="font-medium">
-              {errorCount} line{errorCount === 1 ? "" : "s"} below {errorCount === 1 ? "reports" : "report"} an error.
-            </p>
-            <p className="mt-1">
-              Only the last {logs.length} lines are kept, so an error that has scrolled off is gone. Copy it
-              before closing or restarting anything.
-            </p>
+        <Note tone="bad" icon={AlertTriangle}>
+          <p className="font-medium">
+            {errorCount} line{errorCount === 1 ? "" : "s"} below {errorCount === 1 ? "reports" : "report"} an error.
+          </p>
+          <p>
+            Only the last {logs.length} lines are kept, so an error that has scrolled off is gone. Copy it
+            before closing or restarting anything.
+          </p>
+          <div className="pt-2">
+            <button onClick={() => setFilter("errors")} className="btn-secondary">
+              Show only these
+            </button>
           </div>
-          <button onClick={() => setFilter("errors")} className="btn-secondary shrink-0">
-            Show only these
-          </button>
-        </div>
+        </Note>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 px-3 pt-1">
         {FILTERS.map(([key, label]) => (
           <button
             key={key}
@@ -130,46 +130,50 @@ export function LogsPanel({ logs, base, onCopy }: Props) {
         </button>
       </div>
 
-      <div
-        ref={boxRef}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-        }}
-        className="tray h-80 overflow-y-auto font-mono text-xs"
-      >
-        {visible.length === 0 ? (
-          <span className="font-sans text-sm text-neutral-700">
-            {logs.length === 0
-              ? "Nothing yet. This app writes here as it works. Run a sync and lines will appear."
-              : `No ${filter === "all" ? "" : FILTERS.find(([k]) => k === filter)?.[1].toLowerCase() + " "}lines are held right now.`}
-          </span>
-        ) : (
-          visible.map((line, i) => (
-            <div
-              key={i}
-              className={clsx(
-                "whitespace-pre-wrap wrap-anywhere",
-                /* The same tokens as everywhere else. "Failed" is one red. */
-                isErrorLine(line) ? "text-danger-700"
-                : /⚠/.test(line) ? "text-warn-700"
-                : /✓/.test(line) ? "text-success-700"
-                : /🌐|🌙/.test(line) ? "text-accent-700"
-                : "text-neutral-700",
-              )}
-            >
-              {plainLine(line)}
-            </div>
-          ))
-        )}
-      </div>
+      <Tile>
+        <div
+          ref={boxRef}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          }}
+          className="h-80 overflow-y-auto font-mono text-xs"
+        >
+          {visible.length === 0 ? (
+            <span className="font-sans text-sm text-neutral-700">
+              {logs.length === 0
+                ? "Nothing yet. This app writes here as it works. Run a sync and lines will appear."
+                : `No ${filter === "all" ? "" : FILTERS.find(([k]) => k === filter)?.[1].toLowerCase() + " "}lines are held right now.`}
+            </span>
+          ) : (
+            visible.map((line, i) => (
+              <div
+                key={i}
+                className={clsx(
+                  "whitespace-pre-wrap wrap-anywhere",
+                  /* The same tokens as everywhere else. "Failed" is one red. */
+                  isErrorLine(line) ? "text-danger-700"
+                  : /⚠/.test(line) ? "text-warn-700"
+                  : /✓/.test(line) ? "text-success-700"
+                  : /🌐|🌙/.test(line) ? "text-accent-700"
+                  : "text-neutral-700",
+                )}
+              >
+                {plainLine(line)}
+              </div>
+            ))
+          )}
+        </div>
+      </Tile>
 
-      <p className="flex items-start gap-2 text-xs text-neutral-700">
-        <Terminal size={16} className="mt-1 shrink-0" />
-        The latest lines from this app's server: {logs.length} line{logs.length === 1 ? "" : "s"} held, refreshed every 2 seconds.
-        The same lines are also shown as a web page at {base}/, which stays available when this window is closed.
+      <p className="flex items-start gap-3 px-3 text-xs text-neutral-700">
+        <span className="grid h-5 w-5 shrink-0 place-items-center"><Terminal size={16} aria-hidden="true" /></span>
+        <span>
+          The latest lines from this app's server: {logs.length} line{logs.length === 1 ? "" : "s"} held, refreshed every 2 seconds.
+          The same lines are also shown as a web page at {base}/, which stays available when this window is closed.
+        </span>
       </p>
-    </div>
+    </>
   );
 }
 
