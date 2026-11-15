@@ -4,7 +4,7 @@ import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 import {
   Wifi, WifiOff, RefreshCw, Cloud, CloudOff, CheckCircle, XCircle,
   Clock, Activity, ChevronDown, ChevronUp, Settings, Database,
-  AlertTriangle, Loader2, Send, Upload, Download, Tag, CalendarRange, PackageSearch,
+  AlertTriangle, Loader2, Send, Upload, Download, Tag, CalendarRange, PackageSearch, Building2,
 } from "lucide-react";
 import { useTallyStore } from "./store/tallyStore";
 import { useSupabaseSyncStatusStore } from "./store/supabaseSyncStatusStore";
@@ -16,6 +16,7 @@ import { MirrorPanel } from "./MirrorPanel";
 import { PageHeader } from "./components/PageHeader";
 import { StatTile } from "./components/StatTile";
 import { PushQueuePanel } from "./components/PushQueuePanel";
+import { PrimaryCard } from "./components/PrimaryCard";
 /* The five panels below were inline in this file. Each is rebuilt on the web
    dashboard's idiom the way PushQueuePanel was — see each file's header for
    what the old version got wrong and why the new one is shaped as it is. */
@@ -29,6 +30,8 @@ import { UpdatesPanel } from "./components/UpdatesPanel";
    lives in one module rather than in whichever window was edited last. The part
    that must not drift is telling "zero" apart from "never counted". */
 import { tallyFact, drainFact, queueFact, cloudFact, toneToStatTile } from "./status/agentFacts";
+/* After go-live the office agent runs in primary mode. These are the same plain-English facts the Quick View window reads. */
+import { officeFact, claimFact, mirrorRunFact, primaryIsOn, type PrimarySummaryLike } from "./status/primaryFacts";
 
 const SUPA_URL = (import.meta as any).env?.VITE_SUPABASE_URL as string | undefined;
 const SUPA_ANON = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -127,7 +130,7 @@ interface FailedQueueRow {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return "none";
   /* en-IN explicitly. The default locale rendered `9/15/2026 12:04:54 PM`
      next to rows formatted `15/9/2026, 12:04:54 pm` — the same instant in two
      notations, one line apart. */
@@ -159,21 +162,13 @@ interface UpdateState {
 }
 
 /**
- * The update control — what is available, what is in it, and install it now.
+ * The update control: what is available, what is in it, and install it now. It is not only a status chip, because this process owns Tally's
+ * single-threaded port and works the job queue, so "the next time you close it" can be days away.
  *
- * It was a status chip and nothing more: it told you a version was ready and
- * then made you quit the app to get it. On a machine that is deliberately left
- * running — this one owns Tally's port and drains the push queue — "the next
- * time you close it" can be days, so a fix could sit downloaded and unused for
- * a week. Asked for directly on 16-Sep-2026.
- *
- * Three things it must do that a chip could not:
- *   · say WHAT is in the release, so accepting a restart is not an act of
- *     faith in a version number;
- *   · install on demand;
- *   · refuse to do that while a voucher push is in flight — see `installNow`
- *     in autoUpdate.js. Quitting then ends the push between "Tally created it"
- *     and "the queue row says so".
+ *   - it says WHAT is in the release, so accepting a restart is not an act of faith in a version number;
+ *   - it installs on demand;
+ *   - it refuses while a voucher is being sent to Tally (see `installNow` in autoUpdate.js): quitting then ends the send between "Tally made it"
+ *     and "the queue says so".
  */
 function UpdateChip({ state, currentVersion }: { state: UpdateState | null; currentVersion?: string }) {
   const [open, setOpen] = useState(false);
@@ -181,8 +176,7 @@ function UpdateChip({ state, currentVersion }: { state: UpdateState | null; curr
   const [working, setWorking] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
 
-  /* Close on an outside click or Escape — a panel that can only be dismissed by
-     the control that opened it traps a mis-tap. */
+  /* Close on an outside click or Escape: a panel that can only be dismissed by the control that opened it traps a mis-tap. */
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -208,28 +202,28 @@ function UpdateChip({ state, currentVersion }: { state: UpdateState | null; curr
       if (r && !r.ok) {
         setBusyMsg(
           r.reason === "busy"
-            ? "A voucher is being pushed to Tally right now. Installing would cut it off mid-push."
+            ? "A voucher is being sent to Tally right now. Installing would cut it off halfway."
             : r.reason,
         );
       }
     } catch (e) {
-      setBusyMsg(e instanceof Error ? e.message : "Couldn't start the install.");
+      setBusyMsg(e instanceof Error ? e.message : "The install could not be started.");
     } finally {
       setWorking(false);
     }
   }
 
   const tone =
-    phase === "ready" ? "border-success-200 bg-success-50 text-success-700"
-    : phase === "error" ? "border-warn-200 bg-warn-50 text-warn-800"
-    : "border-neutral-200 bg-white text-neutral-600";
+    phase === "ready" ? "bg-success-soft text-success-700"
+    : phase === "error" ? "bg-warn-soft text-warn-700"
+    : "bg-white text-neutral-900";
 
   const label =
-    phase === "downloading" ? `Update${typeof percent === "number" ? ` ${percent}%` : "…"}`
-    : phase === "ready" ? (version ? `v${version} ready` : "Update ready")
-    : phase === "installing" ? "Restarting…"
-    : phase === "checking" ? "Checking…"
-    : phase === "current" ? (currentVersion ? `v${currentVersion}` : "Up to date")
+    phase === "downloading" ? `Update${typeof percent === "number" ? ` ${percent}%` : " downloading"}`
+    : phase === "ready" ? (version ? `Version ${version} ready` : "Update ready")
+    : phase === "installing" ? "Restarting"
+    : phase === "checking" ? "Checking for updates"
+    : phase === "current" ? (currentVersion ? `Version ${currentVersion}` : "Up to date")
     : "Update check failed";
 
   return (
@@ -238,93 +232,69 @@ function UpdateChip({ state, currentVersion }: { state: UpdateState | null; curr
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="dialog"
-        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold ${tone}`}
-        title="Updates — what is available and what is in it"
+        className={`filter-chip ${tone}`}
+        title="Updates: what is available and what is in it"
       >
-        <span className={`h-1.5 w-1.5 rounded-full ${
-          phase === "ready" ? "bg-success-600"
-          : phase === "error" ? "bg-warn-600"
-          : phase === "downloading" || phase === "checking" ? "bg-accent animate-pulse"
-          : "bg-neutral-400"}`} />
         {label}
-        <ChevronDown size={12} className={open ? "rotate-180 transition-transform" : "transition-transform"} />
+        <ChevronDown size={16} className={open ? "rotate-180 transition-transform" : "transition-transform"} />
       </button>
 
       {open && (
         <div
           role="dialog"
           aria-label="Updates"
-          className="absolute right-0 z-50 mt-1.5 w-[320px] rounded-xl border border-neutral-200 bg-white p-3 shadow-lg"
+          className="absolute right-0 z-modal mt-2 w-80 rounded-lg bg-white p-4 shadow-menu animate-fade-in"
         >
           <div className="flex items-baseline justify-between gap-2">
-            <span className="text-[13px] font-semibold text-neutral-900">
-              {phase === "ready" || phase === "downloading" ? `Version ${version ?? "?"}` : "Updates"}
+            <span className="font-display text-lg text-neutral-950">
+              {phase === "ready" || phase === "downloading" ? `Version ${version ?? "unknown"}` : "Updates"}
             </span>
-            {currentVersion && (
-              <span className="text-[11px] text-neutral-500">running v{currentVersion}</span>
-            )}
+            {currentVersion && <span className="text-xs text-neutral-600">running version {currentVersion}</span>}
           </div>
 
           {state.releaseDate && (
-            <div className="mt-0.5 text-[11px] text-neutral-500">
-              published {new Date(state.releaseDate).toLocaleDateString()}
-            </div>
+            <div className="mt-1 text-xs text-neutral-600">published {new Date(state.releaseDate).toLocaleDateString("en-IN")}</div>
           )}
 
-          {/* What is in it. Rendered as TEXT, never as markup — release notes
-              are authored outside this app and a renderer that injects them is
-              a renderer that trusts a remote string. */}
+          {/* What is in it. Rendered as TEXT, never as markup: release notes are written outside this app. */}
           {state.notes && (
-            <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-neutral-50 p-2 text-[11.5px] leading-snug text-neutral-700">
+            <div className="mt-3 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-bg-sub p-3 text-sm text-neutral-700">
               {state.notes.replace(/<[^>]+>/g, "").trim()}
             </div>
           )}
 
-          {state.message && !state.notes && (
-            <p className="mt-2 text-[11.5px] text-neutral-600">{state.message}</p>
-          )}
+          {state.message && !state.notes && <p className="mt-3 text-sm text-neutral-700">{state.message}</p>}
 
-          {busyMsg && (
-            <p className="mt-2 rounded-lg bg-warn-50 p-2 text-[11.5px] font-medium text-warn-800">{busyMsg}</p>
-          )}
+          {busyMsg && <p className="note note-warn mt-3">{busyMsg}</p>}
 
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-4 flex flex-wrap items-center gap-2">
             {phase === "ready" && (
               <button
                 onClick={() => void install(false)}
                 disabled={working}
-                className="btn-primary btn-sm flex-1 disabled:opacity-50"
+                className="btn-primary flex-1"
                 title="Closes the agent, installs, and starts it again."
               >
-                {working ? "Starting…" : "Install and restart"}
+                {working ? "Starting" : "Install and restart"}
               </button>
             )}
             {phase !== "ready" && (
-              <button
-                onClick={() => { setBusyMsg(null); void api?.checkNow(); }}
-                className="btn-secondary btn-sm flex-1"
-              >
+              <button onClick={() => { setBusyMsg(null); void api?.checkNow(); }} className="btn-secondary flex-1">
                 Check for updates
               </button>
             )}
           </div>
 
-          {/* The override, and only once refusing has actually happened. An
-              "install anyway" offered up front invites the very thing the
+          {/* The override, offered only once a refusal has actually happened. An "install anyway" shown up front invites the very thing the
               refusal exists to prevent. */}
           {busyMsg?.startsWith("A voucher") && (
-            <button
-              onClick={() => void install(true)}
-              className="mt-2 w-full text-[11px] font-semibold text-warn-800 underline"
-            >
-              Install anyway — I accept the push may be cut off
+            <button onClick={() => void install(true)} className="btn-ghost mt-2 w-full text-warn-700">
+              Install anyway, and accept that the voucher may be cut off
             </button>
           )}
 
           {phase === "ready" && (
-            <p className="mt-2 text-[10.5px] leading-snug text-neutral-500">
-              It installs on its own the next time you close the app. Nothing is lost by waiting.
-            </p>
+            <p className="mt-3 text-xs text-neutral-600">It installs on its own the next time you close the app. Nothing is lost by waiting.</p>
           )}
         </div>
       )}
@@ -332,6 +302,7 @@ function UpdateChip({ state, currentVersion }: { state: UpdateState | null; curr
   );
 }
 
+/** What the agent is doing right now, in one pill: idle, syncing (and which part), done, skipped or failed (with the actual reason, in full). */
 function SyncStateIndicator({
   isSyncing, syncingLabel, qsync,
 }: {
@@ -340,87 +311,53 @@ function SyncStateIndicator({
   qsync: import("./store/quickSyncStore").QuickSyncState;
 }) {
   if (qsync.running) {
-    const phaseLabel = qsync.phase === "push" ? "Pushing to Supabase…" : "Pulling from Tally…";
+    const phaseLabel = qsync.phase === "push" ? "sending to the online database" : "reading from Tally";
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-accent/10 text-accent-700">
-        <Loader2 size={12} className="animate-spin" /> Syncing · {phaseLabel}
+      <span className="pill pill-live">
+        <Loader2 size={16} className="animate-spin" /> Syncing, {phaseLabel}
       </span>
     );
   }
   if (isSyncing) {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-accent/10 text-accent-700">
-        <Loader2 size={12} className="animate-spin" /> Syncing{syncingLabel ? ` · ${syncingLabel}` : ""}
+      <span className="pill pill-live">
+        <Loader2 size={16} className="animate-spin" /> Syncing{syncingLabel ? `, ${syncingLabel}` : ""}
       </span>
     );
   }
-  // Skip is only shown while it's newer than the last real finish — a subsequent
-  // completed sync naturally supersedes it via this comparison, no separate
-  // "clear" action needed (single source of truth: the timestamps).
+  // A skip shows only while it is newer than the last real finish; a later completed sync supersedes it by the timestamps alone.
   if (qsync.lastSkipped && (!qsync.finishedAt || qsync.lastSkipped.at > qsync.finishedAt)) {
     const reasonLabel = qsync.lastSkipped.reason === "sync-in-progress"
       ? "another sync was already running"
       : qsync.lastSkipped.reason === "not-connected"
-        ? "Tally not connected"
-        : "no company configured";
-    return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-warn-soft text-warn-800">
-        <AlertTriangle size={12} /> {qsync.lastSkipped.label} sync skipped — {reasonLabel}
-      </span>
-    );
+        ? "Tally was not connected"
+        : "no company is set";
+    return <span className="pill pill-warn">{qsync.lastSkipped.label} sync skipped, {reasonLabel}</span>;
   }
   if (qsync.finishedAt) {
-    if (qsync.ok) {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-success/10 text-success-700">
-          <CheckCircle size={12} /> Synced {fmt(qsync.finishedAt)}
-        </span>
-      );
-    }
+    if (qsync.ok) return <span className="pill pill-good">Synced {fmt(qsync.finishedAt)}</span>;
     const errMsg = qsync.tally && !qsync.tally.ok
-      ? qsync.tally.error || "Tally pull failed"
+      ? qsync.tally.error || "The read from Tally failed"
       : qsync.push && !qsync.push.ok
-        ? qsync.push.vouchersErr || qsync.push.configErr || "Supabase push failed"
-        : "Sync failed";
-    return (
-      <span
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-danger-soft text-danger-700 max-w-[360px] truncate"
-        title={errMsg}
-      >
-        <XCircle size={12} className="shrink-0" /> Failed · {errMsg}
-      </span>
-    );
+        ? qsync.push.vouchersErr || qsync.push.configErr || "The send to the online database failed"
+        : "The sync failed";
+    return <span className="pill pill-bad wrap-anywhere max-w-sm">Failed: {errMsg}</span>;
   }
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-neutral-100 text-neutral-500">
-      <Clock size={12} /> Idle
-    </span>
-  );
+  return <span className="pill">Idle</span>;
 }
 
 /**
- * The collapsible panel — ONE definition.
- *
- * Logs, Settings and File transfer each hand-rolled this same card and header
- * inline further down, because SectionCard could not carry the small badge
- * their headers needed (an error count, a "new" pill). Four copies of one
- * shape, so an affordance had to be fixed four times and was not: none of the
- * four said `aria-expanded`, none had a hover state, and the header was 44px
- * only by the accident of its padding. Adding a `badge` slot collapses them
- * into this. (15-Sep-2026)
+ * The collapsible panel, one definition. A white card (20 px corner) whose header is a 44 px tap target; the body holds the panel's own rows.
+ * `badge` is the one small thing worth seeing while the panel is still shut (an error count, a "new" pill).
  */
-function SectionCard({ title, icon, children, badge, defaultOpen = true, bodyClassName = "px-4 py-3", open: openProp, onOpenChange }: {
+function SectionCard({ title, icon, children, badge, defaultOpen = true, bodyClassName = "", open: openProp, onOpenChange }: {
   title: string;
   icon: React.ReactNode;
   children: React.ReactNode;
-  /** Small trailing note in the header — the one thing worth seeing while the
-   *  panel is still closed. */
   badge?: React.ReactNode;
   defaultOpen?: boolean;
   bodyClassName?: string;
-  /** Controlled mode. Three panels poll a server only while they are open, so
-   *  the parent has to know — Logs refreshes its tail every 2s, File transfer
-   *  its list every 10s, and both are deliberately quiet while shut. */
+  /** Controlled mode. Three panels poll a server only while they are open, so the parent has to know. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
@@ -428,36 +365,27 @@ function SectionCard({ title, icon, children, badge, defaultOpen = true, bodyCla
   const open = openProp ?? openState;
   const setOpen = (next: boolean) => { setOpenState(next); onOpenChange?.(next); };
   return (
-    <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+    <div className="panel">
       <button
-        className="flex min-h-11 w-full items-center gap-2 border-b border-neutral-100 bg-neutral-50 px-4 py-3 text-left transition-colors hover:bg-neutral-100"
+        className="panel-head"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         title={open ? `Hide ${title}` : `Show ${title}`}
       >
-        <span className="text-neutral-500">{icon}</span>
-        <h2 className="font-semibold text-sm text-neutral-700 flex-1">{title}</h2>
+        <span className="text-neutral-700">{icon}</span>
+        <h2 className="panel-title">{title}</h2>
         {badge}
-        {open ? <ChevronUp size={14} className="text-neutral-400" /> : <ChevronDown size={14} className="text-neutral-400" />}
+        {open ? <ChevronUp size={16} className="text-neutral-600" /> : <ChevronDown size={16} className="text-neutral-600" />}
       </button>
-      {open && <div className={bodyClassName}>{children}</div>}
+      {open && <div className={`panel-body ${bodyClassName}`}>{children}</div>}
     </div>
   );
 }
 
 /**
- * The small button used by Settings and File transfer.
- *
- * It used to carry its own three-variant palette — `bg-blue-600`,
- * `bg-red-50 text-red-700` — which meant the agent's "danger" was a different
- * red from the danger in every panel beside it and from the web dashboard's.
- * It now composes the shared `.btn-*` classes in index.css, which is the same
- * vocabulary the rebuilt panels use, so there is one definition of each state.
- *
- * `disabledReason` is not decoration: a flat grey button that says nothing is
- * the difference between a two-second fix and a hunt through the log. When it
- * is given, it becomes the tooltip AND the accessible description, and the
- * button is disabled from that fact rather than from a separate flag.
+ * The small button used by Settings and File transfer. `disabledReason` is not decoration: a flat grey button that says nothing is the difference
+ * between a two-second fix and a hunt through the log. When it is given it becomes the tooltip AND the accessible description, and the button is
+ * disabled from that fact rather than from a separate flag.
  */
 function Btn({ onClick, disabled, disabledReason, children, variant = "secondary", title }: {
   onClick: () => void;
@@ -476,12 +404,13 @@ function Btn({ onClick, disabled, disabledReason, children, variant = "secondary
       disabled={off}
       title={disabledReason ?? title}
       aria-description={disabledReason ?? undefined}
-      className={`${cls} btn-sm tap-y shrink-0`}
+      className={`${cls} shrink-0`}
     >
       {children}
     </button>
   );
 }
+
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function AgentStatus() {
@@ -524,6 +453,10 @@ export default function AgentStatus() {
   const [health, setHealth] = useState<TallyHealth | null>(null);
   const [pushStatus, setPushStatus] = useState<PushAgentStatus | null>(null);
   const [pushStatusUnreachable, setPushStatusUnreachable] = useState(false);
+  /* The office computer's answer (GET /api/primary/summary). Null until read, and also null when the local server did not answer;
+     `primaryRead` tells the two apart so an unread card is not shown as a failed one. */
+  const [primary, setPrimary] = useState<PrimarySummaryLike | null>(null);
+  const [primaryRead, setPrimaryRead] = useState(false);
   const [polling, setPolling] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [draining, setDraining] = useState(false);
@@ -598,18 +531,21 @@ export default function AgentStatus() {
       const r = await fetch(`${BASE}/api/tally/logs`);
       const lines = await r.json();
       if (Array.isArray(lines)) setLogs(lines as string[]);
-    } catch { /* server not up yet — ignore */ }
+    } catch { /* server not up yet. Ignore */ }
   }, []);
 
   // ── Poll — only hits local server endpoints (not Supabase) ───────────────
   const poll = useCallback(async () => {
     setPolling(true);
     try {
-      const [h, p] = await Promise.all([
+      const [h, p, office] = await Promise.all([
         fetch(`${BASE}/api/tally/health`).then(r => r.json()).catch(() => null),
         fetch(`${BASE}/api/push-agent/status`).then(r => r.json()).catch(() => null),
+        fetch(`${BASE}/api/primary/summary`).then(r => (r.ok ? r.json() : null)).catch(() => null),
       ]);
       setHealth(h);
+      setPrimary(office);
+      setPrimaryRead(true);
       if (h != null) setConnected(!!h.connected);
       setPushStatus(p);
       // A completed poll with no payload = the local server is down/unreachable,
@@ -706,7 +642,7 @@ export default function AgentStatus() {
   const [update, setUpdate] = useState<UpdateState | null>(null);
   useEffect(() => {
     const api = (window as any).electronAPI?.update;
-    if (!api) return;               // browser/dev — there is no updater to report
+    if (!api) return;               // browser/dev. There is no updater to report
     void api.getState().then(setUpdate).catch(() => {});
     return api.onState(setUpdate);
   }, []);
@@ -734,7 +670,7 @@ export default function AgentStatus() {
   const desktopBridge = typeof window !== "undefined" && !!(window as any).electronAPI;
   const noBridgeReason = desktopBridge
     ? null
-    : "Only the installed desktop app can open a folder picker — this window is running in a browser.";
+    : "Only the installed desktop app can open a folder picker. This window is running in a browser.";
 
   const chooseWatchFolder = useCallback(async () => {
     const api = (window as any).electronAPI;
@@ -742,7 +678,7 @@ export default function AgentStatus() {
     const res = await api.pickWatchFolder();
     if (res?.ok) {
       setWatchFolder(res.path);
-      toast("Anything dropped in this folder will be sent up automatically", "success");
+      toast("Anything dropped in this folder will be sent up by itself", "success");
     } else if (res?.reason && res.reason !== "canceled") {
       toast(res.reason, "error");
     }
@@ -778,7 +714,7 @@ export default function AgentStatus() {
       setTransferNote("");
       void fetchTransfers();
     } catch (err: any) {
-      toast(`Couldn't send that file: ${err.message}`, "error");
+      toast(`That file could not be sent: ${err.message}`, "error");
     } finally {
       setPushingFile(false);
     }
@@ -805,10 +741,10 @@ export default function AgentStatus() {
     void fetchPushLog();
     const r = useQuickSyncStore.getState();
     if (!r.tally?.ok) {
-      toast(`${label}: Tally sync failed — ${r.tally?.error ?? "unknown"}`, "error");
+      toast(`${label}: the read from Tally failed: ${r.tally?.error ?? "no reason given"}`, "error");
     } else {
       toast(
-        r.ok ? `${label}: synced ${r.tally.vouchers} voucher(s) → pushed to Supabase` : `${label}: synced, but Supabase push had errors`,
+        r.ok ? `${label}: read ${r.tally.vouchers} voucher(s) from Tally and sent them to the online database` : `${label}: read from Tally, but the send to the online database had errors`,
         r.ok ? "success" : "error",
       );
     }
@@ -818,7 +754,7 @@ export default function AgentStatus() {
   const triggerSync = useCallback(async (endpoint: string, body: Record<string, unknown>, label: string) => {
     // Respect the global lock — never start a manual sync while another sync
     // (manual, scheduled, or quick) is running.
-    if (useTallyStore.getState().isSyncing) { toast("A sync is already running — please wait", "info"); return; }
+    if (useTallyStore.getState().isSyncing) { toast("A sync is already running. Please wait.", "info"); return; }
     setSyncing(label);
     setTallySyncing(true);
     try {
@@ -851,8 +787,8 @@ export default function AgentStatus() {
       await poll();
       void fetchPushLog();
       void fetchFailedJobs();
-      toast("Drain tick triggered", "success");
-    } catch { toast("Drain trigger failed", "error"); }
+      toast("Sending started", "success");
+    } catch { toast("Sending could not be started", "error"); }
     finally { setDraining(false); }
   }, [toast, poll, fetchPushLog, fetchFailedJobs]);
 
@@ -866,14 +802,14 @@ export default function AgentStatus() {
       });
       const j = await r.json();
       if (j.ok) {
-        toast("Job requeued — draining now", "success");
+        toast("Put back in the queue and sent on its way", "success");
         void fetchFailedJobs();
         void poll();
       } else {
-        toast(`Requeue failed: ${j.error}`, "error");
+        toast(`It could not be put back in the queue: ${j.error}`, "error");
       }
     } catch (e: any) {
-      toast(`Requeue failed: ${e.message}`, "error");
+      toast(`It could not be put back in the queue: ${e.message}`, "error");
     } finally {
       setRequeueing(null);
     }
@@ -903,18 +839,23 @@ export default function AgentStatus() {
      failure from Tally being down and has a different fix. The Tally tile used
      to blame TallyPrime's port 9000 in both cases. */
   const localServerDown = health == null;
-  const company = companyName || "—";
+  const company = companyName || "none";
 
   /* The four facts, from status/agentFacts.ts — the same functions the Quick
      View window renders from. Each knows the difference between a measured
      value and one that was never read; the reasoning for each sits in that
      module, next to the field it reads. */
-  const facts = [
-    tallyFact(health, BASE_LABEL),
-    drainFact(pushStatus),
-    queueFact(pushStatus),
-    cloudFact(cloudConfig, cloudMasters, cloudVouchers),
-  ];
+  /* In office (primary) mode the old push drain and its queue depth describe a queue nothing uses, so they give way to the office facts.
+     When the mode is off, the strip is exactly what it was. */
+  const officeOn = primaryIsOn(primary);
+  const facts = officeOn
+    ? [tallyFact(health, BASE_LABEL), officeFact(primary), claimFact(primary), mirrorRunFact(primary)]
+    : [
+        tallyFact(health, BASE_LABEL),
+        drainFact(pushStatus),
+        queueFact(pushStatus),
+        cloudFact(cloudConfig, cloudMasters, cloudVouchers),
+      ];
 
   /* Still needed below: the Supabase panel lists every channel individually,
      and the push-queue panel says whether a depth was ever counted. */
@@ -961,29 +902,29 @@ export default function AgentStatus() {
   const pullActions: PullAction[] = [
     {
       key: "full", label: "Full sync", icon: RefreshCw,
-      note: "whole FY, day by day — slowest",
+      note: "the whole year, one day at a time. The slowest",
       /* Kept from the old panel and still true: a full-year detail pull is the
          heaviest thing this app can ask Tally for, and it sat one click away
          from the much narrower Masters button. */
-      confirm: "Pull the FULL current financial year from Tally? This is the slowest option — Masters or Daybook is usually what you actually want.",
+      confirm: "Read the WHOLE financial year from Tally? This is the slowest option. \"Parties and items\" or \"All vouchers\" is usually what you want.",
       run: () => triggerSync("/api/tally/sync", { company, fromDate: fyFromDate, toDate: fyToDate, mode: "full", chunkStrategy: "daily" }, "Full sync"),
     },
     {
-      key: "masters", label: "Sync Masters", icon: PackageSearch,
-      note: "items, ledgers, groups",
-      run: () => triggerSync("/api/tally/sync-masters", { company }, "Sync Masters"),
+      key: "masters", label: "Parties and items", icon: PackageSearch,
+      note: "items, parties and groups",
+      run: () => triggerSync("/api/tally/sync-masters", { company }, "Parties and items"),
     },
     {
-      key: "daybook", label: "Sync Daybook", icon: CalendarRange,
-      note: "every voucher in the FY window",
-      run: () => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate, chunkMode: "daily" }, "Sync Daybook"),
+      key: "daybook", label: "All vouchers", icon: CalendarRange,
+      note: "every voucher in the financial year",
+      run: () => triggerSync("/api/tally/sync-daybook", { company, fromDate: fyFromDate, toDate: fyToDate, chunkMode: "daily" }, "All vouchers"),
     },
     {
       /* One Tally request for the whole catalogue — measured at well under a
          second against the live company — so it does not belong behind a
          masters sync that takes minutes. */
       key: "price", label: "Price list", icon: Tag,
-      note: "one request, whole catalogue",
+      note: "the whole catalogue in one go",
       run: () => triggerSync("/api/tally/sync-price-list", { company, origin: "agent-ui" }, "Price list"),
     },
   ];
@@ -1000,18 +941,11 @@ export default function AgentStatus() {
   }));
 
   return (
-    /* `bg-bg-page`, the same ground the web dashboard paints. This was
-       `bg-neutral-100`, a different off-white, so the two apps sat side by side
-       on the same desk in visibly different greys. */
-    <div className="min-h-screen bg-bg-page p-4 md:p-6">
-      <div className="max-w-5xl mx-auto">
-        {/* The web dashboard's own PageHeader, copied verbatim — same title
-            sizing, same subtitle spacing, same title/actions row. The agent
-            previously hand-rolled a smaller heading, which is why it read as a
-            utility window rather than as part of the same product. */}
+    <div className="min-h-screen bg-bg-page p-4 md:p-5">
+      <div className="mx-auto max-w-page">
         <PageHeader
           title="Sync agent"
-          subtitle={<>{company} · the only thing here that talks to Tally</>}
+          subtitle={<>{company} · the only program here that talks to Tally</>}
           actions={
             <>
               <UpdateChip state={update} currentVersion={appVersion} />
@@ -1019,25 +953,22 @@ export default function AgentStatus() {
               <button
                 onClick={() => { void poll(); void fetchHistory(); void fetchPushLog(); void fetchFailedJobs(); }}
                 disabled={polling}
-                title={polling ? "Already reading…" : "Re-read health, the push queue and the Supabase lists now. They refresh on their own every 10 s."}
-                className="btn-secondary btn-sm"
+                title={polling ? "Already reading." : "Read everything again now. It refreshes on its own every 10 seconds."}
+                className="btn-secondary"
               >
-                <RefreshCw size={13} className={polling ? "animate-spin" : ""} />
+                <RefreshCw size={16} className={polling ? "animate-spin" : ""} />
                 Refresh
               </button>
             </>
           }
         />
 
-        {/* The four figures worth reading before anything else: is Tally there,
-            is the drain running, how deep is the queue, and when did the mirror
-            last move. They were scattered across four panels, each as a small
-            pill, so the state of the system had to be assembled by eye. */}
-        <div className="mb-4 grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+        {/* The four figures worth reading before anything else. After go-live the second and third say whether the office computer is ready and
+            when it last took a job; before that they are the old push drain and queue. */}
+        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
           {facts.map((f) => (
             <StatTile
               key={f.label}
-              emphasis
               label={f.label}
               value={f.value}
               tone={toneToStatTile(f.tone)}
@@ -1046,255 +977,234 @@ export default function AgentStatus() {
             />
           ))}
         </div>
-      </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mx-auto">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
 
-        {/* ── Cloud / Supabase ──────────────────────────────────── */}
-        <SectionCard title="Supabase Cloud" icon={cloudOk ? <Cloud size={15} /> : <CloudOff size={15} />}>
-          <SupabaseCloudPanel
-            config={cloudConfig}
-            masters={cloudMasters}
-            vouchers={cloudVouchers}
-            canRead={!!sbRead}
-            readHost={SUPA_URL ? new URL(SUPA_URL).host : null}
-            fmtTime={fmt}
-          />
-        </SectionCard>
+          {/* ── The office computer (primary mode) ─────────────────────
+              Shown only when office mode is on. The old push-queue card below describes a queue nothing uses after go-live, so it is kept only
+              for a machine where office mode is off. Until the first answer arrives neither card is drawn, so a reading in progress never looks
+              like the other mode. */}
+          {officeOn && (
+            <div className="md:col-span-2">
+              <SectionCard title="Office computer" icon={<Building2 size={16} />}>
+                <PrimaryCard
+                  summary={primary}
+                  baseLabel={BASE_LABEL}
+                  onRefresh={() => void poll()}
+                  refreshing={polling}
+                  onCopy={(text) =>
+                    navigator.clipboard?.writeText(text).then(
+                      () => toast("Fingerprint copied", "success"),
+                      () => toast("It could not be copied", "error"),
+                    )
+                  }
+                />
+              </SectionCard>
+            </div>
+          )}
 
-        {/* ── Tally ─────────────────────────────────────────────── */}
-        <SectionCard title="Tally" icon={connected ? <Wifi size={15} /> : <WifiOff size={15} />}>
-          <TallyPanel health={health} configuredCompany={companyName} base={BASE} />
-        </SectionCard>
-
-        {/* ── Quick Sync (Tally → then push → Supabase) ────────── */}
-        <div className="md:col-span-2">
-          <SectionCard title="Quick Sync  (Tally → then push → Supabase)" icon={<RefreshCw size={15} />}>
-            <QuickSyncPanel
-              ranges={quickRanges}
-              qsync={qsync}
-              connected={connected}
-              notConnectedReason={notConnectedReason}
-              company={companyName}
-              otherSyncRunning={!!syncing || isSyncing}
-              onRun={(r) => quickSync(r.label, r.from, r.to)}
-            />
-          </SectionCard>
-        </div>
-
-        {/* ── Pull Sync ─────────────────────────────────────────── */}
-        <div className="md:col-span-2">
-          <SectionCard title="Pull Sync  (Tally → Supabase)" icon={<Database size={15} />}>
-            <PullSyncPanel
-              actions={pullActions}
-              windows={voucherWindows}
-              runningLabel={syncing}
-              busy={!!syncing || isSyncing || !!qsync.running}
-              blocked={pullBlocked}
-              history={syncHistory}
-              canReadHistory={!!sbRead}
-            />
-          </SectionCard>
-        </div>
-
-        {/* ── Push Queue ────────────────────────────────────────── */}
-        {/* Rebuilt in components/PushQueuePanel.tsx on the web dashboard's row
-            idiom. The counts and the two health pills that used to open this
-            panel now live in the KPI strip at the top of the page, so this is
-            only the work behind them: what is stuck, what is waiting, what
-            went. */}
-        <div className="md:col-span-2">
-          <SectionCard title="Push queue  (Supabase → Tally)" icon={<Activity size={15} />}>
-            <PushQueuePanel
-              status={pushStatus}
-              unreachable={pushStatusUnreachable}
-              baseLabel={BASE_LABEL}
-              log={pushLog}
-              failedJobs={failedJobs}
-              draining={draining}
-              onDrain={drainQueue}
-              requeueingId={requeueing}
-              onRequeue={requeueJob}
+          {/* ── Cloud / Supabase ──────────────────────────────────── */}
+          <SectionCard title="Online database" icon={cloudOk ? <Cloud size={16} /> : <CloudOff size={16} />}>
+            <SupabaseCloudPanel
+              config={cloudConfig}
+              masters={cloudMasters}
+              vouchers={cloudVouchers}
+              canRead={!!sbRead}
+              readHost={SUPA_URL ? new URL(SUPA_URL).host : null}
               fmtTime={fmt}
             />
           </SectionCard>
-        </div>
 
-        {/* ── The mirror, as this machine sees it ──────────────── */}
-        {/* Sync history, data snapshot and a per-voucher push log — the three
-            things the web dashboard has had and the agent did not, so the one
-            screen in the office could report a failure without being able to
-            say which voucher or why. */}
-        <div className="md:col-span-2">
-          <MirrorPanel />
-        </div>
-
-        {/* ── Logs ─────────────────────────────────────────────── */}
-        {/* Rebuilt in components/LogsPanel.tsx. The header keeps only the
-            error count, because that is the one thing worth seeing while the
-            panel is still closed; everything else moved inside. */}
-        <div className="md:col-span-2">
-          <SectionCard
-            title={`Logs${logs.length > 0 ? ` (${logs.length})` : ""}`}
-            icon={<Activity size={15} />}
-            open={showLogs}
-            onOpenChange={setShowLogs}
-            bodyClassName="px-3 py-3"
-            badge={logErrorCount > 0 ? (
-              <span className="text-[11px] font-semibold text-danger-700">
-                {logErrorCount} error{logErrorCount === 1 ? "" : "s"}
-              </span>
-            ) : undefined}
-          >
-            <LogsPanel
-              logs={logs}
-              base={BASE}
-              onCopy={(text) =>
-                navigator.clipboard?.writeText(text).then(
-                  () => toast("Logs copied", "success"),
-                  () => toast("Copy failed", "error"),
-                )
-              }
-            />
+          {/* ── Tally ─────────────────────────────────────────────── */}
+          <SectionCard title="Tally" icon={connected ? <Wifi size={16} /> : <WifiOff size={16} />}>
+            <TallyPanel health={health} configuredCompany={companyName} base={BASE} />
           </SectionCard>
-        </div>
 
-        {/* ── Settings ─────────────────────────────────────────── */}
-        <div className="md:col-span-2">
-          <SectionCard
-            title="Settings"
-            icon={<Settings size={15} />}
-            open={showSettings}
-            onOpenChange={setShowSettings}
-            bodyClassName="px-4 py-4 grid grid-cols-1 sm:grid-cols-2 gap-4"
-          >
-            <>
+          {/* ── Quick Sync (Tally, then the online database) ──────── */}
+          <div className="md:col-span-2">
+            <SectionCard title="Quick sync" icon={<RefreshCw size={16} />}>
+              <QuickSyncPanel
+                ranges={quickRanges}
+                qsync={qsync}
+                connected={connected}
+                notConnectedReason={notConnectedReason}
+                company={companyName}
+                otherSyncRunning={!!syncing || isSyncing}
+                onRun={(r) => quickSync(r.label, r.from, r.to)}
+              />
+            </SectionCard>
+          </div>
+
+          {/* ── Manual sync buttons ───────────────────────────────── */}
+          <div className="md:col-span-2">
+            <SectionCard title="Manual sync from Tally" icon={<Database size={16} />}>
+              <PullSyncPanel
+                actions={pullActions}
+                windows={voucherWindows}
+                runningLabel={syncing}
+                busy={!!syncing || isSyncing || !!qsync.running}
+                blocked={pullBlocked}
+                history={syncHistory}
+                canReadHistory={!!sbRead}
+              />
+            </SectionCard>
+          </div>
+
+          {/* ── The old push queue ─────────────────────────────────
+              Only when office mode is off. It lists, drains and re-queues rows of the old push queue, which nothing feeds after go-live. */}
+          {!officeOn && primaryRead && (
+            <div className="md:col-span-2">
+              <SectionCard title="Push queue: online database to Tally" icon={<Activity size={16} />}>
+                <PushQueuePanel
+                  status={pushStatus}
+                  unreachable={pushStatusUnreachable}
+                  baseLabel={BASE_LABEL}
+                  log={pushLog}
+                  failedJobs={failedJobs}
+                  draining={draining}
+                  onDrain={drainQueue}
+                  requeueingId={requeueing}
+                  onRequeue={requeueJob}
+                  fmtTime={fmt}
+                />
+              </SectionCard>
+            </div>
+          )}
+
+          {/* ── The mirror, as this machine sees it ──────────────── */}
+          <div className="md:col-span-2">
+            <MirrorPanel showOldQueue={!officeOn} />
+          </div>
+
+          {/* ── Logs ─────────────────────────────────────────────── */}
+          <div className="md:col-span-2">
+            <SectionCard
+              title={`Logs${logs.length > 0 ? ` (${logs.length})` : ""}`}
+              icon={<Activity size={16} />}
+              open={showLogs}
+              onOpenChange={setShowLogs}
+              badge={logErrorCount > 0 ? (
+                <span className="pill pill-bad">
+                  {logErrorCount} error{logErrorCount === 1 ? "" : "s"}
+                </span>
+              ) : undefined}
+            >
+              <LogsPanel
+                logs={logs}
+                base={BASE}
+                onCopy={(text) =>
+                  navigator.clipboard?.writeText(text).then(
+                    () => toast("Logs copied", "success"),
+                    () => toast("They could not be copied", "error"),
+                  )
+                }
+              />
+            </SectionCard>
+          </div>
+
+          {/* ── Settings ─────────────────────────────────────────── */}
+          <div className="md:col-span-2">
+            <SectionCard title="Settings" icon={<Settings size={16} />} open={showSettings} onOpenChange={setShowSettings}>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {([
-                  ["Company name",       editCompany, setEditCompany],
-                  ["Proxy URL",          editProxy,   setEditProxy],
-                  ["FY from (YYYYMMDD)", editFyFrom,  setEditFyFrom],
-                  ["FY to (YYYYMMDD)",   editFyTo,    setEditFyTo],
+                  ["Company name",                    editCompany, setEditCompany],
+                  ["Local server address",            editProxy,   setEditProxy],
+                  ["Financial year starts (YYYYMMDD)", editFyFrom,  setEditFyFrom],
+                  ["Financial year ends (YYYYMMDD)",   editFyTo,    setEditFyTo],
                 ] as [string, string, (v: string) => void][]).map(([label, val, set]) => (
                   <label key={label} className="block">
-                    <span className="text-xs text-neutral-500 mb-1 block">{label}</span>
-                    <input
-                      className="form-input w-full"
-                      value={val}
-                      onChange={e => set(e.target.value)}
-                    />
+                    <span className="mb-1 block text-xs text-neutral-700">{label}</span>
+                    <input className="form-input" value={val} onChange={e => set(e.target.value)} />
                   </label>
                 ))}
 
-                {/* Scheduled quick syncs — the only automatic syncs. 0 = off. */}
-                <div className="sm:col-span-2 mt-1 pt-3 border-t border-neutral-100">
-                  <p className="text-xs font-medium text-neutral-600">Automatic sync intervals</p>
-                  <p className="text-[10px] text-neutral-400">Each runs the matching Quick Sync (pull daily from Tally → push to Supabase). Only Today runs by default; set a value to enable the others (0 = off). No other auto-syncs run.</p>
+                {/* The scheduled quick syncs are the only automatic syncs. 0 turns one off. */}
+                <div className="sm:col-span-2 mt-2">
+                  <p className="text-sm text-neutral-900">Automatic sync timing</p>
+                  <p className="text-xs text-neutral-700">
+                    Each one runs the matching quick sync: read the days from Tally, then send them to the online database. Only "Today" runs by
+                    default. Type 0 to turn one off. Nothing else syncs by itself.
+                  </p>
                 </div>
                 <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Today — every (minutes)</span>
-                  <input
-                    type="number" min={0} step={1}
-                    className="form-input w-full"
-                    value={editTodayMins}
-                    onChange={e => setEditTodayMins(e.target.value)}
-                  />
+                  <span className="mb-1 block text-xs text-neutral-700">Today: every how many minutes</span>
+                  <input type="number" min={0} step={1} className="form-input" value={editTodayMins} onChange={e => setEditTodayMins(e.target.value)} />
                 </label>
                 <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">Last 7 days — every (minutes, 0 = off)</span>
-                  <input
-                    type="number" min={0} step={1}
-                    className="form-input w-full"
-                    value={editWeekMins}
-                    onChange={e => setEditWeekMins(e.target.value)}
-                  />
+                  <span className="mb-1 block text-xs text-neutral-700">Last 7 days: every how many minutes (0 is off)</span>
+                  <input type="number" min={0} step={1} className="form-input" value={editWeekMins} onChange={e => setEditWeekMins(e.target.value)} />
                 </label>
                 <label className="block">
-                  <span className="text-xs text-neutral-500 mb-1 block">This FY — every (minutes, 0 = off · heavy, use the button)</span>
-                  <input
-                    type="number" min={0} step={1}
-                    className="form-input w-full"
-                    value={editFyMins}
-                    onChange={e => setEditFyMins(e.target.value)}
-                  />
+                  <span className="mb-1 block text-xs text-neutral-700">This financial year: every how many minutes (0 is off, heavy, use the button instead)</span>
+                  <input type="number" min={0} step={1} className="form-input" value={editFyMins} onChange={e => setEditFyMins(e.target.value)} />
                 </label>
 
                 <div className="sm:col-span-2">
-                  <Btn variant="primary" onClick={applySettings} title="Store these on this machine and use them from now on.">
+                  <Btn variant="primary" onClick={applySettings} title="Keep these on this computer and use them from now on.">
                     Save settings
                   </Btn>
                 </div>
-            </>
-          </SectionCard>
-        </div>
+              </div>
+            </SectionCard>
+          </div>
 
-        {/* ── File transfer ────────────────────────────────────── */}
-        <div className="md:col-span-2">
-          <SectionCard
-            title="File transfer"
-            icon={<Send size={15} />}
-            open={showFileTransfer}
-            onOpenChange={setShowFileTransfer}
-            bodyClassName="px-4 py-4 space-y-4"
-            badge={incomingWaiting > 0 ? (
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-accent/10 text-accent-700">
-                {incomingWaiting} new
-              </span>
-            ) : undefined}
-          >
-            <>
+          {/* ── File transfer ────────────────────────────────────── */}
+          <div className="md:col-span-2">
+            <SectionCard
+              title="File transfer"
+              icon={<Send size={16} />}
+              open={showFileTransfer}
+              onOpenChange={setShowFileTransfer}
+              bodyClassName="space-y-4"
+              badge={incomingWaiting > 0 ? <span className="pill pill-live">{incomingWaiting} new</span> : undefined}
+            >
+              <>
                 {noBridgeReason && (
-                  <p className="flex items-start gap-1.5 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
-                    <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-                    {noBridgeReason} The list below is still live.
+                  <p className="note note-warn">
+                    <AlertTriangle size={16} className="mt-1 shrink-0" />
+                    <span>{noBridgeReason} The list below is still live.</span>
                   </p>
                 )}
 
                 <div>
-                  <p className="text-xs text-neutral-500 mb-1">Incoming files save to</p>
+                  <p className="mb-1 text-xs text-neutral-700">Incoming files are saved to</p>
                   <div className="flex flex-wrap items-center gap-2">
-                    <code className="min-w-0 flex-1 basis-48 truncate rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-xs">
-                      {syncFolder || "not configured — files will wait until you choose one"}
+                    <code className="min-w-0 flex-1 basis-48 rounded-md bg-bg-sub px-4 py-3 text-sm wrap-anywhere">
+                      {syncFolder || "not chosen yet, so files will wait until you choose a folder"}
                     </code>
                     <Btn onClick={() => void chooseSyncFolder()} disabledReason={noBridgeReason}>Choose folder</Btn>
                   </div>
                 </div>
 
                 <div>
-                  <p className="text-xs text-neutral-500 mb-1">
-                    Watch folder — drop a Tally export here and it uploads itself
+                  <p className="mb-1 text-xs text-neutral-700">
+                    Watch folder: drop a Tally export here and it uploads by itself
                   </p>
                   <div className="flex flex-wrap items-center gap-2">
-                    <code className="min-w-0 flex-1 basis-48 truncate rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-xs">
-                      {watchStatus?.dir || watchFolder || "not configured — nothing is being watched"}
+                    <code className="min-w-0 flex-1 basis-48 rounded-md bg-bg-sub px-4 py-3 text-sm wrap-anywhere">
+                      {watchStatus?.dir || watchFolder || "not chosen yet, so nothing is being watched"}
                     </code>
                     <Btn onClick={() => void chooseWatchFolder()} disabledReason={noBridgeReason}>Choose folder</Btn>
                   </div>
-                  {/* The path above is only the path last CHOSEN. Whether
-                      anything is actually being watched is decided by chokidar
-                      in the server, which answers at
-                      /api/file-transfer/watch — a route that existed and was
-                      read by nothing, so a watcher that failed to start (a
-                      folder since deleted, or a path on a disconnected drive)
-                      showed here as a configured, working watch folder.
-                      (15-Sep-2026) */}
+                  {/* The path above is only the folder last CHOSEN. Whether anything is actually being watched is decided by the server. */}
                   {watchStatus && (
-                    <p className={`mt-1 text-[11px] ${watchStatus.watching ? "text-neutral-500" : "text-warn-800"}`}>
+                    <p className={`mt-2 text-xs ${watchStatus.watching ? "text-neutral-700" : "text-warn-700"}`}>
                       {watchStatus.watching
                         ? "The server is watching this folder now."
-                        : "The server is NOT watching anything — a file dropped in this folder will sit there."}
+                        : "The server is NOT watching anything. A file dropped in this folder will just sit there."}
                     </p>
                   )}
-                  <p className="text-[11px] text-neutral-400 mt-1">
-                    Must be a different folder from the one above, or files would loop back and forth.
+                  <p className="mt-1 text-xs text-neutral-700">
+                    It must be a different folder from the one above, or files would go back and forth forever.
                   </p>
                 </div>
 
                 <div>
-                  <p className="text-xs text-neutral-500 mb-1">Send a file to the web dashboard</p>
+                  <p className="mb-1 text-xs text-neutral-700">Send a file to the web dashboard</p>
                   <div className="flex flex-wrap items-center gap-2">
                     <input
-                      className="form-input min-w-0 flex-1 basis-48 text-xs"
-                      placeholder="Note (optional)"
+                      className="form-input min-w-0 flex-1 basis-48"
+                      placeholder="A note to go with it (optional)"
                       value={transferNote}
                       onChange={e => setTransferNote(e.target.value)}
                     />
@@ -1304,104 +1214,89 @@ export default function AgentStatus() {
                       disabled={pushingFile}
                       disabledReason={noBridgeReason ?? (companyName.trim() ? null : "No company is set in Settings, so a file has nothing to be filed under.")}
                     >
-                      {pushingFile ? "Sending…" : "Choose file & send"}
+                      {pushingFile ? "Sending" : "Choose a file and send it"}
                     </Btn>
                   </div>
                 </div>
 
                 <div>
-                  <p className="text-xs text-neutral-500 mb-1">Recent transfers</p>
-                  {/* "Nothing yet." used to be printed for three different
-                      answers — there are no transfers, this machine has no
-                      Supabase credentials, and the query failed — two of which
-                      mean files may well be waiting. The server now says which.
-                      (15-Sep-2026) */}
+                  <p className="mb-2 text-xs text-neutral-700">Recent transfers</p>
+                  {/* "None" was once printed for three different answers: there are none, this computer cannot read the list, and the read
+                      failed. The server now says which. */}
                   {transfersError ? (
-                    <p className="flex items-start gap-1.5 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
-                      <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                    <p className="note note-warn">
+                      <AlertTriangle size={16} className="mt-1 shrink-0" />
                       <span>
-                        The transfer list could not be read: {transfersError}. That is not the same as there being
-                        none{transfersReadAt ? `; the last list that did come back was at ${new Date(transfersReadAt).toLocaleTimeString("en-IN")}` : ""}.
+                        The transfer list could not be read: {transfersError}. That is not the same as there being none
+                        {transfersReadAt ? `. The last list that did come back was at ${new Date(transfersReadAt).toLocaleTimeString("en-IN")}` : ""}.
                       </span>
                     </p>
                   ) : transfers.length === 0 ? (
-                    <p className="text-xs text-neutral-500">No transfers in either direction yet.</p>
+                    <p className="text-sm text-neutral-700">No transfers in either direction yet.</p>
                   ) : (
-                    <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                    <ul className="tray flex max-h-72 flex-col gap-2 overflow-y-auto">
                       {transfers.map(t => (
-                        <div key={t.id} className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg bg-neutral-50">
-                          {/* Direction is a CATEGORY, not a state, so it is not
-                              given a status colour: incoming takes the accent
-                              because it is the only one that can still need
-                              you, outgoing is neutral because it is done. */}
-                          {t.direction === "web_to_desktop"
-                            ? <Download size={12} className="text-accent flex-shrink-0" />
-                            : <Upload size={12} className="text-neutral-500 flex-shrink-0" />}
-                          <div className="flex-1 min-w-0">
-                            <div className="truncate">{t.filename}</div>
-                            <div className="flex items-center gap-1.5 text-[10px] text-neutral-400">
-                              {t.kind && t.kind !== "unknown" && (
-                                <span className="px-1 py-0.5 rounded bg-neutral-200 text-neutral-600 font-medium">
-                                  {KIND_LABEL[t.kind]}
-                                </span>
-                              )}
+                        <li key={t.id} className="flex items-center gap-3 rounded-md bg-white p-2 shadow-card">
+                          {/* Direction is a CATEGORY, not a state, so it gets no status colour: incoming takes the accent because it is the only
+                              one that can still need you; outgoing is neutral because it is done. */}
+                          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-sm bg-bg-sub">
+                            {t.direction === "web_to_desktop"
+                              ? <Download size={16} className="text-accent" />
+                              : <Upload size={16} className="text-neutral-700" />}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm wrap-anywhere">{t.filename}</div>
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-700">
+                              {t.kind && t.kind !== "unknown" && <span className="rounded-xs bg-bg-sub px-2">{KIND_LABEL[t.kind]}</span>}
                               <span>{fmt(t.created_at)}</span>
                             </div>
                           </div>
-                          {/* Same three tones as every other status on this
-                              screen: waiting is warn, done is success, put
-                              aside is neutral. */}
-                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
-                            t.status === "pending" ? "bg-warn/10 text-warn-800"
-                            : t.status === "downloaded" ? "bg-success/10 text-success-700"
-                            : "bg-neutral-100 text-neutral-600"
-                          }`}>{t.status}</span>
+                          <span className={`pill ${
+                            t.status === "pending" ? "pill-warn"
+                            : t.status === "downloaded" ? "pill-good"
+                            : ""
+                          }`}>{t.status === "pending" ? "waiting" : t.status === "downloaded" ? "received" : "put aside"}</span>
                           {t.direction === "web_to_desktop" && t.status === "pending" && (
                             <button
-                              className="btn-icon h-9 w-9 shrink-0 tap disabled:opacity-50"
+                              className="btn-icon shrink-0"
                               onClick={() => void dismissTransfer(t.id)}
                               disabled={transferBusy === t.id || !sbRead}
-                              title={sbRead ? "Dismiss" : "This build has no Supabase read credentials, so it cannot mark a transfer dismissed."}
-                              aria-label="Dismiss this transfer"
+                              title={sbRead ? "Put this one aside" : "This build has no read access to the online database, so it cannot put a transfer aside."}
+                              aria-label="Put this transfer aside"
                             >
                               {transferBusy === t.id
-                                ? <Loader2 size={14} className="animate-spin" />
-                                : <XCircle size={14} />}
+                                ? <Loader2 size={16} className="animate-spin" />
+                                : <XCircle size={16} />}
                             </button>
                           )}
-                        </div>
+                        </li>
                       ))}
-                    </div>
+                    </ul>
                   )}
                 </div>
-            </>
-          </SectionCard>
+              </>
+            </SectionCard>
+          </div>
+
+          {/* ── Updates ───────────────────────────────────────────────
+              Last, and full width: it is the only section that is not about today's work. It answers "which build am I on". */}
+          <div className="md:col-span-2">
+            <SectionCard title="Updates" icon={<Download size={16} />}>
+              <UpdatesPanel />
+            </SectionCard>
+          </div>
+
         </div>
 
-        {/* ── Updates ───────────────────────────────────────────────
-            Last on the page, and full width. It is the only section that is
-            not about today's work: everything above answers "is the agent
-            doing its job right now", and this answers "which build am I on" —
-            a question asked occasionally and deliberately, not scanned.
-            Full width because it ends the grid, and a half-width card beside
-            nothing reads as a layout fault rather than a choice. */}
-        <div className="md:col-span-2">
-          <SectionCard title="Updates" icon={<Download size={15} />}>
-            <UpdatesPanel />
-          </SectionCard>
-        </div>
-
+        {/* `agentId` is the computer's name and a number, from the server. When it is missing the server did not answer, which is a fact about
+            this app and not an agent named "none". */}
+        <p className="mt-6 text-center text-xs text-neutral-700">
+          {pushStatus?.agentId
+            ? `Agent: ${pushStatus.agentId}`
+            : "The local server is not answering, so this window cannot name the agent."}
+          {" · Refreshes by itself every 10 seconds"}
+        </p>
       </div>
-
-      {/* `agentId` is `os.hostname()#pid` from the server. When it is a dash the
-          server did not answer — which is a fact about this app, not an agent
-          named "—". */}
-      <p className="mt-6 text-center text-xs text-neutral-400 max-w-5xl mx-auto">
-        {pushStatus?.agentId
-          ? `Agent: ${pushStatus.agentId}`
-          : "The local server is not answering, so this window cannot name the agent."}
-        {" · Auto-refresh every 10 s"}
-      </p>
     </div>
   );
 }

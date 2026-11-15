@@ -126,7 +126,7 @@ export function UpdatesPanel() {
     setBusyVersion(null);
     setProgress((p) => ({ ...p, [v]: 0 }));
     setNote(res.ok
-      ? `${v} ${res.alreadyHad ? "was already in" : "saved to"} Downloads — shown in Explorer. Run it to install.`
+      ? `${v} ${res.alreadyHad ? "was already in" : "saved to"} Downloads. Shown in Explorer. Run it to install.`
       : `Could not download ${v}: ${res.reason}`);
   };
 
@@ -136,7 +136,7 @@ export function UpdatesPanel() {
     setNote(null);
     if (state.phase !== "ready") {
       await a.update.checkNow?.();
-      setNote("Checking — an update downloads in the background, then this says Ready.");
+      setNote("Checking. An update downloads in the background, then this says Ready.");
       return;
     }
     const res = await a.update.installNow?.({ force });
@@ -145,51 +145,51 @@ export function UpdatesPanel() {
         /* Named, not a generic failure. The operator is the one who can decide
            whether interrupting is acceptable, and they can only decide that if
            they are told what is happening. */
-        ? "A push is in flight. Installing now would abandon a voucher mid-push — use Force install if you accept that."
-        : `Could not install: ${res.reason}`);
+        ? "A voucher is being sent to Tally right now. Installing now would cut it off halfway. Use \"Install anyway\" only if you accept that."
+        : `The install could not be started: ${res.reason}`);
     }
   };
 
   const statusLine = useMemo(() => {
     switch (state.phase) {
-      case "checking": return "Checking for updates…";
-      case "downloading": return `Downloading ${state.version ?? ""}… ${state.percent ?? 0}%`;
+      case "checking": return "Checking for updates.";
+      case "downloading": return `Downloading ${state.version ?? "the update"}: ${state.percent ?? 0}% done.`;
       case "ready": return `${state.version} is downloaded and installs when you next close the app.`;
-      case "installing": return "Restarting to install…";
+      case "installing": return "Restarting to install.";
       case "current": return "This is the newest published version.";
-      case "error": return `Update check failed — ${state.message}`;
-      case "disabled": return state.message ?? "Updates are not checked in this build.";
+      case "error": return `The update check failed: ${state.message}`;
+      case "disabled": return state.message ?? "This version does not check for updates.";
       default: return null;
     }
   }, [state]);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {/* Where this machine stands. One sentence, before any list. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-neutral-50 px-3 py-2.5 text-[12px]">
-        <PackageCheck size={14} className="shrink-0 text-neutral-500" />
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md bg-bg-sub p-2 pl-4 text-sm">
+        <PackageCheck size={16} className="shrink-0 text-neutral-500" />
         <span>
-          Running <span className="font-mono font-semibold">{installed ?? "…"}</span>
+          Running <span className="font-medium">{installed ?? "an unknown version"}</span>
         </span>
         {latest && (
-          <span className={behind ? "text-warn-800" : "text-neutral-500"}>
-            {behind ? `· ${latest.version} is published` : "· newest published"}
+          <span className={behind ? "text-warn-700" : "text-neutral-700"}>
+            {behind ? `${latest.version} is published.` : "That is the newest published version."}
           </span>
         )}
         <span className="ml-auto flex items-center gap-2">
           <button
             onClick={() => load(true)}
-            className="inline-flex items-center gap-1 rounded-lg border border-neutral-200 px-2 py-1 hover:bg-white"
+            className="btn-secondary"
           >
-            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-            Refresh
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+            Check again
           </button>
           {behind && (
             <button
               onClick={() => updateNow(false)}
-              className="inline-flex items-center gap-1 rounded-lg bg-accent px-2 py-1 font-semibold text-white hover:opacity-90"
+              className="btn-primary"
             >
-              <Rocket size={12} />
+              <Rocket size={16} />
               {state.phase === "ready" ? "Install now" : "Update now"}
             </button>
           )}
@@ -199,85 +199,86 @@ export function UpdatesPanel() {
                rather than a second click of the same button. */
             <button
               onClick={() => updateNow(true)}
-              title="Install even if a push is in flight. A voucher mid-push may be abandoned."
-              className="inline-flex items-center gap-1 rounded-lg border border-warn/40 bg-warn-soft px-2 py-1 font-semibold text-warn-800 hover:bg-warn/15"
+              title="Install even if a voucher is being sent. That voucher may be cut off halfway."
+              className="btn-danger text-warn-700"
             >
-              Force install
+              Install anyway
             </button>
           )}
         </span>
       </div>
 
       {statusLine && (
-        <p className={`px-1 text-[12px] ${state.phase === "error" ? "text-danger-700" : "text-neutral-600"}`}>
+        <p className={`px-1 text-sm ${state.phase === "error" ? "text-danger-700" : "text-neutral-700"}`}>
           {statusLine}
         </p>
       )}
-      {note && <p className="rounded-xl bg-accent-soft px-3 py-2 text-[12px] text-accent-700">{note}</p>}
+      {note && <p className="note note-info">{note}</p>}
 
       {listError && (
-        <div className="flex items-start gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <div className="note note-warn">
+          <AlertTriangle size={16} className="mt-1 shrink-0" />
           <div>
-            <p className="font-semibold">Could not read the published releases.</p>
+            <p className="font-medium">The list of published versions could not be read.</p>
             {/* The distinction that matters: an empty list here does not mean
                 nothing has been published. */}
-            <p className="mt-1">{listError} — this is "could not ask", not "nothing published".</p>
+            <p className="mt-1">{listError} This means "could not ask", not "nothing has been published".</p>
           </div>
         </div>
       )}
 
-      <ul className="flex flex-col gap-2">
+      <ul className={rows.length ? "tray flex flex-col gap-2" : "hidden"}>
         {rows.map((r) => {
           const isInstalled = installed === r.version;
           const pct = progress[r.version];
           return (
-            <li key={r.version} className="rounded-xl border border-neutral-200 px-3 py-2.5">
+            <li key={r.version} className="rounded-md bg-white p-3 shadow-card">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span className="font-mono text-[13px] font-semibold">{r.version}</span>
+                <span className="font-display text-lg">{r.version}</span>
                 {isInstalled && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-semibold text-success">
-                    <CheckCircle2 size={10} /> installed
+                  <span className="pill pill-good">
+                    installed
                   </span>
                 )}
                 {r === latest && !isInstalled && (
-                  <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent-700">latest</span>
+                  <span className="pill pill-live">newest</span>
                 )}
                 {r.prerelease && (
-                  <span className="rounded-full bg-warn/15 px-2 py-0.5 text-[10px] font-semibold text-warn-800">pre-release</span>
+                  <span className="pill pill-warn">test version</span>
                 )}
-                <span className="text-[11px] text-neutral-500">{day(r.publishedAt)}</span>
+                <span className="text-xs text-neutral-700">{day(r.publishedAt)}</span>
 
                 <span className="ml-auto flex items-center gap-2">
                   {r.notes && (
                     <button
                       onClick={() => setOpenNotes(openNotes === r.version ? null : r.version)}
-                      className="text-[11px] text-neutral-600 underline underline-offset-2 hover:text-neutral-900"
+                      className="btn-ghost"
                     >
-                      {openNotes === r.version ? "hide notes" : "what changed"}
+                      {openNotes === r.version ? "Hide what changed" : "What changed"}
                     </button>
                   )}
                   <a
                     href={r.htmlUrl} target="_blank" rel="noreferrer"
-                    title="Open this release on GitHub"
-                    className="inline-flex items-center gap-1 text-[11px] text-neutral-500 hover:text-neutral-800"
+                    title="Open this version on GitHub"
+                    aria-label="Open this version on GitHub"
+                    className="btn-icon"
                   >
-                    <ExternalLink size={11} />
+                    <ExternalLink size={16} />
                   </a>
                   {r.exeName ? (
                     <button
                       disabled={busyVersion === r.version}
                       onClick={() => download(r.version)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-neutral-200 px-2 py-1 text-[11px] hover:bg-neutral-50 disabled:opacity-60"
+                      className="btn-secondary"
                     >
-                      <Download size={11} />
-                      {busyVersion === r.version ? (pct != null ? `${pct}%` : "starting…") : `Download ${MB(r.sizeBytes)}`}
+                      <Download size={16} />
+                      {busyVersion === r.version ? (pct != null ? `${pct}%` : "starting") : `Download ${MB(r.sizeBytes)}`}
                     </button>
                   ) : (
                     /* Said on the row, not discovered on click. */
                     <span
-                      title="This release's installer was removed. Its notes are still here, but there is nothing to install."
-                      className="rounded-lg bg-neutral-100 px-2 py-1 text-[11px] text-neutral-500"
+                      title="This version's installer was removed. Its notes are still here, but there is nothing to install."
+                      className="pill"
                     >
                       no installer
                     </span>
@@ -286,8 +287,8 @@ export function UpdatesPanel() {
               </div>
 
               {busyVersion === r.version && pct != null && (
-                <div className="mt-2 h-1 overflow-hidden rounded-full bg-neutral-100">
-                  <div className="h-full bg-accent transition-[width] duration-200" style={{ width: `${pct}%` }} />
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-bg-sub">
+                  <div className="h-full w-full origin-left bg-accent transition-transform" style={{ transform: `scaleX(${Math.max(0, Math.min(100, pct)) / 100})` }} />
                 </div>
               )}
 
@@ -295,7 +296,7 @@ export function UpdatesPanel() {
                 /* Plain text, never markup. The body comes from a GitHub release
                    and rendering it as HTML would put remote content into the
                    app's DOM for no benefit. */
-                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-neutral-50 px-3 py-2 font-sans text-[11.5px] leading-relaxed text-neutral-700">
+                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap rounded-sm bg-bg-sub p-3 font-sans text-sm text-neutral-700">
                   {r.notes.trim()}
                 </pre>
               )}
@@ -305,13 +306,12 @@ export function UpdatesPanel() {
       </ul>
 
       {!loading && !rows.length && !listError && (
-        <p className="px-1 text-[12px] text-neutral-500">No releases have been published yet.</p>
+        <p className="px-1 text-sm text-neutral-700">No versions have been published yet.</p>
       )}
 
-      <p className="px-1 text-[11px] leading-relaxed text-neutral-500">
-        Download saves the installer to your Downloads folder and shows it in Explorer — it never runs it.
-        Any version can be installed over the current one; the app's settings and its{" "}
-        <span className="font-mono">.env</span> live outside the install folder and are not touched.
+      <p className="px-1 text-xs text-neutral-700">
+        Download saves the installer in your Downloads folder and shows it in Explorer. It never runs it for you.
+        Any version can be installed over the current one. This computer's settings are kept outside the program's folder and are not touched.
       </p>
     </div>
   );

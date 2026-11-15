@@ -1,14 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+/* Both typefaces are bundled with the app (nothing is fetched at start), so the window looks the same on an office PC with no internet.
+   If a font file ever failed to load, the stacks in styles/tokens.css fall back to the system's own sans-serif. */
 import "@fontsource-variable/geist";
-import "@fontsource-variable/geist-mono";
+import "@fontsource-variable/outfit";
 import "./index.css";
-// Must load after index.css — the bento layer wins on specificity, but source
-// order decides ties. Canonical copy lives in the web-dashboard; keep in sync.
-import "./theme-bento.css";
 import App from "./App";
-
-document.documentElement.setAttribute("data-theme", "bento");
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

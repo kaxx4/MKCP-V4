@@ -31,7 +31,7 @@
  * so the screen carried them twice in two shapes and neither showed the reason
  * without a click. Its rows column printed `items:412 ledgers:295` as one
  * unspaced run of text. The whole thing was painted in `bg-neutral-50` tiles,
- * `bg-red-50` error boxes and the green/red `Pill`.
+ * `bg-danger-soft` error boxes and the green/red `Pill`.
  *
  * ── What this shows instead ───────────────────────────────────────────────
  *
@@ -103,22 +103,22 @@ interface Props {
  *  date and dropped the clock, which is the part that tells you whether the
  *  number on screen is this morning's. */
 function ago(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "none";
   const ms = Date.now() - new Date(iso).getTime();
   if (ms < 60_000) return "just now";
   const m = Math.floor(ms / 60_000);
-  if (m < 60) return `${m} min ago`;
+  if (m < 60) return `${m} minute${m === 1 ? "" : "s"} ago`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ${m % 60}m ago`;
+  if (h < 24) return `${h} hour${h === 1 ? "" : "s"} ago`;
   const d = Math.floor(h / 24);
   return `${d} day${d === 1 ? "" : "s"} ago`;
 }
 
 function dur(ms: number | null): string {
-  if (ms == null) return "—";
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
+  if (ms == null) return "time not recorded";
+  if (ms < 1000) return "under a second";
+  if (ms < 60_000) return `${Math.round(ms / 1000)} seconds`;
+  return `${Math.floor(ms / 60_000)} min ${Math.floor((ms % 60_000) / 1000)} sec`;
 }
 
 /** `items:412 ledgers:295` was one unreadable run of text. */
@@ -127,7 +127,7 @@ function counts(rc: Record<string, number> | null): string | null {
   const parts = Object.entries(rc)
     .filter(([, v]) => Number(v) > 0)
     .map(([k, v]) => `${Number(v).toLocaleString("en-IN")} ${k.replace(/_/g, " ")}`);
-  return parts.length ? parts.join(" · ") : null;
+  return parts.length ? parts.join(", ") : null;
 }
 
 /** The first reason that applies, so a grey button answers the question it
@@ -182,21 +182,21 @@ export function PullSyncPanel({
                 a.run();
               }}
               disabled={busy || !!blocked}
-              title={whyOff(blocked, busy, runningLabel) ?? `${a.label} — ${a.note}${a.confirm ? " (asks first)" : ""}`}
-              className="btn-secondary btn-sm !flex-col !items-start !gap-0 !py-1.5"
+              title={whyOff(blocked, busy, runningLabel) ?? `${a.label}: ${a.note}${a.confirm ? " (asks first)" : ""}`}
+              className="btn-secondary !flex-col !items-start !gap-0 !rounded-md !py-2"
             >
-              <span className="flex items-center gap-1.5">
-                {running ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+              <span className="flex items-center gap-2">
+                {running ? <Loader2 size={16} className="animate-spin" /> : <Icon size={16} />}
                 {a.label}
               </span>
-              <span className="text-[10px] font-medium text-neutral-500">{a.note}</span>
+              <span className="text-xs text-neutral-700">{a.note}</span>
             </button>
           );
         })}
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[10.5px] font-bold uppercase tracking-wide text-neutral-600">Vouchers only</span>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm text-neutral-700">Vouchers only, for</span>
         {windows.map((w) => {
           const running = runningLabel === `Vouchers ${w.label}`;
           return (
@@ -204,10 +204,10 @@ export function PullSyncPanel({
               key={w.label}
               onClick={w.run}
               disabled={busy || !!blocked}
-              title={whyOff(blocked, busy, runningLabel) ?? `Pull every voucher in "${w.label}" from Tally.`}
-              className={`filter-chip text-[11px] ${running ? "filter-chip-active" : ""}`}
+              title={whyOff(blocked, busy, runningLabel) ?? `Read every voucher in "${w.label}" from Tally.`}
+              className={`filter-chip ${running ? "filter-chip-active" : ""}`}
             >
-              {running && <Loader2 size={10} className="animate-spin" />}
+              {running && <Loader2 size={16} className="animate-spin" />}
               {w.label}
             </button>
           );
@@ -217,8 +217,8 @@ export function PullSyncPanel({
       {/* A flat-disabled button with no reason turns a two-second fix into a
           hunt through the log. */}
       {blocked && (
-        <p className="flex items-start gap-1.5 text-[11.5px] text-warn-800">
-          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+        <p className="flex items-start gap-2 text-sm text-warn-700">
+          <AlertTriangle size={16} className="mt-1 shrink-0" />
           {blocked}
         </p>
       )}
@@ -227,20 +227,20 @@ export function PullSyncPanel({
       {failed.length > 0 && (
         <section>
           <RowGroupHeading tone="danger" icon={AlertTriangle}>
-            Needs you — {failed.length} run{failed.length === 1 ? "" : "s"} failed
+            Needs you: {failed.length} run{failed.length === 1 ? "" : "s"} failed
           </RowGroupHeading>
-          <ul className="flex flex-col gap-2">
+          <ul className="tray flex flex-col gap-2">
             {failed.map((h) => (
               <StatusRow
                 key={h.id}
                 icon={AlertTriangle}
                 tone="danger"
-                title={h.sync_type === "masters" ? "Masters sync" : "Voucher sync"}
-                subject={counts(h.row_counts) ?? "nothing reached Supabase"}
-                meta={`${new Date(h.started_at).toLocaleString("en-IN")} · ${dur(h.duration_ms)}${h.chunk_count ? ` · ${h.chunk_count} chunks` : ""}`}
+                title={h.sync_type === "masters" ? "Parties and items" : "Vouchers"}
+                subject={counts(h.row_counts) ?? "nothing reached the online database"}
+                meta={`${new Date(h.started_at).toLocaleString("en-IN")}. Took ${dur(h.duration_ms)}${h.chunk_count ? `, in ${h.chunk_count} parts` : ""}.`}
                 /* Open, and in full. This used to be behind a chevron in a
                    table cell, and the reason is the only useful part. */
-                error={h.errors?.length ? h.errors.join(" · ") : "It failed and recorded no reason."}
+                error={h.errors?.length ? h.errors.join(". ") : "It failed and recorded no reason."}
               />
             ))}
           </ul>
@@ -251,25 +251,25 @@ export function PullSyncPanel({
              read the same table, so when that read is unavailable they collapse
              into ONE notice rather than saying the same thing twice. */}
       {!canReadHistory ? (
-        <div className="flex items-start gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <div className="note note-warn">
+          <AlertTriangle size={16} className="mt-1 shrink-0" />
           <div>
-            <p className="font-semibold">Freshness and history cannot be read by this build.</p>
+            <p className="font-medium">This version cannot read how fresh the data is or what ran before.</p>
             <p className="mt-1">
-              Both come from the sync history in Supabase, and this window has no read credentials — see the
-              Supabase Cloud panel. Nothing below is stale or missing; it is unknown. Pulling itself is unaffected.
+              Both come from the history kept in the online database, and this window has no read-only access to it. See the
+              Online database panel. Nothing below is old or missing. It is simply not known. Reading from Tally itself is not affected.
             </p>
           </div>
         </div>
       ) : (
         <>
           <section>
-            <RowGroupHeading>Freshness</RowGroupHeading>
-            <ul className="flex flex-col gap-2">
+            <RowGroupHeading>How fresh the data is</RowGroupHeading>
+            <ul className="tray flex flex-col gap-2">
               <StatusRow
                 icon={PackageSearch}
                 tone={newestMasters ? "neutral" : "warn"}
-                title="Masters"
+                title="Parties and items"
                 subject={newestMasters ? (counts(newestMasters.row_counts) ?? "no rows changed") : "no run on record"}
                 meta={ago(newestMasters?.started_at ?? null)}
               />
@@ -283,38 +283,38 @@ export function PullSyncPanel({
               <StatusRow
                 icon={CalendarClock}
                 tone={newestSweep ? "neutral" : "warn"}
-                title="Full sweep"
+                title="Whole-year check"
                 /* A run of small syncs makes the mirror look fresh while
                    backdated entry never arrives. Most of the entry here is
                    backdated, so this is the row that matters. */
-                subject={`a voucher run of ${FULL_SWEEP_MIN_VOUCHERS.toLocaleString("en-IN")}+ rows — the only kind that catches backdated entry`}
+                subject={`a voucher run of ${FULL_SWEEP_MIN_VOUCHERS.toLocaleString("en-IN")} or more rows. It is the only kind that catches entries made for an earlier date`}
                 meta={sweepMeta}
               />
             </ul>
           </section>
 
           <section>
-            <RowGroupHeading icon={History}>Recent successful runs</RowGroupHeading>
+            <RowGroupHeading icon={History}>Recent runs that worked</RowGroupHeading>
             {succeeded.length === 0 ? (
-              <EmptyNote icon={History}>No successful run is on record yet.</EmptyNote>
+              <EmptyNote icon={History}>No run that worked is on record yet.</EmptyNote>
             ) : (
               <>
-                <ul className="flex flex-col gap-2">
+                <ul className="tray flex flex-col gap-2">
                   {shownOk.map((h) => (
                     <StatusRow
                       key={h.id}
                       icon={CheckCircle2}
                       tone="success"
-                      title={h.sync_type === "masters" ? "Masters sync" : "Voucher sync"}
+                      title={h.sync_type === "masters" ? "Parties and items" : "Vouchers"}
                       subject={counts(h.row_counts) ?? "no rows changed"}
-                      meta={`${new Date(h.started_at).toLocaleString("en-IN")} · ${dur(h.duration_ms)}${h.chunk_count ? ` · ${h.chunk_count} chunks` : ""}`}
+                      meta={`${new Date(h.started_at).toLocaleString("en-IN")}. Took ${dur(h.duration_ms)}${h.chunk_count ? `, in ${h.chunk_count} parts` : ""}.`}
                     />
                   ))}
                 </ul>
                 {succeeded.length > shownOk.length && (
                   <button
                     onClick={() => setShowAllRuns(true)}
-                    className="mt-2 w-full rounded-lg px-3 py-1.5 text-[11.5px] font-medium text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-700"
+                    className="btn-ghost mt-2 w-full"
                   >
                     Show {succeeded.length - shownOk.length} more
                   </button>
@@ -325,9 +325,9 @@ export function PullSyncPanel({
         </>
       )}
 
-      <p className="flex items-start gap-1.5 text-[11px] text-neutral-500">
-        <Tag size={11} className="mt-0.5 shrink-0" />
-        The price list is one request for the whole catalogue, so it does not need a masters sync behind it.
+      <p className="flex items-start gap-2 text-xs text-neutral-700">
+        <Tag size={16} className="mt-1 shrink-0" />
+        The price list is read in one go for the whole catalogue, so it does not need a parties and items sync first.
       </p>
     </div>
   );

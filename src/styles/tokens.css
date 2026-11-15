@@ -1,0 +1,132 @@
+/* JOB: the blue design language as variables, for the sync agent's own window. The ONLY file in the renderer where a literal colour, type size,
+   radius, shadow or spacing value is written; tailwind.config.js and index.css read these by name.
+   Source: the web app's src/styles/tokens.css (the approved blue language, 4-Nov-2026). The values are COPIED, not imported, because the two repos
+   cannot share a file. Keep the two in step; src/styles/__tests__ is not shared either, so scripts/test-agent-ui.ts guards this copy.
+   Light only. Left out on purpose, because the agent window is a plain status panel: the page gradient (the ground is one flat colour), the
+   frosted glass surfaces and their blur, and the ink card. */
+:root {
+  /* the ground behind everything: one flat colour */
+  --page: #eef1f6;
+
+  /* surfaces */
+  --card: #fff;
+  --soft: #f3f5f9;
+  --soft-2: #e9edf3;
+
+  /* lines */
+  --line: #e2e6ee;
+  --line-2: #c9cfda;
+  /* the edge of a form control: 3:1 on white (WCAG 1.4.11) */
+  --edge-control: #868d9c;
+
+  /* ink */
+  --ink: #14171f;
+  --ink-2: #262b36;
+  --ink-3: #5a6070;
+
+  /* text */
+  --text: #1b2030;
+  --muted: #5d6577;
+  --faint: #5c6476;
+
+  /* the one accent */
+  --b700: #1d41c4;
+  --b600: #2f5fe0;
+  --b400: #7097f5;
+  --b200: #c9d8fc;
+  --b100: #e6edfe;
+
+  --on-ink: #fff;
+
+  /* status: pills, figures and the error line only */
+  --good: #17784f;
+  --good-bg: #ddf3e8;
+  --good-ink: #0f4f34;
+  --warn: #925c06;
+  --warn-bg: #fbefd2;
+  --warn-ink: #5b3a05;
+  --bad: #b4312f;
+  --bad-bg: #fde4e2;
+  --bad-ink: #7b1f1d;
+
+  /* hairline shadow colours, used only inside the elevation values below */
+  --shadow-edge: rgba(25, 28, 33, 0.06);
+  --shadow-edge-2: rgba(25, 28, 33, 0.08);
+  --shadow-short: rgba(20, 23, 31, 0.08);
+  --shadow-mid: rgba(20, 23, 31, 0.12);
+  --shadow-deep: rgba(20, 23, 31, 0.16);
+  --shadow-primary-drop: rgba(29, 65, 196, 0.34);
+  --scrim: rgba(20, 23, 31, 0.42);
+  --focus: var(--b600);
+
+  /* elevation: a fine ring, a crisp 1 px drop and at most one short drop. No big soft blur, no glow. */
+  --shadow-button: 0 0 0 1px var(--shadow-edge-2), 0 1px 2px 0 var(--shadow-mid);
+  --shadow-card: 0 0 0 1px var(--shadow-edge), 0 1px 2px 0 var(--shadow-mid), 0 3px 4px -2px var(--shadow-short);
+  --shadow-menu: 0 0 0 1px var(--shadow-edge-2), 0 1px 2px 0 var(--shadow-mid), 0 4px 8px -4px var(--shadow-deep);
+  --shadow-modal: 0 0 0 1px var(--shadow-edge), 0 1px 2px 0 var(--shadow-mid), 0 6px 8px -4px var(--shadow-mid);
+  --shadow-primary: 0 1px 2px 0 var(--shadow-primary-drop);
+  --shadow-badge: 0 1px 2px 0 color-mix(in srgb, currentColor 16%, transparent), 0 0 0 1px color-mix(in srgb, currentColor 14%, transparent);
+  --ring: inset 0 0 0 1px var(--line-2);
+  --ring-soft: inset 0 0 0 1px var(--line);
+
+  /* corners: concentric (an inner corner is the outer corner minus the gap) */
+  --r-xl: 28px;
+  --r-lg: 20px;
+  --r-md: 12px;
+  --r-sm: 8px;
+  --r-xs: 4px;
+  --r-pill: 999px;
+
+  /* spacing: 4 8 12 16 24, and 48 between sections only */
+  --sp-0: 2px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 48px;
+
+  --bw: 1px;
+  --bw-2: 2px;
+
+  /* control sizes */
+  --tap: 44px;
+  --icon: 20px;
+  --icon-s: 16px;
+  --dot: 6px;
+  --page-max: 1120px;
+
+  /* type: Outfit for display text, Geist for everything read in rows. Weights 300 400 500, never bold. Steps 12 14 16 18 24 32 40 56. */
+  --font-display: "Outfit Variable", Outfit, "Geist Variable", Geist, system-ui, sans-serif;
+  --font: "Geist Variable", Geist, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --fw-light: 300;
+  --fw: 400;
+  --fw-medium: 500;
+  --fs-12: 12px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-18: 18px;
+  --fs-24: 24px;
+  --fs-32: 32px;
+  --fs-40: 40px;
+  --fs-56: 56px;
+  --lh-12: 16px;
+  --lh-14: 20px;
+  --lh-16: 24px;
+  --lh-18: 24px;
+  --lh-24: 28px;
+  --lh-32: 36px;
+  --lh-40: 44px;
+  --lh-56: 60px;
+  --ls-display: -0.02em;
+  --ls-fig: -0.01em;
+
+  /* motion: 150 ms fades and slides only; press feedback scales to 0.97; all of it off under reduced motion */
+  --dur: 150ms;
+  --dur-exit: 120ms;
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --press: 0.97;
+  --press-icon: 0.94;
+
+  color-scheme: light;
+}

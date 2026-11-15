@@ -76,10 +76,11 @@ export function readPrimaryConfig(tallyUrl: string, env: Env = process.env): { o
 }
 
 // ── The queue loop ────────────────────────────────────────────────────────────
-export interface LoopStatus { running: boolean; rounds: number; lastAt: string | null; lastNote: string | null; errors: number; busy: boolean }
+/** `lastAt` is the last time the loop looked; `lastWorkAt` (agent-ui lane) is the last time it actually did something (worked a job, or ran a piece of mirror work), so a person can tell "looked and found nothing" from "did something". */
+export interface LoopStatus { running: boolean; rounds: number; lastAt: string | null; lastNote: string | null; errors: number; busy: boolean; lastWorkAt?: string | null }
 
 export class PrimaryQueueLoop {
-  readonly status: LoopStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, busy: false };
+  readonly status: LoopStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, busy: false, lastWorkAt: null };
   private timer: ReturnType<typeof setTimeout> | null = null;
   private fails = 0;
   constructor(private o: { agent: Pick<ErpJobAgent, "runOnce">; pollMs: number; busyMs: number; log?: (l: string) => void; now?: () => number }) {}
@@ -98,7 +99,7 @@ export class PrimaryQueueLoop {
       if (r.stopped && r.results.length === 0 && r.settled.length === 0) { this.status.lastNote = r.stopped; return this.o.pollMs; }
       const n = r.results.length + r.settled.length;
       this.status.lastNote = n ? `${r.results.length} job(s) worked, ${r.settled.length} settled` : "idle";
-      if (n) log(this.status.lastNote);
+      if (n) { log(this.status.lastNote); this.status.lastWorkAt = this.status.lastAt; }
       return n ? this.o.busyMs : this.o.pollMs;
     } catch (e) {
       this.status.errors++;
@@ -277,7 +278,7 @@ const holdLine = (h: Pick<MirrorHold, "type" | "storeRows" | "consecutive" | "si
   `${h.type}: ${h.storeRows} voucher(s) of this type vanished from Tally's read, so the mirror is NOT pruning them (held ${h.consecutive} run(s) in a row since ${h.since}). If they really are gone from Tally, release it once with: npx tsx scripts/primary-switches.ts ack-vanish "${h.type}"`;
 
 export class PrimaryMirrorLoop {
-  readonly status: MirrorLoopStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, busy: false, alarms: [], holds: [] };
+  readonly status: MirrorLoopStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, busy: false, lastWorkAt: null, alarms: [], holds: [] };
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pausedUntil = 0;
   constructor(private o: {
@@ -410,6 +411,7 @@ export class PrimaryMirrorLoop {
       this.status.rounds++;
       this.status.lastAt = now.toISOString();
       this.status.lastNote = rep.skipped ?? (rep.did.map((d) => `${d.work}:${d.state}`).join(", ") || "nothing due");
+      if (rep.did.length > 0) this.status.lastWorkAt = now.toISOString();
     } catch (e) {
       this.status.errors++;
       const msg = (e as Error).message;

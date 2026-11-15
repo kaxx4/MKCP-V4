@@ -75,7 +75,7 @@ export function tallyFact(health: HealthLike | null, baseLabel: string): AgentFa
       label: "Tally",
       value: "Offline",
       tone: "bad",
-      sub: "TallyPrime is not answering on :9000",
+      sub: "TallyPrime is not answering on port 9000",
       attention: true,
     };
   }
@@ -83,7 +83,7 @@ export function tallyFact(health: HealthLike | null, baseLabel: string): AgentFa
     label: "Tally",
     value: "Connected",
     tone: "good",
-    sub: health.busy ? "busy with a sync — inferred, not a fresh ping" : health.tallyUrl || baseLabel,
+    sub: health.busy ? "busy with a sync, so this is worked out and not freshly checked" : health.tallyUrl || baseLabel,
     attention: false,
   };
 }
@@ -92,16 +92,16 @@ export function tallyFact(health: HealthLike | null, baseLabel: string): AgentFa
 export function drainFact(pushStatus: PushStatusLike | null): AgentFact {
   if (!pushStatus) {
     return {
-      label: "Push drain",
+      label: "Old sender",
       value: "Unknown",
       tone: "unknown",
-      sub: "the local server did not answer, so its state is unknown",
+      sub: "the local server did not answer, so this is not known",
       attention: true,
     };
   }
   if (!pushStatus.enabled) {
     return {
-      label: "Push drain",
+      label: "Old sender",
       value: "Disabled",
       tone: "warn",
       sub: "queued vouchers will stay queued",
@@ -109,10 +109,10 @@ export function drainFact(pushStatus: PushStatusLike | null): AgentFact {
     };
   }
   return {
-    label: "Push drain",
+    label: "Old sender",
     value: "Running",
     tone: "good",
-    sub: pushStatus.lastTick ? `last tick ${clock(pushStatus.lastTick)}` : "no tick yet",
+    sub: pushStatus.lastTick ? `last checked ${clock(pushStatus.lastTick)}` : "not checked yet",
     attention: false,
   };
 }
@@ -131,29 +131,29 @@ export function queueFact(pushStatus: PushStatusLike | null): AgentFact {
     /* Not "never counted" — the agent may have counted it a hundred times; we
        could not ask. Two different unknowns with two different fixes. */
     return {
-      label: "Queue",
-      value: "—",
+      label: "Old queue",
+      value: "Not known",
       tone: "unknown",
-      sub: "the local server did not answer, so the depth is unknown",
+      sub: "the local server did not answer, so the number is not known",
       attention: true,
     };
   }
   if (!at) {
     return {
-      label: "Queue",
-      value: "—",
+      label: "Old queue",
+      value: "Not known",
       tone: "unknown",
-      sub: "never counted — the drain agent has not reported a depth",
+      sub: "never counted: the old sender has not reported a number",
       attention: true,
     };
   }
   const { pending, pushing, failed } = pushStatus.queueStats;
   const waiting = pending + pushing;
   return {
-    label: "Queue",
+    label: "Old queue",
     value: String(waiting),
     tone: failed > 0 ? "warn" : "good",
-    sub: failed > 0 ? `${failed} failed · counted ${clock(at)}` : `nothing waiting · counted ${clock(at)}`,
+    sub: failed > 0 ? `${failed} refused, counted ${clock(at)}` : `nothing waiting, counted ${clock(at)}`,
     attention: failed > 0,
   };
 }
@@ -187,31 +187,31 @@ export function cloudFact(config: ChannelLike, masters: ChannelLike, vouchers: C
 
   if (failing) {
     return {
-      label: "Supabase",
-      value: "Error",
+      label: "Online database",
+      value: "Failing",
       tone: "bad",
       /* Not "last write": `lastAt` is stamped on every ATTEMPT, so a failing
          channel was reporting a write that never happened. */
-      sub: lastAt ? `last tried ${clock(lastAt)}` : "no push since this app started",
+      sub: lastAt ? `last tried ${clock(lastAt)}` : "nothing sent since this app started",
       attention: true,
     };
   }
   if (!tried) {
     return {
-      label: "Supabase",
-      value: "Not tried",
+      label: "Online database",
+      value: "Nothing sent yet",
       tone: "unknown",
       /* The store is in-memory, so no timestamp means "not since this app
          started", never "never". */
-      sub: "no push since this app started",
+      sub: "nothing sent since this app started",
       attention: false,
     };
   }
   return {
-    label: "Supabase",
+    label: "Online database",
     value: "OK",
     tone: "good",
-    sub: lastAt ? `last write ${clock(lastAt)}` : "no push since this app started",
+    sub: lastAt ? `last sent ${clock(lastAt)}` : "nothing sent since this app started",
     attention: false,
   };
 }

@@ -23,6 +23,7 @@ import { primaryModeOn } from "./services/primaryMode.js";
 import { startPrimaryMode, type PrimaryHandle } from "./services/primaryRunner.js";
 import { startOfficeProvisioning } from "./services/officeProvision.js";
 import { PreflightReporter, runPreflightLines } from "./services/primaryPreflight.js";
+import { buildPrimarySummary } from "./services/primarySummary.js";
 import { agentMachineId, supabaseClient as dbClient } from "./services/supabaseClient.js";
 import { filedThroughOn } from "./services/pushGuard.js";
 import { checkDebugXml } from "./services/debugGuard.js";
@@ -869,6 +870,9 @@ app.get("/api/whoami", (_req, res) =>
 
 app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()));
 app.get("/api/primary/status", (_req, res) => res.json(primary ? primary.status() : { mode: primaryModeOn() ? "on-but-not-running" : "off" }));
+/* The agent window's "office computer" card (agent-ui lane). Read-only, behind the same agent auth as every route above; asks nothing of Tally or the
+   database. The machine key is never in the answer, only its sha-256 (primarySummary.ts). */
+app.get("/api/primary/summary", (_req, res) => res.json(buildPrimarySummary({ env: process.env, tallyUrl: TALLY, primary: primary ? primary.status() : null, preflight: preflightReporter ? preflightReporter.status : null })));
 
 /* ── What the agent can tell you about the mirror, without a browser ──────
  *

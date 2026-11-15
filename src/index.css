@@ -1,19 +1,18 @@
+@import "./styles/tokens.css";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* IBM Plex Sans loaded via <link> in index.html for non-blocking font load */
-
 /* ═══════════════════════════════════════════════════════════════
-   M.K. CYCLES DASHBOARD — Bold Financial Design System
-   IBM Plex Sans · Light mode · Bold typography · High contrast
+   The sync agent's window, in the blue design language.
+   Values live in styles/tokens.css and nowhere else. Light only.
+   One accent (blue), one flat ground, Outfit for display text and
+   Geist for rows. 44 px tap targets, concentric corners, 150 ms
+   motion. Nothing is cut short with dots; nothing glows.
    ═══════════════════════════════════════════════════════════════ */
 
-/* ─── Motion Preferences ──────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
@@ -21,853 +20,159 @@
   }
 }
 
-/* ─── Focus Ring ──────────────────────────────────────────── */
+/* One focus ring for everything the keyboard can land on. */
 *:focus-visible {
-  outline: 2px solid #2f5fe0;
-  outline-offset: 2px;
-  border-radius: 6px;
+  outline: var(--bw-2) solid var(--focus);
+  outline-offset: var(--sp-1);
 }
 
-/* Inputs, selects and buttons carry their own ring already; 3px keeps the two
-   from touching. Same values as the web app. */
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible,
-button:focus-visible {
-  outline-offset: 3px;
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   BASE LAYER
-   ═══════════════════════════════════════════════════════════════ */
 @layer base {
-  * {
-    box-sizing: border-box;
-  }
+  * { box-sizing: border-box; }
 
   html {
-    overflow-x: hidden;
     -webkit-text-size-adjust: 100%;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
-    text-rendering: optimizeLegibility;
-  }
-
-  /* Matched to the web dashboard's "Refined Minimal" base. The sync agent and
-     the web app are opened by the same person on the same desk, against the
-     same books; they had no business being set in different typefaces on
-     different grounds. Only the tokens differed — the component vocabulary
-     (.card, .btn-*, .badge-*, .form-*) is already the same in both — so this is
-     a token change, not a rewrite of the two screens. */
-  body {
-    background-color: #eeefec;
-    color: #16161a;
-    font-family: "Plus Jakarta Sans", "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-    font-size: 14.5px;
-    line-height: 1.55;
-    font-weight: 400;
-    /* Tabular figures at the root, as the web app does. Every number on this
-       window is a count, a rupee figure or a timestamp, and proportional digits
-       make a column of them shuffle sideways as they tick. */
-    font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
-    text-wrap: pretty;
-    overflow-x: hidden;
   }
 
-  /* Scrollbars */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  ::-webkit-scrollbar-thumb {
-    background: #d0d0d5;
-    border-radius: 3px;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: #9a9aa0;
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: var(--fs-14);
+    line-height: var(--lh-14);
+    font-weight: var(--fw);
   }
 
-  /* Selection */
-  ::selection {
-    background-color: #2f5fe0;
-    color: #ffffff;
-  }
+  /* Display text only: the page title, the big figures, and a panel's heading. */
+  h1, h2, h3 { font-family: var(--font-display); font-weight: var(--fw-medium); letter-spacing: var(--ls-display); margin: 0; text-wrap: balance; }
+  p { margin: 0; text-wrap: pretty; }
+  button { font: inherit; color: inherit; }
+  code, kbd { font-family: var(--font); font-size: inherit; }
+
+  /* Numbers line up in a column without a second typeface. */
+  .font-mono, .tabular-nums, time { font-variant-numeric: tabular-nums; }
+  strong { font-weight: var(--fw-medium); }
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   COMPONENT LAYER
-   ═══════════════════════════════════════════════════════════════ */
 @layer components {
-
-  /* ═══════════════════════════════════════════════════════════
-     CARDS & SURFACES
-     ═══════════════════════════════════════════════════════════ */
-
-  .card {
-    @apply bg-white rounded-xl border border-neutral-200/80
-           p-4
-           transition-[box-shadow] duration-100;
+  /* ── buttons: a 44 px pill; the blue one is the one thing pressed ── */
+  .btn-base, .btn-primary, .btn-secondary, .btn-danger, .btn-ghost {
+    position: relative;
+    display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+    min-height: var(--tap); padding: 0 var(--sp-5);
+    border: 0; border-radius: var(--r-pill);
+    font-weight: var(--fw-medium); font-size: var(--fs-14); line-height: var(--lh-14);
+    white-space: nowrap; cursor: pointer; text-decoration: none;
+    transition: transform var(--dur) var(--ease), background-color var(--dur) var(--ease), color var(--dur) var(--ease);
   }
-
-  .card-elevated {
-    @apply bg-white rounded-xl shadow-base
-           p-4
-           transition-[box-shadow,transform] duration-150
-           hover:shadow-md hover:-translate-y-px;
+  .btn-primary   { background: var(--b600); color: var(--on-ink); box-shadow: var(--shadow-primary); }
+  .btn-secondary { background: var(--card); color: var(--text); box-shadow: var(--shadow-button); }
+  .btn-danger    { background: var(--card); color: var(--bad); box-shadow: var(--shadow-button); }
+  .btn-ghost     { background: none; color: var(--b700); padding: 0 var(--sp-3); }
+  .btn-primary:active:not(:disabled), .btn-secondary:active:not(:disabled), .btn-danger:active:not(:disabled) { transform: scale(var(--press)); }
+  .btn-primary:active:not(:disabled) { background: var(--b700); }
+  .btn-secondary:active:not(:disabled), .btn-danger:active:not(:disabled) { background: var(--soft-2); }
+  @media (hover: hover) {
+    .btn-primary:hover:not(:disabled) { background: var(--b700); }
+    .btn-secondary:hover:not(:disabled), .btn-danger:hover:not(:disabled), .btn-ghost:hover:not(:disabled) { background: var(--soft); }
   }
-
-  .card-interactive {
-    @apply card cursor-pointer
-           hover:shadow-md hover:border-neutral-300
-           active:scale-[0.98]
-           transition-[box-shadow,border-color,transform] duration-100;
+  .btn-primary:disabled, .btn-secondary:disabled, .btn-danger:disabled {
+    background: var(--soft-2); color: var(--muted); box-shadow: var(--ring); cursor: not-allowed;
   }
-
-  /* Bento grid */
-  .bento-grid {
-    display: grid;
-    gap: 12px;
-    grid-template-columns: repeat(2, 1fr);
-  }
-  @media (min-width: 640px) {
-    .bento-grid {
-      gap: 14px;
-      grid-template-columns: repeat(3, 1fr);
-    }
-  }
-  @media (min-width: 1024px) {
-    .bento-grid {
-      grid-template-columns: repeat(4, 1fr);
-    }
-  }
-
-  /* Backward compatibility aliases */
-  .bento-card { @apply card; }
-  .bento-card-interactive { @apply card-interactive; }
-  .bento-card-elevated { @apply card-elevated; }
-
-  /* ═══════════════════════════════════════════════════════════
-     TYPOGRAPHY SYSTEM
-     Clear hierarchy: Title → Section → Subsection → Body → Caption
-     ═══════════════════════════════════════════════════════════ */
-
-  /* Large Title — 20px/700 — page headings (Electron: compact data app) */
-  .page-title {
-    @apply text-2xl font-bold text-neutral-950;
-    letter-spacing: -0.02em;
-    font-weight: 700;
-    text-wrap: balance;
-  }
-
-  /* Page Subtitle — 13px/500 — below page title */
-  .page-subtitle {
-    @apply text-sm text-neutral-600 mt-1;
-    font-weight: 500;
-  }
-
-  /* Section Header — 18px/700 — card/section headings */
-  .section-header {
-    @apply text-xl font-bold text-neutral-950;
-    letter-spacing: -0.01em;
-    font-weight: 700;
-    text-wrap: balance;
-  }
-
-  /* Subsection Header — 16px/700 */
-  .subsection-header {
-    @apply text-lg font-bold text-neutral-900;
-    font-weight: 700;
-    text-wrap: balance;
-  }
-
-  /* Card Title — 16px/700 — inside cards */
-  .card-title {
-    @apply text-lg font-bold text-neutral-900;
-    font-weight: 700;
-    text-wrap: balance;
-  }
-
-  /* Card Subtitle — 14px/500 */
-  .card-subtitle {
-    @apply text-base text-neutral-600;
-    font-weight: 500;
-  }
-
-  /* Label — 13px/600 uppercase — form labels, column headers */
-  .label-text {
-    @apply text-sm font-semibold uppercase tracking-wide text-neutral-700;
-    font-weight: 600;
-  }
-
-  /* Caption — 13px/500 — secondary small text */
-  .caption-text {
-    @apply text-sm text-neutral-600;
-    font-weight: 500;
-  }
-
-  /* Metric Value — responsive: 18px mobile → 20px md → 20px lg — KPI numbers (Electron density) */
-  .metric-value {
-    @apply text-xl md:text-2xl lg:text-2xl font-bold text-neutral-950 tabular-nums;
-    letter-spacing: -0.02em;
-    font-weight: 700;
-  }
-
-  /* Metric Label — 13px/600 uppercase — KPI descriptions */
-  .metric-label {
-    @apply text-sm font-semibold uppercase tracking-wide text-neutral-700;
-    font-weight: 600;
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     PAGE LAYOUT — breathing whitespace
-     ═══════════════════════════════════════════════════════════ */
-
-  .page-section {
-    @apply space-y-4 md:space-y-5;
-  }
-
-  .page-header {
-    @apply flex flex-col gap-1.5 mb-3 md:mb-4;
-  }
-
-  .page-header-row {
-    @apply flex items-center justify-between gap-4;
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     TABLES
-     ═══════════════════════════════════════════════════════════ */
-
-  .table-scroll {
-    @apply overflow-x-auto -mx-5 px-5 md:-mx-6 md:px-6;
-    overscroll-behavior-x: none;
-  }
-
-  .data-table {
-    @apply w-full text-sm border-collapse;
-  }
-
-  .table-header {
-    @apply text-xs font-bold uppercase tracking-wide
-           text-neutral-700
-           bg-neutral-50
-           px-3 py-2.5 text-left whitespace-nowrap
-           border-b border-neutral-200;
-    font-weight: 700;
-  }
-
-  .table-header-sticky {
-    @apply table-header sticky top-0 z-20
-           bg-neutral-50;
-  }
-
-  .table-cell {
-    @apply text-sm px-3 py-2 text-neutral-900
-           border-b border-neutral-100;
-  }
-
-  .table-cell-emphasis {
-    @apply table-cell font-semibold text-neutral-950;
-  }
-
-  .table-cell-muted {
-    @apply table-cell text-neutral-500;
-  }
-
-  .table-cell-mono {
-    @apply table-cell font-mono text-sm tabular-nums;
-  }
-
-  .table-cell-right {
-    @apply table-cell text-right tabular-nums whitespace-nowrap;
-  }
-
-  .responsive-table-row {
-    @apply border-b border-neutral-100 transition-colors duration-75;
-  }
-  .responsive-table-row:hover {
-    @apply bg-neutral-50;
-  }
-  .responsive-table-row:last-child {
-    @apply border-b-0;
-  }
-
-  .table-row-hover {
-    @apply hover:bg-neutral-50 transition-colors duration-75;
-  }
-
-  .table-row-striped:nth-child(even) {
-    @apply bg-neutral-50/50;
-  }
-
-  .table-footer-row {
-    @apply border-t-2 border-neutral-200 bg-neutral-50 font-semibold;
-  }
-
-  .table-group-header {
-    @apply bg-neutral-100 font-medium text-xs uppercase tracking-wide
-           text-neutral-500 px-4 py-2.5;
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     TABS
-     ═══════════════════════════════════════════════════════════ */
-
-  .tab-list {
-    @apply flex gap-0 border-b border-neutral-200
-           overflow-x-auto -mx-5 px-5 md:mx-0 md:px-0;
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-    overscroll-behavior-x: none;
-  }
-  .tab-list::-webkit-scrollbar { display: none; }
-
-  .tab-item {
-    @apply px-4 py-3 text-sm font-semibold text-neutral-500
-           border-b-2 border-transparent
-           transition-colors duration-150 cursor-pointer
-           hover:text-neutral-900
-           whitespace-nowrap;
-  }
-
-  .tab-item-active {
-    @apply text-accent border-accent;
-  }
-
-  .tab-pills {
-    @apply flex gap-2 flex-wrap;
-  }
-
-  .tab-pill {
-    @apply px-3 py-1.5 text-xs font-medium text-neutral-600
-           rounded-full border border-neutral-200
-           transition-[background-color,color,transform] duration-150 cursor-pointer
-           hover:text-neutral-900 hover:bg-neutral-50
-           active:scale-[0.96];
-  }
-
-  .tab-pill-active {
-    @apply text-accent bg-accent/10 border-accent/30 font-semibold;
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     BUTTONS
-     ═══════════════════════════════════════════════════════════ */
-
-  .btn-base {
-    @apply inline-flex items-center justify-center gap-2
-           font-semibold text-sm rounded-lg
-           transition-[background-color,border-color,box-shadow,color,transform] duration-150
-           disabled:opacity-50 disabled:cursor-not-allowed
-           focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2;
-    font-weight: 600;
-  }
-
-  .btn-primary {
-    @apply btn-base min-h-10 px-5 py-2.5
-           bg-accent text-white font-bold
-           hover:bg-accent-700 active:bg-accent-800 active:scale-[0.96]
-           shadow-sm hover:shadow-md;
-    font-weight: 700;
-  }
-
-  .btn-secondary {
-    @apply btn-base min-h-10 px-4 py-2
-           bg-white text-neutral-900 border border-neutral-200
-           hover:bg-neutral-50 active:bg-neutral-100 active:scale-[0.96]
-           shadow-xs;
-  }
-
-  .btn-ghost {
-    @apply btn-base min-h-10 px-3 py-2 text-neutral-600
-           hover:text-neutral-900 hover:bg-neutral-100
-           active:bg-neutral-200 active:scale-[0.96];
-  }
-
-  .btn-danger {
-    @apply btn-base min-h-10 px-4 py-2
-           bg-danger text-white font-semibold
-           hover:bg-danger-600 active:bg-danger-700 active:scale-[0.96];
-  }
-
-  .btn-accent-ghost {
-    @apply btn-base min-h-10 px-3 py-2 text-accent
-           hover:text-accent-700 hover:bg-accent/10
-           active:bg-accent/20 active:scale-[0.96];
-  }
-
-  .btn-icon {
-    @apply flex items-center justify-center w-10 h-10
-           rounded-lg text-neutral-500
-           hover:text-neutral-900 hover:bg-neutral-100
-           transition-[background-color,color,transform] duration-150
-           active:scale-[0.96]
-           disabled:opacity-50;
-  }
-
-  .btn-icon-accent {
-    @apply flex items-center justify-center w-10 h-10
-           rounded-lg text-accent
-           hover:bg-accent/10
-           transition-[background-color,transform] duration-150
-           active:scale-[0.96];
-  }
-
-  .btn-sm { @apply text-xs min-h-7 px-2.5 py-1; }
-  .btn-lg { @apply text-base min-h-11 px-6 py-2.5; }
-
-  /* ── Finger-sized hit areas, without changing how anything looks ────────
-   *
-   * A sweep of this window on 15-Sep-2026 found the small controls well under
-   * the 44px guidance: the mirror panel's refresh was a bare 13px icon, the
-   * file-transfer dismiss 13px, and every `.btn-sm` 28px tall. Simply making
-   * them 44px would wreck a window that is dense on purpose — it is a status
-   * board, and the whole point is that the state of the system fits on one
-   * screen. So the VISUAL box is left exactly as it is and an invisible one
-   * is grown behind it.
-   *
-   * `.tap` gives a centred 44x44 area; `.tap-y` grows only vertically, for a
-   * control sitting in a horizontal row where a wider area would reach its
-   * neighbour — a hit area that overlaps the next control is worse than a
-   * small one, because it does the wrong thing rather than nothing.
-   *
-   * DELIBERATELY NOT gated on `@media (pointer: coarse)`, which is how the web
-   * dashboard ships the same class (web-dashboard/src/index.css). That gate is
-   * right there — those are phone visits to an all-day desktop grid. This is an
-   * Electron window driven by a mouse, where the gate would make the class a
-   * silent no-op, and Fitts's law does not stop applying because the pointer
-   * is fine. Nothing sits behind these controls for the area to swallow. */
+  /* "small" is a size of label, not of target: it is still 44 px tall. */
+  .btn-sm { padding: 0 var(--sp-4); }
+  .btn-lg { padding: 0 var(--sp-5); font-size: var(--fs-16); }
   .tap, .tap-y { position: relative; }
-  .tap::before, .tap-y::before {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    min-height: 44px;
-    /* Never wider than the element on .tap-y — vertical reach only. */
-    width: 100%;
-    min-width: 0;
+
+  /* a round 44 px icon button */
+  .btn-icon {
+    position: relative; width: var(--tap); height: var(--tap); flex: none;
+    display: inline-grid; place-items: center; border: 0; border-radius: 50%; cursor: pointer;
+    background: var(--card); color: var(--text); box-shadow: var(--shadow-button);
+    transition: transform var(--dur) var(--ease), background-color var(--dur) var(--ease);
   }
-  .tap::before { min-width: 44px; }
+  .btn-icon:active:not(:disabled) { transform: scale(var(--press-icon)); background: var(--soft-2); }
+  @media (hover: hover) { .btn-icon:hover:not(:disabled) { background: var(--soft); } }
+  .btn-icon:disabled { background: var(--soft-2); color: var(--muted); box-shadow: none; cursor: not-allowed; }
 
-  /* The two named small controls, given `.tap-y`'s treatment without having to
-     touch every call site. Measured in the running window 15-Sep-2026: every
-     `.btn-sm` is 28px tall and every `.filter-chip` 30px — 20 controls across
-     the page header, the Logs filter bar, Pull Sync's voucher windows and the
-     panel actions. Vertical reach only: these sit in wrapping horizontal rows,
-     and a hit area that reaches sideways into the next chip would do the wrong
-     thing rather than nothing. */
-  .btn-sm, .filter-chip { position: relative; }
-  .btn-sm::before, .filter-chip::before {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    width: 100%;
-    min-width: 0;
-    min-height: 44px;
+  /* ── a field: filled, no border; the 3:1 edge appears when it is focused ── */
+  .form-input, .form-select {
+    width: 100%; min-height: var(--tap); padding: 0 var(--sp-4);
+    border: 0; border-radius: var(--r-md);
+    background: var(--soft-2); color: var(--text);
+    font: inherit; font-size: var(--fs-14);
+    transition: background-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
   }
+  .form-input::placeholder { color: var(--muted); }
+  .form-input:focus { background: var(--card); box-shadow: 0 0 0 var(--bw) var(--edge-control); outline: none; }
+  .form-input:focus-visible { outline: var(--bw-2) solid var(--focus); outline-offset: 0; }
 
-  /* ═══════════════════════════════════════════════════════════
-     FORM CONTROLS
-     ═══════════════════════════════════════════════════════════ */
+  /* ── page header ── */
+  .page-header { margin-bottom: var(--sp-5); }
+  .page-header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-4); }
+  .page-title { font-family: var(--font-display); font-size: var(--fs-32); line-height: var(--lh-32); font-weight: var(--fw-medium); letter-spacing: var(--ls-display); color: var(--ink); }
+  .page-subtitle { margin-top: var(--sp-1); font-size: var(--fs-14); line-height: var(--lh-14); color: var(--muted); }
 
-  .form-label {
-    @apply text-sm font-medium text-neutral-900;
-  }
-
-  .form-helper {
-    @apply text-xs text-neutral-500 mt-1;
-  }
-
-  .form-input {
-    @apply min-h-10 px-3 py-2 text-sm
-           bg-white border border-neutral-200
-           text-neutral-900
-           placeholder:text-neutral-400
-           rounded-lg
-           focus:border-accent focus:ring-2 focus:ring-accent/15
-           transition-[border-color,box-shadow] duration-150
-           disabled:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-60;
-  }
-
-  .form-input-error {
-    @apply border-danger focus:ring-danger/15 focus:border-danger;
-  }
-
-  .form-input-success {
-    @apply border-success focus:ring-success/15 focus:border-success;
-  }
-
-  .form-select {
-    @apply form-input appearance-none bg-white pr-8 cursor-pointer;
-    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%238e8e93' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
-    background-repeat: no-repeat;
-    background-position: right 0.5rem center;
-    background-size: 1em 1em;
-  }
-
-  .form-textarea {
-    @apply form-input resize-none min-h-24;
-  }
-
-  .input-group {
-    @apply flex flex-col gap-2;
-  }
-
-  .input-label {
-    @apply text-sm font-medium text-neutral-900;
-  }
-
-  .search-input {
-    @apply form-input pl-10 pr-4 bg-white;
-    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a6' stroke-width='2'%3e%3ccircle cx='11' cy='11' r='8'/%3e%3cpath d='m21 21-4.35-4.35'/%3e%3c/svg%3e");
-    background-repeat: no-repeat;
-    background-position: left 0.75rem center;
-    background-size: 1rem;
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     BADGES & STATUS
-     ═══════════════════════════════════════════════════════════ */
-
-  .badge {
-    @apply inline-flex items-center px-2.5 py-1 text-xs font-medium
-           rounded-full bg-accent/10 text-accent;
-  }
-
-  .badge-success { @apply bg-success/10 text-success-600; }
-  .badge-danger  { @apply bg-danger/10 text-danger-600; }
-  .badge-warn    { @apply bg-warn/10 text-warn-600; }
-  .badge-muted   { @apply bg-neutral-100 text-neutral-600; }
-  .badge-info    { @apply bg-info/10 text-info-600; }
-  .badge-pill    { @apply rounded-full; }
-
-  .badge-dot {
-    @apply inline-flex items-center gap-1.5;
-  }
-  .badge-dot::before {
-    content: "";
-    @apply w-1.5 h-1.5 rounded-full bg-current;
-  }
-
-  .status-badge {
-    @apply inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full;
-  }
-  .status-badge-active   { @apply bg-success/10 text-success-600; }
-  .status-badge-inactive { @apply bg-neutral-100 text-neutral-600; }
-  .status-badge-pending  { @apply bg-warn/10 text-warn-600; }
-
-  /* ═══════════════════════════════════════════════════════════
-     ALERTS
-     ═══════════════════════════════════════════════════════════ */
-
-  .alert {
-    @apply flex gap-3 p-4 rounded-xl border text-sm;
-  }
-  .alert-info    { @apply border-accent/20 bg-accent/[0.04] text-neutral-900; }
-  .alert-success { @apply border-success/20 bg-success/[0.04] text-neutral-900; }
-  .alert-warn    { @apply border-warn/20 bg-warn/[0.04] text-neutral-900; }
-  .alert-danger  { @apply border-danger/20 bg-danger/[0.04] text-neutral-900; }
-
-  /* ═══════════════════════════════════════════════════════════
-     KPI / STAT CARDS
-     ═══════════════════════════════════════════════════════════ */
-
-  .kpi-value {
-    @apply text-xl md:text-2xl lg:text-2xl font-bold text-neutral-950 tabular-nums;
-    letter-spacing: -0.02em;
-    font-weight: 700;
-  }
-
-  .kpi-label {
-    @apply text-sm font-semibold uppercase tracking-wide text-neutral-700;
-    font-weight: 600;
-  }
-
-  .stat-card {
-    @apply flex flex-col gap-2 p-4
-           bg-white border border-neutral-200/80
-           rounded-xl;
-  }
-
-  .stat-label {
-    @apply text-xs font-semibold uppercase tracking-wide text-neutral-700;
-    font-weight: 600;
-  }
-
-  .stat-value {
-    @apply text-lg md:text-xl font-bold text-neutral-950 tabular-nums;
-    letter-spacing: -0.02em;
-    font-weight: 700;
-  }
-
-  .stat-sub {
-    @apply text-xs text-neutral-500;
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     MODALS
-     ═══════════════════════════════════════════════════════════ */
-
-  .modal-overlay {
-    @apply fixed inset-0 bg-black/40 flex items-center justify-center z-50;
-    animation: fadeIn 0.15s cubic-bezier(0.2, 0, 0, 1);
-  }
-
-  .modal-content {
-    @apply bg-white rounded-2xl shadow-xl
-           max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto;
-    animation: modalPop 0.2s cubic-bezier(0.2, 0, 0, 1);
-  }
-
-  .modal-header {
-    @apply flex items-center justify-between p-4 pb-3;
-  }
-
-  .modal-body {
-    @apply px-4 pb-4;
-  }
-
-  .modal-footer {
-    @apply flex items-center justify-end gap-3 px-4 pb-4;
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     TOOLTIPS
-     ═══════════════════════════════════════════════════════════ */
-
-  .tooltip { @apply relative inline-block; }
-
-  .tooltip-trigger {
-    @apply cursor-help border-b border-dotted border-neutral-400 transition-colors;
-  }
-
-  .tooltip-text {
-    @apply hidden absolute bottom-full left-1/2 -translate-x-1/2 mb-2
-           px-3 py-1.5 bg-neutral-900 text-white
-           text-xs rounded-lg whitespace-nowrap z-50 shadow-lg;
-  }
-
-  .tooltip:hover .tooltip-text { @apply block; }
-
-  /* ═══════════════════════════════════════════════════════════
-     SKELETON LOADING
-     ═══════════════════════════════════════════════════════════ */
-
-  .skeleton {
-    @apply relative overflow-hidden bg-neutral-200 rounded-lg;
-  }
-
-  .skeleton::after {
-    content: "";
-    @apply absolute inset-0;
-    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.3), transparent);
-    animation: shimmer 2s infinite;
-  }
-
-  @keyframes shimmer {
-    100% { transform: translateX(100%); }
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     EMPTY STATES
-     ═══════════════════════════════════════════════════════════ */
-
-  .empty-state {
-    @apply flex flex-col items-center justify-center py-10 px-6 text-center;
-  }
-
-  .empty-state-icon {
-    @apply w-16 h-16 text-neutral-300 mb-5;
-  }
-
-  .empty-state-title {
-    @apply text-lg font-semibold text-neutral-900 mb-2;
-    text-wrap: balance;
-  }
-
-  .empty-state-description {
-    @apply text-sm text-neutral-500 mb-8 max-w-sm leading-relaxed;
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     PROGRESS BARS
-     ═══════════════════════════════════════════════════════════ */
-
-  .progress-bar {
-    @apply h-1.5 bg-neutral-200 rounded-full overflow-hidden;
-  }
-
-  .progress-bar-fill {
-    @apply h-full bg-accent rounded-full transition-[width] duration-200;
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     DIVIDERS
-     ═══════════════════════════════════════════════════════════ */
-
-  .divider       { @apply border-t border-neutral-200; }
-  .divider-strong { @apply border-t border-neutral-300; }
-
-  /* ═══════════════════════════════════════════════════════════
-     SECTION CARDS
-     ═══════════════════════════════════════════════════════════ */
-
-  .section-card {
-    @apply bg-white rounded-xl border border-neutral-200/80 overflow-hidden;
-  }
-
-  .section-card-header {
-    @apply flex items-center justify-between px-4 py-3
-           border-b border-neutral-200 bg-neutral-50/50;
-  }
-
-  .section-card-body {
-    @apply p-4;
-  }
-
-  .section-card-body-flush { @apply p-0; }
-
-  /* ═══════════════════════════════════════════════════════════
-     FILTER BAR
-     ═══════════════════════════════════════════════════════════ */
-
-  .filter-bar {
-    @apply flex flex-wrap items-center gap-2 p-4
-           bg-neutral-50 rounded-xl border border-neutral-200/80;
-  }
-
+  /* ── a chip you choose ── */
   .filter-chip {
-    @apply inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
-           rounded-full border border-neutral-200
-           bg-white text-neutral-600
-           hover:border-accent/50 hover:text-accent hover:bg-accent/[0.04]
-           transition-[background-color,border-color,color,transform] duration-150 cursor-pointer
-           active:scale-[0.96];
+    position: relative; display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+    min-height: var(--tap); padding: 0 var(--sp-4); border: 0; border-radius: var(--r-pill); cursor: pointer;
+    background: var(--card); color: var(--text); box-shadow: var(--shadow-button);
+    font-size: var(--fs-14); font-weight: var(--fw-medium);
+    transition: transform var(--dur) var(--ease), background-color var(--dur) var(--ease);
   }
+  .filter-chip:active { transform: scale(var(--press)); }
+  .filter-chip-active { background: var(--ink); color: var(--on-ink); box-shadow: none; }
 
-  .filter-chip-active {
-    @apply bg-accent/10 border-accent/30 text-accent;
+  /* ── the panel: a white card with a quiet header; its body is a tray of rows ── */
+  .panel {
+    background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow-card); overflow: hidden;
   }
+  .panel-head {
+    display: flex; align-items: center; gap: var(--sp-3); width: 100%; min-height: var(--tap);
+    padding: var(--sp-2) var(--sp-4); border: 0; background: none; text-align: left; cursor: pointer;
+    transition: background-color var(--dur) var(--ease);
+  }
+  @media (hover: hover) { .panel-head:hover { background: var(--soft); } }
+  .panel-title { flex: 1; min-width: 0; font-family: var(--font-display); font-size: var(--fs-18); line-height: var(--lh-18); font-weight: var(--fw-medium); letter-spacing: var(--ls-display); color: var(--ink); }
+  .panel-body { padding: var(--sp-2) var(--sp-4) var(--sp-4); }
 
-  /* ═══════════════════════════════════════════════════════════
-     NUMBER HIGHLIGHTS
-     ═══════════════════════════════════════════════════════════ */
+  /* a row tray inside a card: 8 px in from the card's 20 px corner, so its own corner is 12 */
+  .tray { background: var(--soft); border-radius: var(--r-md); padding: var(--sp-2); }
 
-  .num-positive  { @apply text-success-600 font-medium tabular-nums; }
-  .num-negative  { @apply text-danger-600 font-medium tabular-nums; }
-  .num-highlight { @apply text-accent font-semibold tabular-nums; }
-  .num-muted     { @apply text-neutral-500 font-normal tabular-nums; }
+  /* ── a pill that tells a state ── */
+  .pill {
+    display: inline-flex; align-items: center; gap: var(--sp-2); width: fit-content;
+    min-height: var(--sp-5); padding: 0 var(--sp-3); border-radius: var(--r-pill);
+    font-size: var(--fs-12); line-height: var(--lh-12); font-weight: var(--fw-medium);
+    background: var(--soft-2); color: var(--ink-3); box-shadow: var(--shadow-badge);
+  }
+  .pill::before { content: ""; width: var(--dot); height: var(--dot); border-radius: 50%; background: currentColor; flex: none; }
+  .pill-good { background: var(--good-bg); color: var(--good); }
+  .pill-warn { background: var(--warn-bg); color: var(--warn); }
+  .pill-bad  { background: var(--bad-bg);  color: var(--bad); }
+  .pill-live { background: var(--b100);    color: var(--b700); }
+
+  /* ── a note: a flat tint with its reason in full ── */
+  .note { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); font-size: var(--fs-14); line-height: var(--lh-14); }
+  .note-good { background: var(--good-bg); color: var(--good-ink); }
+  .note-warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .note-bad  { background: var(--bad-bg);  color: var(--bad-ink); }
+  .note-info { background: var(--b100);    color: var(--b700); }
+
+  /* a small label above a group of rows */
+  .group-label { font-size: var(--fs-12); line-height: var(--lh-12); font-weight: var(--fw-medium); color: var(--muted); }
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   UTILITY LAYER
-   ═══════════════════════════════════════════════════════════════ */
 @layer utilities {
-  /* Animations */
-  .animate-slide-in {
-    animation: slideIn 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  @keyframes slideIn {
-    from { opacity: 0; transform: translateX(8px); }
-    to   { opacity: 1; transform: translateX(0); }
-  }
-
-  .animate-slide-up {
-    animation: slideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  @keyframes slideUp {
-    from { transform: translateY(100%); }
-    to   { transform: translateY(0); }
-  }
-
-  /* Stagger fade-up for grid/list reveals */
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(6px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  .animate-fade-up {
-    animation: fadeUp 0.25s cubic-bezier(0.2, 0, 0, 1) forwards;
-  }
-  .bento-grid > * {
-    animation: fadeUp 0.25s cubic-bezier(0.2, 0, 0, 1) forwards;
-  }
-  .bento-grid > *:nth-child(1)  { animation-delay: 0ms; }
-  .bento-grid > *:nth-child(2)  { animation-delay: 40ms; }
-  .bento-grid > *:nth-child(3)  { animation-delay: 80ms; }
-  .bento-grid > *:nth-child(4)  { animation-delay: 120ms; }
-  .bento-grid > *:nth-child(5)  { animation-delay: 160ms; }
-  .bento-grid > *:nth-child(6)  { animation-delay: 200ms; }
-  .bento-grid > *:nth-child(7)  { animation-delay: 240ms; }
-  .bento-grid > *:nth-child(8)  { animation-delay: 280ms; }
-  .bento-grid > *:nth-child(n+9){ animation-delay: 320ms; }
-
-  /* Overlay fade — for modal backdrops */
-  @keyframes fadeIn {
-    from { opacity: 0; }
-    to   { opacity: 1; }
-  }
-  .animate-fade-in {
-    animation: fadeIn 0.15s cubic-bezier(0.2, 0, 0, 1);
-  }
-
-  /* Modal pop — scale + fade for centered dialogs */
-  @keyframes modalPop {
-    from { opacity: 0; transform: scale(0.97) translateY(4px); }
-    to   { opacity: 1; transform: scale(1)    translateY(0); }
-  }
-  .animate-modal-pop {
-    animation: modalPop 0.2s cubic-bezier(0.2, 0, 0, 1);
-  }
-
-  /* Shake — for disabled-action feedback */
-  @keyframes shake {
-    0%, 100% { transform: translateX(0); }
-    20%       { transform: translateX(-4px); }
-    40%       { transform: translateX(4px); }
-    60%       { transform: translateX(-3px); }
-    80%       { transform: translateX(3px); }
-  }
-  .animate-shake {
-    animation: shake 0.35s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
-  }
-
-  /* Text Utilities */
-  .value-truncate     { @apply truncate max-w-full; }
-  .text-responsive-xl { @apply text-xl md:text-3xl; }
-  .text-responsive-lg { @apply text-lg md:text-2xl; }
-  .text-responsive-sm { @apply text-xs md:text-sm; }
-
-  /* Accessibility */
-  .skip-to-content {
-    @apply absolute top-0 left-0 -translate-y-full
-           px-4 py-2 bg-accent text-white font-semibold
-           z-50 rounded-b text-sm;
-  }
-  .skip-to-content:focus { @apply translate-y-0; }
-
-  /* Scrollbar Hide */
-  .scrollbar-none {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-  .scrollbar-none::-webkit-scrollbar { display: none; }
-
-  /* Tabular Numbers */
-  .tabular-nums {
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* Glass Effect — backdrop-blur removed for Electron perf */
-  .glass {
-    @apply bg-white border border-neutral-200/60;
-  }
+  .animate-fade-in { animation: fade-in var(--dur) var(--ease); }
+  .animate-slide-in { animation: slide-in var(--dur) var(--ease); }
+  .animate-spin { animation: spin 0.8s linear infinite; }
+  /* A long unbroken string (a URL, an error message) wraps; it is never cut. */
+  .wrap-anywhere { overflow-wrap: anywhere; }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes slide-in { from { opacity: 0; transform: translateY(var(--sp-1)); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
 }

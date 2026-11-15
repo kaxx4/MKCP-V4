@@ -41,24 +41,25 @@ import { SERVER_BASE } from "./config/serverUrl";
  */
 import { useCallback, useEffect, useState } from "react";
 import clsx from "clsx";
-import { AlertTriangle, Inbox, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import {
   tallyFact, drainFact, queueFact,
   type AgentFact, type HealthLike, type PushStatusLike,
 } from "./status/agentFacts";
+/* After go-live the drain and the queue depth describe a queue nothing uses, so on the office computer they give way to the office facts. */
+import { officeFact, claimFact, primaryIsOn, type PrimarySummaryLike } from "./status/primaryFacts";
 
 const BASE = SERVER_BASE;
 const BASE_LABEL = BASE.replace(/^https?:\/\//, "");
 
-/** Same 10s cadence as the main window — the two should not disagree about how
- *  old a reading is because one of them looked more recently. */
+/** Same 10 s cadence as the main window: the two should not disagree about how old a reading is because one looked more recently. */
 const POLL_MS = 10_000;
 
 const TONE_TEXT: Record<AgentFact["tone"], string> = {
   good: "text-success-700",
   bad: "text-danger-700",
-  warn: "text-warn-800",
-  unknown: "text-warn-800",
+  warn: "text-warn-700",
+  unknown: "text-warn-700",
 };
 
 const TONE_TINT: Record<AgentFact["tone"], string> = {
@@ -68,26 +69,16 @@ const TONE_TINT: Record<AgentFact["tone"], string> = {
   unknown: "bg-warn-soft",
 };
 
-/** One fact, sized to be read at a glance rather than studied. */
+/** One fact, sized to be read at a glance rather than studied. Label and figure sit on one line when they fit and stack when they do not. */
 function FactRow({ fact }: { fact: AgentFact }) {
   return (
-    <li
-      className={clsx(
-        "rounded-xl px-3 py-2.5",
-        fact.attention ? TONE_TINT[fact.tone] : "bg-white ring-1 ring-black/[0.06]",
-      )}
-    >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[10.5px] font-semibold uppercase tracking-wide text-neutral-700">
-          {fact.label}
-        </span>
-        <span className={clsx("font-mono text-[17px] font-black tabular-nums", TONE_TEXT[fact.tone])}>
-          {fact.value}
-        </span>
+    <li className={clsx("rounded-md p-3", fact.attention ? TONE_TINT[fact.tone] : "bg-white shadow-card")}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+        <span className="text-xs text-neutral-700">{fact.label}</span>
+        <span className={clsx("font-display text-xl tabular-nums wrap-anywhere", TONE_TEXT[fact.tone])}>{fact.value}</span>
       </div>
-      {/* Never truncated. The sub-line is where "never counted" lives, and
-          cropping it turns an honest unknown back into a bare figure. */}
-      <p className="mt-0.5 text-[10.5px] leading-snug text-neutral-700">{fact.sub}</p>
+      {/* Never shortened. The sub-line is where "never counted" lives, and cutting it turns an honest unknown back into a bare figure. */}
+      <p className="mt-1 text-xs text-neutral-700">{fact.sub}</p>
     </li>
   );
 }
@@ -95,6 +86,7 @@ function FactRow({ fact }: { fact: AgentFact }) {
 export default function QuickView() {
   const [health, setHealth] = useState<HealthLike | null>(null);
   const [pushStatus, setPushStatus] = useState<PushStatusLike | null>(null);
+  const [office, setOffice] = useState<PrimarySummaryLike | null>(null);
   /* When the server last actually answered. Null until it has once. */
   const [confirmedAt, setConfirmedAt] = useState<string | null>(null);
   const [reachable, setReachable] = useState<boolean | null>(null);
@@ -103,12 +95,14 @@ export default function QuickView() {
   const poll = useCallback(async () => {
     setPolling(true);
     try {
-      const [h, p] = await Promise.all([
+      const [h, p, o] = await Promise.all([
         fetch(`${BASE}/api/tally/health`).then((r) => r.json()).catch(() => null),
         fetch(`${BASE}/api/push-agent/status`).then((r) => r.json()).catch(() => null),
+        fetch(`${BASE}/api/primary/summary`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
       ]);
       setHealth(h);
       setPushStatus(p);
+      setOffice(o);
       const answered = h != null || p != null;
       setReachable(answered);
       if (answered) setConfirmedAt(new Date().toISOString());
@@ -123,46 +117,41 @@ export default function QuickView() {
     return () => clearInterval(id);
   }, [poll]);
 
-  const facts = [
-    tallyFact(health, BASE_LABEL),
-    drainFact(pushStatus),
-    queueFact(pushStatus),
-  ];
+  const facts = primaryIsOn(office)
+    ? [tallyFact(health, BASE_LABEL), officeFact(office), claimFact(office)]
+    : [tallyFact(health, BASE_LABEL), drainFact(pushStatus), queueFact(pushStatus)];
 
   return (
-    /* `min-h-screen` and nothing wider than the window: at 280px this is a
-       single column with a 12px gutter, which is the narrowest the Electron
-       window can be made (public/electron.js, minWidth 280). */
-    <div className="min-h-screen bg-bg-page px-3 py-3">
-      <header className="mb-2.5 flex items-center gap-2">
-        <h1 className="flex-1 text-[13px] font-bold text-neutral-900">Sync agent</h1>
+    /* A single column with a 12 px gutter: the narrowest the window can be made is 280 px (public/electron.js, minWidth 280). */
+    <div className="min-h-screen bg-bg-page p-3">
+      <header className="mb-3 flex items-center gap-2">
+        <h1 className="flex-1 text-xl text-neutral-950">Sync agent</h1>
         <button
           onClick={() => void poll()}
           disabled={polling}
-          title={polling ? "Already reading…" : `Re-read now. It refreshes on its own every ${POLL_MS / 1000} s.`}
+          title={polling ? "Already reading." : `Read again now. It refreshes on its own every ${POLL_MS / 1000} seconds.`}
           aria-label="Refresh now"
-          className="btn-icon h-9 w-9 shrink-0 tap"
+          className="btn-icon"
         >
-          <RefreshCw size={14} className={polling ? "animate-spin" : ""} />
+          <RefreshCw size={16} className={polling ? "animate-spin" : ""} />
         </button>
       </header>
 
-      {/* 1 — is the pipeline alive */}
+      {/* 1: is the pipeline alive */}
       <ul className="flex flex-col gap-2">
         {facts.map((f) => <FactRow key={f.label} fact={f} />)}
       </ul>
 
-      {/* 2 — how old everything above is. A small always-on-top window is the
-             easiest place in the product to leave a stale number sitting in
-             front of someone for an hour. */}
-      <p className="mt-2.5 text-[10px] leading-snug text-neutral-500">
+      {/* 2: how old everything above is. A small always-on-top window is the easiest place in the product to leave a stale number sitting in
+          front of someone for an hour. */}
+      <p className="mt-3 text-xs text-neutral-700">
         {reachable === false
           ? confirmedAt
-            ? `${BASE_LABEL} stopped answering — it last did at ${new Date(confirmedAt).toLocaleTimeString("en-IN")}. Nothing above is a current reading.`
+            ? `${BASE_LABEL} stopped answering. It last did at ${new Date(confirmedAt).toLocaleTimeString("en-IN")}. Nothing above is a current reading.`
             : `The local server on ${BASE_LABEL} is not answering.`
           : confirmedAt
-            ? `Confirmed ${new Date(confirmedAt).toLocaleTimeString("en-IN")} · every ${POLL_MS / 1000} s`
-            : "Reading…"}
+            ? `Confirmed ${new Date(confirmedAt).toLocaleTimeString("en-IN")} · every ${POLL_MS / 1000} seconds`
+            : "Reading"}
       </p>
     </div>
   );

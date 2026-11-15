@@ -19,7 +19,7 @@
  * That collision is not hypothetical here — sandbox and production share a
  * company name and write the same Supabase rows.
  *
- * And it was painted in raw palette utilities (`bg-green-50`, `bg-red-50`
+ * And it was painted in raw palette utilities (`bg-success-soft`, `bg-danger-soft`
  * through the shared `Pill`), so "Tally is down" was a different red from
  * "this voucher failed" a few inches below it.
  *
@@ -104,61 +104,61 @@ export function TallyPanel({ health, configuredCompany, base }: Props) {
   const mismatch = !!openCompany && !!configured && norm(openCompany) !== norm(configured);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {/* 1 — what needs a person. A name mismatch never stops a sync; it just
              files the data under the wrong company. */}
       {mismatch && (
-        <div className="flex items-start gap-2 rounded-xl bg-danger-soft px-3 py-2.5 text-[12px] text-danger-700">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <div className="note note-bad">
+          <AlertTriangle size={16} className="mt-1 shrink-0" />
           <div>
-            <p className="font-semibold">Tally has a different company open from the one this agent syncs as.</p>
+            <p className="font-medium">Tally has a different company open from the one this agent syncs as.</p>
             <p className="mt-1">
-              Tally: <strong className="font-semibold">{openCompany}</strong> · this agent:{" "}
-              <strong className="font-semibold">{configured}</strong>
+              Open in Tally: <strong className="font-medium">{openCompany}</strong>. This agent syncs as:{" "}
+              <strong className="font-medium">{configured}</strong>.
             </p>
             <p className="mt-1">
-              Nothing will fail — the rows will just be written under the configured name. Either open the right
-              company in TallyPrime, or change the company in Settings below to match.
+              Nothing will fail. The figures will just be filed under the name in Settings. Either open the right
+              company in TallyPrime, or change the company name in Settings below to match.
             </p>
           </div>
         </div>
       )}
 
       {localServerDown && (
-        <div className="flex items-start gap-2 rounded-xl bg-danger-soft px-3 py-2.5 text-[12px] text-danger-700">
-          <WifiOff size={14} className="mt-0.5 shrink-0" />
+        <div className="note note-bad">
+          <WifiOff size={16} className="mt-1 shrink-0" />
           <div>
-            <p className="font-semibold">
-              This app&rsquo;s own server on <span className="font-mono">{base.replace(/^https?:\/\//, "")}</span> is
+            <p className="font-medium">
+              This app&rsquo;s own server on <span>{base.replace(/^https?:\/\//, "")}</span> is
               not answering, so nothing on this screen can be read.
             </p>
             <p className="mt-1">
-              Nothing here is a statement about TallyPrime — it has not been asked. The usual causes are the app
-              being started before its server finished binding, or another copy already holding the port, which the
-              mirror panel below reports by name.
+              Nothing here says anything about TallyPrime, because it has not been asked. The usual causes are the app
+              being opened before its server was ready, or another copy of this app already running, which the
+              Mirror panel below names.
             </p>
-            <p className="mt-1"><strong>Quitting and reopening this app is the usual fix.</strong></p>
+            <p className="mt-1"><strong>Closing this app and opening it again is the usual fix.</strong></p>
           </div>
         </div>
       )}
 
       {!localServerDown && !connected && (
-        <div className="flex items-start gap-2 rounded-xl bg-danger-soft px-3 py-2.5 text-[12px] text-danger-700">
-          <WifiOff size={14} className="mt-0.5 shrink-0" />
+        <div className="note note-bad">
+          <WifiOff size={16} className="mt-1 shrink-0" />
           <div>
-            <p className="font-semibold">TallyPrime is not answering, so nothing can be pulled or pushed.</p>
-            {health?.error && <p className="mt-1 break-words font-mono text-[11px]">{health.error}</p>}
-            <ul className="mt-1.5 space-y-0.5">
-              <li>· TallyPrime is open, with a company loaded — not sitting on the company-select screen.</li>
+            <p className="font-medium">TallyPrime is not answering, so nothing can be read from it or sent to it.</p>
+            {health?.error && <p className="mt-1 text-xs wrap-anywhere">{health.error}</p>}
+            <ol className="mt-2 list-decimal space-y-1 pl-5">
+              <li>TallyPrime is open and a company is loaded, not sitting on the screen where you choose a company.</li>
               <li>
-                · Its XML port is on: <span className="font-mono">F1 → Settings → Connectivity</span>, TallyPrime
-                acting as <span className="font-mono">Server</span>, port <span className="font-mono">9000</span>.
+                Its connection is switched on: press F1, then Settings, then Connectivity, and set TallyPrime to act as
+                Server on port 9000.
               </li>
               <li>
-                · <strong>If Tally showed an import error, restart TallyPrime itself.</strong> An XML error freezes
-                its server for good; dismissing the dialog does not release the port.
+                <strong>If Tally showed an error message while receiving something, close TallyPrime completely and open it again.</strong>{" "}
+                The error freezes its connection until then. Closing the message is not enough.
               </li>
-            </ul>
+            </ol>
           </div>
         </div>
       )}
@@ -166,30 +166,30 @@ export function TallyPanel({ health, configuredCompany, base }: Props) {
       {/* 2 — the identity, once it is not a problem */}
       <section>
         <RowGroupHeading>Company</RowGroupHeading>
-        <ul className="flex flex-col gap-2">
+        <ul className="tray flex flex-col gap-2">
           <StatusRow
             icon={Building2}
             tone={mismatch ? "danger" : openCompany ? "success" : "neutral"}
-            title="Open in Tally"
-            subject={openCompany ?? (connected ? "asking Tally…" : "—")}
+            title="Company open in Tally"
+            subject={openCompany ?? (connected ? "asking Tally" : "not known")}
             meta={
               askError
                 ? undefined
                 : openCompany
-                  ? "read from Tally, not from this app's settings"
+                  ? "Read from Tally itself, not from this app's settings."
                   : connected
                     ? undefined
                     : localServerDown
-                      ? "cannot be read — this app's own server is not answering, so Tally was never asked"
-                      : "cannot be read while Tally is unreachable"
+                      ? "It cannot be read. This app's own server is not answering, so Tally was never asked."
+                      : "It cannot be read while Tally is not answering."
             }
             error={askError}
             spinning={asking}
             action={
               connected ? (
-                <button onClick={() => void askTally()} disabled={asking} className="btn-secondary btn-sm tap-y">
-                  {asking ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                  Re-check
+                <button onClick={() => void askTally()} disabled={asking} className="btn-secondary btn-sm">
+                  {asking ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                  Check again
                 </button>
               ) : undefined
             }
@@ -197,12 +197,12 @@ export function TallyPanel({ health, configuredCompany, base }: Props) {
           <StatusRow
             icon={mismatch ? AlertTriangle : CheckCircle2}
             tone={mismatch ? "danger" : configured ? "neutral" : "warn"}
-            title="Synced as"
+            title="Figures are filed under"
             subject={configured || "not set"}
             meta={
               configured
-                ? "the company key every row is written under"
-                : "set it in Settings, or nothing has a company to belong to"
+                ? "The company name every figure sent to the online database is filed under."
+                : "Set it in Settings, or nothing has a company to belong to."
             }
           />
         </ul>
@@ -210,20 +210,20 @@ export function TallyPanel({ health, configuredCompany, base }: Props) {
 
       {/* 3 — where it is talking, for when someone has two copies running */}
       <section>
-        <RowGroupHeading>Endpoints</RowGroupHeading>
-        <ul className="flex flex-col gap-2">
+        <RowGroupHeading>Where this app is talking</RowGroupHeading>
+        <ul className="tray flex flex-col gap-2">
           <StatusRow
             icon={Plug}
-            title="Tally XML port"
-            subject={<span className="font-mono">{health?.tallyUrl ?? "—"}</span>}
+            title="Tally's connection"
+            subject={<span>{health?.tallyUrl ?? "not known"}</span>}
             meta={
               localServerDown
-                ? "not asked — the request never left this app"
+                ? "Not asked. The request never left this app."
                 : health?.busy
-                  ? "a sync is holding the port — this is inferred from the sync, not a fresh ping"
+                  ? "A sync is using it right now, so this is worked out from the sync and not from a fresh check."
                   : connected
-                    ? "answered the last health ping"
-                    : "no answer"
+                    ? "It answered the last check."
+                    : "No answer."
             }
             tone={localServerDown ? "neutral" : connected ? "success" : "danger"}
           />
@@ -231,11 +231,11 @@ export function TallyPanel({ health, configuredCompany, base }: Props) {
             icon={Plug}
             tone={localServerDown ? "danger" : "neutral"}
             title="This app's server"
-            subject={<span className="font-mono">{base.replace(/^https?:\/\//, "")}</span>}
+            subject={<span>{base.replace(/^https?:\/\//, "")}</span>}
             meta={
               localServerDown
-                ? "not answering — every reading above and below comes through it"
-                : "the only process here that talks to Tally"
+                ? "Not answering. Everything on this screen is read through it."
+                : "The only program here that talks to Tally."
             }
           />
         </ul>

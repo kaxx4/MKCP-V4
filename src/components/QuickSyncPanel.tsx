@@ -17,7 +17,7 @@
  * all four, which turns a two-second fix into a hunt through the log.
  *
  * Its two phase boxes were hand-built `border border-neutral-200` cards using
- * `text-blue-500`, `text-green-600`, `text-red-600`, `text-amber-700` — five
+ * `text-accent-700`, `text-success-700`, `text-danger-700`, `text-warn-700` — five
  * raw palette colours for the same four states the rest of the app already has
  * semantic tokens for.
  *
@@ -63,9 +63,9 @@ interface Props {
 }
 
 const everyLabel = (m: number) =>
-  m <= 0 ? "manual only"
-  : m < 60 ? `automatic every ${m} min`
-  : `automatic every ${(m / 60).toFixed(m % 60 === 0 ? 0 : 1)} h`;
+  m <= 0 ? "only when you press it"
+  : m < 60 ? `by itself every ${m} minutes`
+  : `by itself every ${(m / 60).toFixed(m % 60 === 0 ? 0 : 1)} hours`;
 
 export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, company, otherSyncRunning, onRun }: Props) {
   /* One reason, the first that applies — not a disabled button with no note. */
@@ -86,9 +86,9 @@ export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, c
 
   return (
     <div className="space-y-3">
-      <p className="text-[12px] text-neutral-600">
-        Pulls the window from Tally day by day, then pushes what it pulled to Supabase — never at the same time, so
-        the push can never read a half-written day.
+      <p className="text-sm text-neutral-700">
+        Reads the chosen days from Tally one day at a time, then sends them to the online database. The two steps never
+        overlap, so the sending never picks up a half-finished day.
       </p>
 
       <div className="flex flex-wrap gap-2">
@@ -102,24 +102,24 @@ export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, c
               /* The reason travels with the control, not only with the note
                  below it — a pointer resting on a grey button should answer
                  the question it just raised. */
-              title={blocked ?? `Pull ${r.label} from Tally, then push it to Supabase.`}
-              className={clsx("btn-secondary btn-sm tap-y !items-start !flex-col !gap-0 !py-1.5")}
+              title={blocked ?? `Read ${r.label} from Tally, then send it to the online database.`}
+              className={clsx("btn-secondary !flex-col !items-start !gap-0 !rounded-md !py-2")}
             >
-              <span className="flex items-center gap-1.5">
-                {running ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                {running ? (qsync.phase === "push" ? "Pushing…" : "Pulling…") : r.label}
+              <span className="flex items-center gap-2">
+                {running ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                {running ? (qsync.phase === "push" ? "Sending" : "Reading") : r.label}
               </span>
               {/* The fact the old panel hid in Settings: whether this window
                   also runs on its own, and how often. */}
-              <span className="text-[10px] font-medium text-neutral-500">{everyLabel(r.everyMinutes)}</span>
+              <span className="text-xs text-neutral-700">{everyLabel(r.everyMinutes)}</span>
             </button>
           );
         })}
       </div>
 
       {blocked && (
-        <p className="flex items-start gap-1.5 text-[11.5px] text-warn-800">
-          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+        <p className="flex items-start gap-2 text-sm text-warn-700">
+          <AlertTriangle size={16} className="mt-1 shrink-0" />
           {blocked}
         </p>
       )}
@@ -127,14 +127,14 @@ export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, c
       {/* A scheduled run that never happened. Without this the indicator is
           identical to the scheduler simply not having fired. */}
       {skipped && (
-        <div className="flex items-start gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <div className="note note-warn">
+          <AlertTriangle size={16} className="mt-1 shrink-0" />
           <span>
-            The automatic <strong className="font-semibold">{skipped.label}</strong> sync was skipped —{" "}
+            The automatic <strong className="font-medium">{skipped.label}</strong> sync was skipped because{" "}
             {skipped.reason === "sync-in-progress" ? "another sync was already running"
               : skipped.reason === "not-connected" ? "Tally was not connected"
-              : "no company was configured"}
-            . It will try again at the next interval.
+              : "no company is set"}
+            . It will try again at the next time it is due.
           </span>
         </div>
       )}
@@ -144,71 +144,71 @@ export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, c
         <section>
           <RowGroupHeading>
             {qsync.running
-              ? `Running — ${qsync.running}`
+              ? `Running: ${qsync.running}`
               : `Last run${qsync.auto ? " (automatic)" : ""}`}
           </RowGroupHeading>
-          <ul className="flex flex-col gap-2">
+          <ul className="tray flex flex-col gap-2">
             <StatusRow
               icon={qsync.running && qsync.phase === "sync" ? Loader2 : tally?.ok ? CheckCircle2 : tally ? AlertTriangle : Clock}
               tone={qsync.running && qsync.phase === "sync" ? "accent" : tally?.ok ? "success" : tally ? "danger" : "neutral"}
               spinning={!!qsync.running && qsync.phase === "sync"}
-              title="1 · Pull from Tally"
-              subject={tally ? undefined : qsync.phase === "sync" ? "reading day by day…" : "not started"}
+              title="Step 1: read from Tally"
+              subject={tally ? undefined : qsync.phase === "sync" ? "reading one day at a time" : "not started"}
               meta={
                 tally
-                  ? `${tally.chunksSucceeded}/${tally.chunksTotal} days${tally.chunksFailed > 0 ? ` · ${tally.chunksFailed} failed` : ""} · ${tally.elapsedSeconds}s`
+                  ? `${tally.chunksSucceeded} of ${tally.chunksTotal} days read${tally.chunksFailed > 0 ? `, ${tally.chunksFailed} failed` : ""}, in ${tally.elapsedSeconds} seconds`
                   : undefined
               }
               detail={
                 tally?.ok ? (
                   <>
-                    <strong className="font-semibold text-neutral-900 tabular-nums">{tally.vouchers}</strong> voucher
-                    {tally.vouchers === 1 ? "" : "s"} pulled
+                    <strong className="font-medium text-neutral-900 tabular-nums">{tally.vouchers}</strong> voucher
+                    {tally.vouchers === 1 ? "" : "s"} read
                     {tally.cleared > 0 && (
                       <>
-                        {" · "}
-                        <span className="text-warn-800 tabular-nums">{tally.cleared} cleared</span>
-                        <span className="text-neutral-500"> (gone from Tally, so removed here too)</span>
+                        {". "}
+                        <span className="text-warn-700 tabular-nums">{tally.cleared} removed</span>
+                        <span className="text-neutral-700"> (they are gone from Tally, so they are removed here too)</span>
                       </>
                     )}
                   </>
                 ) : undefined
               }
-              error={tally && !tally.ok ? tally.error ?? "The pull failed and gave no reason." : null}
+              error={tally && !tally.ok ? tally.error ?? "The read from Tally failed and gave no reason." : null}
             />
 
             <StatusRow
               icon={qsync.running && qsync.phase === "push" ? Loader2 : push?.ok ? CheckCircle2 : push ? AlertTriangle : Clock}
               tone={qsync.running && qsync.phase === "push" ? "accent" : push?.ok ? "success" : push ? "danger" : "neutral"}
               spinning={!!qsync.running && qsync.phase === "push"}
-              title="2 · Push to Supabase"
-              subject={push ? undefined : qsync.phase === "push" ? "writing…" : qsync.running ? "waiting for the pull to finish" : "not started"}
+              title="Step 2: send to the online database"
+              subject={push ? undefined : qsync.phase === "push" ? "sending" : qsync.running ? "waiting for the read to finish" : "not started"}
               detail={
                 push ? (
                   <span className="tabular-nums">
-                    <strong className="font-semibold text-neutral-900">{push.vouchers}</strong> vouchers ·{" "}
-                    <strong className="font-semibold text-neutral-900">{push.items}</strong> items ·{" "}
-                    <strong className="font-semibold text-neutral-900">{push.ledgers}</strong> ledgers
+                    <strong className="font-medium text-neutral-900">{push.vouchers}</strong> vouchers,{" "}
+                    <strong className="font-medium text-neutral-900">{push.items}</strong> items and{" "}
+                    <strong className="font-medium text-neutral-900">{push.ledgers}</strong> parties sent
                   </span>
                 ) : undefined
               }
-              error={push && !push.ok ? push.vouchersErr || push.configErr || "The push had errors and gave no reason." : null}
+              error={push && !push.ok ? push.vouchersErr || push.configErr || "The send had errors and gave no reason." : null}
             />
           </ul>
 
           {/* Neither a failure nor a success. The sync completed; some of what
               it wrote is short of what Tally holds. */}
           {incomplete > 0 && (
-            <div className="mt-2 flex items-start gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
-              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div className="mt-2 note note-warn">
+              <AlertTriangle size={16} className="mt-1 shrink-0" />
               <div>
-                <p className="font-semibold">
-                  {incomplete} voucher{incomplete === 1 ? "" : "s"} came back with fewer lines than {incomplete === 1 ? "it has" : "they have"}, and {incomplete === 1 ? "was" : "were"} still short after the retry.
+                <p className="font-medium">
+                  {incomplete} voucher{incomplete === 1 ? "" : "s"} came back from Tally with fewer lines than {incomplete === 1 ? "it has" : "they have"}, and {incomplete === 1 ? "was" : "were"} still short after a second try.
                 </p>
                 <p className="mt-1">
-                  The sync reports success because every day was fetched — but {incomplete === 1 ? "that voucher is" : "those vouchers are"} now
-                  wrong in the mirror rather than missing from it. Re-running this window is the fix; Tally tends to
-                  answer fully when it is not busy.
+                  Every day was read, so the sync says it worked. But {incomplete === 1 ? "that voucher is" : "those vouchers are"} now
+                  wrong in the copy rather than missing from it. Running this window again is the fix. Tally usually
+                  answers in full when it is not busy.
                 </p>
               </div>
             </div>
@@ -217,14 +217,14 @@ export function QuickSyncPanel({ ranges, qsync, connected, notConnectedReason, c
       )}
 
       {!tally && !qsync.running && (
-        <p className="flex items-center gap-1.5 text-[11.5px] text-neutral-500">
-          <CloudUpload size={12} /> No quick sync has run since this app started.
+        <p className="flex items-center gap-2 text-xs text-neutral-700">
+          <CloudUpload size={16} /> No quick sync has run since this app started.
         </p>
       )}
 
       {qsync.finishedAt && !qsync.running && (
-        <p className="flex items-center gap-1.5 text-[11px] text-neutral-500">
-          <Clock size={11} /> Finished {new Date(qsync.finishedAt).toLocaleString("en-IN")}
+        <p className="flex items-center gap-2 text-xs text-neutral-700">
+          <Clock size={16} /> Finished {new Date(qsync.finishedAt).toLocaleString("en-IN")}
         </p>
       )}
     </div>

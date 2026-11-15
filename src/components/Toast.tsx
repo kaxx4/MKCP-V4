@@ -26,7 +26,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm" role="region" aria-label="Notifications">
+      <div className="fixed bottom-4 right-4 z-toast flex max-w-sm flex-col gap-2" role="region" aria-label="Notifications">
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} onDismiss={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))} />
         ))}
@@ -36,32 +36,30 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 const TOAST_STYLES = {
-  success: { border: "border-success/25", bg: "bg-success/[0.04]", icon: CheckCircle, iconColor: "text-success-600" },
-  error: { border: "border-danger/25", bg: "bg-danger/[0.04]", icon: XCircle, iconColor: "text-danger-600" },
-  warn: { border: "border-warn/25", bg: "bg-warn/[0.04]", icon: AlertTriangle, iconColor: "text-warn-600" },
-  info: { border: "border-accent/25", bg: "bg-accent/[0.04]", icon: Info, iconColor: "text-accent" },
+  success: { bg: "bg-success-soft", icon: CheckCircle, iconColor: "text-success-700" },
+  error: { bg: "bg-danger-soft", icon: XCircle, iconColor: "text-danger-700" },
+  warn: { bg: "bg-warn-soft", icon: AlertTriangle, iconColor: "text-warn-700" },
+  info: { bg: "bg-accent-soft", icon: Info, iconColor: "text-accent-700" },
 } as const;
 
+/* A toast: 20 px card corner, 8 px in, so the dismiss button's own corner is 12 and round. */
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const style = TOAST_STYLES[toast.type];
   const Icon = style.icon;
 
   return (
     <div
-      className={clsx(
-        "flex items-start gap-2.5 bg-white border border-neutral-200 rounded-lg px-4 py-3 shadow-lg animate-slide-in",
-        style.border
-      )}
+      className={clsx("flex items-center gap-3 rounded-lg py-2 pl-4 pr-2 shadow-modal animate-slide-in", style.bg)}
       role="alert"
     >
-      <Icon size={16} className={clsx("flex-shrink-0 mt-0.5", style.iconColor)} />
-      <p className="text-neutral-950 text-sm flex-1 leading-snug">{toast.message}</p>
+      <Icon size={16} className={clsx("shrink-0", style.iconColor)} />
+      <p className="flex-1 py-1 text-sm text-neutral-950">{toast.message}</p>
       <button
         onClick={onDismiss}
-        className="flex items-center justify-center w-10 h-10 rounded-lg text-neutral-500 hover:text-neutral-950 transition-[color,transform] duration-150 active:scale-[0.96] flex-shrink-0 -mr-2"
+        className="btn-icon shrink-0"
         aria-label="Dismiss notification"
       >
-        <X size={14} />
+        <X size={16} />
       </button>
     </div>
   );

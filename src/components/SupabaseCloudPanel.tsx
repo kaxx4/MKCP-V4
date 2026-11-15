@@ -6,7 +6,7 @@
  * It repeated the header: the KPI strip already says "Supabase — OK / Error /
  * Never" with the last write time under it, and this panel then re-derived the
  * same verdict from the same three channels and printed it four more times as
- * green and red `Pill`s — `bg-green-50`, `bg-red-50` straight off the palette,
+ * green and red `Pill`s — `bg-success-soft`, `bg-danger-soft` straight off the palette,
  * so "Error" here was a different red from "failed" in the push queue below it.
  *
  * Worse, the word it printed was wrong. `success === null` rendered as
@@ -17,7 +17,7 @@
  * push. The honest statement is "not since this app started", and that is what
  * it says now.
  *
- * The retry hint said `retry ~60s` in `text-yellow-600` — a fifth colour, and a
+ * The retry hint said `retry ~60s` in `text-warn-700` — a fifth colour, and a
  * figure with no unit of trust behind it.
  *
  * ── What this shows instead ───────────────────────────────────────────────
@@ -54,12 +54,11 @@ interface Props {
   fmtTime: (iso: string | null | undefined) => string;
 }
 
-/** What each channel actually carries — the row title alone does not say, and
- *  "masters failed" means something quite different from "config failed". */
-const CHANNEL: Record<string, { title: string; carries: string }> = {
-  config: { title: "Config", carries: "13 configuration tables" },
-  masters: { title: "Masters", carries: "items and ledgers" },
-  vouchers: { title: "Vouchers", carries: "vouchers, inventory and ledger entries" },
+/** What each write channel carries, in words a person can use. "masters failed" means something quite different from "config failed". */
+const CHANNEL: Record<"config" | "masters" | "vouchers", { title: string; carries: string }> = {
+  config: { title: "Settings", carries: "the 13 settings tables" },
+  masters: { title: "Lists", carries: "items and parties" },
+  vouchers: { title: "Vouchers", carries: "vouchers, stock lines and ledger lines" },
 };
 
 export function SupabaseCloudPanel({ config, masters, vouchers, canRead, readHost, fmtTime }: Props) {
@@ -69,42 +68,36 @@ export function SupabaseCloudPanel({ config, masters, vouchers, canRead, readHos
     ["vouchers", vouchers] as const,
   ];
 
-  /* Failing first, then never-attempted, then the ones that worked. A channel
-     that is fine does not need to be found. */
+  /* Failing first, then never-attempted, then the ones that worked. A channel that is fine does not need to be found. */
   const rank = (c: ChannelStatusLike) => (c.success === false ? 0 : c.success === null ? 1 : 2);
   const ordered = [...channels].sort((a, b) => rank(a[1]) - rank(b[1]));
   const failing = channels.filter(([, c]) => c.success === false).length;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {failing > 0 && (
-        <div className="flex items-start gap-2 rounded-xl bg-danger-soft px-3 py-2.5 text-[12px] text-danger-700">
-          <CloudOff size={14} className="mt-0.5 shrink-0" />
+        <div className="note note-bad">
+          <CloudOff size={16} className="mt-1 shrink-0" />
           <div>
-            <p className="font-semibold">
-              {failing === 1 ? "One channel is not reaching Supabase." : `${failing} channels are not reaching Supabase.`}
+            <p className="font-medium">
+              {failing === 1 ? "One part is not reaching the online database." : `${failing} parts are not reaching the online database.`}
             </p>
             <p className="mt-1">
-              {/* Not "Tally keeps being read" — this panel cannot see whether it
-                  is, and when the local server is the thing that is down,
-                  nothing is being read either. Stated as what a write-channel
-                  failure does and does not imply. (15-Sep-2026) */}
-              A write channel failing does not by itself stop Tally being read; it stops the mirror MOVING, so
-              every screen that reads Supabase — the web dashboard included — is showing older numbers than this
-              machine has.
+              Tally is still being read. What stops is the copy moving, so every screen that reads the online database, the web dashboard
+              included, is showing older numbers than this computer has.
             </p>
           </div>
         </div>
       )}
 
       <section>
-        <RowGroupHeading>Write channels</RowGroupHeading>
-        <ul className="flex flex-col gap-2">
+        <RowGroupHeading>What this computer sends up</RowGroupHeading>
+        <ul className="tray flex flex-col gap-2">
           {ordered.map(([name, c]) => {
             const meta = c.success === null
-              /* NOT "never". The store is in-memory; this is the honest claim. */
-              ? "no push attempted since this app started"
-              : `${c.success ? "last written" : "last tried"} ${fmtTime(c.lastAt)}`;
+              /* NOT "never": the record is kept in memory, so this is the honest claim. */
+              ? "nothing sent since this app started"
+              : `${c.success ? "last sent" : "last tried"} ${fmtTime(c.lastAt)}`;
             return (
               <StatusRow
                 key={name}
@@ -116,8 +109,8 @@ export function SupabaseCloudPanel({ config, masters, vouchers, canRead, readHos
                   <>
                     {meta}
                     {c.retryScheduled && (
-                      <span className="ml-1.5 inline-flex items-center gap-1 text-warn-800">
-                        <RotateCw size={10} /> retrying in under a minute
+                      <span className="ml-2 inline-flex items-center gap-1 text-warn-700">
+                        <RotateCw size={16} /> trying again within a minute
                       </span>
                     )}
                   </>
@@ -129,50 +122,37 @@ export function SupabaseCloudPanel({ config, masters, vouchers, canRead, readHos
         </ul>
       </section>
 
-      {/* The two credentials. Kept together because the failure they produce
-          looks the same from the outside and is fixed in two different places. */}
       <section>
-        <RowGroupHeading>Credentials in play</RowGroupHeading>
-        <ul className="flex flex-col gap-2">
+        <RowGroupHeading>Who can read and who can write</RowGroupHeading>
+        <ul className="tray flex flex-col gap-2">
           <StatusRow
             icon={Cloud}
             tone="neutral"
-            title="Writing"
-            subject="this app's server, on the service key"
-            meta={
-              <>
-                from <span className="font-mono">%APPDATA%\mkcycles-dashboard-electron\.env</span> — read once at
-                startup, so a change needs the app restarted
-              </>
-            }
+            title="Sending up"
+            subject="this app's own server"
+            meta="It uses the access the installer gave this computer. A change to that access only takes effect after the app is closed and opened again."
           />
           <StatusRow
             icon={canRead ? Database : KeyRound}
             tone={canRead ? "neutral" : "warn"}
-            title="Reading"
-            subject={canRead ? <span className="font-mono">{readHost}</span> : "no read client"}
+            title="Reading back"
+            subject={canRead ? <span>{readHost}</span> : "not available in this build"}
             meta={
               canRead
-                ? "this window, on the publishable key compiled into this build"
-                : "the history and push-log lists on this page will stay empty"
+                ? "This window reads the online database with the read-only access built into this version."
+                : "The history and send-log lists on this page will stay empty."
             }
           />
         </ul>
         {!canRead && (
-          <div className="mt-2 flex items-start gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <div className="mt-2 note note-warn">
+            <AlertTriangle size={16} className="mt-1 shrink-0" />
             <div>
-              <p className="font-semibold">This build has no Supabase read credentials, so the lists below read empty.</p>
+              <p className="font-medium">This version has no read-only access to the online database, so the lists on this page read empty.</p>
               <p className="mt-1">
-                Empty here means "could not ask", not "nothing has synced" — pushing is unaffected and carries on
-                through the server.
+                Empty here means "could not ask", not "nothing has synced". Sending up is not affected and carries on through the server.
               </p>
-              <p className="mt-1">
-                <span className="font-mono">VITE_SUPABASE_URL</span> and{" "}
-                <span className="font-mono">VITE_SUPABASE_PUBLISHABLE_KEY</span> are baked in by Vite at build time,
-                not read at run time. Editing a <span className="font-mono">.env</span> on this machine will not
-                change them — the app has to be rebuilt.
-              </p>
+              <p className="mt-1">The read-only access is built in when the app is made. It cannot be fixed by changing a file on this computer. A new version of the app is needed.</p>
             </div>
           </div>
         )}

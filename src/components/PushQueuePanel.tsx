@@ -8,8 +8,8 @@
  * so showing them again as pills meant the same four facts twice on one screen
  * and neither copy being the obvious one to read.
  *
- * It was painted in raw palette utilities — `bg-blue-50 text-blue-800`,
- * `bg-yellow-50`, `bg-red-100` — rather than the semantic tokens the rest of
+ * It was painted in raw palette utilities — `bg-accent-soft text-accent-700`,
+ * `bg-warn-soft`, `bg-danger-soft` — rather than the semantic tokens the rest of
  * both apps uses, so "failed" here was a different red from "failed" three
  * inches away in the web dashboard.
  *
@@ -93,18 +93,18 @@ export function PushQueuePanel({
 
   if (unreachable) {
     return (
-      <div className="flex items-start gap-2 rounded-xl bg-danger-soft px-3 py-2.5 text-[12.5px] text-danger-700">
-        <CloudOff size={14} className="mt-0.5 shrink-0" />
+      <div className="note note-bad">
+        <CloudOff size={16} className="mt-1 shrink-0" />
         <span>
-          The local server on <code className="font-mono">{baseLabel}</code> is not answering, so nothing can be
-          pushed from here. Restarting the app is the usual fix.
+          This app's own server on {baseLabel} is not answering, so nothing can be sent from here. Closing the app and
+          opening it again is the usual fix.
         </span>
       </div>
     );
   }
 
   if (!status) {
-    return <p className="flex items-center gap-2 py-2 text-[12.5px] text-neutral-500"><Loader2 size={13} className="animate-spin" /> Reading the push agent…</p>;
+    return <p className="flex items-center gap-2 py-2 text-sm text-neutral-700"><Loader2 size={16} className="animate-spin" /> Reading the old sender</p>;
   }
 
   const queueKnown = !!status.queueStatsAt;
@@ -120,59 +120,56 @@ export function PushQueuePanel({
         <button
           onClick={onDrain}
           disabled={draining || !status.enabled}
-          title={!status.enabled ? "The drain agent is not running — see the reason below." : undefined}
-          className="btn-secondary btn-sm tap-y"
+          title={!status.enabled ? "The old sender is not running. The reason is written below." : undefined}
+          className="btn-secondary btn-sm"
         >
-          {draining ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-          Drain now
+          {draining ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+          Send what is waiting now
         </button>
         {/* "Nothing waiting" was printed from counters that had never been
-            read — see server/src/services/pushAgent.ts:refreshQueueStats,
+            read. See server/src/services/pushAgent.ts:refreshQueueStats,
             which only runs at the end of a completed tick and never runs at
             all when the agent could not start. (15-Sep-2026) */}
-        <span className="text-[11.5px] text-neutral-600">
+        <span className="text-xs text-neutral-700">
           {!queueKnown
-            ? "The depth of the queue has never been counted, so nothing here says it is empty."
+            ? "The queue has not been counted yet, so nothing here says it is empty."
             : waiting > 0
-              ? `${waiting} waiting · the agent picks these up on its own every few seconds`
-              : "Nothing waiting — the agent drains automatically."}
+              ? `${waiting} waiting. They are picked up by themselves every few seconds.`
+              : "Nothing is waiting. Anything new is picked up by itself."}
         </span>
       </div>
 
       {/* Why the drain is off. Three causes, and the old copy named one of them
           and pointed at a file that no longer ships. */}
       {!status.enabled && (
-        <div className="flex items-start gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[12px] text-warn-800">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <div className="note note-warn">
+          <AlertTriangle size={16} className="mt-1 shrink-0" />
           <div>
-            <p className="font-semibold">The drain agent is not running, so queued vouchers stay queued.</p>
-            <p className="mt-1">
-              All three must hold in <code className="font-mono">%APPDATA%\mkcycles-dashboard-electron\.env</code>:
-            </p>
-            <ul className="mt-1 space-y-0.5">
-              <li>· <code className="font-mono">PUSH_AGENT_ENABLED=true</code></li>
-              <li>· <code className="font-mono">MKCP_TALLY_ROLE=primary</code> — on <code className="font-mono">sandbox</code> it refuses to claim jobs and nothing says why</li>
-              <li>· <code className="font-mono">SUPABASE_URL</code> and <code className="font-mono">SUPABASE_SERVICE_KEY</code> set</li>
+            <p className="font-medium">The old sender is not running, so vouchers waiting in the old queue stay there.</p>
+            <p className="mt-1">This usually means one of three things:</p>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              <li>It has been switched off on this computer.</li>
+              <li>This computer is a practice machine, and a practice machine never sends from the real queue.</li>
+              <li>This computer cannot reach the online database.</li>
             </ul>
             <p className="mt-1">
-              <strong>Then restart this app</strong> — the server reads its environment once, at startup.
-              That folder is named after the package, not the product; the app logs the path it actually read.
+              Ask whoever looks after this computer to check, then close this app and open it again.
             </p>
           </div>
         </div>
       )}
 
       {nothingAtAll && (
-        <EmptyNote icon={Activity}>Nothing has been pushed from this machine yet.</EmptyNote>
+        <EmptyNote icon={Activity}>Nothing has been sent from this computer yet.</EmptyNote>
       )}
 
       {/* 1 — what needs a person */}
       {failedJobs.length > 0 && (
         <section>
           <RowGroupHeading tone="danger" icon={AlertTriangle}>
-            Needs you — {failedJobs.length} refused
+            Needs you: {failedJobs.length} refused by Tally
           </RowGroupHeading>
-          <ul className="flex flex-col gap-2">
+          <ul className="tray flex flex-col gap-2">
             {failedJobs.map((job) => (
               <StatusRow
                 key={job.id}
@@ -180,7 +177,7 @@ export function PushQueuePanel({
                 tone="danger"
                 title={String((job.payload as { voucherType?: string })?.voucherType ?? "Voucher")}
                 subject={String((job.payload as { partyLedgerName?: string })?.partyLedgerName ?? "")}
-                meta={`attempt ${job.attempts} · queued ${fmtTime(job.created_at)}`}
+                meta={`Tried ${job.attempts} time${job.attempts === 1 ? "" : "s"}. Queued ${fmtTime(job.created_at)}.`}
                 error={job.last_error}
                 action={
                   <button
@@ -188,8 +185,8 @@ export function PushQueuePanel({
                     disabled={requeueingId === job.id}
                     className="btn-secondary btn-sm"
                   >
-                    {requeueingId === job.id ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
-                    Re-queue
+                    {requeueingId === job.id ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16} />}
+                    Try again
                   </button>
                 }
               />
@@ -201,8 +198,8 @@ export function PushQueuePanel({
       {/* 2 — what already went */}
       {log.length > 0 && (
         <section>
-          <RowGroupHeading>Recently pushed</RowGroupHeading>
-          <ul className="flex flex-col gap-2">
+          <RowGroupHeading>Recently sent</RowGroupHeading>
+          <ul className="tray flex flex-col gap-2">
             {shown.map((row) => (
               <StatusRow
                 key={row.id}
@@ -213,7 +210,7 @@ export function PushQueuePanel({
                 meta={[
                   row.date,
                   fmtTime(row.resolved_at),
-                  row.tally_vch_id ? `Tally id ${row.tally_vch_id}` : null,
+                  row.tally_vch_id ? `Tally number ${row.tally_vch_id}` : null,
                 ].filter(Boolean).join(" · ")}
                 error={row.status === "failed" ? (row.line_errors?.join(" · ") || row.last_error) : null}
               />
@@ -222,7 +219,7 @@ export function PushQueuePanel({
           {log.length > shown.length && (
             <button
               onClick={() => setShowAll(true)}
-              className="mt-2 w-full rounded-lg px-3 py-1.5 text-[11.5px] font-medium text-neutral-500 transition-colors hover:bg-neutral-50 hover:text-neutral-700"
+              className="btn-ghost mt-2 w-full"
             >
               Show {log.length - shown.length} more
             </button>
@@ -231,9 +228,9 @@ export function PushQueuePanel({
       )}
 
       {status.lastTick && (
-        <p className="flex items-center gap-1.5 text-[11px] text-neutral-500">
-          <Clock size={11} /> Last checked {fmtTime(status.lastTick)}
-          {!status.tallyHealthy && " · Tally was not answering then"}
+        <p className="flex items-center gap-2 text-xs text-neutral-700">
+          <Clock size={16} /> Last checked {fmtTime(status.lastTick)}
+          {!status.tallyHealthy && ". Tally was not answering then."}
         </p>
       )}
     </div>

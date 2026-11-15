@@ -27,25 +27,24 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-bg flex items-center justify-center p-6">
-          <div className="bg-white border border-danger/20 rounded-2xl p-8 max-w-md w-full text-center shadow-base">
-            <div className="w-14 h-14 rounded-2xl bg-danger/10 flex items-center justify-center mx-auto mb-5">
-              <AlertTriangle size={28} className="text-danger" />
+        <div className="flex min-h-screen items-center justify-center bg-bg-page p-6">
+          <div className="w-full max-w-md rounded-lg bg-white p-6 text-center shadow-card">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-md bg-danger-soft">
+              <AlertTriangle size={24} className="text-danger-700" />
             </div>
-            <h2 className="text-xl font-bold text-primary mb-2">Something went wrong</h2>
-            <p className="text-muted text-sm mb-6 font-mono bg-bg-hover/50 rounded-lg px-3 py-2 text-left break-all">
+            <h2 className="mb-2 text-xl text-neutral-950">Something went wrong</h2>
+            <p className="mb-6 rounded-sm bg-bg-sub px-3 py-2 text-left text-sm text-neutral-700 wrap-anywhere">
               {this.state.error?.message ?? "An unexpected error occurred"}
             </p>
             <button
               onClick={() => {
                 this.setState({ hasError: false, error: null });
-                // reload() works for both BrowserRouter and HashRouter (Electron)
                 window.location.reload();
               }}
-              className="btn-primary btn-lg gap-2"
+              className="btn-primary"
             >
               <RotateCcw size={16} />
-              Reset App
+              Reset the window
             </button>
           </div>
         </div>

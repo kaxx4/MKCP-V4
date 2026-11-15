@@ -17,14 +17,10 @@ import {
   Database, History, ArrowUpRight, RefreshCw, Check, AlertTriangle, Loader2, Minus, Clock, PenLine,
 } from "lucide-react";
 
-/* The edit-log action chips. These are CATEGORIES, not states — the word is
-   already in the chip — so only the one that carries real meaning keeps a
-   status colour. The old map spent four hues on them (`bg-purple-50`,
-   `bg-amber-50`) and put `import` in the same amber this screen uses for
-   "needs attention", so a routine import read as a warning. */
+/* The edit-log action chips. These are CATEGORIES, not states, so only the one that carries real meaning keeps a status colour. */
 const ACTION_TONE: Record<string, string> = {
-  upsert: "bg-accent/10 text-accent-700",
-  delete: "bg-danger/10 text-danger-700",
+  upsert: "bg-accent-soft text-accent-700",
+  delete: "bg-danger-soft text-danger-700",
   export: "bg-neutral-100 text-neutral-700",
   import: "bg-neutral-100 text-neutral-700",
 };
@@ -57,75 +53,86 @@ interface Panel {
 }
 
 const n = (v: number | null | undefined) =>
-  v == null ? "—" : v.toLocaleString("en-IN");
+  v == null ? "not known" : v.toLocaleString("en-IN");
 
 const when = (iso: string | null): string => {
-  if (!iso) return "—";
+  if (!iso) return "not recorded";
   const ms = Date.now() - new Date(iso).getTime();
   if (ms < 60_000) return "just now";
   const m = Math.floor(ms / 60_000);
-  if (m < 60) return `${m}m ago`;
+  if (m < 60) return `${m} minute${m === 1 ? "" : "s"} ago`;
   const h = Math.floor(m / 60);
-  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
+  if (h < 24) return `${h} hour${h === 1 ? "" : "s"} ago`;
+  const d = Math.floor(h / 24);
+  return `${d} day${d === 1 ? "" : "s"} ago`;
 };
 
-/* Semantic tokens only — "failed" here must be the same red as "failed" in the
-   push queue two panels up, and as "failed" in the web dashboard. */
+/* Semantic tokens only: "failed" here must be the same red as "failed" everywhere else on this screen. */
 const TONE: Record<string, string> = {
   succeeded: "text-success-700", pending: "text-accent-700", claimed: "text-accent-700",
-  pushing: "text-accent-700", failed: "text-danger-700", cancelled: "text-neutral-400",
+  pushing: "text-accent-700", failed: "text-danger-700", cancelled: "text-neutral-700",
 };
+const STATUS_WORD: Record<string, string> = {
+  succeeded: "done", pending: "waiting", claimed: "picked up", pushing: "being sent", failed: "refused", cancelled: "cancelled",
+};
+const ACTION_WORD: Record<string, string> = { upsert: "saved", delete: "deleted", export: "exported", import: "imported" };
 
 declare const __APP_VERSION__: string;
 
 /**
- * Is the server on port 3100 actually OURS?
- *
- * It can be a leftover standalone `node dist/index.js` from an earlier session
- * or a second copy of the app. When it is, this app's own server never binds —
- * `EADDRINUSE` goes to a console nobody reads — and every screen here talks to
- * a stale build started with a different environment.
- *
- * That happened on 14-Sep-2026: a server from the previous evening held the
- * port, so the mirror panel 404'd AND the push agent read as disabled, and the
- * only advice on screen was about a `.env` that was already correct. Two wrong
- * readings from one invisible cause, and no way to see it from inside the app.
+ * Is the server on this computer's port actually OURS? It can be a leftover copy from an earlier session or a second copy of the app. When it
+ * is, this app's own server never starts, and every screen here talks to an older copy that was started with a different setup.
  */
 function StaleServerBanner({ who, reachable }: { who: WhoAmI | null; reachable: boolean }) {
   const mine = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : null;
   const theirs = who?.version;
-  /* Only when we can actually TELL. An older server has no /api/whoami at all,
-     which is itself the signal — but a network blip is not, so an unreachable
-     server says nothing here and the panel's own message covers it. */
+  /* Only when we can actually TELL. An older server has no /api/whoami at all, which is itself the signal. A network blip is not. */
   const mismatch = reachable && (!who || (!!mine && !!theirs && theirs !== mine && theirs !== "unknown"));
   if (!mismatch) return null;
 
   return (
-    <div className="bg-warn-soft border border-warn-200 rounded-xl px-4 py-3 text-xs text-warn-800">
-      <div className="flex items-start gap-2">
-        <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-        <div>
-          <p className="font-semibold">
-            Another MK Cycles server is holding the local server port — this window is talking to it, not to its own.
-          </p>
-          <p className="mt-1">
-            {who?.version
-              ? <>It reports version <b>{who.version}</b>{who.pid ? <> (pid {who.pid})</> : null}
-                  {who.startedAt ? <>, started {new Date(who.startedAt).toLocaleString()}</> : null}.
-                  This app is <b>{mine}</b>.</>
-              : <>It does not answer <code>/api/whoami</code>, so it predates this build.</>}
-          </p>
-          <p className="mt-1">
-            Everything on this screen — the push agent's state included — is that server's, and it was
-            started with whatever environment existed then. Quit it and restart this app.
-          </p>
-        </div>
+    <div className="note note-warn">
+      <AlertTriangle size={16} className="mt-1 shrink-0" />
+      <div>
+        <p className="font-medium">
+          Another copy of this program is already running on this computer. This window is talking to that copy, not to its own.
+        </p>
+        <p className="mt-1">
+          {who?.version
+            ? <>That copy is version <b>{who.version}</b>{who.startedAt ? <>, started {new Date(who.startedAt).toLocaleString("en-IN")}</> : null}.
+                This window is version <b>{mine}</b>.</>
+            : <>It is too old to say which version it is.</>}
+        </p>
+        <p className="mt-1">
+          Everything on this screen comes from that copy, and it was started with whatever settings existed then. Close the other copy, then
+          close and open this app again.
+        </p>
       </div>
     </div>
   );
 }
 
-export function MirrorPanel() {
+/** One block of the mirror: a white card with a quiet header and a body. Not collapsible: the page already has a panel around the whole mirror. */
+function Block({ icon, title, aside, children, action }: { icon: React.ReactNode; title: string; aside?: React.ReactNode; children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <section className="panel">
+      <div className="flex min-h-11 items-center gap-3 px-4 py-2">
+        <span className="text-neutral-700">{icon}</span>
+        <h2 className="panel-title">{title}</h2>
+        {aside && <span className="text-xs text-neutral-700">{aside}</span>}
+        {action}
+      </div>
+      <div className="px-4 pb-4">{children}</div>
+    </section>
+  );
+}
+
+interface MirrorProps {
+  /** True only on a machine where office mode is off. The queue timing and the push log describe the old push queue, which nothing feeds after go-live. */
+  showOldQueue?: boolean;
+}
+
+export function MirrorPanel({ showOldQueue = true }: MirrorProps) {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [who, setWho] = useState<WhoAmI | null>(null);
   const [reachable, setReachable] = useState(false);
@@ -134,8 +141,7 @@ export function MirrorPanel() {
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      /* whoami FIRST, and separately: if the wrong server is answering, that is
-         the thing to say, and it explains whatever the panel does next. */
+      /* whoami FIRST, and separately: if the wrong copy is answering, that is the thing to say, and it explains whatever the panel does next. */
       try {
         const w = await fetch(`${BASE}/api/whoami`);
         setReachable(true);
@@ -161,13 +167,13 @@ export function MirrorPanel() {
 
   if (!panel) {
     return (
-      <div className="space-y-3">
+      <div className="space-y-4">
         <StaleServerBanner who={who} reachable={reachable} />
-        <div className="bg-white rounded-xl border border-neutral-200 px-4 py-3 text-xs text-neutral-500">
-          {busy ? "Reading the mirror…"
+        <div className="rounded-lg bg-white px-4 py-3 text-sm text-neutral-700 shadow-card">
+          {busy ? "Reading the online copy"
             : reachable
-              ? "The local server answered, but not with this panel — see above."
-              : "Could not reach the local server."}
+              ? "This app's server answered, but not with this panel. See the note above."
+              : "This app's own server could not be reached."}
         </div>
       </div>
     );
@@ -175,210 +181,168 @@ export function MirrorPanel() {
 
   if (panel.offline) {
     return (
-      <div className="bg-white rounded-xl border border-neutral-200 px-4 py-3 text-xs text-warn-800 flex items-start gap-1.5">
-        <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-        <span>Supabase is not configured or not reachable, so there is nothing to read. {panel.error}</span>
+      <div className="note note-warn">
+        <AlertTriangle size={16} className="mt-1 shrink-0" />
+        <span>The online database is not set up or cannot be reached from this computer, so there is nothing to read. {panel.error}</span>
       </div>
     );
   }
 
   const lat = panel.pushLatency;
+  const refresh = (
+    <button
+      onClick={() => void load()}
+      disabled={busy}
+      className="btn-icon shrink-0"
+      aria-label="Read the online copy again"
+      title={busy ? "Reading the online copy" : "Read the online copy again now"}
+    >
+      <RefreshCw size={16} className={busy ? "animate-spin" : ""} />
+    </button>
+  );
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <StaleServerBanner who={who} reachable={reachable} />
 
-      {/* ── How fast a queued voucher actually reaches Tally ────────────── */}
-      <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
-          <Clock size={14} className="text-neutral-500" />
-          <h2 className="font-semibold text-sm text-neutral-700 flex-1">Queue to Tally</h2>
-          {/* Was a bare 13px icon with no box at all — the smallest target on
-              the screen, for the control a person reaches for most often on
-              this panel. `btn-icon` gives it a real box and `tap` a 44px
-              area behind it. (15-Sep-2026) */}
-          <button
-            onClick={() => void load()}
-            disabled={busy}
-            className="btn-icon h-9 w-9 shrink-0 tap"
-            aria-label="Refresh the mirror"
-            title={busy ? "Reading the mirror…" : "Re-read the mirror now"}
-          >
-            <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
-          </button>
-        </div>
-        <div className="px-4 py-3 text-xs text-neutral-700">
-          {lat.count === 0 ? (
-            <span className="text-neutral-500">Nothing has been pushed yet, so there is no timing to show.</span>
-          ) : (
-            <>
-              {/* TWO figures, never one. The app's own responsiveness and
-                  Tally's import time are different things with different
-                  remedies, and blending them reads as "the app took 25
-                  seconds" when the app took half of one. */}
-              <div className="flex flex-wrap gap-x-6 gap-y-1">
-                <span>
-                  <span className="font-mono text-lg font-bold text-neutral-900">{lat.pickupMedian ?? "—"}s</span>{" "}
-                  to pick up
-                  <span className="text-neutral-500"> · this app noticing</span>
-                </span>
-                <span>
-                  <span className="font-mono text-lg font-bold text-neutral-900">{lat.inTallyMedian ?? "—"}s</span>{" "}
-                  in Tally
-                  <span className="text-neutral-500">
-                    {lat.inTallySlowest != null ? ` · slowest ${lat.inTallySlowest}s` : ""} · {lat.count} measured
-                  </span>
-                </span>
-              </div>
-              <p className="mt-1 text-neutral-500">
-                Pickup is sub-second because the agent listens for the insert; the poll behind it is only a
-                guarantee. The rest is Tally importing, one voucher at a time — its XML port is
-                single-threaded, so a batch finishes in sequence rather than together.
-              </p>
-              {lat.pickupMedian != null && lat.pickupMedian > 6 && (
-                <p className="mt-1 text-warn-800">
-                  Pickup is slower than the 4-second poll, which means the realtime channel is not
-                  delivering and every push is waiting for a tick.
-                </p>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* ── Push log ───────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
-          <ArrowUpRight size={14} className="text-neutral-500" />
-          <h2 className="font-semibold text-sm text-neutral-700 flex-1">Push log</h2>
-          <span className="text-[11px] text-neutral-500">{panel.pushes.length} most recent</span>
-        </div>
-        {panel.pushes.length === 0 ? (
-          <p className="px-4 py-3 text-xs text-neutral-500">Nothing queued yet.</p>
-        ) : (
-          <ul className="divide-y divide-neutral-100 max-h-[320px] overflow-auto">
-            {panel.pushes.map((p) => (
-              <li key={p.id} className="px-4 py-2">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-xs font-semibold">{p.voucherType}</span>
-                  <span className="text-[11px] font-mono text-neutral-500">{p.voucherNumber}</span>
-                  <span className={`ml-auto text-[10.5px] font-bold inline-flex items-center gap-1 ${TONE[p.status] ?? "text-neutral-500"}`}>
-                    {p.status === "succeeded" ? <Check size={11} />
-                      : p.status === "failed" ? <AlertTriangle size={11} />
-                      : p.status === "cancelled" ? <Minus size={11} />
-                      : <Loader2 size={11} className="animate-spin" />}
-                    {p.status}
-                  </span>
-                </div>
-                <div className="flex items-baseline gap-2 mt-0.5">
-                  <span className="text-[11px] text-neutral-600 truncate" title={p.party}>{p.party}</span>
-                  {p.amount > 0 && (
-                    <span className="ml-auto text-[11px] font-mono text-neutral-700">
-                      ₹{p.amount.toLocaleString("en-IN")}
+      {showOldQueue && (
+        <>
+          {/* ── How fast a queued voucher reaches Tally (old push queue) ───── */}
+          <Block icon={<Clock size={16} />} title="How fast the old queue reaches Tally" action={refresh}>
+            <div className="text-sm text-neutral-700">
+              {lat.count === 0 ? (
+                <span>Nothing has been sent yet, so there is no timing to show.</span>
+              ) : (
+                <>
+                  {/* TWO figures, never one: this app noticing a voucher and Tally importing it are different things with different remedies. */}
+                  <div className="flex flex-wrap gap-x-6 gap-y-2">
+                    <span>
+                      <span className="font-display text-2xl text-neutral-950">{lat.pickupMedian ?? "not known"} seconds</span>{" "}
+                      to be noticed
                     </span>
+                    <span>
+                      <span className="font-display text-2xl text-neutral-950">{lat.inTallyMedian ?? "not known"} seconds</span>{" "}
+                      inside Tally
+                      <span className="text-neutral-700">
+                        {lat.inTallySlowest != null ? `, slowest ${lat.inTallySlowest} seconds` : ""}. {lat.count} measured.
+                      </span>
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs">
+                    Being noticed takes under a second. The rest is Tally taking in one voucher at a time, so a batch finishes in a line, not all at once.
+                  </p>
+                  {lat.pickupMedian != null && lat.pickupMedian > 6 && (
+                    <p className="mt-2 text-warn-700">
+                      Being noticed is slower than the 4-second check, which means the instant signal is not arriving and every voucher is waiting for the
+                      next check.
+                    </p>
                   )}
-                </div>
-                <div className="text-[10.5px] text-neutral-400 mt-0.5">
-                  queued {when(p.createdAt)}
-                  {p.waitedSeconds !== null && p.waitedSeconds >= 0 && ` · took ${p.waitedSeconds}s`}
-                  {p.attempts > 1 && ` · ${p.attempts} attempts`}
-                </div>
-                {/* In full. Truncating a refusal removes the only useful part. */}
-                {p.lastError && (
-                  <p className="mt-1 text-[10.5px] text-danger-700 bg-danger-soft rounded px-1.5 py-1">{p.lastError}</p>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+                </>
+              )}
+            </div>
+          </Block>
+
+          {/* ── Send log (old push queue) ──────────────────────────────────── */}
+          <Block icon={<ArrowUpRight size={16} />} title="What the old queue has sent" aside={`${panel.pushes.length} most recent`}>
+            {panel.pushes.length === 0 ? (
+              <p className="text-sm text-neutral-700">Nothing has been queued yet.</p>
+            ) : (
+              <ul className="tray flex max-h-80 flex-col gap-2 overflow-auto">
+                {panel.pushes.map((p) => (
+                  <li key={p.id} className="rounded-md bg-white p-3 shadow-card">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="text-sm font-medium">{p.voucherType}</span>
+                      <span className="text-sm text-neutral-700">{p.voucherNumber}</span>
+                      <span className={`ml-auto inline-flex items-center gap-1 text-sm ${TONE[p.status] ?? "text-neutral-700"}`}>
+                        {p.status === "succeeded" ? <Check size={16} />
+                          : p.status === "failed" ? <AlertTriangle size={16} />
+                          : p.status === "cancelled" ? <Minus size={16} />
+                          : <Loader2 size={16} className="animate-spin" />}
+                        {STATUS_WORD[p.status] ?? p.status}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
+                      <span className="text-sm text-neutral-700 wrap-anywhere">{p.party}</span>
+                      {p.amount > 0 && <span className="ml-auto text-sm tabular-nums text-neutral-900">₹{p.amount.toLocaleString("en-IN")}</span>}
+                    </div>
+                    <div className="mt-1 text-xs text-neutral-700">
+                      Queued {when(p.createdAt)}
+                      {p.waitedSeconds !== null && p.waitedSeconds >= 0 && `. Took ${p.waitedSeconds} seconds`}
+                      {p.attempts > 1 && `. Tried ${p.attempts} times`}
+                    </div>
+                    {/* In full. Cutting a refusal short removes the only useful part. */}
+                    {p.lastError && <p className="mt-2 rounded-sm bg-danger-soft px-3 py-2 text-xs text-danger-700 wrap-anywhere">{p.lastError}</p>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Block>
+        </>
+      )}
 
       {/* ── Sync history ───────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
-          <History size={14} className="text-neutral-500" />
-          <h2 className="font-semibold text-sm text-neutral-700 flex-1">Sync history</h2>
-          <span className="text-[11px] text-neutral-500">
-            last full pull {panel.lastFullSyncAt ? when(panel.lastFullSyncAt) : "— none on record"}
-          </span>
-        </div>
-        {/* A full sweep is its own fact. Backdated entry is most of the work
-            here and the small pulls only look at today, so a run of successful
-            little syncs makes the mirror look fresh while last week's orders
-            quietly never arrive. */}
-        <ul className="divide-y divide-neutral-100 max-h-[240px] overflow-auto">
+      <Block
+        icon={<History size={16} />}
+        title="Sync history"
+        aside={`last whole-year read: ${panel.lastFullSyncAt ? when(panel.lastFullSyncAt) : "none on record"}`}
+        action={showOldQueue ? undefined : refresh}
+      >
+        {/* A whole-year read is its own fact. Entries made for an earlier date are most of the work here and the small syncs only look at
+            today, so a run of small successful syncs makes the copy look fresh while last week's orders quietly never arrive. */}
+        <ul className="tray flex max-h-72 flex-col gap-2 overflow-auto">
           {panel.syncs.map((s, i) => (
-            <li key={i} className="px-4 py-1.5 flex items-baseline gap-2 text-[11px]">
+            <li key={i} className="flex flex-wrap items-baseline gap-x-2 rounded-md bg-white p-3 text-sm shadow-card">
               <span className={s.success ? "text-success-700" : "text-danger-700"}>
-                {s.success ? <Check size={11} /> : <AlertTriangle size={11} />}
+                {s.success ? <Check size={16} /> : <AlertTriangle size={16} />}
               </span>
-              <span className="font-semibold capitalize">{s.syncType ?? "sync"}</span>
-              {s.full && (
-                <span className="px-1.5 rounded bg-accent/10 text-accent-700 text-[10px] font-bold">full</span>
-              )}
-              <span className="text-neutral-500 truncate">
-                {Object.entries(s.counts ?? {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${n(Number(v))} ${k}`).join(", ") || "—"}
+              <span className="font-medium capitalize">{s.syncType ?? "sync"}</span>
+              {s.full && <span className="rounded-xs bg-accent-soft px-2 text-xs text-accent-700">whole year</span>}
+              <span className="text-neutral-700 wrap-anywhere">
+                {Object.entries(s.counts ?? {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${n(Number(v))} ${k.replace(/_/g, " ")}`).join(", ") || "nothing changed"}
               </span>
-              <span className="ml-auto shrink-0 text-neutral-400">{when(s.startedAt)}</span>
+              <span className="ml-auto text-xs text-neutral-700">{when(s.startedAt)}</span>
             </li>
           ))}
         </ul>
-      </div>
+      </Block>
 
-      {/* ── Snapshot ─────────────────────────────────────────────────────
-          Tiles rather than a list, matching the web Sync Logs page — the same
-          five figures in the same shape, so the two screens can be read
-          against each other without translating. */}
-      <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
-          <Database size={14} className="text-neutral-500" />
-          <h2 className="font-semibold text-sm text-neutral-700 flex-1">Data snapshot</h2>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 p-3">
+      {/* ── Snapshot: the same figures, in the same shape, as the web Sync Logs page, so the two screens can be read against each other. ── */}
+      <Block icon={<Database size={16} />} title="What the online database holds">
+        <div className="tray grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           {panel.snapshot.map((s) => (
-            <div key={s.table} className="rounded-lg border border-neutral-200 px-3 py-2">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-500 truncate" title={s.table}>
-                {s.table.replace(/^tally_/, "").replace(/_/g, " ")}
-              </div>
-              <div className="font-mono text-lg font-bold text-neutral-900 tabular-nums">{n(s.rows)}</div>
-              {s.newest && <div className="text-[10px] text-neutral-400">to {s.newest}</div>}
+            <div key={s.table} className="rounded-md bg-white p-3 shadow-card">
+              <div className="text-xs text-neutral-700 wrap-anywhere">{s.table.replace(/^tally_/, "").replace(/_/g, " ")}</div>
+              <div className="font-display text-2xl tabular-nums text-neutral-950">{n(s.rows)}</div>
+              {s.newest && <div className="text-xs text-neutral-700">up to {s.newest}</div>}
             </div>
           ))}
         </div>
-        <p className="px-4 py-2 text-[10.5px] text-neutral-500 border-t border-neutral-100">
-          A dash means the table could not be read, which is not the same as it being empty.
+        <p className="mt-2 text-xs text-neutral-700">
+          "Not known" means that list could not be read, which is not the same as it being empty.
         </p>
-      </div>
+      </Block>
 
-      {/* ── Activity log ─────────────────────────────────────────────────
-          Who changed what, from the same `config_edit_log` the web page reads.
-          Here because the agent is the machine people stand in front of when
-          something looks wrong, and "did someone change the discount rules?" is
-          one of the first questions. */}
-      <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-neutral-100 bg-neutral-50">
-          <PenLine size={14} className="text-neutral-500" />
-          <h2 className="font-semibold text-sm text-neutral-700 flex-1">Activity log</h2>
-          <span className="text-[11px] text-neutral-500">{panel.edits.length} most recent</span>
-        </div>
+      {/* ── Activity log: who changed what, from the same record the web page reads. The agent is the computer people stand in front of
+          when something looks wrong, and "did someone change the discount rules?" is one of the first questions. ── */}
+      <Block icon={<PenLine size={16} />} title="Who changed what" aside={`${panel.edits.length} most recent`}>
         {panel.edits.length === 0 ? (
-          <p className="px-4 py-3 text-xs text-neutral-500">Nothing recorded yet.</p>
+          <p className="text-sm text-neutral-700">Nothing has been recorded yet.</p>
         ) : (
-          <ul className="divide-y divide-neutral-100 max-h-[240px] overflow-auto">
+          <ul className="tray flex max-h-72 flex-col gap-2 overflow-auto">
             {panel.edits.map((e) => (
-              <li key={e.id} className="px-4 py-1.5 flex items-baseline gap-2 text-[11px]">
-                <span className={`px-1.5 rounded text-[10px] font-bold shrink-0 ${ACTION_TONE[e.action] ?? "bg-neutral-100 text-neutral-600"}`}>
-                  {e.action}
+              <li key={e.id} className="flex flex-wrap items-baseline gap-x-2 rounded-md bg-white p-3 text-sm shadow-card">
+                <span className={`rounded-xs px-2 text-xs ${ACTION_TONE[e.action] ?? "bg-neutral-100 text-neutral-700"}`}>
+                  {ACTION_WORD[e.action] ?? e.action}
                 </span>
-                <span className="font-semibold truncate" title={`${e.domain} · ${e.table}`}>{e.domain}</span>
-                {e.count != null && <span className="text-neutral-500 shrink-0">×{e.count}</span>}
-                <span className="text-neutral-500 truncate" title={e.who}>{e.who}</span>
-                <span className="ml-auto shrink-0 text-neutral-400">{when(e.at)}</span>
+                <span className="font-medium wrap-anywhere">{e.domain}</span>
+                {e.count != null && <span className="text-neutral-700">{e.count} rows</span>}
+                <span className="text-neutral-700 wrap-anywhere">{e.who}</span>
+                <span className="ml-auto text-xs text-neutral-700">{when(e.at)}</span>
               </li>
             ))}
           </ul>
         )}
-      </div>
+      </Block>
     </div>
   );
 }

@@ -4,8 +4,8 @@
  * ── What was wrong with the old one ───────────────────────────────────────
  *
  * It was a black terminal — `bg-neutral-950 text-neutral-200` — dropped into a
- * light app, with its own private colour scheme: `text-red-400` for errors,
- * `text-green-400`, `text-amber-400`, `text-cyan-300`, `text-violet-300`. Five
+ * light app, with its own private colour scheme: `text-danger-700` for errors,
+ * `text-success-700`, `text-warn-700`, `text-accent-700`, `text-accent-700`. Five
  * colours that exist nowhere else in either app. A failure line here was a
  * completely different red from the failure three inches above it in the push
  * queue, which is the exact thing the semantic tokens are for. The web
@@ -22,7 +22,7 @@
  * the active chip when `.filter-chip` / `.filter-chip-active` already exist in
  * index.css and are what every other segmented control in both apps uses.
  *
- * And the error count was buried in the collapsed header, in `text-red-600`,
+ * And the error count was buried in the collapsed header, in `text-danger-700`,
  * where it was visible only once you had already opened the panel to look.
  *
  * ── What this shows instead ───────────────────────────────────────────────
@@ -42,14 +42,18 @@ const FILTERS: Array<[LogFilter, string]> = [
   ["all", "All"],
   ["errors", "Errors"],
   ["tally", "Tally"],
-  ["supabase", "Supabase"],
-  ["remote", "Web-triggered"],
+  ["supabase", "Online database"],
+  ["remote", "Asked from the web"],
   ["auto", "Scheduled"],
 ];
 
 /* Genuine failures carry the ❌/✗ marker the server prefixes every
    console.error with. The word test also catches plain-text failures, but must
    not catch a benign "(0 errors)" summary. */
+/** The server marks its own lines with symbols and pictures. They are read for meaning above and never drawn, because this window shows words only. */
+export const plainLine = (l: string): string =>
+  l.replace(/[\p{Extended_Pictographic}\uFE0F\u2713\u2717]/gu, "").replace(/ {2,}/g, " ").trim();
+
 export const isErrorLine = (l: string) =>
   /❌|✗/.test(l) || /\bfailed\b|\bexception\b|\brejected\b/i.test(l);
 
@@ -87,41 +91,41 @@ export function LogsPanel({ logs, base, onCopy }: Props) {
   }, [logs, filter]);
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-4">
       {/* 1 — what needs a person */}
       {errorCount > 0 && filter !== "errors" && (
-        <div className="flex items-start gap-2 rounded-xl bg-danger-soft px-3 py-2.5 text-[12px] text-danger-700">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        <div className="note note-bad">
+          <AlertTriangle size={16} className="mt-1 shrink-0" />
           <div className="min-w-0 flex-1">
-            <p className="font-semibold">
-              {errorCount} error line{errorCount === 1 ? "" : "s"} in the buffer.
+            <p className="font-medium">
+              {errorCount} line{errorCount === 1 ? "" : "s"} below {errorCount === 1 ? "reports" : "report"} an error.
             </p>
-            <p className="mt-0.5">
-              This is a rolling tail of the last {logs.length} lines, so an error that scrolled off is gone — copy it
-              before restarting anything.
+            <p className="mt-1">
+              Only the last {logs.length} lines are kept, so an error that has scrolled off is gone. Copy it
+              before closing or restarting anything.
             </p>
           </div>
-          <button onClick={() => setFilter("errors")} className="btn-secondary btn-sm shrink-0">
+          <button onClick={() => setFilter("errors")} className="btn-secondary shrink-0">
             Show only these
           </button>
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-2">
         {FILTERS.map(([key, label]) => (
           <button
             key={key}
             onClick={() => setFilter(key)}
             aria-pressed={filter === key}
-            className={clsx("filter-chip text-[11px]", filter === key && "filter-chip-active")}
+            className={clsx("filter-chip", filter === key && "filter-chip-active")}
           >
             {label}
             {key === "errors" && errorCount > 0 && <span className="tabular-nums">({errorCount})</span>}
           </button>
         ))}
         {/* Its own control, not a span nested inside the section's button. */}
-        <button onClick={() => onCopy(visible.join("\n"))} className="btn-secondary btn-sm ml-auto">
-          <ClipboardCopy size={12} />
+        <button onClick={() => onCopy(visible.join("\n"))} className="btn-secondary ml-auto">
+          <ClipboardCopy size={16} />
           Copy {filter === "all" ? "all" : "these"}
         </button>
       </div>
@@ -132,39 +136,38 @@ export function LogsPanel({ logs, base, onCopy }: Props) {
           const el = e.currentTarget;
           stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
-        className="h-80 overflow-y-auto rounded-xl bg-white p-3 font-mono text-[11px] leading-relaxed ring-1 ring-black/[0.06]"
+        className="tray h-80 overflow-y-auto font-mono text-xs"
       >
         {visible.length === 0 ? (
-          <span className="font-sans text-[12.5px] text-neutral-500">
+          <span className="font-sans text-sm text-neutral-700">
             {logs.length === 0
-              ? "Nothing yet — the server writes here as it works. Run a sync and lines appear."
-              : `No ${filter === "all" ? "" : FILTERS.find(([k]) => k === filter)?.[1].toLowerCase() + " "}lines in the current buffer.`}
+              ? "Nothing yet. This app writes here as it works. Run a sync and lines will appear."
+              : `No ${filter === "all" ? "" : FILTERS.find(([k]) => k === filter)?.[1].toLowerCase() + " "}lines are held right now.`}
           </span>
         ) : (
           visible.map((line, i) => (
             <div
               key={i}
               className={clsx(
-                "whitespace-pre-wrap break-words",
+                "whitespace-pre-wrap wrap-anywhere",
                 /* The same tokens as everywhere else. "Failed" is one red. */
                 isErrorLine(line) ? "text-danger-700"
-                : /⚠/.test(line) ? "text-warn-800"
+                : /⚠/.test(line) ? "text-warn-700"
                 : /✓/.test(line) ? "text-success-700"
                 : /🌐|🌙/.test(line) ? "text-accent-700"
                 : "text-neutral-700",
               )}
             >
-              {line}
+              {plainLine(line)}
             </div>
           ))
         )}
       </div>
 
-      <p className="flex items-start gap-1.5 text-[11px] text-neutral-500">
-        <Terminal size={11} className="mt-0.5 shrink-0" />
-        Live tail of this app's server — {logs.length} line{logs.length === 1 ? "" : "s"} held, refreshed every 2s.
-        The same tail is served as a page at <span className="font-mono">{base}/</span>, which survives this window
-        being closed.
+      <p className="flex items-start gap-2 text-xs text-neutral-700">
+        <Terminal size={16} className="mt-1 shrink-0" />
+        The latest lines from this app's server: {logs.length} line{logs.length === 1 ? "" : "s"} held, refreshed every 2 seconds.
+        The same lines are also shown as a web page at {base}/, which stays available when this window is closed.
       </p>
     </div>
   );

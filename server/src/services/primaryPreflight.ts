@@ -74,7 +74,8 @@ export class PreflightReporter {
   private lastAt = 0;
   private lastReady = false;
   private busy = false;
-  readonly status: { reports: number; lastAt: string | null; lastReady: boolean | null; lastError: string | null } = { reports: 0, lastAt: null, lastReady: null, lastError: null };
+  /** `lines` (agent-ui lane): the lines of the last report, already scrubbed of the key, so the agent's own window can show them. */
+  readonly status: { reports: number; lastAt: string | null; lastReady: boolean | null; lastError: string | null; lines: PreflightLine[] } = { reports: 0, lastAt: null, lastReady: null, lastError: null, lines: [] };
   constructor(private o: {
     run: () => Promise<PreflightLine[]>;
     send: (args: Record<string, unknown>) => Promise<void>;
@@ -93,6 +94,7 @@ export class PreflightReporter {
       await this.o.send(args);
       this.lastReady = args.p_ready === true;
       this.status.reports++; this.status.lastAt = new Date(now()).toISOString(); this.status.lastReady = this.lastReady; this.status.lastError = null;
+      this.status.lines = (args.p_lines as PreflightLine[]).map((l) => ({ name: l.name, ok: l.ok, detail: l.detail }));
     } catch (e) {
       this.status.lastError = scrubKey((e as Error).message, this.o.key).slice(0, 160);
       (this.o.log ?? (() => {}))(`could not send the preflight report: ${this.status.lastError}`);
