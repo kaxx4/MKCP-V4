@@ -118,8 +118,8 @@ export const ERP_MIRROR_MARK_DEF: CollectionDef = {
   tallyCollection: "Voucher",
   metadataType: "Voucher",
   category: "transaction",
-  /* Guid too (0119): the nightly check compares the mirror key by key (A11). */
-  fetch: ["AlterID", "Date", "Guid"],
+  /* Guid too (0119): the nightly check compares the mirror key by key (A11). VoucherTypeName (D-M.279): so the check can see a whole type missing. */
+  fetch: ["AlterID", "Date", "Guid", "VoucherTypeName"],
   timeout: 120_000,
   parallel: false,
 };
@@ -556,7 +556,7 @@ export interface MirrorTally {
 }
 
 /** One voucher as the nightly check sends it: key, ISO date, AlterID (raw; the database checks each). */
-export interface DayCheckVoucher { k: string; d: string | null; a: number | null }
+export interface DayCheckVoucher { k: string; d: string | null; a: number | null; /** voucher type, for the type-vanished guard only; never sent to the database */ t?: string | null }
 
 export interface SwapResult {
   state: "swapped" | "refused";
@@ -580,6 +580,11 @@ export interface MirrorStore {
   fail(run: string, error: string): Promise<void>;
   /** Stage ledgers (at most 500 per call); returns the count staged for the run. */
   stageLedgers(run: string, rows: MirrorLedgerRow[]): Promise<number>;
+  /**
+   * D-M.279: how many mirror vouchers of each type the store holds for these days (inclusive). Optional: a store without it is not guarded. A store that
+   * has it and cannot answer fails the run (a guard that cannot look is not a pass).
+   */
+  typeCounts?(from: string, to: string): Promise<Record<string, number>>;
   /** Start the oldest queued one-day re-pull, or null when none is queued. */
   repullStart(): Promise<{ run_id: string; scope_from: string; scope_to: string; mark: number | null; repull_id?: string } | null>;
   /** The nightly key compare (A11): the database compares and queues the re-pulls. */
@@ -623,7 +628,7 @@ export function tallyMirrorReads(tallyUrl: string, company: string, post: Post =
         if (d && (!latest || d > latest)) latest = d;
         const a = String(v.alterid ?? "").trim();
         /* Tally never gives an AlterID of 0, and the converter turns a missing one into 0: so 0 is "missing". */
-        vouchers.push({ k: String(v.guid ?? "").trim(), d, a: /^\d+$/.test(a) && Number(a) > 0 ? Number(a) : null });
+        vouchers.push({ k: String(v.guid ?? "").trim(), d, a: /^\d+$/.test(a) && Number(a) > 0 ? Number(a) : null, t: String(v.vouchertypename ?? "").trim() || null });
       }
       /* Review 1-5 item 5: vouchers with no AlterID on any of them is a read
          that did not work (G7), not a mark of 0 to read everything above. */
@@ -670,6 +675,21 @@ export function supabaseMirrorStore(c: SupabaseClient, machine: string, key: str
     swap: async (run, mark) => call("erp_sync_swap", { p_run: run, p_mark_candidate: mark }),
     fail: async (run, error) => { await call("erp_sync_run_fail", { p_run: run, p_error: error }); },
     stageLedgers: async (run, rows) => Number(await call("erp_sync_stage_ledgers", { p_run: run, p_rows: rows })),
+    /* D-M.279: the type counts for the guard. Live rows only (a test store, which the rigs use, is not guarded: its client is fenced to rpc). A page at a
+       time, because the service key's reads stop at 1000 rows. A read that fails throws, and the run fails with it. */
+    ...(isTest ? {} : {
+      typeCounts: async (from: string, to: string) => {
+        const out: Record<string, number> = {};
+        for (let at = 0; ; at += 1000) {
+          const { data, error } = await (c as any).from("erp_mirror_rows").select("voucher_type")
+            .eq("company_key", companyKey).eq("object", "voucher").eq("is_test", false).gte("voucher_date", from).lte("voucher_date", to).order("key").range(at, at + 999);
+          if (error) throw new Error(`erp_mirror_rows: ${error.message}`);
+          for (const r of data ?? []) { const t = String(r.voucher_type ?? "").trim() || "(no type)"; out[t] = (out[t] ?? 0) + 1; }
+          if (!data || data.length < 1000) break;
+        }
+        return out;
+      },
+    }),
     repullStart: async () => (await call("erp_sync_repull_start", { p_company_key: companyKey, p_is_test: isTest })) ?? null,
     checkDays: async (tallyHighest, vouchers) => call("erp_sync_check_days", { p_company_key: companyKey, p_is_test: isTest, p_tally_highest: tallyHighest, p_vouchers: vouchers }),
     lastFullRun: async () => (await call("erp_sync_last_full_run", { p_company_key: companyKey, p_is_test: isTest })) ?? null,
@@ -705,6 +725,8 @@ export interface MirrorSyncReport {
   /** The answer of erp_tally_derive after a swap (go-live swap); null when not run. A failure here never fails the run. */
   tally?: Record<string, any> | null;
   tallyError?: string | null;
+  /** D-M.279: alarms raised by the run (a voucher type that vanished from the read). The swap is held when there is one. */
+  alarms?: MirrorAlarm[];
   /** The biggest single staging request of this run (item 15): its rows and its bytes of JSON. */
   largestBatchRows?: number;
   largestBatchBytes?: number;
@@ -712,6 +734,8 @@ export interface MirrorSyncReport {
 
 const STAGE_BATCH = 500;
 export { STAGE_MAX_BYTES, stageChunks } from "./stageChunks.js";
+export { mirrorFullScope, MIRROR_FORWARD_DAYS, vanishedTypes, type MirrorAlarm } from "./mirrorGuards.js";
+import { mirrorFullScope, vanishedTypes, countByType, type MirrorAlarm } from "./mirrorGuards.js";
 import { STAGE_MAX_BYTES, stageChunks } from "./stageChunks.js";
 
 /** L3 (task 1-5): vouchers per incremental request at most. The busiest dummy day (245 vouchers with their lines) read in one request in 79 s. */
@@ -807,13 +831,16 @@ async function runMirror(opts: {
   const scrubOpts = store.isTest ? { scrub: true as const, salt: store.scrubSalt! } : { scrub: false as const };
   const log = opts.log ?? ((l: string) => console.log(`[erpMirror] ${l}`));
   const report: MirrorSyncReport = { run_id: null, kind, state: "failed", scope: null, markCandidate: null, read: 0, staged: 0, noGuid: 0, swap: null, error: null, tallyReads: 0, ledgers: null, ledgersAsOf: null };
-  const run = kind === "repull" ? await store.repullStart() : await store.start(kind, opts.scope);
+  /* D-M.279: a full run's window runs FORWARD from today too (mirrorFullScope), so a voucher dated ahead is read on its new day. */
+  const scope = opts.scope ?? (kind === "full" ? mirrorFullScope(opts.today ?? indiaToday()) : undefined);
+  const run = kind === "repull" ? await store.repullStart() : await store.start(kind, scope);
   if (!run) return null;
   const readLedgers = kind !== "repull" && opts.ledgers !== false;
   report.run_id = run.run_id;
   report.scope = { from: run.scope_from, to: run.scope_to };
   const timed = async <T>(fn: () => Promise<T>): Promise<[T, number]> => { const t0 = Date.now(); const v = await fn(); return [v, Date.now() - t0]; };
   let buffer: MirrorRow[] = [];
+  const pulledByType: Record<string, number> = {};
   const flush = async () => {
     const chunks = stageChunks(buffer);
     buffer = [];
@@ -831,7 +858,10 @@ async function runMirror(opts: {
     for (const v of list) {
       const p = voucherProblem(v) ?? (day && isoOf(v?.date) !== day ? `dated ${isoOf(v?.date)}, not ${day}` : null);
       if (p) { if (p === "no GUID") report.noGuid++; problems.push(p); continue; }
-      buffer.push(mirrorRowFrom(v, scrubOpts, store.companyKey ? { company: store.companyKey } : undefined)!);
+      const kept = mirrorRowFrom(v, scrubOpts, store.companyKey ? { company: store.companyKey } : undefined)!;
+      buffer.push(kept);
+      const tk = kept.voucher_type?.trim() || "(no type)";
+      pulledByType[tk] = (pulledByType[tk] ?? 0) + 1;
     }
     if (problems.length) {
       const counts = [...new Set(problems)].map((p) => `${problems.filter((x) => x === p).length} with ${p}`).join("; ");
@@ -954,6 +984,20 @@ async function runMirror(opts: {
       await store.step(run.run_id, period.unexpected ? "read and staged the ledgers, flagged balance_period_unexpected" : "read and staged the ledgers with their closing balances", "ok", n, msL,
         { balance_as_of: asOf, loaded_from: period.from, balance_period_unexpected: period.unexpected, why: period.why, closing_balance_sent: rows.filter((r) => r.row.closing_balance_sent).length });
     }
+    /* D-M.279: a whole voucher type missing from the read is held, never pruned. Only a run that prunes a window (full or a re-pull) is judged. */
+    if ((kind === "full" || kind === "repull") && store.typeCounts) {
+      const held = vanishedTypes(await store.typeCounts(run.scope_from, run.scope_to), pulledByType, { from: run.scope_from, to: run.scope_to, where: kind });
+      if (held.length) {
+        const why = `${held.length} voucher type(s) vanished from the read (${held.map((a) => a.type).join(", ")}); nothing was swapped or pruned. ${held[0].reason}`;
+        report.alarms = held;
+        report.state = "refused";
+        report.error = `refused: ${why}`;
+        await store.step(run.run_id, `held: ${why}`.slice(0, 500), "failed", null, null, { alarms: held.map(({ type, storeRows, where }) => ({ type, storeRows, where })) });
+        await store.fail(run.run_id, report.error.slice(0, 500));
+        log(`${kind} run ${run.run_id}: ${report.error}`);
+        return report;
+      }
+    }
     const [res, msS] = await timed(() => store.swap(run.run_id, top.alterId));
     report.swap = res;
     report.state = res.state;
@@ -971,7 +1015,7 @@ async function runMirror(opts: {
   }
 }
 
-export interface DayCheckReport { state: "ok" | "gaps" | "refused" | "failed"; result: Record<string, any> | null; error: string | null; vouchers: number; tallyHighest: number | null }
+export interface DayCheckReport { state: "ok" | "gaps" | "refused" | "failed"; result: Record<string, any> | null; error: string | null; vouchers: number; tallyHighest: number | null; alarms?: MirrorAlarm[] }
 
 /**
  * The nightly check (A11, 0119): one cheap read of every voucher's key, date
@@ -983,7 +1027,19 @@ export async function runDayCheck(opts: { store: MirrorStore; tally: MirrorTally
   try {
     const top = await opts.tally.highest();
     if (!top.vouchers) throw new Error("the AlterID read did not return the vouchers' keys, so there is nothing to compare");
-    const result = await opts.store.checkDays(top.alterId, top.vouchers);
+    /* D-M.279: a whole voucher type missing from Tally's list (while the mirror holds it) would queue re-pulls that prune it: held, with an alarm. */
+    if (opts.store.typeCounts) {
+      const dates = top.vouchers.map((v) => v.d).filter((d): d is string => !!d).sort();
+      if (dates.length && top.vouchers.every((v) => v.t !== undefined)) {
+        const held = vanishedTypes(await opts.store.typeCounts(dates[0], dates[dates.length - 1]), countByType(top.vouchers.map((v) => ({ type: v.t }))), { from: dates[0], to: dates[dates.length - 1], where: "day_check" });
+        if (held.length) {
+          const error = `refused: ${held.length} voucher type(s) vanished from Tally's list (${held.map((a) => a.type).join(", ")}); the day check was not stored. ${held[0].reason}`;
+          log(`day check: ${error}`);
+          return { state: "refused", result: null, error, vouchers: top.vouchers.length, tallyHighest: top.alterId, alarms: held };
+        }
+      }
+    }
+    const result = await opts.store.checkDays(top.alterId, top.vouchers.map(({ k, d, a }) => ({ k, d, a })));
     const state = (["ok", "gaps", "refused"].includes(result?.state) ? result.state : "failed") as DayCheckReport["state"];
     log(`day check: ${state} (${JSON.stringify({ ...result, days: undefined })})`);
     return { state, result, error: state === "failed" ? `the database answered ${JSON.stringify(result)}` : null, vouchers: top.vouchers.length, tallyHighest: top.alterId };

@@ -99,7 +99,9 @@ export type JournalEntry =
   /** D-M.262: the primary runner's once-a-day housekeeping (today only the change-signal prune). Not about any job. */
   | { kind: "housekeeping"; task: "signals-prune"; pruned: number | null; error: string | null; at: string }
   /** D-M.270: a swap the pin check refused (the masters of the swap store), so a person can see why the store did not move. */
-  | { kind: "swap-refused"; what: "masters"; reason: string; at: string };
+  | { kind: "swap-refused"; what: "masters"; reason: string; at: string }
+  /** D-M.279: the mirror held a run because a whole voucher type vanished from the read; a person must look. */
+  | { kind: "mirror-alarm"; alarm: string; where: string; reason: string; at: string };
 
 /** Append-only, one JSON line per step, flushed to disk before the call returns. */
 export class Journal {

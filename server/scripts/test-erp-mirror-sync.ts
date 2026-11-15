@@ -315,7 +315,7 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   const reads = tallyMirrorReads("http://localhost:9000", "ZZ PRACTICE CO", async (_u, xml) => { sent.push(xml); return { ENVELOPE: { BODY: { DATA: { COLLECTION: "" } } } }; });
   await reads.highest(); await reads.vouchersOn("2026-11-03"); await reads.changedSince(42);
   ok("every request has an <ID>, names the company, fetches no '*'", sent.length === 3 && sent.every((x) => /<ID>[^<]+<\/ID>/.test(x) && x.includes("<SVCURRENTCOMPANY>ZZ PRACTICE CO<") && !/<NATIVEMETHOD>[^<]*\*/.test(x)));
-  ok("the AlterID read asks for AlterID, Date and Guid only (0119: Guid for the key compare), above 0, escaped", /\$AlterID &gt; 0</.test(sent[0]) && (sent[0].match(/<NATIVEMETHOD>/g) ?? []).length === 3 && sent[0].includes(">Guid<"));
+  ok("the AlterID read asks for AlterID, Date, Guid and VoucherTypeName only (0119: Guid for the key compare; D-M.279: the type for the type-vanished guard), above 0, escaped", /\$AlterID &gt; 0</.test(sent[0]) && (sent[0].match(/<NATIVEMETHOD>/g) ?? []).length === 4 && sent[0].includes(">Guid<") && sent[0].includes(">VoucherTypeName<"));
   await reads.ledgers(); await reads.loadedPeriod().catch(() => null);
   ok("0119: the ledger read is one Ledger collection with an <ID>, the company, the named fields and no filter", sent.length === 5 && /<TYPE>Ledger<\/TYPE>/.test(sent[3]) && /<ID>[^<]+<\/ID>/.test(sent[3])
     && sent[3].includes("<SVCURRENTCOMPANY>ZZ PRACTICE CO<") && sent[3].includes(">ClosingBalance<") && !/<NATIVEMETHOD>[^<]*\*/.test(sent[3]) && !/<FILTER>/.test(sent[3]));

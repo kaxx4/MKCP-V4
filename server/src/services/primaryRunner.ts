@@ -16,6 +16,7 @@ import {
   planMirrorWork, runMirrorSync, runDayCheck, runRepull, applyAcceptedDrops, supabaseMirrorStore, tallyMirrorReads,
   type MirrorStore, type MirrorTally, type MirrorWork,
 } from "./erpMirrorSync.js";
+import type { MirrorAlarm } from "./mirrorGuards.js";
 import { runMasters, supabaseMastersStore, fetchGstWithinLimit, type MastersStore } from "./erpMasters.js";
 import { loadCompanyYears, type CompanyYear } from "./companyYears.js";
 import { primaryModeOn, primaryModeRefusal, primaryGuid, primaryCompanyName, primaryCompanyKey } from "./primaryMode.js";
@@ -224,10 +225,11 @@ export function supabaseMirrorPlanSource(c: Required<Pick<Rpc, "from">>, company
 }
 
 /** The pieces of work the mirror loop can run. The defaults are the real ones; a test passes its own. */
+export type RunnerResult = { state: string; error: string | null; /** D-M.279: a voucher type vanished from the read; the run was held */ alarms?: MirrorAlarm[] };
 export interface MirrorRunners {
-  mirror(store: MirrorStore, tally: MirrorTally, kind: "full" | "incremental", log: (l: string) => void): Promise<{ state: string; error: string | null }>;
-  check(store: MirrorStore, tally: MirrorTally, log: (l: string) => void): Promise<{ state: string; error: string | null }>;
-  repull(store: MirrorStore, tally: MirrorTally, log: (l: string) => void): Promise<{ state: string; error: string | null } | null>;
+  mirror(store: MirrorStore, tally: MirrorTally, kind: "full" | "incremental", log: (l: string) => void): Promise<RunnerResult>;
+  check(store: MirrorStore, tally: MirrorTally, log: (l: string) => void): Promise<RunnerResult>;
+  repull(store: MirrorStore, tally: MirrorTally, log: (l: string) => void): Promise<RunnerResult | null>;
   accepted(store: MirrorStore, log: (l: string) => void): Promise<{ state: string }[]>;
 }
 export const REAL_MIRROR_RUNNERS: MirrorRunners = {
@@ -239,8 +241,12 @@ export const REAL_MIRROR_RUNNERS: MirrorRunners = {
 
 export interface MirrorTickReport { skipped: string | null; planned: MirrorWork[]; did: { work: string; state: string; note?: string }[] }
 
+/** D-M.279: what /api/primary/status shows of a mirror alarm (the last 20, newest last). */
+export interface MirrorAlarmNote extends MirrorAlarm { at: string }
+export interface MirrorLoopStatus extends LoopStatus { alarms: MirrorAlarmNote[] }
+
 export class PrimaryMirrorLoop {
-  readonly status: LoopStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, busy: false };
+  readonly status: MirrorLoopStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, busy: false, alarms: [] };
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pausedUntil = 0;
   constructor(private o: {
@@ -260,6 +266,15 @@ export class PrimaryMirrorLoop {
     pinEveryMs?: number;
     tickMs: number; log?: (l: string) => void; now?: () => number; runners?: MirrorRunners;
   }) {}
+
+  /** D-M.279: write each alarm of a held run to the status and the journal. Never throws. */
+  private noteAlarms(alarms: MirrorAlarm[] | undefined, at: string): void {
+    for (const a of alarms ?? []) {
+      this.status.alarms.push({ ...a, at });
+      if (this.status.alarms.length > 20) this.status.alarms.shift();
+      try { this.o.journal?.append({ kind: "mirror-alarm", alarm: `${a.kind}: ${a.type}`, where: a.where, reason: a.reason.slice(0, 400), at }); } catch { /* the status still shows it */ }
+    }
+  }
 
   /** One pass: ask the planner, do each piece of work in order. Never throws. */
   async tick(): Promise<MirrorTickReport> {
@@ -289,6 +304,7 @@ export class PrimaryMirrorLoop {
           rep.did.push({ work: w, state: r.every((x) => x.state === "swapped") ? "ok" : "failed", note: `${r.length} accepted drop(s)` });
         } else if (w === "full" || w === "incremental") {
           const r = await run.mirror(this.o.store, tally, w, log);
+          this.noteAlarms(r.alarms, now.toISOString());
           rep.did.push({ work: w, state: r.state, note: r.error ?? undefined });
           if (r.state === "failed" && /off until go-live/i.test(r.error ?? "")) { this.pausedUntil = now.getTime() + 15 * 60_000; break; }
           if (w === "full" && r.state === "swapped" && this.o.masters) {
@@ -309,11 +325,13 @@ export class PrimaryMirrorLoop {
           if (r.state !== "swapped") break;     // a refused or failed run stops the pass; the next pass plans again
         } else if (w === "check") {
           const r = await run.check(this.o.store, tally, log);
+          this.noteAlarms(r.alarms, now.toISOString());
           rep.did.push({ work: w, state: r.state, note: r.error ?? undefined });
         } else if (w === "repull") {
           for (let i = 0; i < 7; i++) {
             const r = await run.repull(this.o.store, tally, log);
             if (!r) break;
+            this.noteAlarms(r.alarms, now.toISOString());
             rep.did.push({ work: "repull", state: r.state, note: r.error ?? undefined });
             if (r.state !== "swapped") break;
           }
@@ -432,7 +450,7 @@ export class PrimaryHousekeeping {
 // ── Start it ──────────────────────────────────────────────────────────────────
 export interface PrimaryHandle {
   stop(): void;
-  status(): { mode: "primary"; company: string; machine: string; queue: LoopStatus; mirror: LoopStatus; housekeeping: HousekeepingStatus; agent: unknown };
+  status(): { mode: "primary"; company: string; machine: string; queue: LoopStatus; mirror: MirrorLoopStatus; housekeeping: HousekeepingStatus; agent: unknown };
 }
 
 export interface PrimaryDeps {
