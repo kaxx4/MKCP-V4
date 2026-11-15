@@ -275,7 +275,11 @@ export function voucherProblem(v: any): string | null {
   if (!String(v?.guid ?? "").trim()) return "no GUID";
   if (!isoOf(v?.date)) return "a date that did not parse";
   const lines = Array.isArray(v.allledgerentries) ? v.allledgerentries : [];
-  if (lines.some((e: any) => !String(e?.ledgername ?? "").trim())) return "an empty ledger line (a placeholder)";
+  /* D-M.292 (go-live night, 15-Nov-2026): Tally keeps a CANCELLED voucher as one ledger line with no name and amount 0 (5 such vouchers in the live
+     books; the first full run stopped on one of 28-Apr). That line is the voucher as stored, not a truncated pull, so it is kept as read. Every other
+     empty line, and an empty line with an amount on a cancelled voucher, still fails the run. */
+  const cancelledShape = (e: any) => v.iscancelled === true && !String(e?.ledgername ?? "").trim() && Math.abs(Number(String(e?.amount ?? "0").replace(/,/g, "")) || 0) === 0;
+  if (lines.some((e: any) => !String(e?.ledgername ?? "").trim() && !cancelledShape(e))) return "an empty ledger line (a placeholder)";
   const type = String(v.vouchertypename ?? "").trim() || null;
   if (v.iscancelled !== true && lines.length === 0 && isAccountingType(type)) return `no ledger lines on a ${type}`;
   return null;
