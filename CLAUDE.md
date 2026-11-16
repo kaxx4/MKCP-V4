@@ -4,6 +4,8 @@
 
 Nicknamed **sync agent**. Companion repo: kaxx4/MKCPWEB, nicknamed **web app**. Both read and write one Supabase project (`vmkytsytxlofjyeotmgb`). This repo is the only code on both sides of the TallyPrime boundary, so most hard rules live here.
 
+**Resuming? Read `OPEN-ITEMS.md` (repo root) first:** where things stand, what waits on the owner and the follow-ups (16-Nov-2026).
+
 **Before large work read:** the rebuild hand-off package. It is a local folder on the owner's laptop (`MKCP\handoff\`, next to the `Live-Sync` checkouts), it is **not in this repo**, and nothing from it is ever committed or quoted here: start with its `00-START-HERE.md`, then the target architecture (file 14) and decision logic (file 13). Then `ARCHITECTURE.md` and the Scripts section below. Long-form Tally reference: Brain vault `07_Systems/Contracts/Talking to Tally — Push and Pull From Zero.md`.
 
 ## What runs here
