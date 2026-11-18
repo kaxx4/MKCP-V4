@@ -38,6 +38,31 @@
 /** Six hours. Long enough not to matter, short enough that a day-old fix lands. */
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 
+/* ── Installing without a person (Owner, 18-Nov-2026, A-2) ───────────────────
+ * "I shouldn't need to be manually at the laptop to push the update." A downloaded update installs by itself, silently, in two cases:
+ *   1. the night window, 01:00 to 05:00 India time, when the office is closed; or
+ *   2. an install was asked for from the website (erp_control 'agent_install_now', migration 0342) after this copy started.
+ * Both only when the agent has been idle for QUIET_MS: no claimed push and no Tally sync, judged by the same probe "install now" uses,
+ * where a probe that fails counts as busy. The installer runs silently and the agent starts itself again (isForceRunAfter). */
+const NIGHT_FROM_IST = 1;
+const NIGHT_TO_IST = 5;
+const QUIET_MS = 2 * 60 * 1000;
+
+/** The hour of day in India (UTC+5:30), 0-23. */
+function istHour(nowMs) {
+  return new Date(nowMs + 330 * 60 * 1000).getUTCHours();
+}
+
+/** Pure: should a downloaded update be installed now, with nobody at the machine? Returns the reason, or null. */
+function autoInstallReason({ nowMs, phase, busy, lastBusyAtMs, requestAtMs, startedAtMs }) {
+  if (phase !== 'ready' || busy) return null;
+  if (lastBusyAtMs != null && nowMs - lastBusyAtMs < QUIET_MS) return null;
+  if (requestAtMs != null && Number.isFinite(requestAtMs) && requestAtMs > startedAtMs && requestAtMs <= nowMs + 60_000) return 'asked from the website';
+  const h = istHour(nowMs);
+  if (h >= NIGHT_FROM_IST && h < NIGHT_TO_IST) return 'night window';
+  return null;
+}
+
 let broadcast = () => {};
 /** Last known state, so a renderer that mounts late can still be told. */
 let lastState = { phase: 'idle' };
@@ -145,16 +170,16 @@ function startAutoUpdate({ getWindow, isDev, isBusy }) {
    * the icon during an install. `isForceRunAfter=true` brings the agent back up
    * on its own, because a sync agent nobody restarts is a sync that stopped.
    */
-  const installNow = async ({ force = false } = {}) => {
+  const installNow = async ({ force = false, silent = false, why = null } = {}) => {
     if (lastState.phase !== 'ready') {
       return { ok: false, reason: 'No downloaded update is waiting.' };
     }
     if (!force && typeof isBusy === 'function' && isBusy()) {
       return { ok: false, reason: 'busy' };
     }
-    setState({ ...lastState, phase: 'installing', message: 'Restarting to install…' });
-    /* Let the reply reach the renderer before the window goes. */
-    setTimeout(() => autoUpdater.quitAndInstall(false, true), 400);
+    setState({ ...lastState, phase: 'installing', message: why ? `Restarting to install (${why})…` : 'Restarting to install…' });
+    /* Let the reply reach the renderer before the window goes. Silent only when nobody is at the machine (see autoInstallReason). */
+    setTimeout(() => autoUpdater.quitAndInstall(!!silent, true), 400);
     return { ok: true };
   };
 
@@ -305,4 +330,4 @@ async function downloadRelease(version, { onProgress } = {}) {
   }
 }
 
-module.exports = { startAutoUpdate, getUpdateState, listReleases, downloadRelease };
+module.exports = { startAutoUpdate, getUpdateState, listReleases, downloadRelease, autoInstallReason, istHour, QUIET_MS };

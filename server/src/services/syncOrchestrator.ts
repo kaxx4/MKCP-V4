@@ -337,6 +337,12 @@ export class SyncOrchestrator {
       const prevCount = allVouchers.length;
       const wave = chunks.slice(i, i + CONCURRENCY);
       await Promise.all(wave.map((chunk, j) => processChunk(chunk, i + j)));
+      /* "days-done" (H-1, 19-Nov-2026): how many chunks have FINISHED, for the web's progress bar. The per-chunk event above
+         fires at the START of a chunk, three at a time, so it cannot say how far along the run is. */
+      {
+        const done = Math.min(chunks.length, i + wave.length);
+        onProgress?.({ phase: "days-done", step: done, totalSteps: chunks.length, detail: wave[wave.length - 1].label, timestamp: Date.now() });
+      }
       if (!earlyExitEnabled) continue;
       const newInWave = allVouchers.length - prevCount;
       if (newInWave === 0 && allVouchers.length > 0) {

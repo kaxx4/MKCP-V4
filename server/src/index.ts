@@ -46,6 +46,7 @@ import {
   startWatchFolder, watchFolderStatus,
 } from "./services/fileTransferSync.js";
 import type { SyncPlan } from "./types.js";
+import { refreshProgressWriter } from "./services/refreshProgress.js";
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "3100", 10);
@@ -196,8 +197,9 @@ app.get("/api/tally/company", async (_req, res) => {
 
 // ── Sync endpoints ─────────────────────────────────────────────────────────────
 app.post("/api/tally/sync", syncGuard, async (req, res) => {
-  const { company, fromDate, toDate, mode = "full", chunkStrategy = "smart" } = req.body;
+  const { company, fromDate, toDate, mode = "full", chunkStrategy = "smart", progressIds } = req.body;
   const ac = new AbortController();
+  const progress = refreshProgressWriter(progressIds);
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
   res.setTimeout(0); // No server socket timeout: a finite ceiling destroys the socket mid-sync → res.on("close") → ac.abort() → truncated upload. Per-chunk (orchestrator) + client (postTallySync 2h / browser) timeouts bound it.
 
@@ -209,7 +211,9 @@ app.post("/api/tally/sync", syncGuard, async (req, res) => {
   try {
     const result = await orchestrator.syncAll(plan, (p) => {
       console.log(`[SYNC] ${p.phase} ${p.step}/${p.totalSteps}: ${p.detail}`);
+      progress.onProgress(p);
     });
+    await progress.flush();
     if (!res.writableEnded) res.json(result);
   } catch (e: any) {
     if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
@@ -868,7 +872,18 @@ app.get("/api/whoami", (_req, res) =>
   }),
 );
 
-app.get("/api/push-agent/status", (_req, res) => res.json(getPushAgentStatus()));
+app.get("/api/push-agent/status", (_req, res) => res.json({ ...getPushAgentStatus(), tallyBusy: isTallyBusy() }));
+/* A-2 (19-Nov-2026): "was an install asked for from the website?" The Electron side asks every few minutes; the answer is the time of
+   the latest request (erp_control 'agent_install_now', migration 0342) or null. A sandbox, an offline machine or an old database
+   answers null, and null only ever means "install at night as usual". */
+app.get("/api/update/install-request", async (_req, res) => {
+  const c = dbClient();
+  if (!c) return res.json({ at: null });
+  try {
+    const { data, error } = await (c as any).rpc("erp_agent_install_request");
+    res.json({ at: !error && typeof data === "string" ? data : null });
+  } catch { res.json({ at: null }); }
+});
 app.get("/api/primary/status", (_req, res) => res.json(primary ? primary.status() : { mode: primaryModeOn() ? "on-but-not-running" : "off" }));
 /* The agent window's "office computer" card (agent-ui lane). Read-only, behind the same agent auth as every route above; asks nothing of Tally or the
    database. The machine key is never in the answer, only its sha-256 (primarySummary.ts). */

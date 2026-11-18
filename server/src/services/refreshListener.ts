@@ -23,11 +23,10 @@ function currentFyRange(): { from: string; to: string } {
   return { from: `${fyStartYear}0401`, to: ymd(now) };
 }
 
-/** Trailing-N-days window (today − n → today) as YYYYMMDD. */
-function lastNDaysRange(n: number): { from: string; to: string } {
-  const now = new Date();
+/** Trailing-N-days window as YYYYMMDD: n days INCLUDING today, so "last 7 days" reads 7 days, not 8 (owner, 18-Nov-2026). */
+export function lastNDaysRange(n: number, now: Date = new Date()): { from: string; to: string } {
   const start = new Date(now);
-  start.setDate(start.getDate() - n);
+  start.setDate(start.getDate() - Math.max(0, n - 1));
   return { from: ymd(start), to: ymd(now) };
 }
 
@@ -303,6 +302,7 @@ function subscribeForCompany(
       // aborted by undici's 5-min headersTimeout. See localSyncClient.ts.
       const resp = await postTallySync(localPort, {
         company, fromDate: from, toDate: to, mode: "full", chunkStrategy: "daily",
+        progressIds: ids, // H-1: the agent writes days done / days in all onto these rows (migration 0339)
       });
 
       if (resp.ok) {

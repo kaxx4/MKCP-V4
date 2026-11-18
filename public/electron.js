@@ -38,7 +38,11 @@ process.on('unhandledRejection', (reason) => {
   // Never crash/relaunch on an unhandled promise rejection — just log it.
   console.error('[electron] unhandledRejection:', reason);
 });
-const { startAutoUpdate, getUpdateState, listReleases, downloadRelease } = require('./autoUpdate');
+const { startAutoUpdate, getUpdateState, listReleases, downloadRelease, autoInstallReason } = require('./autoUpdate');
+/** When this copy started, so an install request made BEFORE it (already acted on by the copy before) is not acted on again. */
+const STARTED_AT_MS = Date.now();
+/** Last moment the busy probe said busy (or failed). The night install waits for a quiet spell after it. */
+let lastBusyAtMs = Date.now();
 let updater = null;
 /** True while the push agent holds a claimed job — see `isBusy` below.
  *  Starts TRUE so an install cannot slip through before the first probe. */
@@ -842,15 +846,43 @@ app.whenReady().then(() => {
     /* Polled rather than fetched at the moment of asking, because `isBusy` is
        called from a synchronous IPC path and a hung HTTP call there would
        freeze the click. */
+    /* Main-process fetches do not pass the window's header hook above, so the agent token is added here. Before 19-Nov-2026 it was
+       not: with AGENT_API_TOKEN set the probe got a 401, read no claimedCount, and called the machine IDLE. A reply that is not OK is
+       now busy, and a sync in progress (tallyBusy) is busy too. */
+    const agentGet = (p) => {
+      const token = (process.env.AGENT_API_TOKEN || '').trim();
+      return fetch(`http://localhost:${SERVER_PORT}${p}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    };
     setInterval(async () => {
       try {
-        const r = await fetch(`http://localhost:${SERVER_PORT}/api/push-agent/status`);
-        const j = await r.json();
-        lastPushBusy = (j?.claimedCount ?? 0) > 0;
+        const r = await agentGet('/api/push-agent/status');
+        const j = r.ok ? await r.json() : null;
+        lastPushBusy = !j || (j.claimedCount ?? 0) > 0 || j.tallyBusy === true;
       } catch {
         lastPushBusy = true;
       }
+      if (lastPushBusy) lastBusyAtMs = Date.now();
     }, 5_000);
+    /* A-2: install a downloaded update with nobody at the machine (night window, or asked from the website). See autoUpdate.js. */
+    setInterval(async () => {
+      try {
+        if (!updater || getUpdateState().phase !== 'ready') return;
+        let requestAtMs = null;
+        try {
+          const r = await agentGet('/api/update/install-request');
+          const j = r.ok ? await r.json() : null;
+          requestAtMs = j && j.at ? Date.parse(j.at) : null;
+        } catch { /* no answer: night window only */ }
+        const why = autoInstallReason({ nowMs: Date.now(), phase: getUpdateState().phase, busy: lastPushBusy, lastBusyAtMs, requestAtMs, startedAtMs: STARTED_AT_MS });
+        if (why) {
+          console.log(`[update] installing by itself: ${why}`);
+          const r = await updater.installNow({ silent: true, why });
+          if (r && r.ok) appQuitting = true; // so the window's close-to-tray does not stop the quit
+        }
+      } catch (err) {
+        console.error('[update] auto-install check failed (will try again):', err.message);
+      }
+    }, 60_000);
   } catch (err) {
     console.error('[update] could not start the updater (continuing):', err.message);
   }
