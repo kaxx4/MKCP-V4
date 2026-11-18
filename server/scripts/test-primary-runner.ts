@@ -42,7 +42,7 @@ const noop = () => {};
   {
     const c = readPrimaryConfig("http://t", good());
     ok("a complete setting reads", c.ok && c.cfg.machine === "office-pc-1" && c.cfg.company === NAME && c.cfg.companyKey === NAME);
-    ok("the defaults are 10 s polling and a 5 minute mirror pass", c.ok && c.cfg.queuePollMs === 10_000 && c.cfg.mirrorTickMs === 300_000);
+    ok("the defaults are 30 s polling and a 5 minute mirror pass", c.ok && c.cfg.queuePollMs === 30_000 && c.cfg.mirrorTickMs === 300_000);
     const cases: Array<[string, string[], RegExp]> = [
       ["the mode off", ["MKCP_PRIMARY_MODE"], /MKCP_PRIMARY_MODE is not on/],
       ["no pinned GUID", ["MKCP_PRIMARY_COMPANY_GUID"], /MKCP_PRIMARY_COMPANY_GUID is not set/],
@@ -87,13 +87,13 @@ const noop = () => {};
     let n = 0;
     const flaky = new PrimaryQueueLoop({ agent: { runOnce: async () => { if (++n <= 4) throw new Error("socket hang up"); return { held: true, settled: [], results: [] }; } } as any, pollMs: 10_000, busyMs: 2_000, log: noop });
     const ds = [await flaky.tick(), await flaky.tick(), await flaky.tick(), await flaky.tick()];
-    ok("a failing round backs off: 5 s, 10 s, 20 s, 40 s", ds.join() === "5000,10000,20000,40000", ds.join());
+    ok("a failing round backs off from the poll time: 10 s, 20 s, 40 s, 80 s (30, 60, 120, 240 s at the real 30 s poll)", ds.join() === "10000,20000,40000,80000", ds.join());
     ok("a round that throws never throws out of the loop, and is counted", flaky.status.errors === 4 && /round failed: socket hang up/.test(flaky.status.lastNote ?? ""));
-    ok("the back-off resets after a good round", (await flaky.tick()) === 10_000 && (await new PrimaryQueueLoop({ agent: { runOnce: async () => { throw new Error("x"); } } as any, pollMs: 1, busyMs: 1, log: noop }).tick()) === 5_000);
+    ok("the back-off resets after a good round", (await flaky.tick()) === 10_000 && (await new PrimaryQueueLoop({ agent: { runOnce: async () => { throw new Error("x"); } } as any, pollMs: 1, busyMs: 1, log: noop }).tick()) === 1);
     let many = 0;
-    const always = new PrimaryQueueLoop({ agent: { runOnce: async () => { many++; throw new Error("x"); } } as any, pollMs: 1, busyMs: 1, log: noop });
+    const always = new PrimaryQueueLoop({ agent: { runOnce: async () => { many++; throw new Error("x"); } } as any, pollMs: 30_000, busyMs: 1, log: noop });
     let last = 0; for (let i = 0; i < 8; i++) last = await always.tick();
-    ok("the back-off stops at 60 s", last === 60_000 && many === 8);
+    ok("the back-off stops at 300 s", last === 300_000 && many === 8, String(last));
 
     const held = new PrimaryQueueLoop({ agent: { runOnce: async () => ({ held: false, stopped: "the queue lease is held by another boot; waiting", settled: [], results: [] }) } as any, pollMs: 10_000, busyMs: 2_000, log: noop });
     ok("not holding the lease: it waits the poll time and says why", (await held.tick()) === 10_000 && /lease is held/.test(held.status.lastNote ?? ""));

@@ -29,6 +29,7 @@ import { supabaseClient, offlineReason } from "./supabaseClient.js";
 import { withTally } from "./tallyGate.js";
 import { fetchReport, reportByKey, REPORTS } from "./tallyReports.js";
 import { resolveSyncCompany } from "./scheduledSyncs.js";
+import { backoffMs } from "./jobPoll.js";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -192,9 +193,15 @@ function defaultPeriod(): { from: string; to: string } {
   return { from: `${y}-04-01`, to: now.toISOString().slice(0, 10) };
 }
 
+/** How often the runner looks for a pending report job when no event arrived. */
+export const REPORT_POLL_MS = 20_000;
+
 export class ReportRunner {
   private busy = false;
   private stopped = false;
+  /** Lane agent-poll: a failed read of the queue slows the 20 s timer (20, 40, 80, 160, 300 s) until one read works. Nothing written changes. */
+  private queueFails = 0;
+  private retryAt = 0;
   private current: string | null = null;
   private bootSwept = false;
   private readonly askedAgain = new Set<string>();
@@ -240,8 +247,10 @@ export class ReportRunner {
   }
 
   /** Claim and run everything pending, oldest first. Safe to call often. */
-  async drain(): Promise<void> {
+  async drain(fromTimer = false): Promise<void> {
     if (this.busy || this.stopped) return;
+    /* Only the timer waits out a back-off; a new job announced by the database (the INSERT event) always looks at once. */
+    if (fromTimer && this.now() < this.retryAt) return;
     this.busy = true;
     try {
       /* Review 1: a sweep that fails (a read-only disk, a database error) never stops the queue. */
@@ -254,7 +263,14 @@ export class ReportRunner {
           .eq("status", "pending")
           .order("created_at", { ascending: true })
           .limit(1);
-        if (error) { console.error(`[reports] could not read the queue: ${error.message}`); return; }
+        if (error) {
+          this.queueFails++;
+          const wait = backoffMs(REPORT_POLL_MS, this.queueFails);
+          this.retryAt = this.now() + wait;
+          console.error(`[reports] could not read the queue (${this.queueFails} in a row): ${error.message}. Next try in ${Math.round(wait / 1000)} s.`);
+          return;
+        }
+        this.queueFails = 0; this.retryAt = 0;
         const job = (data ?? [])[0] as ReportJob | undefined;
         if (!job || tried.has(job.id)) return;   // a job that cannot be claimed or closed is not asked for again in this pass
         tried.add(job.id);
@@ -365,7 +381,7 @@ export class ReportRunner {
    * ever with the operator watching a chip that never moves. The timer is what
    * makes "it will get there" true.
    */
-  start(pollMs = 20_000): () => void {
+  start(pollMs = REPORT_POLL_MS): () => void {
     const channel = this.client
       .channel("report-jobs")
       .on("postgres_changes",
@@ -373,7 +389,7 @@ export class ReportRunner {
         () => { void this.drain(); })
       .subscribe();
 
-    const timer = setInterval(() => { void this.drain(); }, pollMs);
+    const timer = setInterval(() => { void this.drain(true); }, pollMs);
     void this.drain();
 
     /* The daily refresh checks once a minute, like the other schedules, so a

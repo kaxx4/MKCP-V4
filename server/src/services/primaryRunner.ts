@@ -23,6 +23,7 @@ import { loadCompanyYears, type CompanyYear } from "./companyYears.js";
 import { primaryModeOn, primaryModeRefusal, primaryGuid, primaryCompanyName, primaryCompanyKey } from "./primaryMode.js";
 import { agentMachineId, supabaseClient } from "./supabaseClient.js";
 import { tallyCompany } from "../config/company.js";
+import { JOB_BACKOFF_MAX_MS, jobPollMs, withJitter, backoffMs, leaseSecondsFor } from "./jobPoll.js";
 import { tallyPost } from "../tally.js";
 
 type Env = Record<string, string | undefined>;
@@ -71,7 +72,7 @@ export function readPrimaryConfig(tallyUrl: string, env: Env = process.env): { o
     tallyUrl, company, companyKey: primaryCompanyKey({ ...env, MKCP_PRIMARY_COMPANY: company }), machine, key,
     journalPath,
     companies: years.list,
-    queuePollMs: num(env.MKCP_PRIMARY_POLL_MS, 10_000), queueBusyMs: 2_000, mirrorTickMs: num(env.MKCP_PRIMARY_MIRROR_TICK_MS, 300_000),
+    queuePollMs: jobPollMs(env.MKCP_PRIMARY_POLL_MS), queueBusyMs: 2_000, mirrorTickMs: num(env.MKCP_PRIMARY_MIRROR_TICK_MS, 300_000),
   } };
 }
 
@@ -81,16 +82,29 @@ export interface LoopStatus { running: boolean; rounds: number; lastAt: string |
 
 export class PrimaryQueueLoop {
   readonly status: LoopStatus = { running: false, rounds: 0, lastAt: null, lastNote: null, errors: 0, busy: false, lastWorkAt: null };
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: unknown = null;
   private fails = 0;
-  constructor(private o: { agent: Pick<ErpJobAgent, "runOnce">; pollMs: number; busyMs: number; log?: (l: string) => void; now?: () => number }) {}
+  /**
+   * `pollMs` is the wait after an idle round (jobPoll.ts: 30 s). `rand`, `setTimer` and `clearTimer` are for tests with a fake clock; the real
+   * agent leaves them out. The wait is jittered by plus or minus 10 percent in `start`, not in `tick`, so `tick` returns the plain number.
+   */
+  constructor(private o: {
+    agent: Pick<ErpJobAgent, "runOnce">; pollMs: number; busyMs: number; log?: (l: string) => void; now?: () => number;
+    rand?: () => number; setTimer?: (fn: () => void, ms: number) => unknown; clearTimer?: (h: unknown) => void;
+  }) {}
 
-  /** One round. Never throws: a failed round is noted and the delay before the next one grows (5 s, 10 s ... up to 60 s). Returns that delay. */
+  /**
+   * One round. Never throws. At most one round at a time: a call while one is running does nothing and returns the poll time (single flight).
+   * A failed round (a timeout, a 5xx, a network error) is noted in one plain line and the wait before the next one doubles (30 s, 60 s, 120 s, 240 s,
+   * then 300 s); one good round puts it back to the poll time. Returns the wait before the next round (before jitter).
+   */
   async tick(): Promise<number> {
+    if (this.status.busy) return this.o.pollMs;
     const log = this.o.log ?? ((l: string) => console.log(`[primary queue] ${l}`));
     this.status.busy = true;
     try {
       const r: RunReport = await this.o.agent.runOnce(1);
+      if (this.fails > 0) log(`the database answers again; asking every ${Math.round(this.o.pollMs / 1000)} s`);
       this.fails = 0;
       this.status.rounds++;
       this.status.lastAt = new Date((this.o.now ?? Date.now)()).toISOString();
@@ -104,23 +118,33 @@ export class PrimaryQueueLoop {
     } catch (e) {
       this.status.errors++;
       this.fails++;
-      this.status.lastNote = `round failed: ${(e as Error).message.slice(0, 160)}`;
-      log(this.status.lastNote);
-      return Math.min(60_000, 5_000 * 2 ** (this.fails - 1));
+      const wait = backoffMs(this.o.pollMs, this.fails);
+      const why = (e as Error).message.slice(0, 160);
+      this.status.lastNote = `round failed: ${why}`;
+      log(`round failed (${this.fails} in a row): ${why}. Next try in ${Math.round(wait / 1000)} s.`);
+      return wait;
     } finally { this.status.busy = false; }
   }
 
   start(): void {
     if (this.status.running) return;
     this.status.running = true;
+    const set = this.o.setTimer ?? ((fn: () => void, ms: number) => { const t = setTimeout(fn, ms); t.unref?.(); return t; });
     const loop = async () => {
       if (!this.status.running) return;
-      const wait = await this.tick();
-      if (this.status.running) { this.timer = setTimeout(loop, wait); this.timer.unref?.(); }
+      const base = await this.tick();
+      if (!this.status.running) return;
+      const wait = withJitter(base, this.o.rand);
+      /* The jitter never pushes a failure wait past the 300 s ceiling. */
+      this.timer = set(loop, this.fails > 0 ? Math.min(wait, JOB_BACKOFF_MAX_MS) : wait);
     };
     void loop();
   }
-  stop(): void { this.status.running = false; if (this.timer) clearTimeout(this.timer); this.timer = null; }
+  stop(): void {
+    this.status.running = false;
+    if (this.timer !== null) (this.o.clearTimer ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>)))(this.timer);
+    this.timer = null;
+  }
 }
 
 // ── The mirror loop ───────────────────────────────────────────────────────────
@@ -556,6 +580,8 @@ function startPrimaryModeInner(tallyUrl: string, env: Env, deps: PrimaryDeps): P
   const agent = new ErpJobAgent({
     queue: supabaseErpQueue(c, k.machine, k.key), journal, company: k.company,
     ...seams, companies: k.companies,
+    /* lane agent-poll: the lease outlasts three healthy gaps between rounds, so a slower poll never lets it lapse (jobPoll.ts). */
+    leaseSeconds: leaseSecondsFor(k.queuePollMs),
   } as ConstructorParameters<typeof ErpJobAgent>[0]);
   const queue = new PrimaryQueueLoop({ agent, pollMs: k.queuePollMs, busyMs: k.queueBusyMs, log: (l) => log(`[primary queue] ${l}`) });
   const store = guardedMirrorStore(supabaseMirrorStore(c as any, k.machine, k.key, k.companyKey, false), async () => (await seams.pin(k.company))?.reason ?? null);
