@@ -45,6 +45,8 @@ const SANDBOX_ON = {
   H("THE FENCE (pure)");
   const f = (path: string, method = "POST", host = PROJECT) => erpTestFence(`${host}${path}`, method, PROJECT);
   for (const fn of ERP_TEST_RPCS) ok(`allows POST rpc ${fn}`, f(`/rest/v1/rpc/${fn}`) === null);
+  ok("audit M1: allows the readback's two agent functions", f("/rest/v1/rpc/erp_agent_readback_open") === null && f("/rest/v1/rpc/erp_agent_readback_answer") === null);
+  ok("audit M1: refuses a person's request_erp_readback and the readback table itself", f("/rest/v1/rpc/request_erp_readback") !== null && f("/rest/v1/erp_readback_requests?select=*", "GET") !== null);
   ok("refuses the real claim function claim_push_jobs", /not an ERP test-queue function/.test(f("/rest/v1/rpc/claim_push_jobs") ?? ""));
   ok("refuses approve_proposal", f("/rest/v1/rpc/approve_proposal") !== null);
   ok("refuses GET push_queue", f("/rest/v1/push_queue?select=*", "GET") !== null);

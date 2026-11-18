@@ -25,6 +25,7 @@ import { agentMachineId, supabaseClient } from "./supabaseClient.js";
 import { tallyCompany } from "../config/company.js";
 import { JOB_BACKOFF_MAX_MS, jobPollMs, withJitter, backoffMs, leaseSecondsFor } from "./jobPoll.js";
 import { tallyPost } from "../tally.js";
+import { ReadbackRunner, supabaseReadbackQueue, readbackVoucher, readbackTargetOf, READBACK_TIMEOUT_MS } from "./erpReadback.js";
 
 type Env = Record<string, string | undefined>;
 type Rpc = { rpc: (fn: string, args: Record<string, unknown>) => any; from?: (table: string) => any };
@@ -91,6 +92,11 @@ export class PrimaryQueueLoop {
   constructor(private o: {
     agent: Pick<ErpJobAgent, "runOnce">; pollMs: number; busyMs: number; log?: (l: string) => void; now?: () => number;
     rand?: () => number; setTimer?: (fn: () => void, ms: number) => unknown; clearTimer?: (h: unknown) => void;
+    /**
+     * Audit M1: the "Check again" readback (erpReadback.ts). Run inside this round's busy flag, after a round that held the lease, passed the
+     * company pin and worked nothing, so it never overlaps a push or the mirror sync. Read only. Its own back-off; it never throws.
+     */
+    readback?: Pick<ReadbackRunner, "tick">;
   }) {}
 
   /**
@@ -114,6 +120,12 @@ export class PrimaryQueueLoop {
       const n = r.results.length + r.settled.length;
       this.status.lastNote = n ? `${r.results.length} job(s) worked, ${r.settled.length} settled` : "idle";
       if (n) { log(this.status.lastNote); this.status.lastWorkAt = this.status.lastAt; }
+      /* Audit M1: only on an idle round that held the lease and passed the pin (runOnce reports held=false when the pin fails). Still inside
+         the busy flag, so the mirror waits. A failure here is the readback's own and never fails the queue round. */
+      if (!n && this.o.readback) {
+        try { const rb = await this.o.readback.tick(); if (rb && rb.results.length) this.status.lastWorkAt = this.status.lastAt; }
+        catch { /* tick never throws; this is a second fence */ }
+      }
       return n ? this.o.busyMs : this.o.pollMs;
     } catch (e) {
       this.status.errors++;
@@ -583,7 +595,15 @@ function startPrimaryModeInner(tallyUrl: string, env: Env, deps: PrimaryDeps): P
     /* lane agent-poll: the lease outlasts three healthy gaps between rounds, so a slower poll never lets it lapse (jobPoll.ts). */
     leaseSeconds: leaseSecondsFor(k.queuePollMs),
   } as ConstructorParameters<typeof ErpJobAgent>[0]);
-  const queue = new PrimaryQueueLoop({ agent, pollMs: k.queuePollMs, busyMs: k.queueBusyMs, log: (l) => log(`[primary queue] ${l}`) });
+  /* Audit M1: the "Check again" readback. Read only (one filtered day read per ask, never a push), the pinned company only, real asks only
+     (a sandbox answers the test ones). It is not a claim, so it runs whether or not live_claims is on. */
+  const readback = new ReadbackRunner({
+    queue: supabaseReadbackQueue(c, k.machine, k.key), wantTest: false, company: k.company, pollMs: k.queuePollMs,
+    find: (ask) => readbackVoucher((xml) => post(k.tallyUrl, xml, READBACK_TIMEOUT_MS), k.company, readbackTargetOf(ask)),
+    pin: async () => (await seams.pin(k.company))?.reason ?? null,
+    log: (l) => log(`[primary readback] ${l}`),
+  });
+  const queue = new PrimaryQueueLoop({ agent, pollMs: k.queuePollMs, busyMs: k.queueBusyMs, log: (l) => log(`[primary queue] ${l}`), readback });
   const store = guardedMirrorStore(supabaseMirrorStore(c as any, k.machine, k.key, k.companyKey, false), async () => (await seams.pin(k.company))?.reason ?? null);
   const pinNow = async () => (await seams.pin(k.company))?.reason ?? null;
   const mastersStore = guardedMastersStore(supabaseMastersStore(c as any, k.machine, k.key, k.companyKey, false), pinNow);

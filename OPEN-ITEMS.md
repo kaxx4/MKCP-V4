@@ -19,6 +19,7 @@ Read this first when you resume, here or in a cloud session. The owner's plannin
 1. **Worktree `wt\erp-rebuild-agent`** on the owner's laptop: leave it as it is; it may hold the owner's uncommitted work.
 2. **`server/scripts/probe-creditor-pan.ts`** is an untracked file in the owner's main checkout; it is the owner's, never commit or delete it without asking.
 3. **`ENGINE_FORMULAS_FOR_WEB.md`** is stale on the discount (the web's rule is whole packages only, 19-Oct); the web's `engine/discounts.ts` is the one home.
+4. **"Check again" readback (audit M1, lane/readback):** the agent half is built (`services/erpReadback.ts`) but answers nothing until the owner applies `erp_agent_readback_open` and `erp_agent_readback_answer` in the database, and it ships only with the next release. Until then the office agent logs one line and asks again every 15 minutes.
 
 ## Rules that still hold
 

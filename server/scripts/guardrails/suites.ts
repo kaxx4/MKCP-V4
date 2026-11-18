@@ -30,6 +30,8 @@ export const OFFLINE: string[][] = [
   // Rebuild task 1-0 (5-Nov-2026): the ERP test queue's fence and claim path, pure.
   ["test-erp-test-queue.ts"],
   ["test-queue-lease.ts"],
+  // Audit M1 (18-Nov-2026): the "Check again" readback, the agent half, pure.
+  ["test-erp-readback.ts"],
   // Rebuild task 1-5 (5-Nov-2026): the ERP mirror sync's agent half, pure.
   ["test-erp-mirror-sync.ts"],
   // Rebuild task 1-5, next batch (6-Nov-2026): report jobs left by a stopped agent (E3, E6).

@@ -120,6 +120,9 @@ export const ERP_TEST_RPCS: readonly string[] = [
   /* The masters of the swap store (services/erpMasters.ts, migrations 0125 and 0136): put and finish. The database lets the sandbox key write
      only a ZZTEST company key, as test rows, and refuses the three voucher tables here (those are the derive's). */
   "erp_tally_put", "erp_tally_finish",
+  /* Audit M1 (18-Nov-2026): the "Check again" readback (services/erpReadback.ts). List the open asks and write an answer; the database checks
+     the machine key. The agent answers only is_test asks from the sandbox (filtered in runReadbackRound), and reads Tally only, never writes. */
+  "erp_agent_readback_open", "erp_agent_readback_answer",
 ];
 /** ERP mirror tables the sandbox may read (GET only, only is_test rows), task 1-5. */
 export const ERP_TEST_READ_TABLES: readonly string[] = [
