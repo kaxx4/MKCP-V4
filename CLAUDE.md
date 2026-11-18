@@ -101,7 +101,7 @@ AGENT_ALLOWED_ORIGINS=https://your-dashboard.example  # comma list, optional
 
 ## Build and release
 
-`electron-builder.json5` publishes to GitHub releases on kaxx4/MKCP-V4 (a public repo); `electron-updater` reads `latest.yml`. `build:prod` builds without uploading; release is a separate step. `scripts/build-prod.js` refuses a package with `.env`; the `MKCP_EMBED_ENV=1` provisioning build is never published; `electron-builder.test.json5` must not bundle `.env`. Changes under `scripts/` are not packaged (check `git diff --stat <last-release>..HEAD -- src public server/src`). Releases install only in the 1:30 a.m. window with approval.
+`electron-builder.json5` publishes to GitHub releases on kaxx4/MKCP-V4 (a public repo); `electron-updater` reads `latest.yml`. `build:prod` builds without uploading; release is a separate step. `scripts/build-prod.js` refuses a package with `.env`; the `MKCP_EMBED_ENV=1` provisioning build is never published; `electron-builder.test.json5` must not bundle `.env`. Changes under `scripts/` are not packaged (check `git diff --stat <last-release>..HEAD -- src public server/src`). From 1.5.20 (owner, 18-Nov-2026) a downloaded update installs itself silently between 01:00 and 05:00 India time, or at once when the website asks (`erp_control` key `agent_install_now` = `{"at": <time>}`, read through `erp_agent_install_request`, web migration 0342), and only after two quiet minutes with no claimed push and no Tally sync (`autoInstallReason` in `public/autoUpdate.js`; offline proof `server/scripts/test-night-install-and-progress.ts`). A request older than the running copy is never acted on twice.
 
 ## Secrets
 
