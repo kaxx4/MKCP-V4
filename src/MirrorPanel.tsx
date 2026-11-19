@@ -109,6 +109,9 @@ interface MirrorProps {
   showOldQueue?: boolean;
 }
 
+/** How often the open panel reads the online copy again. Never while the window is hidden. */
+export const PANEL_REFRESH_MS = 30_000;
+
 export function MirrorPanel({ showOldQueue = true }: MirrorProps) {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [who, setWho] = useState<WhoAmI | null>(null);
@@ -136,10 +139,20 @@ export function MirrorPanel({ showOldQueue = true }: MirrorProps) {
     }
   }, []);
 
+  /* Read again every 30 s only while the window is on screen, and once the moment it is shown again (20-Nov-2026). Each read is four
+     database calls (two sync-history reads, the config log, the push list); at 15 s around the clock, with the window hidden in the
+     tray, this panel alone made about 960 of the office computer's 1,740 calls an hour at 3 a.m. (edge logs, 19-Nov night). */
   useEffect(() => {
     void load();
-    const t = setInterval(() => { void load(); }, 15_000);
-    return () => clearInterval(t);
+    let t: ReturnType<typeof setInterval> | null = null;
+    const arm = () => {
+      if (t) { clearInterval(t); t = null; }
+      if (document.visibilityState === "visible") t = setInterval(() => { void load(); }, PANEL_REFRESH_MS);
+    };
+    const onShow = () => { if (document.visibilityState === "visible") void load(); arm(); };
+    arm();
+    document.addEventListener("visibilitychange", onShow);
+    return () => { if (t) clearInterval(t); document.removeEventListener("visibilitychange", onShow); };
   }, [load]);
 
   const refresh = (
