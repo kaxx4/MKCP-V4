@@ -193,8 +193,14 @@ function defaultPeriod(): { from: string; to: string } {
   return { from: `${y}-04-01`, to: now.toISOString().slice(0, 10) };
 }
 
-/** How often the runner looks for a pending report job when no event arrived. */
-export const REPORT_POLL_MS = 20_000;
+/**
+ * How often the runner looks for a pending report job when no event arrived. A new job is announced by the database (the INSERT event) and
+ * looked at at once; this timer is only the backstop for an event missed while asleep or reconnecting. 60 s, was 20 s: every look is two
+ * database calls, and at 20 s the office made 360 of them an hour with nobody asking for a report (load check, 19-Nov-2026).
+ */
+export const REPORT_POLL_MS = 60_000;
+/** A timer look sweeps for stuck "running" jobs at most this often. A job is stuck only after REPORT_STUCK_MS (20 min), so 5 min loses nothing. */
+export const REPORT_SWEEP_EVERY_MS = 5 * 60_000;
 
 export class ReportRunner {
   private busy = false;
@@ -204,6 +210,7 @@ export class ReportRunner {
   private retryAt = 0;
   private current: string | null = null;
   private bootSwept = false;
+  private lastSweepAt = Number.NEGATIVE_INFINITY;
   private readonly askedAgain = new Set<string>();
 
   constructor(
@@ -254,7 +261,11 @@ export class ReportRunner {
     this.busy = true;
     try {
       /* Review 1: a sweep that fails (a read-only disk, a database error) never stops the queue. */
-      try { await this.sweepOrphans(); } catch (e) { console.error(`[reports] sweep failed, the queue goes on: ${(e as Error)?.message ?? e}`); }
+      /* The boot sweep and every announced job sweep; a timer look sweeps only every REPORT_SWEEP_EVERY_MS (19-Nov-2026 load check). */
+      if (!fromTimer || !this.bootSwept || this.now() - this.lastSweepAt >= REPORT_SWEEP_EVERY_MS) {
+        this.lastSweepAt = this.now();
+        try { await this.sweepOrphans(); } catch (e) { console.error(`[reports] sweep failed, the queue goes on: ${(e as Error)?.message ?? e}`); }
+      }
       const tried = new Set<string>();
       for (;;) {
         const { data, error } = await this.client

@@ -178,7 +178,7 @@ class FakeClock {
     ok(`with real jitter the 10 minute outage is still 5 or 6 calls: ${calls}`, calls >= 5 && calls <= 6);
   }
 
-  console.log("\n  the report runner's 20 s timer backs off too");
+  console.log("\n  the report runner's 60 s timer backs off too");
   {
     let calls = 0; let broken = true;
     const chain: any = new Proxy(function () {}, {
@@ -192,16 +192,16 @@ class FakeClock {
     const runner = new ReportRunner(client, "http://t", { count: () => 0, add: noop }, () => now, { has: () => false, add: noop });
     for (now = 0; now <= 600_000; now += REPORT_POLL_MS) await runner.drain(true);
     const failing = calls;
-    ok(`a database failing for 10 minutes: 12 reads (6 looks) from the timer, was 62 at 20 s: ${failing}`, failing === 12, String(failing));
-    ok("each failure says how many in a row and when it tries next", lines.some((l) => /\(5 in a row\).*Next try in 300 s\./.test(l)), lines.join(" | "));
+    ok(`a database failing for 10 minutes at the 60 s timer: 8 reads (4 looks, each still sweeping because the boot sweep never worked), was 12 at 20 s: ${failing}`, failing === 8, String(failing));
+    ok("each failure says how many in a row and when it tries next", lines.some((l) => /\(4 in a row\).*Next try in 300 s\./.test(l)), lines.join(" | "));
     calls = 0; now = 700_000; await runner.drain(false);
     ok("a new job announced by the database looks at once, whatever the back-off", calls === 2, String(calls));
     broken = false; calls = 0;
     now = 1_000_000; await runner.drain(true);
     const afterGood = calls; calls = 0; now = 1_000_000 + REPORT_POLL_MS; await runner.drain(true);
     console.error = silent;
-    ok("one good read ends the back-off: the next timer tick looks again", afterGood === 2 && calls === 2, `${afterGood} ${calls}`);
-    ok("the poll time is still 20 s", REPORT_POLL_MS === 20_000);
+    ok("one good read ends the back-off: the next timer tick looks again, with one call (the stuck-job sweep waits 5 minutes)", afterGood === 2 && calls === 1, `${afterGood} ${calls}`);
+    ok("the poll time is 60 s (load check, 19-Nov-2026)", REPORT_POLL_MS === 60_000);
   }
 
   console.log("\n  the three calls keep their order and meaning");
