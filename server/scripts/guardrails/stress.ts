@@ -235,6 +235,10 @@ async function stress(url: string, company: string, dry: boolean, clean: boolean
     { id: "S04", what: "Cash sale, buyer name + address with XML-hostile characters", expect: "ok",
       spec: { builder: "cash", date: today, number: num("S04"), remoteId: rid("S04"), narration: nar("S04"),
         buyer: { name: `O'BRIEN & SONS <"TEST"> ₹`, address: "12 TEST LANE & CO\nBARASAT 700124" }, lines: [line(itB, 2, 120)] } },
+    /* Split sales group discount (owner, 19-Nov-2026, D-OA.66): the picked bill carries the whole set's discount as ONE netted TRADE DISCOUNTS / H.C. line. */
+    { id: "S04d", what: "Cash sale with a shared discount of 150: ONE H.C. line (split group discount)", expect: "ok",
+      spec: { builder: "cash", date: today, number: num("S04d"), remoteId: rid("S04d"), narration: nar("S04d"),
+        buyer: { name: "STRESS WALKIN DISCOUNT", address: "2 TEST ROAD\nKOLKATA 700001" }, lines: [line(itB, 4, 120)], discount: 150 } },
     { id: "S05", what: "Cash sale, goods EXACTLY ₹50,000 (e-way boundary, allowed)", expect: "ok",
       spec: { builder: "cash", date: today, number: num("S05"), remoteId: rid("S05"), narration: nar("S05"),
         buyer: { name: "STRESS WALKIN FIFTY", address: "1 TEST ROAD\nKOLKATA 700001" }, lines: [line(itA, 1, 50000)] } },
