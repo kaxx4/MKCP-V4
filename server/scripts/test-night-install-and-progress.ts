@@ -9,6 +9,7 @@
 import { createRequire } from "node:module";
 import { refreshProgressWriter, cleanIds, THROTTLE_MS, type ProgressRow } from "../src/services/refreshProgress.js";
 import { lastNDaysRange } from "../src/services/refreshListener.js";
+import { buildPrints, daysToRead, dayKey } from "../src/services/dayFingerprint.js";
 
 const require = createRequire(import.meta.url);
 const { autoInstallReason, istHour, QUIET_MS } = require("../../public/autoUpdate.js");
@@ -88,8 +89,32 @@ function installTests() {
   check("asked but busy: waits", autoInstallReason({ ...base, nowMs: day, requestAtMs: day - 5_000, busy: true }) === null);
 }
 
+function selectiveTests() {
+  const days = ["20261113", "20261114", "20261115", "20261116"];
+  const t = (rows: Array<[string, string, number | null]>) => buildPrints(rows.map(([guid, date, alterId]) => ({ guid, date, alterId })));
+  const tally = t([["a", "20261113", 10], ["b", "20261114", 11], ["c", "20261116", 12]]);
+  const mirrorSame = t([["a", "2026-11-13", 10], ["b", "2026-11-14", 11], ["c", "2026-11-16", 12]]);
+  check("dayKey reads both machine forms", dayKey("2026-11-13") === "20261113" && dayKey("20261113") === "20261113" && dayKey("13-Nov-26") === null);
+  check("identical days are all skipped (empty Sunday too)", daysToRead(days, tally, mirrorSame).length === 0);
+  check("an edit (AlterID moved) reads that day only",
+    JSON.stringify(daysToRead(days, tally, t([["a", "2026-11-13", 10], ["b", "2026-11-14", 9], ["c", "2026-11-16", 12]]))) === '["20261114"]');
+  check("a new voucher in Tally reads its day",
+    JSON.stringify(daysToRead(days, t([["a", "20261113", 10], ["b", "20261114", 11], ["c", "20261116", 12], ["d", "20261115", 13]]), mirrorSame)) === '["20261115"]');
+  check("a voucher deleted in Tally reads its day (so it is pruned)",
+    JSON.stringify(daysToRead(days, t([["a", "20261113", 10], ["c", "20261116", 12]]), mirrorSame)) === '["20261114"]');
+  check("a voucher moved to another date reads both days",
+    JSON.stringify(daysToRead(days, t([["a", "20261115", 14], ["b", "20261114", 11], ["c", "20261116", 12]]), mirrorSame)) === '["20261113","20261115"]');
+  check("a blank AlterID in the mirror reads that day",
+    JSON.stringify(daysToRead(days, tally, t([["a", "2026-11-13", null], ["b", "2026-11-14", 11], ["c", "2026-11-16", 12]]))) === '["20261113"]');
+  check("could not read the mirror: every day", daysToRead(days, tally, null).length === 4);
+  check("could not read Tally: every day", daysToRead(days, null, mirrorSame).length === 4);
+  check("an EMPTY Tally fingerprint is not trusted: every day", daysToRead(days, t([]), t([])).length === 4);
+  check("a row with no guid or date makes the print unusable", buildPrints([{ guid: "", date: "20261113", alterId: 1 }]) === null && buildPrints([{ guid: "x", date: "bad", alterId: 1 }]) === null);
+}
+
 (async () => {
   await progressTests();
+  selectiveTests();
   rangeTests();
   installTests();
   console.log(`${passed} passed, ${failed} failed`);

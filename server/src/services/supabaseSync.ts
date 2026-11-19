@@ -1040,6 +1040,46 @@ export class SupabaseSync {
   }
 
   /** True for connection-level blips worth retrying (NOT data/constraint errors). */
+  /* ── Selective sync (A-3, 19-Nov-2026) ────────────────────────────────
+     The fingerprint of pulled vouchers, read through the SAME mapVoucher the upload uses, so a day compares the way it would be
+     stored. Then the mirror's own guid, date and alter_id for a window. Both feed dayFingerprint.daysToRead; null means "could not
+     tell" and the caller reads every day. */
+  fingerprintRowsOf(messages: any[], company: string): Array<{ guid: unknown; date: unknown; alterId: unknown }> {
+    return (messages || [])
+      .filter((m) => m?.metadata?.type === "Voucher")
+      .map((m) => this.mapVoucher(m, company))
+      .filter(Boolean)
+      .map((v: any) => ({ guid: v.guid, date: v.date, alterId: v.alter_id }));
+  }
+
+  async mirrorDayRows(company: string, fromYmd: string, toYmd: string): Promise<Array<{ guid: unknown; date: unknown; alterId: unknown }> | null> {
+    if (!this.client) return null;
+    const PAGE = 1000;
+    const out: Array<{ guid: unknown; date: unknown; alterId: unknown }> = [];
+    try {
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await this.withRetry("select mirror day fingerprint", async () => {
+          const res = await this.client!
+            .from("tally_vouchers")
+            .select("guid, date, alter_id")
+            .eq("company", company)
+            .gte("date", toIsoDate(fromYmd))
+            .lte("date", toIsoDate(toYmd))
+            .order("guid", { ascending: true })
+            .range(from, from + PAGE - 1);
+          if (res.error && this.isTransient(res.error)) throw res.error;
+          return res;
+        });
+        if (error) { console.warn(`[Supabase] selective sync: mirror read failed (${error.message}) — reading every day`); return null; }
+        for (const r of data ?? []) out.push({ guid: (r as any).guid, date: (r as any).date, alterId: (r as any).alter_id });
+        if (!data || data.length < PAGE) return out;
+      }
+    } catch (e: any) {
+      console.warn(`[Supabase] selective sync: mirror read threw (${e?.message || e}) — reading every day`);
+      return null;
+    }
+  }
+
   private isTransient(e: any): boolean {
     const m = (e?.message || String(e ?? "")).toLowerCase();
     return m.includes("fetch failed") || m.includes("econnreset") || m.includes("etimedout")

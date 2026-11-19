@@ -21,6 +21,8 @@ export interface SyncPlan {
   mode: "full" | "incremental" | "masters-only" | "vouchers-only";
   chunkStrategy: "smart" | "monthly" | "weekly" | "daily";
   signal?: AbortSignal;
+  /** A-3: read only the days that differ from the mirror (dayFingerprint.ts). The web's "last N days" only. */
+  selective?: boolean;
 }
 
 export interface SyncProgress {

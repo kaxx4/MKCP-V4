@@ -303,6 +303,8 @@ function subscribeForCompany(
       const resp = await postTallySync(localPort, {
         company, fromDate: from, toDate: to, mode: "full", chunkStrategy: "daily",
         progressIds: ids, // H-1: the agent writes days done / days in all onto these rows (migration 0339)
+        // A-3: a trailing "last N days" reads only the days that differ from the mirror; the full year stays a complete re-read.
+        selective: b.widestDays !== null && b.widestDays !== undefined,
       });
 
       if (resp.ok) {

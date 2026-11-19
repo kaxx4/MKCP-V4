@@ -12,6 +12,7 @@ import {
 import { PARALLEL_MASTERS, SEQUENTIAL_MASTERS, TRANSACTION_COLLECTIONS } from "../config/collections.js";
 import type { ChangeDetector } from "./changeDetector.js";
 import { SupabaseSync } from "./supabaseSync.js";
+import { buildPrints, daysToRead } from "./dayFingerprint.js";
 import { fetchPriceList } from "./tallyPriceList.js";
 import { fetchGstRates } from "./tallyGstRates.js";
 
@@ -223,7 +224,8 @@ export class SyncOrchestrator {
     toDate: string,
     strategy: "smart" | "monthly" | "weekly" | "daily" = "smart",
     signal?: AbortSignal,
-    onProgress?: (p: SyncProgress) => void
+    onProgress?: (p: SyncProgress) => void,
+    opts?: { selective?: boolean }
   ): Promise<VouchersSyncResult> {
     const t0 = Date.now();
 
@@ -239,6 +241,16 @@ export class SyncOrchestrator {
       chunks = getWeeklyChunks(fromDate, toDate).map(c => ({ ...c, estimatedCount: -1 }));
     } else {
       chunks = getMonthlyChunks(fromDate, toDate).map(c => ({ ...c, estimatedCount: -1 }));
+    }
+
+    /* A-3 selective (only when the caller asks: the web's "last N days"; never the nightly or full-year pull). One fingerprint read
+       for the window, then only the days that differ from the mirror are read in full. Any doubt reads every day. */
+    if (opts?.selective && strategy === "daily" && chunks.length > 1 && !signal?.aborted) {
+      const keep = await this._selectChangedDays(company, fromDate, toDate, chunks.map((c) => c.from), signal);
+      if (keep) {
+        const set = new Set(keep);
+        chunks = chunks.filter((c) => set.has(c.from));
+      }
     }
 
     console.log(`\n[DAYBOOK] Syncing vouchers for "${company}" (${fromDate} → ${toDate}) in ${chunks.length} ${strategy} chunks...`);
@@ -524,7 +536,7 @@ export class SyncOrchestrator {
     // Vouchers
     let vouchersResult: VouchersSyncResult | null = null;
     if (mode !== "masters-only" && fromDate && toDate) {
-      vouchersResult = await this.syncVouchersOnly(company, fromDate, toDate, chunkStrategy, signal, onProgress);
+      vouchersResult = await this.syncVouchersOnly(company, fromDate, toDate, chunkStrategy, signal, onProgress, { selective: plan.selective === true });
     }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -597,6 +609,25 @@ export class SyncOrchestrator {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  /** The days (YYYYMMDD) that need a full read, or null when it could not tell (then every day is read). See dayFingerprint.ts. */
+  private async _selectChangedDays(company: string, fromDate: string, toDate: string, days: string[], signal?: AbortSignal): Promise<string[] | null> {
+    const t = Date.now();
+    try {
+      const def = { ...TRANSACTION_COLLECTIONS[0], fetch: ["Guid", "Date", "AlterID"] };
+      const result = await this.post(this.tallyUrl, buildCollectionXml(def, company, fromDate, toDate), def.timeout, false, 1, signal);
+      const tally = buildPrints(this.supabase.fingerprintRowsOf(convertVouchers(result).tallymessage, company));
+      const mirrorRows = await this.supabase.mirrorDayRows(company, fromDate, toDate);
+      const mirror = mirrorRows ? buildPrints(mirrorRows) : null;
+      const keep = daysToRead(days, tally, mirror);
+      console.log(`[DAYBOOK] Selective: ${days.length - keep.length} of ${days.length} day(s) match the mirror, reading ${keep.length} in full (${Date.now() - t} ms)`);
+      return keep;
+    } catch (e: any) {
+      if (e?.message?.includes("Aborted")) throw e;
+      console.warn(`[DAYBOOK] Selective check failed (${e?.message || e}) — reading every day`);
+      return null;
+    }
+  }
 
   private async _fetchVoucherChunk(
     company: string,

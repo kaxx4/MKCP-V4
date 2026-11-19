@@ -197,7 +197,7 @@ app.get("/api/tally/company", async (_req, res) => {
 
 // ── Sync endpoints ─────────────────────────────────────────────────────────────
 app.post("/api/tally/sync", syncGuard, async (req, res) => {
-  const { company, fromDate, toDate, mode = "full", chunkStrategy = "smart", progressIds } = req.body;
+  const { company, fromDate, toDate, mode = "full", chunkStrategy = "smart", progressIds, selective } = req.body;
   const ac = new AbortController();
   const progress = refreshProgressWriter(progressIds);
   res.on("close", () => { if (!res.writableEnded) ac.abort(); });
@@ -205,7 +205,7 @@ app.post("/api/tally/sync", syncGuard, async (req, res) => {
 
   const plan: SyncPlan = {
     company, fromDate: fromDate ?? "", toDate: toDate ?? "",
-    mode, chunkStrategy, signal: ac.signal,
+    mode, chunkStrategy, signal: ac.signal, selective: selective === true,
   };
 
   try {
