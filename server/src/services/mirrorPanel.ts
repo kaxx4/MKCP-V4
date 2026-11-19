@@ -158,6 +158,10 @@ function partyAmount(payload: any): number {
   return Math.abs(Number(party?.amount ?? 0));
 }
 
+/** How long the table counts are reused (see the snapshot block). */
+export const SNAPSHOT_TTL_MS = 10 * 60_000;
+const SNAPSHOT_CACHE = new Map<string, { at: number; rows: MirrorSnapshot[] }>();
+
 export async function buildMirrorPanel(
   company: string,
   limit = 25,
@@ -206,7 +210,13 @@ export async function buildMirrorPanel(
   );
 
   /* ── Snapshot ──────────────────────────────────────────────────────── */
-  const snapshot: MirrorSnapshot[] = await Promise.all(
+  /* Counting every row of seven big tables is the heaviest thing this machine asks the database: the panel did it once a minute,
+     about 2,100 row scans an hour, while the counts move only when a sync lands. After the 19-Nov-2026 morning stall the owner chose
+     to make the busiest callers ask less often before paying for a bigger database. So a snapshot is reused for ten minutes, unless a
+     table could not be read (then all are asked again next time). Sync history and pushes stay live. */
+  const kept = SNAPSHOT_CACHE.get(company);
+  const reuse = !!kept && Date.now() - kept.at < SNAPSHOT_TTL_MS;
+  const snapshot: MirrorSnapshot[] = reuse ? kept!.rows : await Promise.all(
     MIRROR_TABLES.map(async ({ table, dateColumn }) => {
       try {
         const { count } = await client
@@ -231,6 +241,7 @@ export async function buildMirrorPanel(
       }
     }),
   );
+  if (!reuse && snapshot.every((r) => r.rows !== null)) SNAPSHOT_CACHE.set(company, { at: Date.now(), rows: snapshot });
 
   /* ── Push log ──────────────────────────────────────────────────────── */
   const { data: pushRows } = await client
