@@ -5,6 +5,7 @@ import { recordPricePull } from "./priceChangeLog.js";
 import { postgrestInList } from "./postgrestFilter.js";
 import ws from "ws";
 import { supabaseClient } from "./supabaseClient.js";
+import { voucherTotal, newAndEdited, deletedEvents, EVENT_CEILING, type ChangeEventRow, type PriorVoucher } from "./changeEvents.js";
 import {
   emitMirrorChanges,
   selectMovedChanges,
@@ -431,6 +432,13 @@ export class SupabaseSync {
         );
       }
 
+      /* H-2: list what is new or edited in Tally, with old and new totals (changeEvents.ts). Only when the before-read worked. */
+      if (prior) {
+        const before = new Map<string, PriorVoucher>();
+        for (const [g, a] of prior.alterIds) before.set(g, { alterId: a, total: prior.totals.get(g) ?? null });
+        await this.writeChangeEvents(newAndEdited(company, vouchers, before));
+      }
+
       // Extract and sync denormalized ledger and inventory entries
       const ledgerEntries: any[] = [];
       const inventoryEntries: any[] = [];
@@ -488,8 +496,15 @@ export class SupabaseSync {
         // Empty days are pruned too (their stale rows have no matching pulled GUID) —
         // UNLESS the mass-deletion guard (migration 026) refuses a wide, mostly-
         // empty batch; see deleteVoucherOrphansForDays below.
+        /* H-2: which vouchers the prune is about to remove, read first; listed as deleted only if the prune removed exactly them. */
+        const orphans = await this.dayOrphans(company, meta.pruneDays, voucherGuids);
         const r = await this.deleteVoucherOrphansForDays(company, meta.pruneDays, Array.from(voucherGuids));
         deleted = r.deleted;
+        if (orphans && !r.guardTripped && r.deleted > 0 && r.deleted === orphans.length) {
+          await this.writeChangeEvents(deletedEvents(company, orphans));
+        } else if (r.deleted > 0) {
+          console.log(`[Supabase] change list: ${r.deleted} voucher(s) removed but the list could not say which; not listed`);
+        }
         if (r.guardTripped) {
           guardRefusals++;
           const msg = `Mass-deletion guard refused per-day prune across ${meta.pruneDays.length} day(s) — ` +
@@ -591,10 +606,10 @@ export class SupabaseSync {
   private async priorVoucherState(
     company: string,
     guids: string[],
-  ): Promise<{ alterIds: PriorVersions; entries: Map<string, EntryCounts> } | null> {
+  ): Promise<{ alterIds: PriorVersions; entries: Map<string, EntryCounts>; totals: Map<string, number | null> } | null> {
     if (!this.client) return null;
     const clean = (guids || []).filter((g): g is string => typeof g === "string" && g.length > 0);
-    if (clean.length === 0) return { alterIds: new Map(), entries: new Map() };
+    if (clean.length === 0) return { alterIds: new Map(), entries: new Map(), totals: new Map() };
 
     const held = new Map<string, number | null>();
     /* Entry counts of the stored row, so a partial pull (same AlterID, fewer
@@ -603,6 +618,8 @@ export class SupabaseSync {
        counts. Costs the two JSONB columns for at most SIGNAL_CEILING rows; a
        normal "Today" pass is ~20. See summarizeVoucherSync. */
     const entries = new Map<string, EntryCounts>();
+    /* H-2: the stored total, so an edit can say old and new (changeEvents.ts). */
+    const totals = new Map<string, number | null>();
     const CHUNK = 100;
     try {
       for (let i = 0; i < clean.length; i += CHUNK) {
@@ -631,9 +648,10 @@ export class SupabaseSync {
             ledger: entryCount((row as any).ledger_entries),
             inventory: entryCount((row as any).inventory_entries),
           });
+          totals.set(String((row as any).guid), voucherTotal((row as any).ledger_entries));
         }
       }
-      return { alterIds: held, entries };
+      return { alterIds: held, entries, totals };
     } catch (e: any) {
       console.warn(`[Supabase] mirror signals: pre-image read threw (${e?.message || e}) — announcing every voucher this pass`);
       return null;
@@ -1077,6 +1095,39 @@ export class SupabaseSync {
     } catch (e: any) {
       console.warn(`[Supabase] selective sync: mirror read threw (${e?.message || e}) — reading every day`);
       return null;
+    }
+  }
+
+  /** The mirror rows on these days (YYYYMMDD) that the pull did not bring back: what the per-day prune will remove. Null when it
+   *  cannot tell, or when there are more than EVENT_CEILING (then nothing is listed rather than a part). */
+  private async dayOrphans(company: string, days: string[], pulled: Set<string>): Promise<any[] | null> {
+    if (!this.client) return null;
+    const iso = (days || []).filter((d) => /^\d{8}$/.test(d)).map((d) => toIsoDate(d));
+    if (iso.length === 0) return [];
+    try {
+      const { data, error } = await this.client
+        .from("tally_vouchers")
+        .select("guid, voucher_type, voucher_number, date, party_ledger_name, ledger_entries, alter_id")
+        .eq("company", company)
+        .in("date", iso)
+        .limit(5000);
+      if (error) return null;
+      const gone = (data ?? []).filter((r: any) => !pulled.has(String(r.guid)));
+      return gone.length > EVENT_CEILING ? null : gone;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Best effort: the change list must never fail a sync. */
+  private async writeChangeEvents(rows: ChangeEventRow[]): Promise<void> {
+    if (!this.client || rows.length === 0) return;
+    try {
+      const { error } = await this.client.from("erp_tally_change_events").insert(rows);
+      if (error) console.warn(`[Supabase] change list not written (${error.message})`);
+      else console.log(`[Supabase] change list: ${rows.length} line(s) (${rows.filter((r) => r.op === "new").length} new, ${rows.filter((r) => r.op === "edited").length} edited, ${rows.filter((r) => r.op === "deleted").length} deleted)`);
+    } catch (e: any) {
+      console.warn(`[Supabase] change list not written (${e?.message || e})`);
     }
   }
 

@@ -10,6 +10,7 @@ import { createRequire } from "node:module";
 import { refreshProgressWriter, cleanIds, THROTTLE_MS, type ProgressRow } from "../src/services/refreshProgress.js";
 import { lastNDaysRange } from "../src/services/refreshListener.js";
 import { buildPrints, daysToRead, dayKey } from "../src/services/dayFingerprint.js";
+import { voucherTotal, newAndEdited, deletedEvents } from "../src/services/changeEvents.js";
 
 const require = createRequire(import.meta.url);
 const { autoInstallReason, istHour, QUIET_MS } = require("../../public/autoUpdate.js");
@@ -112,8 +113,26 @@ function selectiveTests() {
   check("a row with no guid or date makes the print unusable", buildPrints([{ guid: "", date: "20261113", alterId: 1 }]) === null && buildPrints([{ guid: "x", date: "bad", alterId: 1 }]) === null);
 }
 
+function changeEventTests() {
+  const lines = (party: string, other: string) => [{ ledgername: "ZZ TEST PARTY", amount: party, ispartyledger: true }, { ledgername: "Sales", amount: other, ispartyledger: false }];
+  check("total is the party line, unsigned", voucherTotal(lines("-1180.00", "1000.00")) === 1180);
+  check("no party line: the largest line", voucherTotal([{ amount: "-50" }, { amount: "200.5" }]) === 200.5);
+  check("no readable amount: null", voucherTotal([{ amount: "" }]) === null && voucherTotal(null) === null);
+  const v = (guid: string, alter: number | null, party = "-1180.00") => ({ guid, alter_id: alter, voucher_type: "Sales", voucher_number: "ZZTEST1/1", date: "2026-11-19", party_ledger_name: "ZZ TEST PARTY", ledger_entries: lines(party, "1000") });
+  const prior = new Map([["a", { alterId: 10, total: 1180 }], ["b", { alterId: 11, total: 500 }], ["c", { alterId: null, total: 90 }]]);
+  const ev = newAndEdited("ZZTEST", [v("a", 10), v("b", 12, "-1250.50"), v("c", 13), v("d", 14)], prior);
+  check("unchanged AlterID: nothing", !ev.some((e) => e.guid === "a"));
+  check("moved AlterID: edited with old and new total", ev.some((e) => e.guid === "b" && e.op === "edited" && e.total_before === 500 && e.total_after === 1250.5));
+  check("blank AlterID before: not called an edit", !ev.some((e) => e.guid === "c"));
+  check("not held before: new with its total", ev.some((e) => e.guid === "d" && e.op === "new" && e.total_after === 1180 && e.total_before === null));
+  check("before-read failed: nothing listed", newAndEdited("ZZTEST", [v("d", 14)], null).length === 0);
+  const del = deletedEvents("ZZTEST", [{ guid: "x", voucher_type: "Sales", voucher_number: "ZZTEST2/1", date: "2026-11-18", party_ledger_name: "ZZ TEST PARTY", ledger_entries: lines("-90", "90"), alter_id: 7 }]);
+  check("deleted carries the old total and AlterID", del.length === 1 && del[0].op === "deleted" && del[0].total_before === 90 && del[0].alter_before === 7 && del[0].total_after === null);
+}
+
 (async () => {
   await progressTests();
+  changeEventTests();
   selectiveTests();
   rangeTests();
   installTests();
