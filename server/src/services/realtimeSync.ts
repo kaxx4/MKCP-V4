@@ -21,6 +21,15 @@
  * the upper end of tolerable while a person is working in Tally. So: masters are
  * polled every tick (cheap), vouchers only every `VOUCHER_EVERY` ticks, and the
  * whole loop stands down while Tally is busy with a human-facing sync.
+ *
+ * ── Polling less, smartly (owner, 20-Nov-2026) ───────────────────────────
+ * Measured again on the laptop's Tally: the voucher check is a flat ~4.7 s scan
+ * of every voucher whether or not anything changed, and narrowing it by date does
+ * not help (Tally scans them all either way). So the lever is HOW OFTEN, not how
+ * big. The voucher check now backs off while nothing changes (every third empty
+ * scan doubles the wait, up to `voucherMaxEveryMs`) and snaps back to the fast
+ * rate the moment a voucher or a master changes, or `nudge()` is called (a push
+ * just landed, a person pressed Sync). Masters stay on every tick: 0.12 s.
  */
 import { tallyPost } from "../tally.js";
 import { convertCompanies } from "../converters/convert.js";
@@ -37,11 +46,23 @@ import { mirrorVoucherWatermark, resolveVoucherCursor, type CursorSource } from 
  * freeze on first import, which makes the loop impossible to reconfigure or to
  * test without restarting the process.
  */
+/**
+ * How many ticks to wait before the next voucher check. Pure, so the schedule can be tested without a Tally.
+ * `idleScans` is how many checks in a row found nothing. Every third one doubles the wait, from `every` up to `maxTicks`.
+ */
+export function nextVoucherStep(every: number, maxTicks: number, idleScans: number): number {
+  const base = Math.max(1, Math.floor(every));
+  const doubled = base * 2 ** Math.floor(Math.max(0, idleScans) / 3);
+  return Math.max(base, Math.min(Math.max(1, Math.floor(maxTicks)), doubled));
+}
+
 export interface RealtimeOptions {
   /** How often to look at all. Masters are checked every tick. */
   tickMs?: number;
   /** Vouchers cost ~4s per scan, so they are checked every Nth tick, not every tick. */
   voucherEvery?: number;
+  /** The longest the voucher check may wait while nothing changes. */
+  voucherMaxEveryMs?: number;
   /**
    * Refuse to fetch detail for more than this many changed vouchers at once.
    * A full year WITH entry blocks exceeded 300s and wedged the port — a valid
@@ -53,6 +74,7 @@ export interface RealtimeOptions {
 const DEFAULTS = {
   tickMs: Number(process.env.REALTIME_TICK_MS ?? 30_000),
   voucherEvery: Number(process.env.REALTIME_VOUCHER_EVERY ?? 2),
+  voucherMaxEveryMs: Number(process.env.REALTIME_VOUCHER_MAX_EVERY_MS ?? 300_000),
   maxChanged: Number(process.env.REALTIME_MAX_CHANGED ?? 400),
 };
 
@@ -65,6 +87,9 @@ export interface RealtimeStatus {
   lastChangeAt: string | null;
   vouchersApplied: number;
   skipped: { busy: number; tooMany: number };
+  /** Voucher checks made, and how many ticks the next one waits (it grows while nothing changes). */
+  voucherChecks: number;
+  voucherWaitTicks: number;
   lastError: string | null;
   /* Where the voucher cursor came from. "tally-now" means restarts can skip
      edits made while the agent was down — a status a human should be able to
@@ -83,9 +108,12 @@ export class RealtimeSync {
   private status: RealtimeStatus = {
     running: false, company: null, cursor: null, ticks: 0,
     lastTickAt: null, lastChangeAt: null, vouchersApplied: 0,
-    skipped: { busy: 0, tooMany: 0 }, lastError: null,
+    skipped: { busy: 0, tooMany: 0 }, voucherChecks: 0, voucherWaitTicks: 0, lastError: null,
     cursorSource: null, cursorNote: null,
   };
+  /** The tick on which the next voucher check is due, and how many checks in a row found nothing. */
+  private nextVoucherTick = 0;
+  private idleVoucherChecks = 0;
 
   private cursorSource: CursorSource | null = null;
 
@@ -146,6 +174,12 @@ export class RealtimeSync {
     this.status.running = true;
   }
 
+  /** Something is likely to have changed (a push landed, a person pressed Sync): check vouchers on the next tick and go back to the fast rate. */
+  nudge(): void {
+    this.idleVoucherChecks = 0;
+    this.nextVoucherTick = this.ticks + 1;
+  }
+
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
@@ -165,7 +199,7 @@ export class RealtimeSync {
     this.ticks++;
     this.status.lastTickAt = new Date().toISOString();
     try {
-      const checkVouchers = this.ticks % this.opts.voucherEvery === 0;
+      const maxTicks = Math.ceil(this.opts.voucherMaxEveryMs / Math.max(1, this.opts.tickMs));
 
       const mastersMoved = await this.detector.mastersChangedSince(this.tallyUrl, this.company, this.cursor);
       if (mastersMoved) {
@@ -174,11 +208,18 @@ export class RealtimeSync {
         const fresh = await this.detector.fetchCurrentAlterIds(this.tallyUrl, this.company);
         this.cursor = { ...this.cursor, masterId: fresh.masterId };
         this.status.lastChangeAt = new Date().toISOString();
+        // A new party or item usually comes with vouchers: look at them now and stay on the fast rate.
+        this.idleVoucherChecks = 0;
+        this.nextVoucherTick = this.ticks;
       }
 
-      if (checkVouchers) {
+      if (this.ticks >= this.nextVoucherTick) {
         const changed = await this.detector.whatChanged(this.tallyUrl, this.company, this.cursor);
         const n = changed.vouchers.count;
+        this.status.voucherChecks++;
+        this.idleVoucherChecks = n > 0 ? 0 : this.idleVoucherChecks + 1;
+        this.nextVoucherTick = this.ticks + nextVoucherStep(this.opts.voucherEvery, maxTicks, this.idleVoucherChecks);
+        this.status.voucherWaitTicks = this.nextVoucherTick - this.ticks;
         if (n > 0) {
           if (n > this.opts.maxChanged) {
             // Too much to be an edit — this is a restore, an import, or a first

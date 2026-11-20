@@ -214,6 +214,7 @@ app.post("/api/tally/sync", syncGuard, async (req, res) => {
       progress.onProgress(p);
     });
     await progress.flush();
+    realtime.nudge(); // a person pressed Sync: the next tick looks at vouchers and goes back to the fast rate
     if (!res.writableEnded) res.json(result);
   } catch (e: any) {
     if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
@@ -342,6 +343,7 @@ app.post("/api/tally/sync-daybook", syncGuard, async (req, res) => {
     // window was refreshed recently, so while the Electron window is open the
     // two schedulers cooperate instead of pulling Tally twice as often.
     noteDaybookSync(company);
+    realtime.nudge();
     console.log(`[SYNC] ✓ origin=${origin} company=${company} route=sync-daybook vouchers=${result.stats?.vouchers ?? 0} ${Date.now() - t0}ms`);
   } catch (e: any) {
     if (!res.writableEnded) res.status(500).json({ success: false, error: e.message });
@@ -1127,6 +1129,11 @@ if (process.env.REALTIME_SYNC_ENABLED === "true") {
   void realtime.start();
 }
 
+/** Something likely changed (a push landed, a person pressed Sync): check vouchers on the next tick and go back to the fast rate. */
+app.post("/api/realtime/nudge", (_req, res) => {
+  realtime.nudge();
+  res.json(realtime.getStatus());
+});
 app.get("/api/realtime/status", (_req, res) => res.json(realtime.getStatus()));
 
 app.post("/api/realtime/start", async (_req, res) => {
