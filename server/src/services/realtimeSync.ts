@@ -105,6 +105,9 @@ export class RealtimeSync {
   private company: string | null = null;
   private ticks = 0;
   private inFlight = false;
+  private starting = false;
+  /** After a failed masters refresh, do not look again until this tick, so a broken upload is not retried every few seconds. */
+  private mastersRetryTick = 0;
   private status: RealtimeStatus = {
     running: false, company: null, cursor: null, ticks: 0,
     lastTickAt: null, lastChangeAt: null, vouchersApplied: 0,
@@ -133,7 +136,17 @@ export class RealtimeSync {
   }
 
   async start(): Promise<void> {
-    if (this.timer) return;
+    // The timer is only set after two awaits, so a second start() in that window used to pass this guard and make a second timer that stop() could not clear.
+    if (this.timer || this.starting) return;
+    this.starting = true;
+    try {
+      await this.begin();
+    } finally {
+      this.starting = false;
+    }
+  }
+
+  private async begin(): Promise<void> {
     try {
       this.company = convertCompanies(await tallyPost(this.tallyUrl, HEALTH_XML, 10_000))[0]?.name ?? null;
       if (!this.company) { console.warn("[realtime] no company loaded — not starting"); return; }
@@ -201,12 +214,21 @@ export class RealtimeSync {
     try {
       const maxTicks = Math.ceil(this.opts.voucherMaxEveryMs / Math.max(1, this.opts.tickMs));
 
-      const mastersMoved = await this.detector.mastersChangedSince(this.tallyUrl, this.company, this.cursor);
+      const mastersMoved = this.ticks >= this.mastersRetryTick
+        && await this.detector.mastersChangedSince(this.tallyUrl, this.company, this.cursor);
       if (mastersMoved) {
         console.log("[realtime] masters changed — refreshing");
-        await this.orchestrator.syncMastersOnly(this.company);
+        // Read the new mark BEFORE the refresh: a ledger edited during a multi-second refresh then stays above the cursor and is seen next time.
         const fresh = await this.detector.fetchCurrentAlterIds(this.tallyUrl, this.company);
-        this.cursor = { ...this.cursor, masterId: fresh.masterId };
+        const result = await this.orchestrator.syncMastersOnly(this.company);
+        if (result && result.success === false) {
+          // The refresh did not land (upload failed or the read came back empty). Keep the old mark so it is tried again, a minute from now.
+          this.mastersRetryTick = this.ticks + Math.ceil(60_000 / Math.max(1, this.opts.tickMs));
+          this.status.lastError = `masters refresh failed: ${(result.errors ?? ["no data"]).join("; ")}`.slice(0, 300);
+          console.warn(`[realtime] ${this.status.lastError} — will retry`);
+        } else {
+          this.cursor = { ...this.cursor, masterId: fresh.masterId };
+        }
         this.status.lastChangeAt = new Date().toISOString();
         // A new party or item usually comes with vouchers: look at them now and stay on the fast rate.
         this.idleVoucherChecks = 0;
