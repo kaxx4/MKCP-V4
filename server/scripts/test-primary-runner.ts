@@ -21,6 +21,9 @@ import type { MirrorStore, MirrorTally } from "../src/services/erpMirrorSync.js"
 import { memErpQueue } from "./rigs/lib/memErpQueue.js";
 import { rigPayload, indiaToday } from "./rigs/lib/simTally.js";
 
+/* 25-Nov-2026 (owner): a full run only starts from 00:30 to 05:00 India time, so the mirror loops here run on a night clock (01:30 India time). */
+const NIGHT = Date.parse("2026-11-06T20:00:00Z");
+
 let pass = 0, fail = 0;
 const ok = (label: string, cond: boolean, detail = "") => {
   if (cond) { pass++; console.log(`  ✓ ${label}`); } else { fail++; console.log(`  ✗ ${label}${detail ? `: ${detail}` : ""}`); }
@@ -129,7 +132,7 @@ const noop = () => {};
     ...over,
   });
   const mk = (p: MirrorPlanSource, r: MirrorRunners, extra: Partial<ConstructorParameters<typeof PrimaryMirrorLoop>[0]> = {}) =>
-    new PrimaryMirrorLoop({ store: fakeStore(), tally, plan: p, tickMs: 1000, log: noop, runners: r, ...extra });
+    new PrimaryMirrorLoop({ store: fakeStore(), tally, plan: p, tickMs: 1000, log: noop, runners: r, now: () => NIGHT, ...extra });
   {
     calls.length = 0;
     const t = await mk(plan({ hasMark: false, lastCheck: null, repulls: 2 }), runners()).tick();

@@ -23,6 +23,9 @@ import { Journal } from "../src/services/erpJobAgent.js";
 import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 
+/* 25-Nov-2026 (owner): a full run only starts from 00:30 to 05:00 India time, so the mirror loops here run on a night clock (01:30 India time). */
+const NIGHT = Date.parse("2026-11-06T20:00:00Z");
+
 let pass = 0, fail = 0;
 const ok = (label: string, cond: boolean, detail = "") => {
   if (cond) { pass++; console.log(`  ✓ ${label}`); } else { fail++; console.log(`  ✗ ${label}${detail ? `: ${detail}` : ""}`); }
@@ -223,7 +226,7 @@ function storeOf(initial: { key: string; date: string; type: string }[], opts: {
       mirror: async () => ({ state: "refused", error: "refused: 1 voucher type(s) vanished from the read (Sales Order Note)", alarms: [alarm] }),
       check: async () => ({ state: "ok", error: null }), repull: async () => null, accepted: async () => [],
     };
-    const loop = new PrimaryMirrorLoop({
+    const loop = new PrimaryMirrorLoop({ now: () => NIGHT,
       store: { acceptedRuns: async () => [], lastFullRun: async () => null } as unknown as MirrorStore, tally: {} as MirrorTally,
       plan: { hasMark: async () => false, fullDue: async () => false, lastCheckAt: async () => new Date(), queuedRepulls: async () => 0 },
       tickMs: 1000, log: noop, runners, journal,
@@ -260,7 +263,7 @@ function storeOf(initial: { key: string; date: string; type: string }[], opts: {
       mirror: (store, tally, kind, log, released) => runMirrorSync({ store, tally, kind, today, log, released }),
       check: async () => ({ state: "ok", error: null }), repull: async () => null, accepted: async () => [],
     };
-    const loop = new PrimaryMirrorLoop({
+    const loop = new PrimaryMirrorLoop({ now: () => NIGHT,
       store: st.store, tally: tallyOf(() => sales, today),
       plan: { hasMark: async () => false, fullDue: async () => false, lastCheckAt: async () => new Date(), queuedRepulls: async () => 0 },
       tickMs: 1000, log: noop, runners, journal, health: async (n) => { health.push(n); },
@@ -274,21 +277,21 @@ function storeOf(initial: { key: string; date: string; type: string }[], opts: {
     ok("a third held run inside the hour does not write another health row", health.length === 1 && loop.status.holds[0].consecutive === 3);
     ok("nothing was pruned while held", st.rows.size === 9);
     // the acknowledgement, written the way the script writes it
-    const refused = vanishAckFor(journal.entries() as { kind: string; alarm?: string }[], "Sales Orderr Note", new Date().toISOString());
+    const refused = vanishAckFor(journal.entries() as { kind: string; alarm?: string }[], "Sales Orderr Note", new Date(NIGHT).toISOString());
     ok("an acknowledgement for a type nobody is holding is refused", !refused.ok && /no vanished-type alarm/.test(refused.reason));
-    const good = vanishAckFor(journal.entries() as { kind: string; alarm?: string }[], "sales order note", new Date().toISOString());
+    const good = vanishAckFor(journal.entries() as { kind: string; alarm?: string }[], "sales order note", new Date(NIGHT).toISOString());
     ok("an acknowledgement for the held type (any case) is accepted", good.ok);
     if (good.ok) journal.append(good.entry);
     await loop.tick();
     ok("the next run prunes the type: swapped, the notes gone, the hold cleared", st.rows.size === 4 && loop.status.holds.length === 0);
-    ok("the acknowledgement is used up (journalled once)", journal.entries().filter((e) => e.kind === "vanish-ack-used").length === 1 && pendingVanishAcks(journal.entries() as { kind: string; type?: string; at?: string }[], Date.now()).length === 0);
+    ok("the acknowledgement is used up (journalled once)", journal.entries().filter((e) => e.kind === "vanish-ack-used").length === 1 && pendingVanishAcks(journal.entries() as { kind: string; type?: string; at?: string }[], NIGHT).length === 0);
     // the type reappears and vanishes again: held again, the old ack does not release it
     for (let i = 1; i <= 4; i++) st.rows.set(`N-${i}`, { key: `N-${i}`, date: "2026-11-12", type: "Sales Order Note" });
     await loop.tick();
     ok("a later vanishing holds again (one acknowledgement released exactly one run)", st.rows.size === 8 && loop.status.holds.length === 1 && loop.status.holds[0].consecutive === 1);
     // a clean run clears a hold
     const sales5: V[] = [...sales, ...[1, 2, 3, 4].map((i) => ({ guid: `N-${i}`, date: "2026-11-12", alterid: 20 + i, type: "Sales Order Note", number: `SO-${i}` }))];
-    const loop2 = new PrimaryMirrorLoop({
+    const loop2 = new PrimaryMirrorLoop({ now: () => NIGHT,
       store: st.store, tally: tallyOf(() => sales5, today),
       plan: { hasMark: async () => false, fullDue: async () => false, lastCheckAt: async () => new Date(), queuedRepulls: async () => 0 },
       tickMs: 1000, log: noop, runners, journal,

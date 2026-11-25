@@ -26,6 +26,7 @@ import {
   indiaToday, ledgerPeriod, judgeLoadedPeriod, incrementalRanges, INCREMENTAL_CHUNK, ERP_MIRROR_VOUCHER_DEF, loadedPeriodFromParsed, tallyDateToIso, ERP_MIRROR_COMPANY_DEF,
   type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult, type MirrorLedgerRow, type TallyLedger, type DayCheckVoucher, type AcceptedRun,
 } from "../src/services/erpMirrorSync.js";
+import { inFullRunWindow } from "../src/services/nightWindow.js";
 import { erpTestFence, ERP_TEST_RPCS } from "../src/services/supabaseClient.js";
 import { parseTallyAmount } from "../src/services/xml.js";
 import { TRANSACTION_COLLECTIONS } from "../src/config/collections.js";
@@ -546,6 +547,19 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
   ok("an Owner's accepted drop goes first, before any run that would swap", planMirrorWork({ now, hasMark: true, fullDue: false, lastFullAt: ago(30), lastCheckAt: ago(21), queuedRepulls: 1, acceptedDrops: 1 }).join(",") === "apply_accepted,incremental,check,repull"
     && planMirrorWork({ now, hasMark: false, fullDue: false, lastFullAt: null, lastCheckAt: ago(1), queuedRepulls: 0, acceptedDrops: 2 }).join(",") === "apply_accepted,full"
     && planMirrorWork({ now, hasMark: true, fullDue: false, lastFullAt: ago(30), lastCheckAt: ago(3), queuedRepulls: 0, acceptedDrops: 0 }).join(",") === "incremental");
+
+  H("A FULL RUN STARTS ONLY FROM 00:30 TO 05:00 INDIA TIME (owner, 25-Nov-2026)");
+  {
+    const day = new Date("2026-11-06T05:00:00Z"); /* 10:30 India time, the working day */
+    const dago = (h: number) => new Date(day.getTime() - h * 3_600_000);
+    ok("in the day a weekly-due full waits; the small incremental runs instead", planMirrorWork({ now: day, hasMark: true, fullDue: false, lastFullAt: dago(8 * 24), lastCheckAt: dago(1), queuedRepulls: 0 }).join(",") === "incremental");
+    ok("in the day a full run flagged due waits; nothing reads the whole year", planMirrorWork({ now: day, hasMark: true, fullDue: true, lastFullAt: dago(2), lastCheckAt: dago(1), queuedRepulls: 0 }).join(",") === "");
+    ok("in the day with no mark nothing reads the whole year; the check and re-pulls still run", planMirrorWork({ now: day, hasMark: false, fullDue: false, lastFullAt: null, lastCheckAt: null, queuedRepulls: 1 }).join(",") === "check,repull");
+    ok("in the day an Owner's accepted drop still applies (it reads nothing from Tally)", planMirrorWork({ now: day, hasMark: true, fullDue: true, lastFullAt: dago(2), lastCheckAt: dago(1), queuedRepulls: 0, acceptedDrops: 1 }).join(",") === "apply_accepted");
+    const at = (hhmmIst: string) => { const [h, m] = hhmmIst.split(":").map(Number); const mins = (h * 60 + m - 330 + 1440) % 1440; return new Date(Date.UTC(2026, 10, 6, Math.floor(mins / 60), mins % 60)); };
+    ok("the slot opens at 00:30 and closes before 05:00 India time", !inFullRunWindow(at("00:29")) && inFullRunWindow(at("00:30")) && inFullRunWindow(at("04:59")) && !inFullRunWindow(at("05:00")) && !inFullRunWindow(at("10:16")) && !inFullRunWindow(at("23:59")));
+    ok("at 00:30 India time a due full runs", planMirrorWork({ now: at("00:30"), hasMark: true, fullDue: true, lastFullAt: dago(2), lastCheckAt: dago(1), queuedRepulls: 0 }).join(",") === "full");
+  }
 
   H("AN OWNER'S ACCEPTED DROP (task 1-5, 0121)");
   {

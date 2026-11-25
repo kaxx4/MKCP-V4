@@ -27,6 +27,9 @@ import type { VoucherPayload } from "../src/types.js";
 import { memErpQueue } from "./rigs/lib/memErpQueue.js";
 import { rigPayload, indiaToday } from "./rigs/lib/simTally.js";
 
+/* 25-Nov-2026 (owner): a full run only starts from 00:30 to 05:00 India time, so the mirror loops here run on a night clock (01:30 India time). */
+const NIGHT = Date.parse("2026-11-06T20:00:00Z");
+
 let pass = 0, fail = 0;
 const ok = (label: string, cond: boolean, detail = "") => {
   if (cond) { pass++; console.log(`  ✓ ${label}`); } else { fail++; console.log(`  ✗ ${label}${detail ? `: ${detail}` : ""}`); }
@@ -173,7 +176,7 @@ function setEnv(e: Record<string, string | undefined>): () => void {
 
   console.log("\n  D-M.258 item 3: the pin is asked again while a full run reads, and a mismatch stops it");
   {
-    const clock = { t: 1_000_000 };
+    const clock = { t: NIGHT };
     let pinCalls = 0; let lost = false;
     const reads: string[] = [];
     const tally: MirrorTally = {

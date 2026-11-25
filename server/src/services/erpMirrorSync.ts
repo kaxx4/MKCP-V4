@@ -80,6 +80,7 @@
  *   database checks the acceptance again (6 hours, no other swap since, the
  *   staged read unchanged). applyAcceptedDrops runs first in planMirrorWork.
  */
+import { inFullRunWindow } from "./nightWindow.js";
 import { createHmac } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CollectionDef } from "../types.js";
@@ -1105,7 +1106,8 @@ export type MirrorWork = "apply_accepted" | "full" | "incremental" | "check" | "
 /**
  * Pure: what the mirror runs next, in order (A7 weekly full, A11 nightly
  * check). A full run when there is no mark, when one is due, or when the last
- * full one swapped 7 or more days ago; otherwise an incremental. Then the
+ * full one swapped 7 or more days ago, but a full run only starts from 00:30 to
+ * 05:00 India time (owner, 25-Nov-2026); otherwise an incremental. Then the
  * nightly check when none ran for 20 hours, then any queued re-pulls. Nothing
  * in index.ts runs it until go-live. When an Owner has accepted a refused big
  * drop (acceptedDrops > 0) that comes first, before any run that would swap.
@@ -1115,7 +1117,12 @@ export function planMirrorWork(s: { now: Date; hasMark: boolean; fullDue: boolea
   const out: MirrorWork[] = [];
   /* An Owner's accepted drop goes first: it expires after 6 hours and is void if any other swap runs before it. */
   if ((s.acceptedDrops ?? 0) > 0) out.push("apply_accepted");
-  out.push(!s.hasMark || s.fullDue || hours(s.lastFullAt) >= 7 * 24 ? "full" : "incremental");
+  /* Owner, 25-Nov-2026: a full run starts only in the 00:30 to 05:00 India-time slot (nightWindow.ts).
+     In the day a weekly-due full waits and the small incremental keeps the mirror current; with no
+     mark or a full run flagged due (the incremental would be refused) nothing runs until the slot. */
+  const wantFull = !s.hasMark || s.fullDue || hours(s.lastFullAt) >= 7 * 24;
+  if (wantFull && inFullRunWindow(s.now)) out.push("full");
+  else if (s.hasMark && !s.fullDue) out.push("incremental");
   if (hours(s.lastCheckAt) >= 20) out.push("check");
   if (s.queuedRepulls > 0) out.push("repull");
   return out;

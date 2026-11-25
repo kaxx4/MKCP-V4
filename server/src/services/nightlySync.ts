@@ -5,6 +5,7 @@ import { postTallySync } from "./localSyncClient.js";
 import { resolveSyncCompany } from "./scheduledSyncs.js";
 import { supabaseClient } from "./supabaseClient.js";
 import { refuseSharedWrite } from "./tallyRole.js";
+import { inFullRunWindow } from "./nightWindow.js";
 
 // Same WebSocket polyfill used by SupabaseSync / refreshListener.
 if (typeof globalThis !== "undefined" && !globalThis.WebSocket) {
@@ -32,7 +33,9 @@ function currentFyRange(): { from: string; to: string } {
  * without waiting for a real midnight.
  */
 export function shouldRunNow(now: Date, lastRunDate: string, hour: number): boolean {
-  return dateKey(now) !== lastRunDate && now.getHours() >= hour;
+  /* Owner, 25-Nov-2026: the full-year sync starts only in the 00:30 to 05:00 India-time slot.
+     Before this a failed midnight run retried every minute and could fire in the working day. */
+  return dateKey(now) !== lastRunDate && now.getHours() >= hour && inFullRunWindow(now);
 }
 
 /**
@@ -192,7 +195,7 @@ export function startNightlySync(localPort: number, fallbackCompany: string): vo
 
   setInterval(tick, 60_000);
   console.log(
-    `🌙 [NIGHTLY] Scheduled automatic full-FY sync at ${pad2(hour)}:00 local (checking every 60s)`
+    `🌙 [NIGHTLY] Scheduled automatic full-FY sync from ${pad2(hour)}:00 local, only inside 00:30-05:00 India time (checking every 60s)`
   );
 
   if ((process.env.NIGHTLY_SYNC_RUN_NOW ?? "").toLowerCase() === "true") {
