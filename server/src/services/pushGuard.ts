@@ -682,16 +682,26 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
         if (!c.mailingName.trim()) missing.push("name");
         if (!c.state.trim()) missing.push("state");
         if (!c.country.trim()) missing.push("country");
-        if (!walkIn && !c.address.length) missing.push("address");
-        if (!walkIn && !c.pincode.trim()) missing.push("pincode");
         if (id.gstin && c.gstin !== id.gstin) missing.push(`GSTIN (bill-to ${id.gstin}, ship-to "${c.gstin}")`);
         if (missing.length) {
           errors.push(walkIn
             ? `The walk-in's ship-to has no ${missing.join(", ")}.`
             : `Ledger "${party.name}" gives the ship-to no ${missing.join(", ")} in Tally, so the invoice's ship-to would be incomplete and the e-way bill / e-invoice for it refused. Add it to the ledger in Tally (the ledger is the only source — a typed copy is ignored).`);
         }
+        // Owner, 26-Nov-2026: "i dont want pushes to tally to get blocked". A
+        // ledger with no address or pincode (or a malformed pincode) no longer
+        // stops the push: Tally takes the invoice, GSTR-1 does not classify on
+        // either field, and only the e-way bill / e-invoice need them, which are
+        // made later. So these are warnings now; name, state, country and GSTIN
+        // still refuse because they decide the return. Was refused since 23-Sep.
+        const soft: string[] = [];
+        if (!walkIn && !c.address.length) soft.push("address");
+        if (!walkIn && !c.pincode.trim()) soft.push("pincode");
+        if (soft.length) {
+          warnings.push(`Ledger "${party.name}" has no ${soft.join(" or ")} in Tally, so the ship-to goes without it. Add it to the ledger in Tally before making the e-way bill or e-invoice.`);
+        }
         if (!walkIn && c.pincode.trim() && !PIN_RE.test(c.pincode.trim())) {
-          errors.push(`The pincode on ledger "${party.name}" ("${c.pincode}") is not a 6-digit Indian pincode — the e-way bill and e-invoice will refuse it.`);
+          warnings.push(`The pincode on ledger "${party.name}" ("${c.pincode}") is not a 6-digit Indian pincode. Correct it in Tally before making the e-way bill or e-invoice.`);
         }
       }
       if (walkIn) {

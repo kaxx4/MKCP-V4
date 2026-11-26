@@ -34,7 +34,7 @@ export const CATALOGUE: Guardrail[] = [
   { id: "TG-P06", area: "push", severity: "critical", title: "Invoice-shaped vouchers carry the party GST identity block (reg type, GSTIN, state, place of supply, country, mailing name)" },
   { id: "TG-P07", area: "push", severity: "medium", title: "Money vouchers (Payment/Receipt/Contra/Journal) carry NO GST identity block" },
   { id: "TG-P08", area: "push", severity: "critical", title: "GSTREGISTRATIONTYPE uses Tally's own word — \"Unregistered/Consumer\", never bare \"Unregistered\"" },
-  { id: "TG-P09", area: "push", severity: "critical", title: "Ship-to = bill-to: consignee name, state, country, GSTIN, pincode and address all present and equal to the party's" },
+  { id: "TG-P09", area: "push", severity: "critical", title: "Ship-to = bill-to: consignee name, state, country and GSTIN present and equal to the party's; a missing address or pincode only warns (owner, 26-Nov-2026)" },
   { id: "TG-P10", area: "push", severity: "critical", title: "Place of supply = party's state outward, OUR state inward; STATENAME = counterparty's state" },
   { id: "TG-P11", area: "push", severity: "critical", title: "Tax head follows the state: interstate IGST + CENTRAL accounts, local CGST+SGST + W.B. accounts" },
   { id: "TG-P12", area: "push", severity: "critical", title: "Cash walk-in is local; a payload-declared place of supply is validated and refused on inward vouchers" },

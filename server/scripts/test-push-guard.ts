@@ -74,10 +74,10 @@ function offlineCases() {
   expectAccepted("registered local sale — ledger carries address + pincode", sale({ number: "PG/1", party: PARTY_LOCAL, lines: clip }), m);
   expectAccepted("inter-state sale (IGST)", sale({ number: "PG/2", party: PARTY_INTER, inter: true, lines: clip }), m);
   expectAccepted("unregistered party ledger", sale({ number: "PG/3", party: PARTY_UNREG, lines: clip }), m);
-  expectRejected("party sale whose ledger has NO pincode (e-way bill would be refused)",
-    sale({ number: "PG/4", party: PARTY_LOCAL, lines: clip }), withLedger(PARTY_LOCAL, { pincode: "" }), "pincode");
-  expectRejected("party sale whose ledger has NO address",
-    sale({ number: "PG/5", party: PARTY_LOCAL, lines: clip }), withLedger(PARTY_LOCAL, { address: [] }), "address");
+  expectAccepted("party sale whose ledger has NO pincode goes through with a warning (owner, 26-Nov-2026: never block a push on it)",
+    sale({ number: "PG/4", party: PARTY_LOCAL, lines: clip }), withLedger(PARTY_LOCAL, { pincode: "" }));
+  expectAccepted("party sale whose ledger has NO address goes through with a warning (owner, 26-Nov-2026)",
+    sale({ number: "PG/5", party: PARTY_LOCAL, lines: clip }), withLedger(PARTY_LOCAL, { address: [] }));
   expectAccepted("cash walk-in with typed name + address",
     sale({ number: "PG/6", party: "Cash", placeOfSupply: "West Bengal", buyerName: "PARTY 905 CYCLE", buyerAddress: ["JHALDAH", "PURULIA 723202"], lines: clip }), m);
   // Owner, 24-Sep-2026: a buyer address is now ALWAYS required on a cash
@@ -106,10 +106,10 @@ function offlineCases() {
     sale({ number: "PG/8j", party: MIXED_ORDER_PARTY, placeOfSupply: "West Bengal", buyerName: "WALK-IN BUYER", buyerAddress: ["BAGNAN"], lines: [{ item: "CARRIER CLIP", amount: 60000, rate: 5 }] }), m, "over the ₹50000 limit for a cash sale");
   expectRejected("a party-ledger sale carrying a typed buyer name/address (second consignee)",
     sale({ number: "PG/8e", party: PARTY_LOCAL, buyerName: "SOMEONE ELSE", buyerAddress: ["ELSEWHERE"], lines: clip }), m, "second consignee");
-  expectRejected("a Sales Order Note whose ledger has no pincode (refused like a Sales invoice)",
-    { ...sale({ number: "PG/8f", party: PARTY_LOCAL, lines: clip }), voucherType: "Sales Order Note", isInvoice: false }, withLedger(PARTY_LOCAL, { pincode: "" }), "pincode");
-  expectRejected("a ledger pincode that is not 6 digits",
-    sale({ number: "PG/8g", party: PARTY_LOCAL, lines: clip }), withLedger(PARTY_LOCAL, { pincode: "74350" }), "6-digit");
+  expectAccepted("a Sales Order Note whose ledger has no pincode goes through like a Sales invoice (owner, 26-Nov-2026)",
+    { ...sale({ number: "PG/8f", party: PARTY_LOCAL, lines: clip }), voucherType: "Sales Order Note", isInvoice: false }, withLedger(PARTY_LOCAL, { pincode: "" }));
+  expectAccepted("a ledger pincode that is not 6 digits warns, never refuses (owner, 26-Nov-2026)",
+    sale({ number: "PG/8g", party: PARTY_LOCAL, lines: clip }), withLedger(PARTY_LOCAL, { pincode: "74350" }));
 
   console.log("\nGSTIN, state, HSN, tax ledgers (offline, mirrors the web's gstIdentity):");
   const regWith = (gstin: string, state = "West Bengal") => withLedger(PARTY_LOCAL, { gstin, state, registrations: [{ applicableFrom: "20170701", gstin, registrationType: "Regular", placeOfSupply: state, state }] });
