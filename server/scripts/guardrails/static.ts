@@ -110,7 +110,8 @@ export async function runStatic(opts: { replay: boolean }): Promise<void> {
   refused("TG-P11", "an Odisha party billed CGST+SGST on the W.B. account", interLocal, /interstate/i);
   refused("TG-P12", "a cash sale with no place of supply", sale({ number: "GUARD/X4", party: "Cash", lines: [{ item: "CARRIER CLIP", amount: 100, rate: 5 }] }));
   refused("TG-P12", "a cash sale declaring a misspelt state (\"West Bangal\")", sale({ number: "GUARD/X5", party: "Cash", placeOfSupply: "West Bangal", lines: [{ item: "CARRIER CLIP", amount: 100, rate: 5 }] }), /spelling|not a state/i);
-  refused("TG-P12", "a placeOfSupply on a purchase", { ...purchase("GUARD/X6", [{ item: "CARRIER CLIP", amount: 100, rate: 5 }]), placeOfSupply: "Punjab" }, /not accepted/i);
+  /* Owner, 27-Nov-2026: a typed place of supply on a purchase is ignored with a warning (dummy Tally, verify-push-rules-dummy.ts case G). */
+  accepted("TG-P12", "a placeOfSupply on a purchase (warns, ignored)", { ...purchase("GUARD/X6", [{ item: "CARRIER CLIP", amount: 100, rate: 5 }]), placeOfSupply: "Punjab" });
   /* Owner, 26-Nov-2026: a typed place of supply that contradicts the ledger warns and is ignored; the ledger's state is what reaches Tally. */
   accepted("TG-P10", "a placeOfSupply contradicting the party ledger's state (warns, ledger wins)", { ...base(), placeOfSupply: "Odisha" });
   check("TG-P10", !/<PLACEOFSUPPLY>Odisha</i.test(build({ ...base(), placeOfSupply: "Odisha" })), "a typed placeOfSupply that contradicts the ledger reached the XML");
@@ -144,7 +145,8 @@ export async function runStatic(opts: { replay: boolean }): Promise<void> {
   const r = drRound.ledgerEntries.find((e) => e.ledgerName === "ROUNDED OFF");
   // The old export-builder bug: side flipped by the sign (isDeemedPositive: roundOff < 0), same arithmetic.
   if (r) r.isDeemedPositive = true;
-  if (r) refused("TG-P17", "a sales ROUNDED OFF moved to the debit side", drRound);
+  /* Owner, 27-Nov-2026: the side only warns (dummy Tally, cases B/C): same money. The builders still write the house form (checked in lib.ts). */
+  if (r) accepted("TG-P17", "a sales ROUNDED OFF moved to the debit side (warns)", drRound);
 
   // ── Adjustments / discount ───────────────────────────────────────────────
   const unapp = sale({ number: "GUARD/X13", party: PARTY_LOCAL, discount: 50, lines: [{ item: "CARRIER CLIP", amount: 1000, rate: 5 }] });

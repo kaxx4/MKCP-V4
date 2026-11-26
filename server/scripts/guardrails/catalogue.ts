@@ -37,14 +37,14 @@ export const CATALOGUE: Guardrail[] = [
   { id: "TG-P09", area: "push", severity: "critical", title: "Ship-to = bill-to: consignee name, state, country and GSTIN present and equal to the party's; a missing address or pincode only warns (owner, 26-Nov-2026)" },
   { id: "TG-P10", area: "push", severity: "critical", title: "Place of supply = party's state outward, OUR state inward; STATENAME = counterparty's state" },
   { id: "TG-P11", area: "push", severity: "critical", title: "Tax head follows the state: interstate IGST + CENTRAL accounts, local CGST+SGST + W.B. accounts" },
-  { id: "TG-P12", area: "push", severity: "critical", title: "Cash walk-in is local; a payload-declared place of supply is validated and refused on inward vouchers" },
+  { id: "TG-P12", area: "push", severity: "critical", title: "Cash walk-in is local; a payload-declared place of supply is validated; on an inward voucher it is ignored with a warning (27-Nov-2026)" },
   // ── Push: line GST ───────────────────────────────────────────────────────
   { id: "TG-P13", area: "push", severity: "critical", title: "Every outward stock line names its GST/HSN source master; a line whose rate cannot be resolved is refused" },
   { id: "TG-P14", area: "push", severity: "critical", title: "Rates resolve item → group chain, IGST (combined), newest revision NOT AFTER the voucher date" },
   { id: "TG-P15", area: "push", severity: "critical", title: "Tax ledgers equal Σ rate × post-discount taxable value; CGST = SGST" },
   { id: "TG-P16", area: "push", severity: "high", title: "Inward (purchase) stock lines name a GST source the way native purchases do" },
   // ── Push: invoice arithmetic ─────────────────────────────────────────────
-  { id: "TG-P17", area: "push", severity: "high", title: "ROUNDED OFF: side fixed by direction (sales credit), |amount| ≤ ₹0.50, party total whole rupees" },
+  { id: "TG-P17", area: "push", severity: "high", title: "ROUNDED OFF: |amount| ≤ ₹0.50 (refused), party total whole rupees; the side by direction (sales credit) is built that way and only warned if a caller flips it (27-Nov-2026)" },
   { id: "TG-P18", area: "push", severity: "critical", title: "Every value-changing adjustment line appropriates to GST (APPROPRIATEFOR / VATEXPAMOUNT)" },
   { id: "TG-P19", area: "push", severity: "medium", title: "Discount written as the native negative credit and balanced as sent" },
   // ── Push: bills ──────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ import { ErpJobAgent, Journal, type ErpJob } from "../src/services/erpJobAgent.j
 import { isMasterKind, planMasterJob, settleMasterJob, masterTestRefusal, type MasterOutcome, type MasterPlan } from "../src/services/masterJobs.js";
 import { buildStockItemXml, buildLedgerXml, buildCostCentreXml, isValidUnitName } from "../src/services/masterPusher.js";
 import { hsnRevisions, type TallyMasters, type MasterItem, type MasterLedger } from "../src/services/tallyMasters.js";
-import { fixtureMasters, G_PARTS, SUPPLIER } from "./guardrails/fixtures.js";
+import { fixtureMasters, G_PARTS, G_EV, SUPPLIER } from "./guardrails/fixtures.js";
 import { memErpQueue } from "./rigs/lib/memErpQueue.js";
 import { sandboxForRig } from "./rigs/lib/simTally.js";
 import { isGstinChecksumValid } from "../src/services/gstIdentity.js";
@@ -81,7 +81,8 @@ const refusedWith = (kind: string, payload: unknown, re: RegExp, m = masters()) 
   ok("REFUSED: a new unit with a digit (Tally answers BAD UNIT NAME)", refusedWith("new_item", withMaster(ITEM_PAYLOAD, { baseUnit: "ZZU1" }, { name: "ZZU1", decimals: 0 }), /letters only/));
   ok("REFUSED: no GST rate", refusedWith("new_item", withMaster(ITEM_PAYLOAD, { gstRate: null }), /no GST rate/));
   ok("REFUSED: a GST rate that is not a number", refusedWith("new_item", withMaster(ITEM_PAYLOAD, { gstRate: "18" }), /no GST rate/));
-  ok("REFUSED: no HSN", refusedWith("new_item", withMaster(ITEM_PAYLOAD, { hsn: "" }), /no HSN code/));
+  ok("REFUSED: no HSN of its own and none on its stock group chain", refusedWith("new_item", withMaster(ITEM_PAYLOAD, { hsn: "", parent: G_EV }), /no HSN code/));
+  ok("ALLOWED (27-Nov-2026, proved on the dummy Tally): no HSN of its own, the stock group declares one", (() => { const r = planMasterJob("new_item", withMaster(ITEM_PAYLOAD, { hsn: "" }), masters()); return r.ok && r.plan.kind === "new_item" && r.plan.item.hsn === undefined && r.plan.item.parent === G_PARTS; })());
   ok("REFUSED: an HSN that is not 4 to 8 digits", refusedWith("new_item", withMaster(ITEM_PAYLOAD, { hsn: "87A" }), /not 4 to 8 digits/));
   ok("REFUSED: a name Tally already holds, even in other letters and spacing", refusedWith("new_item", withMaster(ITEM_PAYLOAD, { name: "carrier  clip" }), /already in Tally/));
   ok("REFUSED: a stock group Tally does not have", refusedWith("new_item", withMaster(ITEM_PAYLOAD, { parent: "NO SUCH GROUP" }), /stock group "NO SUCH GROUP" is not in Tally/));
@@ -190,7 +191,7 @@ const refusedWith = (kind: string, payload: unknown, re: RegExp, m = masters()) 
   }
   {
     const m = memErpQueue({ secondMs: 10 }); const calls: Calls = { created: [], read: 0, ids: 0 };
-    const id = addJob(m, "new_item", withMaster(ITEM_PAYLOAD, { hsn: "" }));
+    const id = addJob(m, "new_item", withMaster(ITEM_PAYLOAD, { hsn: "", parent: G_EV }));
     const rep = await agent(m, calls).runOnce(1);
     const row = m.rows.get(id)!;
     ok("a refused item: failed with the plain reason, nothing created", row.state === "failed" && /no HSN code/.test(String(row.error)) && calls.created.length === 0, `${row.state} ${row.error}`);

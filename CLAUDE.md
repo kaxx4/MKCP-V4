@@ -54,7 +54,7 @@ Silent failures (catalogue: `server/scripts/edge-case-catalogue.ts`):
 - A Tally-typed voucher cannot be altered or deleted from here (MASTERID, VOUCHERKEY, GUID, VCHKEY all fail; `<GUID>` silently creates). Read and copy only.
 - Port 9999 (`tallygatewayserver.exe`) is a service that answers whether TallyPrime is open or not; the preflight in `tally-verify-all.ts` tells it from 9000.
 
-**G7:** a field you did not ask for looks identical to a field Tally lacks. Before concluding Tally does not hold something, check the fetch list (`server/scripts/probe-gst-appropriation.ts` is the template). Computed fields (PARTYGSTIN, STATENAME, PLACEOFSUPPLY) need the entry lists in the same request. Never trim a fetch list.
+**G7:** a field you did not ask for looks identical to a field Tally lacks. Before concluding Tally does not hold something, check the fetch list (`server/scripts/probe-gst-appropriation.ts` is the template). Computed fields (PARTYGSTIN, STATENAME, PLACEOFSUPPLY) need the entry lists in the same request. Never trim a fetch list. The e-way bill block and the e-invoice header (`ewb_details`, `einv_details`) were mapped this way on the dummy on 27-Nov-2026: `probe-ewb-einv-census.ts` lists every tag with how often it is filled, `verify-ewb-einv-pull.ts` proves the sync's own request fills both blocks.
 
 GST: place of supply is the destination of the goods (inward = our state). Every value-changing adjustment line carries `<APPROPRIATEFOR>GST</APPROPRIATEFOR>` (refused by `pushGuard` otherwise, catalogue TG-P18). Read `ALLLEDGERENTRIES.LIST` alone; summing more double-counts. Tally's own GSTR lists are not readable over XML; `gstrExceptions.ts` audits the preconditions instead (a weaker guarantee, P7).
 
@@ -62,7 +62,7 @@ GST: place of supply is the destination of the goods (inward = our state). Every
 
 `safePush` reads back and diffs what we sent. It is blind to fields we never sent, so after any push-path change run `server/scripts/fidelity-vs-native.ts` (our push vs operator-typed vouchers, field by field). `safePush` returning `ok:false` does **not** mean nothing was created: clean up by sweeping the books (`server/scripts/sweep-test-vouchers.ts`), never by a success list.
 
-`pushGuard.guardVoucher()` (`server/src/services/pushGuard.ts`) holds 62 refusal sites (`errors.push`) and 11 warnings, in code order; the guardrail catalogue `server/scripts/guardrails/catalogue.ts` names 34 rules, TG-P01 to TG-P34. Do not route around it.
+`pushGuard.guardVoucher()` (`server/src/services/pushGuard.ts`) holds 66 refusal sites (`errors.push`) and 21 warnings (`warnings.push`), counted with `grep -c` on 27-Nov-2026 (the 5-Nov figure of 62 and 11 was stale: owner rulings of 26 and 27-Nov moved rules from refusal to warning). The 27-Nov review tested each doubtful rule on the dummy Tally (`server/scripts/verify-push-rules-dummy.ts`): a rule became a warning only where Tally kept exactly what was sent and the money, tax and GST identity came out right (place of supply typed on a purchase, ROUNDED OFF on the other side); a round-off over 50 paise, a line amount that is not quantity times rate, a zero-value stock line (Tally silently drops it) and a purchase dated before the supplier's registration stay refusals. Every refusal text says what to do next in plain English. The guardrail catalogue `server/scripts/guardrails/catalogue.ts` names 34 rules, TG-P01 to TG-P34. Do not route around it.
 
 ## Machine role
 

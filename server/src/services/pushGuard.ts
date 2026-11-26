@@ -256,7 +256,7 @@ export function backdatedPurchaseRefusals(
   const errors: string[] = [];
   const filed = filedThrough.trim();
   if (filed && p.date <= filed && !p.allowFiledPeriodEdit) {
-    errors.push(`Create refused: ${p.date} falls in a GST period already filed (through ${filed}). Book the bill on a date after that — its own date stays on REFERENCEDATE.`);
+    errors.push(`Create refused: ${p.date} falls in a GST period already filed (through ${filed}). Book the bill on a date after that; the supplier's own bill date stays on the bill as its reference date.`);
   }
   const party = findLedger(m as TallyMasters, p.partyLedgerName);
   if (!isMiss(party) && party.registrations.length) {
@@ -284,7 +284,7 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
   const filed = filedBoundaryFor(p.voucherType);
   if (CHANGES_EXISTING.has(action0) && filed && p.date <= filed) {
     if (!p.allowFiledPeriodEdit) {
-      errors.push(`${action0} refused: ${p.date} falls in a GST period already filed (through ${filed}). Changing it would alter a submitted return. Set allowFiledPeriodEdit if the return will be revised.`);
+      errors.push(`${action0} refused: ${p.date} falls in a GST period already filed (through ${filed}). Changing it would alter a return that is already submitted. Leave the bill as it is, or, if the return will be revised, ask the owner to allow this edit (the bill's allowFiledPeriodEdit switch).`);
     } else {
       warnings.push(`${action0} on ${p.date} changes a voucher in a FILED period (through ${filed}) — the return will need revising.`);
     }
@@ -302,7 +302,7 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
   if (action0 === "Create" && filed && p.date <= filed
       && (p.isInvoice || (p.inventoryEntries ?? []).some(e => !!e.salesLedgerName))) {
     if (!p.allowFiledPeriodEdit) {
-      if (!isPurchase) errors.push(`Create refused: ${p.voucherType} dated ${p.date} falls in a GST period already filed (through ${filed}) — a new invoice there is a supply the filed return does not contain. Date it in the open period, or set allowFiledPeriodEdit if the return will be amended.`);
+      if (!isPurchase) errors.push(`Create refused: ${p.voucherType} dated ${p.date} falls in a GST period already filed (through ${filed}) — a new invoice there is a supply the filed return does not contain. Date it in the open period, or, if the return will be amended, ask the owner to allow it (the bill's allowFiledPeriodEdit switch).`);
     } else {
       warnings.push(`New ${p.voucherType} dated ${p.date} lands in a FILED period (through ${filed}) — the return will need amending.`);
     }
@@ -316,13 +316,13 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
   if (!m.voucherTypes.has(p.voucherType)) {
     const near = [...m.voucherTypes].find(v => v.toUpperCase() === p.voucherType.toUpperCase());
     if (near) warnings.push(`Voucher type "${p.voucherType}" — this company spells it "${near}". Tally will match it anyway.`);
-    else errors.push(`Voucher type "${p.voucherType}" is not configured in this company. Available: ${[...m.voucherTypes].slice(0, 8).join(", ")}…`);
+    else errors.push(`Voucher type "${p.voucherType}" is not configured in this company. Pick one of: ${[...m.voucherTypes].slice(0, 8).join(", ")}…, or add the voucher type in Tally first.`);
   }
 
-  if (!DATE_RE.test(p.date)) errors.push(`Date must be YYYY-MM-DD (got "${p.date}").`);
+  if (!DATE_RE.test(p.date)) errors.push(`Date must be YYYY-MM-DD (got "${p.date}"). The bill date is not a real date: pick it again and send the bill again.`);
 
   if (NEVER_AUTOMATED.has(p.voucherType.trim().toUpperCase())) {
-    errors.push(`${p.voucherType} is never automated — the owner keys credit and debit notes into Tally by hand (10-Sep-2026). (TG-P29)`);
+    errors.push(`${p.voucherType} is never automated — the owner keys credit and debit notes into Tally by hand (10-Sep-2026). Nothing was sent; type this note into Tally yourself. (TG-P29)`);
   }
 
   // ── Identity: without a REMOTEID a voucher can only ever be created ───────
@@ -331,19 +331,19 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
   // duplicating real money. Refuse rather than let that happen.
   const action = p.action ?? "Create";
   if (CHANGES_EXISTING.has(action) && !p.remoteId) {
-    errors.push(`${action} requires a remoteId — Tally addresses existing vouchers by REMOTEID. Without one it would silently create a duplicate instead of changing anything.`);
+    errors.push(`${action} requires a remoteId — Tally addresses existing vouchers by REMOTEID. Without one it would silently create a duplicate instead of changing anything. Nothing was sent. The bill has lost its tracking id: open the original bill again and send from there. If this repeats, tell the developer.`);
   }
   /* G5: every write carries identity from creation. A voucher created without
      a REMOTEID is permanently unreachable — 13 are stuck in the books that way
      and can only be removed by hand. This used to be a warning. (TG-P01) */
   if (action === "Create" && !p.remoteId?.trim()) {
-    errors.push("Create refused: no remoteId. A voucher created without one can never be altered, cancelled or deleted from here, and a re-push would duplicate it (G5).");
+    errors.push("Create refused: no remoteId. A voucher created without one can never be altered, cancelled or deleted from here, and a re-push would duplicate it (G5). Nothing was sent. This is a fault in the app, not in your bill: send it again, and if it stops again tell the developer.");
   }
   /* 1-4 (file 18 row 1-4): an id with nothing unique after the type, such as
      `MKCP|Journal|2026-27`, is shared by every unnumbered voucher of that type,
      so Tally would ALTER the earlier one instead of creating this one. */
   if (action === "Create" && p.remoteId?.trim() && !remoteIdHasUniquePart(p.remoteId)) {
-    errors.push(`Create refused: the remoteId "${p.remoteId}" has nothing unique after the voucher type, so it would overwrite an earlier ${p.voucherType} in Tally. Give it a number, or key it on its ERP job.`);
+    errors.push(`Create refused: the remoteId "${p.remoteId}" has nothing unique after the voucher type, so it would overwrite an earlier ${p.voucherType} in Tally. Give the bill its own number and send it again; if the bill already has one, tell the developer.`);
   }
   /* 1-4: an ERP-series number (ERP-<n>/<yy-yy>, D-1-4.2) is only ever issued by
      the counter, which builds the REMOTEID from it. A Create carrying one under
@@ -351,11 +351,11 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
      counter never issued. */
   if (action === "Create" && p.voucherNumber?.trim() && p.remoteId?.trim() && isErpSeriesNumber(p.voucherNumber, p.voucherType, p.date)
       && !p.remoteId.split("|").includes(p.voucherNumber.trim())) {
-    errors.push(`Create refused: ${p.voucherNumber} is an ERP counter number but the remoteId "${p.remoteId}" does not carry it.`);
+    errors.push(`Create refused: ${p.voucherNumber} is a number only the app's own counter may hand out, but the bill's tracking id "${p.remoteId}" does not carry it, so it was not made by the counter. Use the number the app gives you when you create the bill, or tell the developer.`);
   }
   // Tally does not auto-number an XML import. (TG-P03)
   if (action === "Create" && NUMBERED.has(p.voucherType.trim().toUpperCase()) && !p.voucherNumber?.trim()) {
-    errors.push(`Create refused: ${p.voucherType} has no voucherNumber. Tally does not number a voucher arriving over XML — it answers created=0 exceptions=1 with no reason.`);
+    errors.push(`Create refused: ${p.voucherType} has no voucherNumber. Tally does not number a voucher arriving over XML — it answers created=0 exceptions=1 with no reason. Give the bill its next bill number and send it again.`);
   }
   /*
    * A hand-typed OVERRIDE number gets a duplicate check the auto-assigned path
@@ -385,8 +385,8 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
   const party = findLedger(m, p.partyLedgerName);
   if (isMiss(party) && !stockOnly) {
     errors.push(party.suggestion
-      ? `Party ledger "${p.partyLedgerName}" does not exist — Tally spells it "${party.suggestion}".`
-      : `Party ledger "${p.partyLedgerName}" does not exist.`);
+      ? `Party ledger "${p.partyLedgerName}" does not exist — Tally spells it "${party.suggestion}". Use that exact name.`
+      : `Party ledger "${p.partyLedgerName}" does not exist. Check the spelling, or create the party in Tally first.`);
   }
 
   // ── Place of supply, when the ledger cannot carry one ─────────────────────
@@ -399,9 +399,11 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     // one says nothing about the supplier and cannot stand in for their state.
     // Accepting and ignoring it would let a caller believe they had supplied the
     // missing information.
-    errors.push(`placeOfSupply is not accepted on ${p.voucherType}: goods are coming TO us, so the place of supply is always ${HOME_STATE_NAME}. It cannot supply the supplier's state — set that on their ledger in Tally.`);
-  }
-  if (declared && partyState && declared.toUpperCase() !== partyState.trim().toUpperCase()) {
+    /* Owner, 27-Nov-2026: a warning, not a refusal. Proved on the dummy Tally (verify-push-rules-dummy.ts, case G): a Purchase from a West
+       Bengal supplier sent with a typed place of supply "Delhi" was kept exactly as built, with PLACEOFSUPPLY West Bengal. The typed value is
+       never read on an inward voucher (resolvePartyState ignores it, the builder sets our own state), so it changes nothing. */
+    warnings.push(`A place of supply ("${declared}") was typed on this ${p.voucherType} and was ignored: goods coming to us are always supplied in ${HOME_STATE_NAME}. The supplier's state comes from its ledger in Tally; if that is wrong, correct it on the ledger.`);
+  } else if (declared && partyState && declared.toUpperCase() !== partyState.trim().toUpperCase()) {
     // Tally's own master is the authority. A payload disagreeing with it is a
     // bug in the caller, not an override.
     // Owner, 26-Nov-2026: the ledger wins anyway (resolvePartyState), so the typed value changes nothing. Warn, never refuse.
@@ -424,20 +426,20 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     warnings.push(`Party "${party.name}" has no state on its ledger master — the tax head cannot be derived from it.`);
   }
 
-  if (!p.ledgerEntries?.length && !stockOnly) errors.push("Voucher has no ledger entries.");
+  if (!p.ledgerEntries?.length && !stockOnly) errors.push("Voucher has no ledger entries. The bill has no money lines (the party, the tax, the sales ledger), so there is nothing to book. Open the bill, add them and send it again.");
 
   for (const e of p.ledgerEntries ?? []) {
     const led = findLedger(m, e.ledgerName);
     if (isMiss(led)) {
       errors.push(led.suggestion
-        ? `Ledger "${e.ledgerName}" does not exist — Tally spells it "${led.suggestion}".`
-        : `Ledger "${e.ledgerName}" does not exist.`);
+        ? `Ledger "${e.ledgerName}" does not exist — Tally spells it "${led.suggestion}". Use that exact name.`
+        : `Ledger "${e.ledgerName}" does not exist. Check the spelling, or create the ledger in Tally first.`);
     }
-    if (!Number.isFinite(e.amount)) errors.push(`Ledger "${e.ledgerName}" has a non-numeric amount.`);
+    if (!Number.isFinite(e.amount)) errors.push(`Ledger "${e.ledgerName}" has an amount that is not a number. Type the amount again.`);
     else if (e.amount < 0) {
       // Direction comes only from isDeemedPositive. A negative magnitude flips this
       // entry's contribution and can make an unbalanced voucher net to zero.
-      errors.push(`Ledger "${e.ledgerName}" has a negative amount (${money(e.amount)}) — amount is a magnitude; direction comes from isDeemedPositive.`);
+      errors.push(`Ledger "${e.ledgerName}" has a negative amount (${money(e.amount)}) — an amount is always typed as a plain positive figure; whether it is a debit or a credit is set separately. Retype it without the minus sign (or tell the developer if you did not type it).`);
     }
 
     // Bill allocations must sum EXACTLY to their parent line — true in 1,732 of
@@ -445,10 +447,10 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     if (e.billAllocations?.length) {
       const sum = e.billAllocations.reduce((s, b) => s + b.amount, 0);
       if (Math.abs(sum - e.amount) > 0.02) {
-        errors.push(`Bill allocations on "${e.ledgerName}" total ${money(sum)} but the line is ${money(e.amount)} — they must match exactly.`);
+        errors.push(`Bill allocations on "${e.ledgerName}" total ${money(sum)} but the line is ${money(e.amount)} — they must match exactly. Change the bill split so it adds up to the line amount.`);
       }
       for (const b of e.billAllocations) {
-        if (!b.name?.trim()) errors.push(`A bill allocation on "${e.ledgerName}" has no reference name.`);
+        if (!b.name?.trim()) errors.push(`A bill allocation on "${e.ledgerName}" has no bill name. Give the bill a reference name and send it again.`);
         /* An Agst Ref naming a bill that is not open for THIS party is not an
            error to Tally: it silently rewrites it as a New Ref, reports success,
            and creates a fresh liability (TG-P20). Checked against Tally's own
@@ -459,7 +461,7 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
             warnings.push(`Agst Ref "${b.name}" on "${e.ledgerName}" could not be checked against open bills before the push — only the read-back will catch Tally rewriting it as a New Ref.`);
           } else if (!ctx.openBills.some(o => o.party === e.ledgerName && o.name === b.name)) {
             const elsewhere = ctx.openBills.find(o => o.name === b.name);
-            errors.push(`Agst Ref "${b.name}" is not an open bill of "${e.ledgerName}"${elsewhere ? ` (it is open for "${elsewhere.party}")` : ""}. Tally would silently turn it into a New Ref and book a fresh liability.`);
+            errors.push(`Agst Ref "${b.name}" is not an open bill of "${e.ledgerName}"${elsewhere ? ` (it is open for "${elsewhere.party}")` : ""}. Tally would silently turn it into a New Ref and book a fresh liability. Pick a bill that is still open for this party, or record the payment as "on account".`);
           }
         }
       }
@@ -471,25 +473,25 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     const item = findItem(m, ie.stockItemName);
     if (isMiss(item)) {
       errors.push(item.suggestion
-        ? `Stock item "${ie.stockItemName}" does not exist — Tally spells it "${item.suggestion}".`
-        : `Stock item "${ie.stockItemName}" does not exist.`);
+        ? `Stock item "${ie.stockItemName}" does not exist — Tally spells it "${item.suggestion}". Use that exact name.`
+        : `Stock item "${ie.stockItemName}" does not exist. Check the spelling, or create the item in Tally first.`);
     } else if (ie.unit !== item.baseUnit) {
       // Silent failure: a unit that isn't the item's own base unit makes Tally
       // void the quantity and rate while still creating the voucher.
-      errors.push(`Unit "${ie.unit}" on "${ie.stockItemName}" is not that item's base unit ("${item.baseUnit}") — Tally would void the quantity and rate without erroring.`);
+      errors.push(`Unit "${ie.unit}" on "${ie.stockItemName}" is not that item's base unit ("${item.baseUnit}") — Tally would void the quantity and rate without erroring. Sell it in "${item.baseUnit}", or in whole packs of that unit.`);
     }
     if (ie.salesLedgerName) {
       const sl = findLedger(m, ie.salesLedgerName);
       if (isMiss(sl)) {
         errors.push(sl.suggestion
-          ? `Accounting ledger "${ie.salesLedgerName}" does not exist — Tally spells it "${sl.suggestion}". It would be dropped silently.`
-          : `Accounting ledger "${ie.salesLedgerName}" does not exist — it would be dropped silently.`);
+          ? `Accounting ledger "${ie.salesLedgerName}" does not exist — Tally spells it "${sl.suggestion}". It would be dropped silently. Use that exact name.`
+          : `Accounting ledger "${ie.salesLedgerName}" does not exist — it would be dropped silently. Pick the sales or purchase ledger that exists in Tally.`);
       }
     }
     if (ie.godownName && !m.godowns.has(ie.godownName)) {
-      errors.push(`Godown "${ie.godownName}" does not exist.`);
+      errors.push(`Godown "${ie.godownName}" does not exist. Pick a godown that exists in Tally.`);
     }
-    if (!Number.isFinite(ie.quantity) || ie.quantity <= 0) errors.push(`Quantity for "${ie.stockItemName}" must be positive.`);
+    if (!Number.isFinite(ie.quantity) || ie.quantity <= 0) errors.push(`Quantity for "${ie.stockItemName}" must be positive. Enter how many pieces are being ${isInwardSupply(p.voucherType) ? "bought" : "sold"}.`);
     // Tally rounds a fractional quantity to whatever decimal precision the unit
     // is configured for, WITHOUT reporting it — 1.5 PC was stored as 2 PC in
     // testing. The voucher still balances on value, so nothing looks wrong; only
@@ -516,14 +518,14 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
       const expected = ie.quantity * ie.rate;
       const tol = 0.01 + 0.005 * ie.quantity;
       if (Math.abs(Math.abs(ie.amount) - expected) > tol) {
-        errors.push(`Line "${ie.stockItemName}": amount ${money(Math.abs(ie.amount))} does not equal quantity ${ie.quantity} × rate ${money(ie.rate)} = ${money(expected)}. Tally stores the three as sent, so the invoice would not agree with itself and the e-invoice could be refused. Fix the rate or the amount.`);
+        errors.push(`Line "${ie.stockItemName}": amount ${money(Math.abs(ie.amount))} does not equal quantity ${ie.quantity} × rate ${money(ie.rate)} = ${money(expected)}. Tally keeps all three as sent (tried on the dummy company, 27-Nov-2026), so it will not catch this: the printed invoice would not agree with itself, and if one of the three is wrong the books are wrong without anyone noticing. The e-invoice would also be refused. Correct the rate or the amount so that quantity × rate equals the amount.`);
       }
     }
     // Zero is rejected, not just negative. A zero-value line books stock out of
     // nothing and is almost always a rate that failed to read; the house
     // convention for a genuine stock adjustment is ₹1, never ₹0.
     if (!Number.isFinite(ie.amount) || ie.amount <= 0) {
-      errors.push(`Amount for "${ie.stockItemName}" must be a positive magnitude — a zero-value stock line would add stock with no value.`);
+      errors.push(`Amount for "${ie.stockItemName}" must be a positive magnitude — a zero-value stock line would add stock with no value. Tally silently drops such a line (tried on the dummy company, 27-Nov-2026: two lines sent, one kept), so the stock would be wrong. Give the line a value (the house convention for a free or sample piece is ₹1) or take it off the bill.`);
     }
   }
 
@@ -533,11 +535,11 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
      godown lands where Tally chooses. The per-line rules above (item exists, base unit, positive quantity, whole
      quantity, amount = quantity x rate, amount above zero) already ran. */
   if (stockOnly) {
-    if (!(p.inventoryEntries?.length)) errors.push("A Stock Journal needs at least one stock line.");
-    if (p.ledgerEntries?.length) errors.push("A Stock Journal carries stock lines only; it has no ledger lines, because it moves no money.");
-    if (p.isInvoice) errors.push("A Stock Journal is not an invoice.");
+    if (!(p.inventoryEntries?.length)) errors.push("A Stock Journal needs at least one stock line. Add the item and quantity that changed.");
+    if (p.ledgerEntries?.length) errors.push("A Stock Journal carries stock lines only; it has no ledger lines, because it moves no money. Remove the money lines from it, or use a different voucher type.");
+    if (p.isInvoice) errors.push("A Stock Journal is not an invoice. Send it as a Stock Journal without the invoice setting (tell the developer if you did not set it).");
     for (const ie of p.inventoryEntries ?? []) {
-      if (!ie.godownName) errors.push(`Stock line "${ie.stockItemName}" names no godown. A count difference belongs to a place.`);
+      if (!ie.godownName) errors.push(`Stock line "${ie.stockItemName}" names no godown. A count difference belongs to a place: pick the godown it was counted in.`);
     }
     if (!p.narration?.trim()) warnings.push("A Stock Journal with no narration cannot be traced to the count that caused it.");
   }
@@ -548,16 +550,16 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
      voucher with no TAXADJUSTMENT is a mistake (Tally ignores it, and the return then disagrees with the books). */
   const adjustments = ["Increase in Tax Liability", "Decrease in Tax Liability"];
   if (p.taxAdjustment !== undefined) {
-    if (p.voucherType.toUpperCase() !== "JOURNAL") errors.push(`Tax adjustment "${p.taxAdjustment}" is only for a Journal, not a ${p.voucherType}.`);
-    if (!adjustments.includes(p.taxAdjustment)) errors.push(`Tax adjustment must be "Increase in Tax Liability" or "Decrease in Tax Liability", not "${String(p.taxAdjustment)}".`);
+    if (p.voucherType.toUpperCase() !== "JOURNAL") errors.push(`Tax adjustment "${p.taxAdjustment}" is only for a Journal, not a ${p.voucherType}. Remove the tax adjustment from this bill, or make it a Journal.`);
+    if (!adjustments.includes(p.taxAdjustment)) errors.push(`Tax adjustment must be "Increase in Tax Liability" or "Decrease in Tax Liability", not "${String(p.taxAdjustment)}". Pick one of the two.`);
   }
   for (const le of p.ledgerEntries ?? []) {
     const hasRate = le.gstTaxRate !== undefined, hasValue = le.gstAssessableValue !== undefined;
     if (!hasRate && !hasValue) continue;
-    if (p.taxAdjustment === undefined) errors.push(`Line "${le.ledgerName}" carries a GST rate or assessable value but the voucher has no tax adjustment; Tally would ignore it.`);
-    if (hasRate !== hasValue) errors.push(`Line "${le.ledgerName}" must carry the GST rate and the assessable value together, or neither.`);
-    if (hasRate && !(Number.isFinite(le.gstTaxRate!) && le.gstTaxRate! > 0 && le.gstTaxRate! <= 50)) errors.push(`Line "${le.ledgerName}" has a GST rate of ${le.gstTaxRate}; it must be above 0 and at most 50.`);
-    if (hasValue && !(Number.isFinite(le.gstAssessableValue!) && le.gstAssessableValue! > 0)) errors.push(`Line "${le.ledgerName}" has an assessable value of ${le.gstAssessableValue}; it must be above 0.`);
+    if (p.taxAdjustment === undefined) errors.push(`Line "${le.ledgerName}" carries a GST rate or assessable value but the voucher has no tax adjustment; Tally would ignore it. Either mark the voucher as a tax adjustment, or take the rate and value off that line.`);
+    if (hasRate !== hasValue) errors.push(`Line "${le.ledgerName}" must carry the GST rate and the assessable value together, or neither. Fill in the missing one.`);
+    if (hasRate && !(Number.isFinite(le.gstTaxRate!) && le.gstTaxRate! > 0 && le.gstTaxRate! <= 50)) errors.push(`Line "${le.ledgerName}" has a GST rate of ${le.gstTaxRate}; it must be above 0 and at most 50. Correct the rate.`);
+    if (hasValue && !(Number.isFinite(le.gstAssessableValue!) && le.gstAssessableValue! > 0)) errors.push(`Line "${le.ledgerName}" has an assessable value of ${le.gstAssessableValue}; it must be above 0. Correct the value.`);
   }
 
   const hasStock = (p.inventoryEntries?.length ?? 0) > 0;
@@ -573,7 +575,7 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     const acctLedgers = new Set((p.inventoryEntries ?? []).map(i => i.salesLedgerName).filter(Boolean));
     for (const e of p.ledgerEntries ?? []) {
       if (acctLedgers.has(e.ledgerName)) {
-        errors.push(`"${e.ledgerName}" appears both as a ledger entry and as a stock line's accounting allocation — on an item invoice it belongs only in the allocation, or that side is counted twice.`);
+        errors.push(`"${e.ledgerName}" appears both as a ledger entry and as a stock line's accounting allocation — on an item invoice it belongs only in the allocation, or that side is counted twice. Remove it from the ledger lines and keep it on the stock line.`);
       }
     }
   }
@@ -591,29 +593,29 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
       .reduce((s, e) => s + (e.isDeemedPositive ? -Math.abs(e.amount) : Math.abs(e.amount)), 0);
     const net = ledgerSide + stockSide;
     if (Math.abs(net) > 0.02) {
-      errors.push(`Voucher does not balance: ledgers ${money(ledgerSide)} + stock ${money(stockSide)} = ${money(net)}, must be zero.`);
+      errors.push(`Voucher does not balance: ledgers ${money(ledgerSide)} + stock ${money(stockSide)} = ${money(net)}, must be zero. Check the amounts: what the party owes must equal the goods plus tax plus the round-off.`);
     }
   }
 
   // ── Party line sanity ─────────────────────────────────────────────────────
   const partyLines = (p.ledgerEntries ?? []).filter(e => e.isPartyLedger);
-  if (partyLines.length > 1) errors.push(`Expected at most one party ledger line, found ${partyLines.length}.`);
+  if (partyLines.length > 1) errors.push(`Expected at most one party ledger line, found ${partyLines.length}. A bill has one party: remove the extra party lines and send it again.`);
   /* Case-SENSITIVE on purpose (review 8-Nov-2026, L1): this is a refusal, and partyIsOverwritten would make it skip a
      lower-case "receipt", which the guard accepts with only a spelling warning. Using the case-free rule here would loosen
      that refusal, so it stays as it was; the warning below (bank instrument detail) only adds a message, so it is case-free. */
   if (partyLines.length === 1 && !PARTY_OVERWRITTEN.has(p.voucherType) && partyLines[0].ledgerName !== p.partyLedgerName) {
-    errors.push(`The party line ("${partyLines[0].ledgerName}") must match partyLedgerName ("${p.partyLedgerName}").`);
+    errors.push(`The party line ("${partyLines[0].ledgerName}") must match partyLedgerName ("${p.partyLedgerName}"). The bill names two different parties: make them the same one.`);
   }
 
   // ── Direction of stock movement ───────────────────────────────────────────
   // Compared case-insensitively: this company's type is literally named "SALES".
   if (p.voucherType.toUpperCase() === "SALES") {
     for (const ie of p.inventoryEntries ?? []) {
-      if (ie.isDeemedPositive) errors.push(`Outward item "${ie.stockItemName}" must have isDeemedPositive=false.`);
+      if (ie.isDeemedPositive) errors.push(`Outward item "${ie.stockItemName}" must have isDeemedPositive=false. A sale takes stock out: this is a fault in the app, so send the bill again and, if it repeats, tell the developer.`);
     }
   } else if (p.voucherType === "Purchase") {
     for (const ie of p.inventoryEntries ?? []) {
-      if (!ie.isDeemedPositive) errors.push(`Inward item "${ie.stockItemName}" must have isDeemedPositive=true.`);
+      if (!ie.isDeemedPositive) errors.push(`Inward item "${ie.stockItemName}" must have isDeemedPositive=true. A purchase brings stock in: this is a fault in the app, so send the bill again and, if it repeats, tell the developer.`);
     }
   }
 
@@ -714,10 +716,10 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
         // A counter sale (or the mixed-order ledger): the buyer is in the shop, so the
         // supply is local.
         if (declared && !sameState(declared, HOME_STATE_NAME)) {
-          errors.push(`A cash sale's place of supply is ${HOME_STATE_NAME}, not "${declared}" — the buyer is standing in the shop and the tax is charged as local.`);
+          errors.push(`A cash sale's place of supply is ${HOME_STATE_NAME}, not "${declared}" — the buyer is standing in the shop and the tax is charged as local. Clear the place of supply, or bill the sale to the buyer's own ledger.`);
         }
         if (!p.buyerName?.trim()) {
-          errors.push(`A cash sale needs the buyer's name — it is the bill-to and ship-to on the invoice, and the Cash and mixed-order ledgers have neither.`);
+          errors.push(`A cash sale needs the buyer's name — it is the bill-to and ship-to on the invoice, and the Cash and mixed-order ledgers have neither. Type the buyer's name on the bill.`);
         }
         const typed = (p.buyerAddress ?? []).map(l => l.trim()).filter(Boolean);
         const goods = (p.inventoryEntries ?? []).reduce((t, i) => t + Math.abs(i.amount), 0);
@@ -748,13 +750,13 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
       if (g && !isGstinChecksumValid(g)) {
         errors.push(`The GSTIN on "${party.name}" (${g}) fails its check digit — not a valid GSTIN. Correct it on the ledger in Tally.`);
       } else if (g && resolved.state && codeForState(resolved.state) && codeForState(resolved.state) !== g.slice(0, 2)) {
-        errors.push(`"${party.name}" has GSTIN ${g}, issued in ${stateFromGstin(g) ?? `state ${g.slice(0, 2)}`}, but its ledger state is "${resolved.state}". One of them is wrong in Tally, and the tax heads depend on which.`);
+        errors.push(`"${party.name}" has GSTIN ${g}, issued in ${stateFromGstin(g) ?? `state ${g.slice(0, 2)}`}, but its ledger state is "${resolved.state}". One of them is wrong in Tally, and the tax heads depend on which. Correct whichever is wrong on the ledger in Tally, then send the bill again.`);
       }
       if (resolved.state && !codeForState(resolved.state)) {
         errors.push(`The state on "${party.name}" ("${resolved.state}") is not a GST state name — pick it from Tally's state list.`);
       }
     } else if (isWalkInLedger(party) && isInwardSupply(p.voucherType)) {
-      errors.push(`A ${p.voucherType} cannot be booked against the cash ledger — the supplier's own ledger carries the GSTIN and state.`);
+      errors.push(`A ${p.voucherType} cannot be booked against the cash ledger — the supplier's own ledger carries the GSTIN and state. Pick the supplier's own ledger.`);
     }
 
     // ── HSN on every outward stock line — the e-invoice rejects a line
@@ -772,8 +774,8 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     // ── OUTPUT tax on a sale, INPUT tax on a purchase — never crossed. ───────
     for (const e of p.ledgerEntries ?? []) {
       if (!TAX_HEAD.test(e.ledgerName)) continue;
-      if (isInwardSupply(p.voucherType) && /\bOUTPUT\b/i.test(e.ledgerName)) errors.push(`"${e.ledgerName}" is an OUTPUT tax ledger on a ${p.voucherType} — inward tax goes to the INPUT ledgers (it is input credit, not tax collected).`);
-      if (!isInwardSupply(p.voucherType) && /\bINPUT\b/i.test(e.ledgerName)) errors.push(`"${e.ledgerName}" is an INPUT tax ledger on a ${p.voucherType} — outward tax goes to the OUTPUT ledgers.`);
+      if (isInwardSupply(p.voucherType) && /\bOUTPUT\b/i.test(e.ledgerName)) errors.push(`"${e.ledgerName}" is an OUTPUT tax ledger on a ${p.voucherType} — inward tax goes to the INPUT ledgers (it is input credit, not tax collected). Use the matching INPUT ledger instead.`);
+      if (!isInwardSupply(p.voucherType) && /\bINPUT\b/i.test(e.ledgerName)) errors.push(`"${e.ledgerName}" is an INPUT tax ledger on a ${p.voucherType} — outward tax goes to the OUTPUT ledgers. Use the matching OUTPUT ledger instead.`);
     }
 
     // "Mismatch between Expected Tax Amount and Modified Tax Amount".
@@ -785,7 +787,7 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
       if (e.isPartyLedger) continue;
       if (TAX_HEAD.test(e.ledgerName) || ROUNDING.test(e.ledgerName)) continue;
       if (!e.appropriateToGst) {
-        errors.push(`"${e.ledgerName}" changes the invoice value but does not appropriate to GST, so Tally will compute expected tax on the gross and file this under GSTR-1's "Mismatch between Expected Tax Amount and Modified Tax Amount". Set appropriateToGst: "Goods" on that line.`);
+        errors.push(`"${e.ledgerName}" changes the invoice value but does not appropriate to GST, so Tally will compute expected tax on the gross and file this under GSTR-1's "Mismatch between Expected Tax Amount and Modified Tax Amount". Mark that line as applying to GST (appropriateToGst: "Goods") and send the bill again.`);
       }
     }
 
@@ -822,10 +824,10 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     if ((outwardTaxed || purchaseTaxed) && !unrated.length) {
       const t = taxCheck(p, m);
       if (t.booked < t.lo - t.tol || t.booked > t.hi + t.tol) {
-        errors.push(`Tax booked ₹${t.booked.toFixed(2)} but the dated rates × taxable value give ₹${t.lo.toFixed(2)}${t.hi - t.lo > 0.005 ? `–₹${t.hi.toFixed(2)}` : ""} (taxable ₹${t.taxable.toFixed(2)}). The voucher balances and would file wrong${isPurchase ? " — and the input credit claimed on it would be wrong" : ""}.`);
+        errors.push(`Tax booked ₹${t.booked.toFixed(2)} but the dated rates × taxable value give ₹${t.lo.toFixed(2)}${t.hi - t.lo > 0.005 ? `–₹${t.hi.toFixed(2)}` : ""} (taxable ₹${t.taxable.toFixed(2)}). The voucher balances and would file wrong${isPurchase ? " — and the input credit claimed on it would be wrong" : ""}. Recalculate the tax from the item's GST rate, or correct the rate on the item in Tally, then send the bill again.`);
       }
       if (t.cgst > 0 || t.sgst > 0) {
-        if (Math.abs(t.cgst - t.sgst) > 0.02) errors.push(`CGST ₹${t.cgst.toFixed(2)} ≠ SGST ₹${t.sgst.toFixed(2)} — a local supply splits its tax in equal halves.`);
+        if (Math.abs(t.cgst - t.sgst) > 0.02) errors.push(`CGST ₹${t.cgst.toFixed(2)} ≠ SGST ₹${t.sgst.toFixed(2)} — a local supply splits its tax in equal halves. Make the two amounts equal and send the bill again.`);
       }
     }
 
@@ -837,17 +839,19 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     }
   }
 
-  // ── ROUNDED OFF (TG-P17): at most 50 paise, and on the side the books use —
+  // ── ROUNDED OFF (TG-P17): at most 50 paise (refused), and on the side the books use (only warned) —
   //    a credit on every sale (664 of 664 hand-typed sales round-offs), a debit
   //    on a purchase (web purchasePayload; native purchases). The sign rides on
   //    the amount, never on the side. ──────────────────────────────────────────
   for (const e of p.ledgerEntries ?? []) {
     if (!/^\s*ROUND(ED)?\s*OFF\s*$/i.test(e.ledgerName)) continue;
     const v = e.signedAmount !== undefined ? Math.abs(e.signedAmount) : Math.abs(e.amount);
-    if (v > 0.5 + 1e-9) errors.push(`ROUNDED OFF of ${money(v)} — rounding to the rupee is never more than ₹0.50; a larger figure is an arithmetic error hidden in the rounding line.`);
+    if (v > 0.5 + 1e-9) errors.push(`ROUNDED OFF of ${money(v)} — rounding to the rupee is never more than ₹0.50. Tally keeps a larger one without complaint (tried on the dummy company, 27-Nov-2026: it booked a bill ₹2.18 above its goods and tax), so the books would be quietly wrong by that much. Check the amounts: what the party owes should be the goods plus tax, rounded to the nearest rupee.`);
     const vt = p.voucherType.trim().toUpperCase();
-    if (OUTWARD_TAXED.has(vt) && e.isDeemedPositive) errors.push(`ROUNDED OFF on a ${p.voucherType} must sit on the CREDIT side (isDeemedPositive=false), with its sign on the amount — every hand-typed sale does.`);
-    if (vt === "PURCHASE" && !e.isDeemedPositive) errors.push(`ROUNDED OFF on a Purchase must sit on the DEBIT side (isDeemedPositive=true), with its sign on the amount.`);
+    /* Owner, 27-Nov-2026: warnings, not refusals. Proved on the dummy Tally (verify-push-rules-dummy.ts, cases B/C and I/J): the same round-off written
+       on the other side, with the same signed amount, was kept exactly as sent and moved the same money. Only the house convention differs. */
+    if (OUTWARD_TAXED.has(vt) && e.isDeemedPositive) warnings.push(`ROUNDED OFF on this ${p.voucherType} is written on the debit side. Tally takes it and the money is the same, but every hand-typed sale writes it on the credit side with the sign on the amount, so it will look different in the books.`);
+    if (vt === "PURCHASE" && !e.isDeemedPositive) warnings.push(`ROUNDED OFF on this Purchase is written on the credit side. Tally takes it and the money is the same, but every native purchase writes it on the debit side with the sign on the amount, so it will look different in the books.`);
   }
 
   // ── A bank ledger with no instrument detail makes Tally prompt on every

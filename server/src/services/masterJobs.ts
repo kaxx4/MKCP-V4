@@ -46,6 +46,21 @@ const TAXABILITY = ["Taxable", "Exempt", "Nil Rated"] as const;
 /** An HSN or SAC code: digits only, four to eight of them. */
 const HSN_RE = /^\d{4,8}$/;
 
+/** The HSN a stock group declares, or the nearest one above it; "" when none does (the chain Tally and `hsnFor` read). */
+function groupHsn(m: TallyMasters, parent: string): string {
+  let name: string | null = hasKey(m.stockGroups, parent);
+  const seen = new Set<string>();
+  while (name && !seen.has(name)) {
+    seen.add(name);
+    const g = m.stockGroups.get(name);
+    if (!g) break;
+    const best = (g.hsnRevisions ?? []).reduce<{ from: string; code: string } | null>((b, r) => (!b || r.from >= b.from ? r : b), null);
+    if (best?.code) return best.code;
+    name = g.parent ? hasKey(m.stockGroups, g.parent) : null;
+  }
+  return "";
+}
+
 const hasKey = (m: Map<string, unknown>, name: string): string | null => {
   if (m.has(name)) return name;
   const want = loose(name);
@@ -75,8 +90,10 @@ function planItem(label: string, master: Record<string, unknown>, newUnitRaw: un
   const rate = master.gstRate;
   if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate > 100) return refuse(`"${name}" has no GST rate. Tally would make the item without tax, and every bill with it would be wrong.`);
   const hsn = text(master.hsn);
-  if (!hsn) return refuse(`"${name}" has no HSN code. Choose one before it is sent.`);
-  if (!HSN_RE.test(hsn)) return refuse(`The HSN code "${hsn}" for "${name}" is not 4 to 8 digits.`);
+  /* 27-Nov-2026: an item with no HSN of its own is allowed when its stock group (or one above it) declares one. Proved on the dummy Tally
+     (verify-push-rules-dummy.ts, case K): such an item was made, and a sale of it was stored with the group's HSN on the line. */
+  if (!hsn && !groupHsn(m, parent)) return refuse(`"${name}" has no HSN code, and neither its stock group nor any group above it has one. Choose a code for the item before it is sent, or set one on the stock group in Tally.`);
+  if (hsn && !HSN_RE.test(hsn)) return refuse(`The HSN code "${hsn}" for "${name}" is not 4 to 8 digits. Correct the code (digits only) and send it again.`);
   const tax = master.taxability === undefined || master.taxability === null ? "Taxable" : String(master.taxability);
   if (!(TAXABILITY as readonly string[]).includes(tax)) return refuse(`"${tax}" is not a way Tally taxes an item (Taxable, Exempt or Nil Rated).`);
 
@@ -97,7 +114,7 @@ function planItem(label: string, master: Record<string, unknown>, newUnitRaw: un
     const dec = typeof nu.decimals === "number" && Number.isInteger(nu.decimals) && nu.decimals >= 0 && nu.decimals <= 6 ? nu.decimals : 0;
     unit = { name: nuName, decimals: dec };
   }
-  const item: NewStockItem = { name, parent: group, baseUnit: existingUnit ?? baseUnit, gstRate: rate, hsn, taxability: tax as NewStockItem["taxability"] };
+  const item: NewStockItem = { name, parent: group, baseUnit: existingUnit ?? baseUnit, gstRate: rate, ...(hsn ? { hsn } : {}), taxability: tax as NewStockItem["taxability"] };
   return { ok: true, plan: { kind: "new_item", label, unit, item } };
 }
 

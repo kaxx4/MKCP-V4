@@ -133,8 +133,13 @@ const warns = (p: VoucherPayload) => guardVoucher(p, M).warnings.join(" | ");
       { ledgerName: "PURCHASE  ( GST CENTRAL )", amount: 100, isDeemedPositive: true, isPartyLedger: false, appropriateToGst: "Goods" },
     ],
   };
-  ok("it is REFUSED on an inward voucher rather than ignored",
-    /not accepted on Purchase/i.test(errs(purchase)), errs(purchase).slice(0, 100));
+  /* 27-Nov-2026: a warning, not a refusal. Proved on the dummy Tally (verify-push-rules-dummy.ts case G): a typed "Delhi" on a Purchase from a West
+     Bengal supplier was kept as sent with PLACEOFSUPPLY West Bengal, so the typed value changes nothing. */
+  {
+    const g = guardVoucher(purchase, M);
+    ok("it no longer blocks an inward voucher, and the guard says it was ignored",
+      !g.errors.some((e) => /place of supply/i.test(e)) && g.warnings.some((w) => /was typed on this Purchase and was ignored/i.test(w)), `${g.errors.join("|").slice(0, 100)} // ${g.warnings.join("|").slice(0, 100)}`);
+  }
 
   const typo = sale({ placeOfSupply: "West Bangal" });
   ok("a misspelt state is refused, not taxed on",

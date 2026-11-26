@@ -153,7 +153,16 @@ function offlineCases() {
   {
     const v = sale({ number: "PG/15", party: PARTY_LOCAL, lines: [{ item: "CARRIER CLIP", amount: 1000.3, rate: 5 }] });
     const r = v.ledgerEntries.find(e => e.ledgerName === "ROUNDED OFF");
-    if (r) { r.isDeemedPositive = true; expectRejected("a sales round-off moved to the debit side", v, m, "CREDIT side"); }
+    /* 27-Nov-2026: the side is a warning now (proved on the dummy Tally, verify-push-rules-dummy.ts cases B/C and I/J): same signed amount on the
+       other side was kept as sent and moved the same money. The size of the round-off is still refused. */
+    if (r) {
+      r.isDeemedPositive = true;
+      const g = guardVoucher(v, m);
+      if (g.ok && g.warnings.some(w => /written on the debit side/i.test(w))) { console.log("  ✓ a sales round-off moved to the debit side — warns, no longer refuses"); pass++; }
+      else { console.log(`  ✗ a sales round-off on the debit side — expected an ACCEPT with a warning, got ${g.ok ? "no warning" : g.errors.join(" | ")}`); fail++; }
+      r.amount = 3; r.signedAmount = 3; r.isDeemedPositive = false;
+      expectRejected("a round-off of ₹3 is still refused", v, m, "never more than");
+    }
   }
   const bills = { openBills: fixtureOpenBills() };
   expectRejected("an Agst Ref naming another party's open bill", receipt("PG/16", PARTY_LOCAL, 1000, "Agst Ref", "TI/26-27/34"), m, "not an open bill", bills);

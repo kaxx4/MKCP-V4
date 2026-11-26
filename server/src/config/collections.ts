@@ -133,6 +133,22 @@ export const TRANSACTION_COLLECTIONS: CollectionDef[] = [
          are a routed estimate and, below that, a rate card typed in July 2024
          that runs up to 67% wrong. */
       "EWayBillDetails",
+      /* E-invoice header and the rest of the shipping header (owner, 26-Nov-2026: "every single piece of information"). Every name here was read
+         with NATIVEMETHOD * on the sandbox dummy Tally, then asked for by this exact FETCH spelling on one week of every voucher type (177
+         vouchers) and again on a day of SALES: each came back as a tag, filled where the company fills it (IRN cancel flag, IRP source,
+         dispatch-from name / address / place / pincode / state, bill-to place, consignee GSTIN and PAN, same-as flags, e-way applicability) and
+         empty where it does not (cancel date and reason, GSTSUPPLYTYPE, transporter, bill of lading). An empty tag is still the answer "Tally
+         has it, this voucher does not" (G7), so they stay on the list. Scalars only, about 1 KB a voucher, nothing like the entry blocks.
+         The two ErrorList names are lists whose rows have never been seen filled. server/scripts/probe-ewb-einv-census.ts. */
+      "IRNCancelled", "IRNCancelDate", "IRNCancelReason", "IRNCancelCode", "IRNIRPSource", "IRNAckUpdateDateTime", "IRNJSONExported",
+      "IRNErrorList", "EWayBillErrorList",
+      "DispatchFromName", "DispatchFromAddress", "DispatchFromPlace", "DispatchFromPinCode", "DispatchFromStateName", "DispatchDate",
+      "BillToPlace", "ConsigneeGSTIN", "ConsigneePinNumber", "ConsigneeCountryName",
+      "IsDeliverySameAsConsignee", "IsDispatchSameAsConsignor", "IsEWayBillApplicable", "IsEWayBillExcluded", "OvrdNEWayBillApplicability",
+      "IsEInvOverridden", "IsECommerceSupply",
+      "GSTSupplyType", "GSTITCDocumentType", "InvDeliveryDate", "DocumentID", "PlaceOfSupplyState", "PlaceOfSupplyCountry",
+      "TransporterName", "TransportMode", "GoodsVehicleNumber", "TransporterVehicle2", "TransporterAddrTown", "TransporterAddrState",
+      "TransporterAddrPinCode", "BasicShipDocumentNo", "BasicShippedBy", "BasicPlaceOfReceipt", "BillOfLadingNo", "BillOfLadingDate",
       /* The real buyer on a counter sale (CASH-P1). A third of SALES are
          billed to the ledger "Cash"; the person who bought is recorded only in
          the voucher header's mailing name and address, and the mirror had none

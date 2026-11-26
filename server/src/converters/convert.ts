@@ -96,8 +96,9 @@ export interface VoucherTransport {
 
 /**
  * Owner, 26-Nov-2026: "every single piece of information" of the e-invoice. The header fields Tally keeps beside IRN/IRNACKNO/IRNACKDATE/
- * IRNQRCODE. Names read from a Tally Day Book export of the same format (26-Nov-2026, names only). They are read when present; the fetch list
- * asks for them only once a sandbox probe has answered them (collections.ts), so until then this stays null.
+ * IRNQRCODE. Names read from a Tally Day Book export of the same format (26-Nov-2026, names only), then proven on the sandbox dummy Tally the
+ * same day: asked for by explicit FETCH name, each came back (probe-ewb-einv-census.ts), and they are on the voucher fetch list (collections.ts).
+ * 1.5.30 shipped this block with the names not yet on that list, so einv_details stayed null until the fetch list change that follows it.
  */
 export interface EinvDetails {
   irn_cancelled: boolean;
@@ -116,6 +117,29 @@ export interface EinvDetails {
   delivery_same_as_consignee: boolean | null;
   dispatch_same_as_consignor: boolean | null;
   ewb_applicable: boolean | null;
+  /* Owner, 26-Nov-2026, second pass: every header name above was probed on the sandbox dummy Tally the same day (names read with NATIVEMETHOD *,
+     then asked for by explicit FETCH: scripts/probe-ewb-einv-census.ts), so they are now on the fetch list and einv_details fills. Optional so a
+     row written by 1.5.30 still reads. Flags are true only when Tally says Yes; null when Tally sent the tag empty. */
+  ewb_excluded?: boolean | null;
+  ewb_applicability_overridden?: boolean | null;
+  einv_overridden?: boolean | null;
+  ecommerce_supply?: boolean | null;
+  irn_json_exported?: boolean | null;
+  consignee_pan?: string | null;
+  consignee_country?: string | null;
+  /** Tally's own GSTSUPPLYTYPE and GSTITCDOCUMENTTYPE as Tally keeps them (empty on every dummy voucher: carried so a filled one is never lost). */
+  gst_supply_type?: string | null;
+  gst_itc_document_type?: string | null;
+  inv_delivery_date?: string | null;
+  document_id?: string | null;
+  place_of_supply_state?: string | null;
+  place_of_supply_country?: string | null;
+  /** Shipping fields kept on the voucher header (transporter, vehicle, bill of lading): only the ones Tally filled, by lower-case tag name. */
+  header_shipping?: Record<string, string> | null;
+  dispatch_date?: string | null;
+  /** Tally's EWayBillErrorList and IRNErrorList (what the portal said when it refused). Empty on every dummy voucher, so the row shape is unseen: each row is its non-empty fields. */
+  ewb_errors?: Record<string, string>[] | null;
+  irn_errors?: Record<string, string>[] | null;
 }
 
 /**
@@ -158,7 +182,47 @@ export interface EwbDetails {
   part_b_pending?: boolean;
   transporter_id_updated?: boolean;
   goods_gold?: boolean | null;
+  /* Owner, 26-Nov-2026, second pass: everything else in the block. Tags read from a sandbox dummy Tally census (25 e-way blocks,
+     probe-ewb-einv-census.ts); a tag that was empty on all of them is still carried so the first filled one is never lost (G7). */
+  bill_number?: string | null;
+  validity?: string | null;
+  generated_on?: string | null;
+  bill_status?: string | null;
+  cancel_code?: string | null;
+  cancel_date?: string | null;
+  consignor_name?: string | null;
+  consignor_gstin?: string | null;
+  consignor_state_name?: string | null;
+  consignor_address_type?: string | null;
+  consignee_name?: string | null;
+  consignee_gstin?: string | null;
+  consignee_state_name?: string | null;
+  consignee_address_type?: string | null;
+  consolidated_bill_number?: string | null;
+  consolidated_bill_date?: string | null;
+  threshold_limit?: string | null;
+  threshold_limit_includes?: string | null;
+  remarks?: string | null;
+  place_of_change?: string | null;
+  state_of_change?: string | null;
+  reason_of_change?: string | null;
+  transporter_id_pending?: boolean;
+  /** Names of the IGNORE... and ISEXPORTEDFOR... switches Tally has set to Yes, lower case. */
+  switches_on?: string[] | null;
+  /** The three lists Tally keeps inside the block, one object per row of the non-empty fields (shape not yet seen filled on the dummy). */
+  multi_vehicle?: Record<string, string>[] | null;
+  extension_details?: Record<string, string>[] | null;
+  statewise_threshold?: Record<string, string>[] | null;
+  /** "Outward" or "Inward". Tally keeps no such field on these vouchers (GSTSUPPLYTYPE is empty on 176 of 176), so it is read from the voucher type:
+   *  a Sales is outward, a Purchase / Debit Note / Receipt Note inward. `supply_type_source` says which. */
+  supply_type?: "Outward" | "Inward" | null;
+  supply_type_source?: "tally" | "voucher_type" | null;
 }
+
+/** Shipping fields Tally keeps on the voucher header itself, outside the e-way block. Empty on every voucher of the dummy company (176 read,
+ *  26-Nov-2026); asked for by name and carried when filled. */
+const HEADER_SHIPPING_TAGS = ["TRANSPORTERNAME", "TRANSPORTMODE", "GOODSVEHICLENUMBER", "TRANSPORTERVEHICLE2", "BASICSHIPDOCUMENTNO", "BASICSHIPPEDBY",
+  "BASICPLACEOFRECEIPT", "BILLOFLADINGNO", "BILLOFLADINGDATE", "TRANSPORTERADDRTOWN", "TRANSPORTERADDRSTATE", "TRANSPORTERADDRPINCODE"] as const;
 
 /** Tally's YYYYMMDD[HHMM…] → ISO "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM". Zero/empty → null. */
 export function tallyStamp(raw: unknown): string | null {
@@ -191,6 +255,9 @@ export function extractVoucherTransport(v: any): VoucherTransport {
   let distance: number | null = null;
   let vehicleType: string | null = null, transporterName: string | null = null, transporterId: string | null = null;
   let lrNumber: string | null = null, lrDate: string | null = null, partB = false, partBPending = false, transIdUpdated = false;
+  let remarks: string | null = null, placeOfChange: string | null = null, stateOfChange: string | null = null, reasonOfChange: string | null = null;
+  let transIdPending = false;
+  const on: string[] = switchesOn(ewb);
   for (const td of listOf(ewb, "TRANSPORTDETAILS")) {
     if (!td || typeof td !== "object") continue;
     // Last non-empty value wins — see the Part-B note above.
@@ -205,10 +272,23 @@ export function extractVoucherTransport(v: any): VoucherTransport {
     partB = partB || /^yes$/i.test(txt(td.ISPARTBUPDATED));
     partBPending = partBPending || /^yes$/i.test(txt(td.ISPARTBPENDING));
     transIdUpdated = transIdUpdated || /^yes$/i.test(txt(td.ISTRANSIDUPDATED));
+    transIdPending = transIdPending || /^yes$/i.test(txt(td.ISTRANSIDPENDING));
+    remarks = txt(td.REMARKS) || remarks;
+    placeOfChange = txt(td.PLACEOFCHANGE) || placeOfChange;
+    stateOfChange = txt(td.STATEOFCHANGE) || stateOfChange;
+    reasonOfChange = txt(td.REASONOFCHANGE) || reasonOfChange;
+    for (const n of switchesOn(td)) if (!on.includes(n)) on.push(n);
   }
 
   const s = (x: any): string | null => txt(x) || null;
-  const lines = (o: any, key: string): string | null => { const l = addressLines(o, key); return l.length ? l.join(", ") : null; };
+  /* Supply type: Tally's own GSTSUPPLYTYPE when it is filled (it is empty on every dummy voucher), else the direction of the voucher type. */
+  const tallySupply = txt(v.GSTSUPPLYTYPE);
+  const vtName = txt(v.VOUCHERTYPENAME);
+  const supplyType: { type: "Outward" | "Inward"; source: "tally" | "voucher_type" } | null =
+    /^outward/i.test(tallySupply) ? { type: "Outward", source: "tally" }
+    : /^inward/i.test(tallySupply) ? { type: "Inward", source: "tally" }
+    : vtName ? { type: /PURCHASE|DEBIT NOTE|RECEIPT NOTE/i.test(vtName) ? "Inward" : "Outward", source: "voucher_type" } : null;
+  const lines =(o: any, key: string): string | null => { const l = addressLines(o, key); return l.length ? l.join(", ") : null; };
   const ewbDetails: EwbDetails | null = ewb
     ? {
         bill_date: tallyStamp(ewb.BILLDATE),
@@ -241,13 +321,50 @@ export function extractVoucherTransport(v: any): VoucherTransport {
         part_b_pending: partBPending,
         transporter_id_updated: transIdUpdated,
         goods_gold: txt(ewb.ISTYPEOFGOODSGOLD) ? /^yes$/i.test(txt(ewb.ISTYPEOFGOODSGOLD)) : null,
+        bill_number: s(ewb.BILLNUMBER),
+        validity: s(ewb.VALIDITY),
+        generated_on: tallyStamp(ewb.GENERATEDON) ?? s(ewb.GENERATEDON),
+        bill_status: s(ewb.BILLSTATUS),
+        cancel_code: s(ewb.CANCELCODE),
+        cancel_date: tallyStamp(ewb.CANCELDATE),
+        consignor_name: s(ewb.CONSIGNORNAME),
+        consignor_gstin: s(ewb.CONSIGNORGSTIN),
+        consignor_state_name: s(ewb.CONSIGNORSTATENAME),
+        consignor_address_type: s(ewb.CONSIGNORADDRESSTYPE),
+        consignee_name: s(ewb.CONSIGNEENAME),
+        consignee_gstin: s(ewb.CONSIGNEEGSTIN),
+        consignee_state_name: s(ewb.CONSIGNEESTATENAME),
+        consignee_address_type: s(ewb.CONSIGNEEADDRESSTYPE),
+        consolidated_bill_number: s(ewb.CONSOLIDATEDBILLNUMBER),
+        consolidated_bill_date: tallyStamp(ewb.CONSOLIDATEDBILLDATE),
+        threshold_limit: s(ewb.THRESHOLDLIMIT),
+        threshold_limit_includes: s(ewb.THRESHOLDLIMITINCLUDES),
+        remarks,
+        place_of_change: placeOfChange,
+        state_of_change: stateOfChange,
+        reason_of_change: reasonOfChange,
+        transporter_id_pending: transIdPending,
+        switches_on: on.length ? on : null,
+        multi_vehicle: rowsOf(ewb, "MULTIVEHICLEDETAILS"),
+        extension_details: rowsOf(ewb, "EXTENSIONDETAILS"),
+        statewise_threshold: rowsOf(ewb, "STATEWISETHRESHOLD"),
+        supply_type: supplyType?.type ?? null,
+        supply_type_source: supplyType?.source ?? null,
       }
     : null;
 
   const yn = (x: any): boolean | null => (txt(x) ? /^yes$/i.test(txt(x)) : null);
-  const einvAny = [v.IRNCANCELLED, v.IRNCANCELDATE, v.IRNCANCELREASON, v.IRNCANCELCODE, v.IRNIRPSOURCE, v.IRNACKUPDATEDATETIME, v.DISPATCHFROMNAME,
+  /* The block is written only when Tally holds something real. Tally sends the same defaults on every voucher of every type (IRNCANCELLED "No", an
+     IRNACKUPDATEDATETIME stamp, the country "India", every flag "No"; 176 of 176 on the dummy), so a bare default is not a reason to store ~1 KB
+     on all the books' vouchers: a value counts only when it is not "No" and not one of those defaults (26-Nov-2026, found by the dummy census). */
+  const real = (x: any): boolean => { const t = txt(x); return !!t && !/^no$/i.test(t); };
+  const einvAny = [v.IRNCANCELLED, v.IRNCANCELDATE, v.IRNCANCELREASON, v.IRNCANCELCODE, v.IRNIRPSOURCE, v.DISPATCHFROMNAME,
     v.DISPATCHFROMPINCODE, v.DISPATCHFROMSTATENAME, v.BILLTOPLACE, v.CONSIGNEEGSTIN, v.ISDELIVERYSAMEASCONSIGNEE, v.ISDISPATCHSAMEASCONSIGNOR,
-    v.ISEWAYBILLAPPLICABLE].some((x) => txt(x)) || listOf(v, "DISPATCHFROMADDRESS").length > 0;
+    v.ISEWAYBILLAPPLICABLE, v.ISEWAYBILLEXCLUDED, v.OVRDNEWAYBILLAPPLICABILITY, v.ISEINVOVERRIDDEN, v.ISECOMMERCESUPPLY, v.IRNJSONEXPORTED, v.GSTSUPPLYTYPE,
+    v.GSTITCDOCUMENTTYPE, v.INVDELIVERYDATE, v.DISPATCHDATE, v.DOCUMENTID, v.PLACEOFSUPPLYSTATE, v.PLACEOFSUPPLYCOUNTRY, v.CONSIGNEEPINNUMBER,
+    ...HEADER_SHIPPING_TAGS.map((t) => v[t])].some(real) || listOf(v, "DISPATCHFROMADDRESS").length > 0 || !!rowsOf(v, "EWAYBILLERRORLIST") || !!rowsOf(v, "IRNERRORLIST");
+  const shipping: Record<string, string> = {};
+  for (const t of HEADER_SHIPPING_TAGS) if (txt(v[t])) shipping[t.toLowerCase()] = txt(v[t]);
   const einvDetails: EinvDetails | null = einvAny
     ? {
         irn_cancelled: /^yes$/i.test(txt(v.IRNCANCELLED)),
@@ -266,6 +383,23 @@ export function extractVoucherTransport(v: any): VoucherTransport {
         delivery_same_as_consignee: yn(v.ISDELIVERYSAMEASCONSIGNEE),
         dispatch_same_as_consignor: yn(v.ISDISPATCHSAMEASCONSIGNOR),
         ewb_applicable: yn(v.ISEWAYBILLAPPLICABLE),
+        ewb_excluded: yn(v.ISEWAYBILLEXCLUDED),
+        ewb_applicability_overridden: yn(v.OVRDNEWAYBILLAPPLICABILITY),
+        einv_overridden: yn(v.ISEINVOVERRIDDEN),
+        ecommerce_supply: yn(v.ISECOMMERCESUPPLY),
+        irn_json_exported: yn(v.IRNJSONEXPORTED),
+        consignee_pan: s(v.CONSIGNEEPINNUMBER),
+        consignee_country: s(v.CONSIGNEECOUNTRYNAME),
+        gst_supply_type: s(v.GSTSUPPLYTYPE),
+        gst_itc_document_type: s(v.GSTITCDOCUMENTTYPE),
+        inv_delivery_date: tallyStamp(v.INVDELIVERYDATE),
+        document_id: s(v.DOCUMENTID),
+        place_of_supply_state: s(v.PLACEOFSUPPLYSTATE),
+        place_of_supply_country: s(v.PLACEOFSUPPLYCOUNTRY),
+        header_shipping: Object.keys(shipping).length ? shipping : null,
+        dispatch_date: tallyStamp(v.DISPATCHDATE),
+        ewb_errors: rowsOf(v, "EWAYBILLERRORLIST"),
+        irn_errors: rowsOf(v, "IRNERRORLIST"),
       }
     : null;
 
@@ -313,6 +447,34 @@ function addressLines(v: any, key: string): string[] {
     if (lines.length > 0) return lines;
   }
   return [];
+}
+
+/** `<KEY.LIST>` rows as plain objects of their non-empty scalar fields (lower-case tag names); null when there is no row with anything in it. */
+function rowsOf(o: any, key: string): Record<string, string>[] | null {
+  const rows: Record<string, string>[] = [];
+  for (const block of listOf(o, key)) {
+    if (!block || typeof block !== "object") continue;
+    // A list may hold its rows as repeated child elements or be one flat row.
+    const kids = Object.entries(block).filter(([k, val]) => !k.startsWith("@_") && val && typeof val === "object" && !("#text" in (val as object)));
+    const candidates: any[] = kids.length ? kids.flatMap(([, val]) => arr(val)) : [block];
+    for (const c of candidates) {
+      if (!c || typeof c !== "object") continue;
+      const row: Record<string, string> = {};
+      for (const [k, val] of Object.entries(c)) {
+        if (k.startsWith("@_") || k.endsWith(".LIST")) continue;
+        const t = txt(val);
+        if (t) row[k.toLowerCase()] = t;
+      }
+      if (Object.keys(row).length) rows.push(row);
+    }
+  }
+  return rows.length ? rows : null;
+}
+
+/** The IGNORE... / ISEXPORTEDFOR... switches of a block that Tally has set to Yes (lower-case tag names). */
+function switchesOn(o: any): string[] {
+  if (!o || typeof o !== "object") return [];
+  return Object.entries(o).filter(([k, val]) => /^(IGNORE|ISEXPORTEDFOR)/.test(k) && /^yes$/i.test(txt(val))).map(([k]) => k.toLowerCase());
 }
 
 /** A line that is a tax-identity note, not part of the place: "(PAN: ZZZPZ0048Z)", "GSTIN ...". */
