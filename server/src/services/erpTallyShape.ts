@@ -42,7 +42,7 @@ export const PERSONAL_VOUCHER_COLUMNS = [
   "reference", "irn", "irn_ack_no", "irn_ack_date", "irn_qr", "ewb_number", "ewb_valid_until", "vehicle_number",
   "consignee_pincode", "consignee_place", "consignee_state", "ship_to_place", "dispatch_from_place", "party_gstin",
   "buyer_name", "buyer_address", "buyer_pincode", "buyer_pincode_source", "buyer_place", "buyer_state",
-  "ewb_details", "ledger_entries",
+  "ewb_details", "einv_details", "ledger_entries",
   /* The distance is worked out from the two addresses, and the embedded inventory copy repeats the stock lines: neither may ride a test row (migration 0138 refuses them). */
   "transport_distance_km", "inventory_entries",
 ] as const;
@@ -54,6 +54,7 @@ export const TALLY_VOUCHER_COLUMNS = [
   "transport_mode", "transport_distance_km", "consignee_pincode", "consignee_place", "consignee_state", "ship_to_place",
   "dispatch_from_place", "party_gstin", "place_of_supply", "master_id", "alter_id", "remote_id", "version", "irn", "irn_ack_no",
   "irn_ack_date", "buyer_name", "buyer_address", "buyer_pincode", "buyer_pincode_source", "buyer_place", "buyer_state", "ewb_details", "irn_qr",
+  "einv_details",
 ] as const;
 export const TALLY_LEDGER_ENTRY_COLUMNS = ["id", "voucher_guid", "company", "ledger_name", "is_debit", "is_party_ledger", "amount", "bill_allocations", "synced_at"] as const;
 export const TALLY_INVENTORY_ENTRY_COLUMNS = [

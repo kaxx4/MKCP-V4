@@ -90,6 +90,32 @@ export interface VoucherTransport {
   place_of_supply: string | null;
   /** The rest of the e-way bill block (migration 049), null with no e-way bill. */
   ewb_details: EwbDetails | null;
+  /** The e-invoice header beyond IRN, ack and QR (web migration 0380), null when Tally sent none of it. */
+  einv_details: EinvDetails | null;
+}
+
+/**
+ * Owner, 26-Nov-2026: "every single piece of information" of the e-invoice. The header fields Tally keeps beside IRN/IRNACKNO/IRNACKDATE/
+ * IRNQRCODE. Names read from a Tally Day Book export of the same format (26-Nov-2026, names only). They are read when present; the fetch list
+ * asks for them only once a sandbox probe has answered them (collections.ts), so until then this stays null.
+ */
+export interface EinvDetails {
+  irn_cancelled: boolean;
+  irn_cancel_date: string | null;
+  irn_cancel_reason: string | null;
+  irn_cancel_code: string | null;
+  irp_source: string | null;
+  ack_updated_at: string | null;
+  dispatch_from_name: string | null;
+  dispatch_from_address: string | null;
+  dispatch_from_place: string | null;
+  dispatch_from_pincode: string | null;
+  dispatch_from_state: string | null;
+  bill_to_place: string | null;
+  consignee_gstin: string | null;
+  delivery_same_as_consignee: boolean | null;
+  dispatch_same_as_consignor: boolean | null;
+  ewb_applicable: boolean | null;
 }
 
 /**
@@ -112,6 +138,26 @@ export interface EwbDetails {
   from_pincode: string | null;
   cancelled: boolean;
   cancel_reason: string | null;
+  /* Owner, 26-Nov-2026: the rest of Tally's e-way bill screen. Every tag below was in the block of a Tally Day Book export of the same format
+     (1,012 blocks read for names only, 26-Nov-2026), and the block is already fetched whole ("EWayBillDetails"), so nothing new is asked of
+     Tally. Optional so a row written before 1.5.30 still reads. */
+  sub_type?: string | null;
+  document_type?: string | null;
+  intrastate?: string | null;
+  from_address?: string | null;
+  from_state?: string | null;
+  to_place?: string | null;
+  to_pincode?: string | null;
+  to_address?: string | null;
+  to_state?: string | null;
+  irp_source?: string | null;
+  cancel_pending?: boolean;
+  transport_mode?: string | null;
+  vehicle_number?: string | null;
+  distance_km?: number | null;
+  part_b_pending?: boolean;
+  transporter_id_updated?: boolean;
+  goods_gold?: boolean | null;
 }
 
 /** Tally's YYYYMMDD[HHMM…] → ISO "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM". Zero/empty → null. */
@@ -144,7 +190,7 @@ export function extractVoucherTransport(v: any): VoucherTransport {
   let mode: string | null = null;
   let distance: number | null = null;
   let vehicleType: string | null = null, transporterName: string | null = null, transporterId: string | null = null;
-  let lrNumber: string | null = null, lrDate: string | null = null, partB = false;
+  let lrNumber: string | null = null, lrDate: string | null = null, partB = false, partBPending = false, transIdUpdated = false;
   for (const td of listOf(ewb, "TRANSPORTDETAILS")) {
     if (!td || typeof td !== "object") continue;
     // Last non-empty value wins — see the Part-B note above.
@@ -157,9 +203,12 @@ export function extractVoucherTransport(v: any): VoucherTransport {
     lrNumber = txt(td.DOCUMENTNUMBER) || lrNumber;
     lrDate = tallyStamp(td.DOCUMENTDATE) ?? lrDate;
     partB = partB || /^yes$/i.test(txt(td.ISPARTBUPDATED));
+    partBPending = partBPending || /^yes$/i.test(txt(td.ISPARTBPENDING));
+    transIdUpdated = transIdUpdated || /^yes$/i.test(txt(td.ISTRANSIDUPDATED));
   }
 
   const s = (x: any): string | null => txt(x) || null;
+  const lines = (o: any, key: string): string | null => { const l = addressLines(o, key); return l.length ? l.join(", ") : null; };
   const ewbDetails: EwbDetails | null = ewb
     ? {
         bill_date: tallyStamp(ewb.BILLDATE),
@@ -175,6 +224,48 @@ export function extractVoucherTransport(v: any): VoucherTransport {
         from_pincode: s(ewb.CONSIGNORPINCODE),
         cancelled: /^yes$/i.test(txt(ewb.ISCANCELLED)),
         cancel_reason: s(ewb.CANCELREASON),
+        sub_type: s(ewb.SUBTYPE),
+        document_type: s(ewb.DOCUMENTTYPE),
+        intrastate: s(ewb.INTRASTATEAPPLICABILITY),
+        from_address: lines(ewb, "CONSIGNORADDRESS"),
+        from_state: s(ewb.SHIPPEDFROMSTATE),
+        to_place: s(ewb.CONSIGNEEPLACE),
+        to_pincode: s(ewb.CONSIGNEEPINCODE),
+        to_address: lines(ewb, "CONSIGNEEADDRESS"),
+        to_state: s(ewb.SHIPPEDTOSTATE),
+        irp_source: s(ewb.IRPSOURCE),
+        cancel_pending: /^yes$/i.test(txt(ewb.ISCANCELPENDING)),
+        transport_mode: mode || null,
+        vehicle_number: vehicle || null,
+        distance_km: distance,
+        part_b_pending: partBPending,
+        transporter_id_updated: transIdUpdated,
+        goods_gold: txt(ewb.ISTYPEOFGOODSGOLD) ? /^yes$/i.test(txt(ewb.ISTYPEOFGOODSGOLD)) : null,
+      }
+    : null;
+
+  const yn = (x: any): boolean | null => (txt(x) ? /^yes$/i.test(txt(x)) : null);
+  const einvAny = [v.IRNCANCELLED, v.IRNCANCELDATE, v.IRNCANCELREASON, v.IRNCANCELCODE, v.IRNIRPSOURCE, v.IRNACKUPDATEDATETIME, v.DISPATCHFROMNAME,
+    v.DISPATCHFROMPINCODE, v.DISPATCHFROMSTATENAME, v.BILLTOPLACE, v.CONSIGNEEGSTIN, v.ISDELIVERYSAMEASCONSIGNEE, v.ISDISPATCHSAMEASCONSIGNOR,
+    v.ISEWAYBILLAPPLICABLE].some((x) => txt(x)) || listOf(v, "DISPATCHFROMADDRESS").length > 0;
+  const einvDetails: EinvDetails | null = einvAny
+    ? {
+        irn_cancelled: /^yes$/i.test(txt(v.IRNCANCELLED)),
+        irn_cancel_date: tallyStamp(v.IRNCANCELDATE),
+        irn_cancel_reason: s(v.IRNCANCELREASON),
+        irn_cancel_code: s(v.IRNCANCELCODE),
+        irp_source: s(v.IRNIRPSOURCE),
+        ack_updated_at: s(v.IRNACKUPDATEDATETIME),
+        dispatch_from_name: s(v.DISPATCHFROMNAME),
+        dispatch_from_address: lines(v, "DISPATCHFROMADDRESS"),
+        dispatch_from_place: s(v.DISPATCHFROMPLACE),
+        dispatch_from_pincode: s(v.DISPATCHFROMPINCODE),
+        dispatch_from_state: s(v.DISPATCHFROMSTATENAME),
+        bill_to_place: s(v.BILLTOPLACE),
+        consignee_gstin: s(v.CONSIGNEEGSTIN),
+        delivery_same_as_consignee: yn(v.ISDELIVERYSAMEASCONSIGNEE),
+        dispatch_same_as_consignor: yn(v.ISDISPATCHSAMEASCONSIGNOR),
+        ewb_applicable: yn(v.ISEWAYBILLAPPLICABLE),
       }
     : null;
 
@@ -195,6 +286,7 @@ export function extractVoucherTransport(v: any): VoucherTransport {
     party_gstin: s(v.PARTYGSTIN),
     place_of_supply: s(v.PLACEOFSUPPLY),
     ewb_details: ewbDetails,
+    einv_details: einvDetails,
   };
 }
 

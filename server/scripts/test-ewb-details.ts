@@ -33,7 +33,15 @@ eq("ewb_details", t.ewb_details, {
   bill_date: "2026-08-01", valid_from: "2026-08-01T11:20", valid_until: "2026-08-02T23:59",
   part_b_updated: true, vehicle_type: "R - Regular", transporter_name: null, transporter_id: null,
   lr_number: null, lr_date: null, from_place: "KOLKATA", from_pincode: "700001", cancelled: false, cancel_reason: null,
+  sub_type: null, document_type: null, intrastate: null, from_address: null, from_state: null, to_place: "BADKULLA", to_pincode: "741121",
+  to_address: null, to_state: "West Bengal", irp_source: null, cancel_pending: false, transport_mode: "1 - Road", vehicle_number: "WB00X0000",
+  distance_km: 90, part_b_pending: false, transporter_id_updated: false, goods_gold: null,
 });
+eq("no e-invoice header → null einv_details", t.einv_details, null);
+const einv = extractVoucherTransport({ ...voucher, IRNCANCELLED: "No", IRNIRPSOURCE: "NIC", DISPATCHFROMNAME: "ZZ TEST DEPOT", DISPATCHFROMPINCODE: "700001",
+  "DISPATCHFROMADDRESS.LIST": { DISPATCHFROMADDRESS: ["Line 1", "Line 2"] }, ISEWAYBILLAPPLICABLE: "Yes", CONSIGNEEGSTIN: "PLACEHOLDER" }).einv_details;
+eq("e-invoice header read", einv && [einv.irn_cancelled, einv.irp_source, einv.dispatch_from_name, einv.dispatch_from_pincode, einv.dispatch_from_address, einv.ewb_applicable, einv.consignee_gstin, einv.delivery_same_as_consignee],
+  [false, "NIC", "ZZ TEST DEPOT", "700001", "Line 1, Line 2", true, "PLACEHOLDER", null]);
 eq("no e-way bill → null details", extractVoucherTransport({}).ewb_details, null);
 eq("zero date → null", tallyStamp("000000000"), null);
 eq("date only", tallyStamp("20261021"), "2026-10-21");

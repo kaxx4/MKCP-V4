@@ -1540,6 +1540,8 @@ export class SupabaseSync {
       ewb_valid_until: t.ewb_valid_until ?? null,
       // Migration 049 (applied 21-Oct-2026), phase 2 W2: the rest of the block.
       ewb_details: t.ewb_details ?? null,
+      // Web migration 0380 (applied 26-Nov-2026): the e-invoice header beyond IRN, ack and QR.
+      einv_details: t.einv_details ?? null,
       vehicle_number: t.vehicle_number ?? null,
       transport_mode: t.transport_mode ?? null,
       transport_distance_km: t.transport_distance_km ?? null,

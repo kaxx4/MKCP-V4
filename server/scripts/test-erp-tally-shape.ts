@@ -31,7 +31,7 @@ const voucher = (): any => ({
   allinventoryentries: [
     { stockitemname: "Item One", actualqty: "2 nos", billedqty: "2 nos", rate: "500/nos", amount: "1000.00", isdeemedpositive: false, godownname: "Main", batchname: "B", batchallocations: [{ godown: "Main" }] },
   ],
-  transport: { ewb_number: "EWB1", ewb_valid_until: "20261105", ewb_details: { cancelled: false }, vehicle_number: "WB00X0000", transport_mode: "1 - Road", transport_distance_km: 90,
+  transport: { ewb_number: "EWB1", ewb_valid_until: "20261105", ewb_details: { cancelled: false }, einv_details: { irn_cancelled: false, dispatch_from_name: "ZZ DEPOT" }, vehicle_number: "WB00X0000", transport_mode: "1 - Road", transport_distance_km: 90,
     consignee_pincode: "700001", consignee_place: "TOWN", consignee_state: "West Bengal", ship_to_place: "TOWN", dispatch_from_place: "DEPOT", party_gstin: "ZZZ", place_of_supply: "West Bengal" },
   buyer: { buyer_name: "A Buyer", buyer_address: "Street", buyer_pincode: "700002", buyer_pincode_source: "tally", buyer_place: "TOWN", buyer_state: "West Bengal" },
 });
@@ -67,8 +67,11 @@ ok("every ledger line name is a stand-in and its bill allocations are gone", tb.
    "is null" in the test block means the code nulled it and not that the fixture never had it. */
 const REQUIRED_NULLED = ["reference", "irn", "irn_ack_no", "irn_ack_date", "irn_qr", "ewb_number", "ewb_valid_until", "vehicle_number", "consignee_pincode", "consignee_place",
   "consignee_state", "ship_to_place", "dispatch_from_place", "party_gstin", "buyer_name", "buyer_address", "buyer_pincode", "buyer_pincode_source", "buyer_place", "buyer_state",
-  "ewb_details", "ledger_entries", "transport_distance_km", "inventory_entries"];
-ok("the code's list of nulled voucher columns is exactly the 24 the database refuses (migration 0138)", same(PERSONAL_VOUCHER_COLUMNS, REQUIRED_NULLED), PERSONAL_VOUCHER_COLUMNS.length + " columns");
+  "ewb_details", "ledger_entries", "transport_distance_km", "inventory_entries",
+  /* Web 0380 (26-Nov-2026): the e-invoice header carries the consignee GSTIN and dispatch address. The database check (0138) does not name it;
+     the code nulls it on a test run anyway, so a test row never carries it. */
+  "einv_details"];
+ok("the code's list of nulled voucher columns is exactly the 24 the database refuses (migration 0138) plus einv_details (0380)", same(PERSONAL_VOUCHER_COLUMNS, REQUIRED_NULLED), PERSONAL_VOUCHER_COLUMNS.length + " columns");
 const realBlock = tallyBlobFrom(voucher(), real)!;
 for (const c of PERSONAL_VOUCHER_COLUMNS) {
   /* ledger_entries (the embedded copy on the voucher row) is only filled when Tally embeds it; the fixture does not, so it is checked by a planted value below */
