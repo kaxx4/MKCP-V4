@@ -111,7 +111,9 @@ export async function runStatic(opts: { replay: boolean }): Promise<void> {
   refused("TG-P12", "a cash sale with no place of supply", sale({ number: "GUARD/X4", party: "Cash", lines: [{ item: "CARRIER CLIP", amount: 100, rate: 5 }] }));
   refused("TG-P12", "a cash sale declaring a misspelt state (\"West Bangal\")", sale({ number: "GUARD/X5", party: "Cash", placeOfSupply: "West Bangal", lines: [{ item: "CARRIER CLIP", amount: 100, rate: 5 }] }), /spelling|not a state/i);
   refused("TG-P12", "a placeOfSupply on a purchase", { ...purchase("GUARD/X6", [{ item: "CARRIER CLIP", amount: 100, rate: 5 }]), placeOfSupply: "Punjab" }, /not accepted/i);
-  refused("TG-P10", "a placeOfSupply contradicting the party ledger's state", { ...base(), placeOfSupply: "Odisha" }, /contradicts/i);
+  /* Owner, 26-Nov-2026: a typed place of supply that contradicts the ledger warns and is ignored; the ledger's state is what reaches Tally. */
+  accepted("TG-P10", "a placeOfSupply contradicting the party ledger's state (warns, ledger wins)", { ...base(), placeOfSupply: "Odisha" });
+  check("TG-P10", !/<PLACEOFSUPPLY>Odisha</i.test(build({ ...base(), placeOfSupply: "Odisha" })), "a typed placeOfSupply that contradicts the ledger reached the XML");
 
   // ── Line GST ─────────────────────────────────────────────────────────────
   refused("TG-P13", "a stock line whose item has no rate anywhere in its chain (EV GOODS) — Tally files it \"Tax rate/tax type not specified\"",

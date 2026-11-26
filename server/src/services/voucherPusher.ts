@@ -180,7 +180,7 @@ export function partyIdentity(p: VoucherPayload, masters?: TallyMasters): PartyI
 
   // The counterparty's state; the payload may stand in only where the ledger has
   // none (the shared Cash ledger). The guard read the same resolver.
-  const state = resolvePartyState(p, (reg.placeOfSupply || reg.state || mail.state).trim()).state;
+  const state = resolvePartyState(p, (reg.placeOfSupply || reg.state || mail.state).trim(), gstin).state;
 
   /* Place of supply is the DESTINATION of the goods: outward → the party's
      state; inward (Purchase, Debit Note, Receipt Note) → OUR state. A native

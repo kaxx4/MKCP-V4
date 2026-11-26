@@ -124,9 +124,14 @@ export type StateSource = "ledger" | "payload" | "none";
 export function resolvePartyState(
   p: Pick<VoucherPayload, "voucherType" | "placeOfSupply">,
   ledgerState: string | undefined | null,
+  gstin?: string | null,
 ): { state: string; source: StateSource } {
   const onLedger = (ledgerState ?? "").trim();
   if (onLedger) return { state: onLedger, source: "ledger" };
+  /* Owner, 26-Nov-2026: a party with a GSTIN but no state on its ledger takes the state the GSTIN was issued in (its
+     first two digits), as the website already did. Before this the website passed the bill and this guard refused it. */
+  const fromGstin = stateFromGstin(gstin);
+  if (fromGstin) return { state: fromGstin, source: "ledger" };
   const declared = (p.placeOfSupply ?? "").trim();
   if (declared && !isInwardSupply(p.voucherType)) return { state: declared, source: "payload" };
   return { state: "", source: "none" };
@@ -386,7 +391,7 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
 
   // ── Place of supply, when the ledger cannot carry one ─────────────────────
   const partyState = isMiss(party) ? "" : party.state;
-  const resolved = resolvePartyState(p, partyState);
+  const resolved = resolvePartyState(p, partyState, isMiss(party) ? null : party.gstin);
   const declared = (p.placeOfSupply ?? "").trim();
 
   if (declared && isInwardSupply(p.voucherType)) {
@@ -399,7 +404,8 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
   if (declared && partyState && declared.toUpperCase() !== partyState.trim().toUpperCase()) {
     // Tally's own master is the authority. A payload disagreeing with it is a
     // bug in the caller, not an override.
-    errors.push(`placeOfSupply "${declared}" contradicts the state on ledger "${!isMiss(party) ? party.name : p.partyLedgerName}" (${partyState}). The ledger is authoritative — remove placeOfSupply.`);
+    // Owner, 26-Nov-2026: the ledger wins anyway (resolvePartyState), so the typed value changes nothing. Warn, never refuse.
+    warnings.push(`The place of supply typed on the bill ("${declared}") differs from the state on ledger "${!isMiss(party) ? party.name : p.partyLedgerName}" (${partyState}). Tally uses the ledger's state; the typed one was ignored.`);
   }
   if (resolved.source === "payload") {
     // A typo here is not cosmetic: it decides CGST+SGST vs IGST. Check it against
@@ -729,9 +735,10 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
           errors.push(`This cash sale is ₹${goods.toFixed(0)} of goods, over the ₹${EWAY_BILL_THRESHOLD} limit for a cash sale. Split it into smaller cash sales, or bill it to the party's own ledger.`);
         }
       } else if (p.buyerName?.trim() || (p.buyerAddress ?? []).some(l => l.trim())) {
-        // Bill-to and ship-to both come from the ledger; a typed buyer would
-        // be a second consignee (the web refuses it too).
-        errors.push(`"${party.name}" is a party ledger, so bill-to and ship-to come from its ledger. The voucher also carries a typed buyer name/address, which would be a second consignee — remove it.`);
+        // Bill-to and ship-to both come from the ledger, and voucherPusher.partyIdentity
+        // ignores a typed buyer on a party ledger, so it cannot become a second consignee.
+        // Owner, 26-Nov-2026: send it, and say the typed text was ignored.
+        warnings.push(`"${party.name}" is a party ledger, so bill-to and ship-to come from its ledger. The buyer name or address typed on the bill was ignored.`);
       }
     }
 
@@ -755,8 +762,10 @@ export function guardVoucher(p: VoucherPayload, m: TallyMasters, ctx: GuardConte
     if (!isInwardSupply(p.voucherType) && act !== "Cancel" && act !== "Delete") {
       for (const ie of p.inventoryEntries ?? []) {
         const h = hsnFor(m, ie.stockItemName, p.date).code.trim();
-        if (!h) errors.push(`"${ie.stockItemName}" has no HSN in Tally (not on the item, not on its stock group) — the e-invoice rejects a line without one. Set it in Tally.`);
-        else if (!HSN_RE.test(h)) errors.push(`The HSN on "${ie.stockItemName}" ("${h}") is not 4, 6 or 8 digits.`);
+        // Owner, 26-Nov-2026: a missing or malformed HSN no longer stops the sale. It warns; set it in Tally
+        // before filing GSTR-1 (its HSN summary) or making an e-invoice.
+        if (!h) warnings.push(`"${ie.stockItemName}" has no HSN in Tally (not on the item, not on its stock group). Set it in Tally before filing GSTR-1 or making an e-invoice.`);
+        else if (!HSN_RE.test(h)) warnings.push(`The HSN on "${ie.stockItemName}" ("${h}") is not 4, 6 or 8 digits. Correct it in Tally before filing GSTR-1 or making an e-invoice.`);
       }
     }
 

@@ -104,8 +104,8 @@ function offlineCases() {
     sale({ number: "PG/8i", party: MIXED_ORDER_PARTY, placeOfSupply: "West Bengal", buyerName: "WALK-IN BUYER", lines: clip }), m, "needs the buyer's address");
   expectRejected("the mixed-order ledger gets the same ₹50,000 ceiling as Cash",
     sale({ number: "PG/8j", party: MIXED_ORDER_PARTY, placeOfSupply: "West Bengal", buyerName: "WALK-IN BUYER", buyerAddress: ["BAGNAN"], lines: [{ item: "CARRIER CLIP", amount: 60000, rate: 5 }] }), m, "over the ₹50000 limit for a cash sale");
-  expectRejected("a party-ledger sale carrying a typed buyer name/address (second consignee)",
-    sale({ number: "PG/8e", party: PARTY_LOCAL, buyerName: "SOMEONE ELSE", buyerAddress: ["ELSEWHERE"], lines: clip }), m, "second consignee");
+  expectAccepted("a party-ledger sale carrying a typed buyer name/address goes through; the typed text is ignored (owner, 26-Nov-2026)",
+    sale({ number: "PG/8e", party: PARTY_LOCAL, buyerName: "SOMEONE ELSE", buyerAddress: ["ELSEWHERE"], lines: clip }), m);
   expectAccepted("a Sales Order Note whose ledger has no pincode goes through like a Sales invoice (owner, 26-Nov-2026)",
     { ...sale({ number: "PG/8f", party: PARTY_LOCAL, lines: clip }), voucherType: "Sales Order Note", isInvoice: false }, withLedger(PARTY_LOCAL, { pincode: "" }));
   expectAccepted("a ledger pincode that is not 6 digits warns, never refuses (owner, 26-Nov-2026)",
@@ -119,7 +119,7 @@ function offlineCases() {
     sale({ number: "PG/22", party: PARTY_UNREG, lines: clip }), withLedger(PARTY_UNREG, { state: "West Bangal", registrations: [{ applicableFrom: "20170701", gstin: "", registrationType: "Unregistered/Consumer", placeOfSupply: "West Bangal", state: "West Bangal" }] }), "not a GST state");
   {
     const noHsn = { ...m, stockGroups: new Map([...m.stockGroups].map(([k, g]) => [k, { ...g, hsnRevisions: [] }])) } as TallyMasters;
-    expectRejected("an outward line whose item has no HSN anywhere in its chain", sale({ number: "PG/23", party: PARTY_LOCAL, lines: clip }), noHsn, "no HSN");
+    expectAccepted("an outward line whose item has no HSN anywhere in its chain warns, never refuses (owner, 26-Nov-2026)", sale({ number: "PG/23", party: PARTY_LOCAL, lines: clip }), noHsn);
   }
   {
     const p = purchase("PG/24", clip);

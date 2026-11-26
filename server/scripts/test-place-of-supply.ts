@@ -115,8 +115,9 @@ const warns = (p: VoucherPayload) => guardVoucher(p, M).warnings.join(" | ");
 
   H("WHAT A DECLARATION MUST NOT DO");
   const contradiction = sale({ partyLedgerName: "PUNJAB DEALER", placeOfSupply: "West Bengal" });
-  ok("it cannot contradict a ledger that already has a state",
-    /contradicts the state on ledger/i.test(errs(contradiction)), errs(contradiction).slice(0, 90));
+  /* Owner, 26-Nov-2026: the contradiction warns and is ignored (the ledger wins), it no longer refuses on its own. */
+  ok("it cannot contradict a ledger that already has a state (warned, ledger wins)",
+    /differs from the state on ledger/i.test(warns(contradiction)) && !/differs from the state on ledger|contradicts/i.test(errs(contradiction)), warns(contradiction).slice(0, 90));
 
   /* The cross-state leak. The live harness cannot see this: its party is in West
      Bengal, so an override would land on the same value it was meant to replace. */
