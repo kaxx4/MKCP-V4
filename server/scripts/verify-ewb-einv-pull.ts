@@ -13,7 +13,8 @@ import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
 
 const here = dirname(fileURLToPath(import.meta.url));
-config({ path: join(here, "..", ".env") });
+/* MKCP_ENV_FILE lets a worktree with no server/.env use the agent checkout's file (loaded, never printed). */
+config({ path: process.env.MKCP_ENV_FILE || join(here, "..", ".env") });
 
 import { tallyPost } from "../src/tally.js";
 import { buildCollectionXml } from "../src/services/xmlBuilder.js";
@@ -22,6 +23,8 @@ import { extractVoucherTransport } from "../src/converters/convert.js";
 
 const TALLY = process.env.TALLY_URL || "http://localhost:9000";
 const COMPANY = process.env.TALLY_COMPANY || "";
+/* 27-Nov-2026: with no company named, Tally answered for whatever was open; after a restart that crashed TallyPrime (c0000005) three times. */
+if (!COMPANY || process.env.MKCP_TALLY_ROLE !== "sandbox") { console.error("refused: TALLY_COMPANY is empty or this is not a sandbox machine. Nothing was sent to Tally."); process.exit(2); }
 
 /** Every VOUCHER object in the parsed reply, wherever the collection nests it. */
 function vouchersIn(node: any, out: any[] = []): any[] {
