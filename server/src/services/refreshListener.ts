@@ -229,6 +229,17 @@ interface SubscriptionHandle {
 export const RECONNECT_BASE_MS = 2_000;
 export const RECONNECT_MAX_MS = 30_000;
 
+/**
+ * How long a "Sync now" waits for another click before it starts (28-Nov-2026, speed pass S3).
+ * It was 8 s, which put 8 of the ~36 seconds of a one-day sync (22 %) before anything was asked of Tally. A burst (7-day then 30-day within a
+ * moment) still merges to the widest scope; a click that lands later than this simply waits its turn behind the running sync (busy retry below).
+ */
+export const COALESCE_MS = 1_500;
+/** While another sync holds Tally's port, look again this often (was 8 s: a finished sync was noticed up to 8 s late). It is a local call, not a database read. */
+export const BUSY_RETRY_MS = 2_000;
+/** Same 3-minute window the web's poll allows, at the shorter retry. */
+export const MAX_BUSY_RETRIES = Math.ceil(180_000 / BUSY_RETRY_MS);
+
 /** Exponential backoff for the Nth reconnect attempt, capped. Pure, so the
  *  schedule is testable without a real channel or a real clock. */
 export function reconnectDelayMs(attempt: number): number {
@@ -255,17 +266,15 @@ function subscribeForCompany(
   // race was honoured and the rest were silently marked done — so a "30-day" click
   // could resolve to a 7-day pull, or vice-versa (bug report 2026-07-02).
   type Batch = { ids: number[]; widestDays: unknown; retries: number };
-  const COALESCE_MS = 8_000;
-  const MAX_BUSY_RETRIES = 22; // ~3 min at 8s — within the web dashboard's 3-min poll window
   let batch: Batch | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   const setStatus = (ids: number[], status: string) =>
     supabase.from("tally_refresh_commands").update({ status }).in("id", ids);
 
-  const armTimer = () => {
+  const armTimer = (ms: number = COALESCE_MS) => {
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => void fireBatch(), COALESCE_MS);
+    timer = setTimeout(() => void fireBatch(), ms);
   };
 
   // Merge a batch into the current buffer (or start one) and re-arm. In its own
@@ -279,7 +288,7 @@ function subscribeForCompany(
       if (rankDays(b.widestDays) > rankDays(batch.widestDays)) batch.widestDays = b.widestDays;
       batch.retries = Math.max(batch.retries, b.retries);
     }
-    armTimer();
+    armTimer(BUSY_RETRY_MS);
   };
 
   async function fireBatch(): Promise<void> {
@@ -336,7 +345,7 @@ function subscribeForCompany(
           requeue(b);
           console.log(
             `🌐 [WEB-SYNC] ⏭ Busy — another sync running; retry ${b.retries}/${MAX_BUSY_RETRIES} ` +
-              `in ${COALESCE_MS / 1000}s [${ids.join(", ")}]`
+              `in ${BUSY_RETRY_MS / 1000}s [${ids.join(", ")}]`
           );
         } else {
           console.log(
@@ -377,9 +386,9 @@ function subscribeForCompany(
   let priceBatch: PriceBatch | null = null;
   let priceTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const armPriceTimer = () => {
+  const armPriceTimer = (ms: number = COALESCE_MS) => {
     if (priceTimer) clearTimeout(priceTimer);
-    priceTimer = setTimeout(() => void firePriceListBatch(), COALESCE_MS);
+    priceTimer = setTimeout(() => void firePriceListBatch(), ms);
   };
 
   const requeuePriceBatch = (b: PriceBatch): void => {
@@ -390,7 +399,7 @@ function subscribeForCompany(
       priceBatch.retries = Math.max(priceBatch.retries, b.retries);
       priceBatch.requesters = [...b.requesters, ...priceBatch.requesters];
     }
-    armPriceTimer();
+    armPriceTimer(BUSY_RETRY_MS);
   };
 
   /** Queue one price_list command. Several queued within COALESCE_MS collapse
@@ -431,7 +440,7 @@ function subscribeForCompany(
         b.retries++;
         requeuePriceBatch(b);
         console.log(
-          `🌐 [WEB-SYNC] ⏭ Price list busy — retry ${b.retries}/${MAX_BUSY_RETRIES} in ${COALESCE_MS / 1000}s [${ids.join(", ")}]`
+          `🌐 [WEB-SYNC] ⏭ Price list busy — retry ${b.retries}/${MAX_BUSY_RETRIES} in ${BUSY_RETRY_MS / 1000}s [${ids.join(", ")}]`
         );
         return;
       }

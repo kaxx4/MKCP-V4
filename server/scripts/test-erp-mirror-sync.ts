@@ -22,7 +22,7 @@ import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import {
   mirrorRowFrom, scrubName, scrubSaltFrom, voucherProblem, isAccountingType, eachDay, runMirrorSync, assertParsedCollection, tallyMirrorReads,
-  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, applyAcceptedDrops, deriveStepState, stageChunks, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_VOUCHERTYPE_DEF, ERP_MIRROR_UNIT_DEF, ERP_MIRROR_ITEM_DEF, voucherExtrasFromParsed, voucherExtraFields, ledgerContactFields, ERP_MIRROR_MARK_DEF,
+  parseBalance, ledgerProblem, ledgerRowFrom, ledgersFromParsed, runRepull, runDayCheck, planMirrorWork, applyAcceptedDrops, deriveStepState, swapMovedMirror, stageChunks, ERP_MIRROR_LEDGER_DEF, ERP_MIRROR_VOUCHERTYPE_DEF, ERP_MIRROR_UNIT_DEF, ERP_MIRROR_ITEM_DEF, voucherExtrasFromParsed, voucherExtraFields, ledgerContactFields, ERP_MIRROR_MARK_DEF,
   indiaToday, ledgerPeriod, judgeLoadedPeriod, incrementalRanges, INCREMENTAL_CHUNK, ERP_MIRROR_VOUCHER_DEF, loadedPeriodFromParsed, tallyDateToIso, ERP_MIRROR_COMPANY_DEF,
   type MirrorStore, type MirrorTally, type MirrorRow, type SwapResult, type MirrorLedgerRow, type TallyLedger, type DayCheckVoucher, type AcceptedRun,
 } from "../src/services/erpMirrorSync.js";
@@ -606,6 +606,35 @@ function fakeTally(byDay: Record<string, any[]>, opts: { highest?: number; failO
     ok("a held-back day writes a failed step and sets tallyError, and the run still finishes swapped", c.f.steps.some((x) => x.state === "failed" && /per-day floor/.test(x.step)) && !!c.rep.tallyError && c.rep.state === "swapped");
     const d = await run(() => new Error("derive boom"));
     ok("a thrown copy writes a failed step", d.f.steps.some((x) => x.state === "failed" && /could not copy/.test(x.step)) && /boom/.test(d.rep.tallyError ?? ""));
+    // Speed pass S3 (28-Nov-2026): an incremental run that moved nothing does not repeat the copy; anything else does.
+    ok("swapMovedMirror: inserted, changed, pruned or moved_out above zero is moved", swapMovedMirror({ inserted: 1, changed: 0, pruned: 0, moved_out: 0 }) && swapMovedMirror({ inserted: 0, changed: 2, pruned: 0, moved_out: 0 }) && swapMovedMirror({ inserted: 0, changed: 0, pruned: 1, moved_out: 0 }) && swapMovedMirror({ inserted: 0, changed: 0, pruned: 0, moved_out: 3 }));
+    ok("swapMovedMirror: all four at zero is not moved", !swapMovedMirror({ inserted: 0, changed: 0, pruned: 0, moved_out: 0, unchanged: 40 }));
+    ok("swapMovedMirror: a missing or odd count is 'cannot tell', so moved", swapMovedMirror({ inserted: 0, changed: 0 }) && swapMovedMirror({ inserted: 0, changed: 0, pruned: "0", moved_out: 0 }) && swapMovedMirror(null) && swapMovedMirror(undefined));
+    {
+      const quietSwap = { state: "swapped", inserted: 0, changed: 0, unchanged: 5, pruned: 0, moved_out: 0 } as SwapResult;
+      const f = fakeStore({ mark: 130, swap: quietSwap, derive: () => whole });
+      const inc = async () => runMirrorSync({ store: f.store, tally: fakeTally({}, { highest: 130 }).tally, kind: "incremental", ledgers: false, log: () => {} });
+      await inc();
+      ok("the first incremental run in a process copies, even with nothing moved", f.calls.filter((x) => x === "derive").length === 1);
+      await inc(); await inc();
+      ok("the next idle incremental runs do not copy again", f.calls.filter((x) => x === "derive").length === 1, f.calls.filter((x) => x === "derive").length + " copies");
+      ok("...and the run still ends swapped", (await inc()).state === "swapped");
+      const g = fakeStore({ mark: 130, swap: { state: "swapped", inserted: 1, changed: 0, unchanged: 5, pruned: 0, moved_out: 0 } as SwapResult, derive: () => whole });
+      await runMirrorSync({ store: g.store, tally: fakeTally({}, { highest: 130 }).tally, kind: "incremental", ledgers: false, log: () => {} });
+      await runMirrorSync({ store: g.store, tally: fakeTally({}, { highest: 130 }).tally, kind: "incremental", ledgers: false, log: () => {} });
+      ok("an incremental run that inserted a voucher copies every time", g.calls.filter((x) => x === "derive").length === 2);
+      let bad = true;
+      const h = fakeStore({ mark: 130, swap: quietSwap, derive: () => (bad ? { ...whole, deletes_skipped: true, day_floor_days: 1 } : whole) });
+      const inc2 = async () => runMirrorSync({ store: h.store, tally: fakeTally({}, { highest: 130 }).tally, kind: "incremental", ledgers: false, log: () => {} });
+      await inc2(); await inc2();
+      ok("a copy that was held back is repeated even when nothing moved", h.calls.filter((x) => x === "derive").length === 2);
+      bad = false; await inc2(); await inc2(); await inc2();
+      ok("...until it is clean once, then idle runs stop copying", h.calls.filter((x) => x === "derive").length === 3, h.calls.filter((x) => x === "derive").length + " copies");
+      const k = fakeStore({ mark: 130, swap: quietSwap, derive: () => whole });
+      await runMirrorSync({ store: k.store, tally: fakeTally({}, { highest: 130 }).tally, kind: "incremental", ledgers: false, log: () => {} });
+      await runMirrorSync({ store: k.store, tally: fakeTally({ "2026-11-01": [] }, { highest: 40, counted: {}, vouchers: [{ k: "G-D1", d: "2026-11-01", a: 40 }] }).tally, kind: "full", scope: { from: "2026-11-01", to: "2026-11-01" }, ledgers: false, log: () => {} }).catch(() => undefined);
+      ok("a full run always copies (it is the rare wide pass)", k.calls.filter((x) => x === "derive").length >= 1);
+    }
     // an accepted drop: the copy leaves a step on the run and a failure is reported on the entry
     const e1 = fakeStore({ accepted: [{ acceptance: "A1", run_id: "RUN1" }], derive: () => whole });
     const r1 = await applyAcceptedDrops({ store: e1.store, log: () => {} });

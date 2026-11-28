@@ -25,6 +25,7 @@ import { agentMachineId, supabaseClient } from "./supabaseClient.js";
 import { tallyCompany } from "../config/company.js";
 import { JOB_BACKOFF_MAX_MS, jobPollMs, withJitter, backoffMs, leaseSecondsFor } from "./jobPoll.js";
 import { tallyPost } from "../tally.js";
+import { startQueueWake } from "./queueWake.js";
 import { ReadbackRunner, supabaseReadbackQueue, readbackVoucher, readbackTargetOf, READBACK_TIMEOUT_MS } from "./erpReadback.js";
 
 type Env = Record<string, string | undefined>;
@@ -78,6 +79,10 @@ export function readPrimaryConfig(tallyUrl: string, env: Env = process.env): { o
 }
 
 // ── The queue loop ────────────────────────────────────────────────────────────
+/** After a wake that arrived during a round, the next round comes this soon (an idle round is three small calls). */
+export const WAKE_RECHECK_MS = 1_000;
+/** Wakes closer together than this are one wake. */
+export const WAKE_MIN_GAP_MS = 1_000;
 /** `lastAt` is the last time the loop looked; `lastWorkAt` (agent-ui lane) is the last time it actually did something (worked a job, or ran a piece of mirror work), so a person can tell "looked and found nothing" from "did something". */
 export interface LoopStatus { running: boolean; rounds: number; lastAt: string | null; lastNote: string | null; errors: number; busy: boolean; lastWorkAt?: string | null }
 
@@ -138,24 +143,55 @@ export class PrimaryQueueLoop {
     } finally { this.status.busy = false; }
   }
 
+  /** Set by `wake` while a round is running: that round may have looked just before the new job landed, so the next one comes soon, not at the poll. */
+  private wakePending = false;
+  private lastWakeAt = -Infinity;
+  private runLoop: (() => Promise<void>) | null = null;
+
   start(): void {
     if (this.status.running) return;
     this.status.running = true;
     const set = this.o.setTimer ?? ((fn: () => void, ms: number) => { const t = setTimeout(fn, ms); t.unref?.(); return t; });
     const loop = async () => {
       if (!this.status.running) return;
+      this.timer = null;
       const base = await this.tick();
       if (!this.status.running) return;
       const wait = withJitter(base, this.o.rand);
-      /* The jitter never pushes a failure wait past the 300 s ceiling. */
-      this.timer = set(loop, this.fails > 0 ? Math.min(wait, JOB_BACKOFF_MAX_MS) : wait);
+      /* The jitter never pushes a failure wait past the 300 s ceiling. A wake that arrived during the round shortens an idle wait to
+         WAKE_RECHECK_MS (never a failure's back-off: a database that is struggling is not asked sooner because a job was announced). */
+      const planned = this.fails > 0 ? Math.min(wait, JOB_BACKOFF_MAX_MS) : wait;
+      const woke = this.wakePending && this.fails === 0;
+      this.wakePending = false;
+      this.timer = set(loop, woke ? Math.min(planned, WAKE_RECHECK_MS) : planned);
     };
+    this.runLoop = loop;
     void loop();
   }
+
+  /**
+   * A new or changed job was announced by the database (queueWake.ts): start the next round now instead of waiting out the 30 s poll
+   * (28-Nov-2026, speed pass S3: a job that cost 25 s of work waited up to 30 s more to be picked up). The round is the same `tick`: same
+   * lease, same company pin, same claim; only the moment changes. Single flight is kept: while a round is running this only notes that one
+   * more look is wanted. Wakes closer together than WAKE_MIN_GAP_MS count once, so a burst of signals is one round. Never throws.
+   */
+  wake(): boolean {
+    if (!this.status.running || this.runLoop === null) return false;
+    const now = (this.o.now ?? Date.now)();
+    if (this.status.busy) { this.wakePending = true; return false; }
+    if (now - this.lastWakeAt < WAKE_MIN_GAP_MS) return false;
+    this.lastWakeAt = now;
+    if (this.timer !== null) (this.o.clearTimer ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>)))(this.timer);
+    this.timer = null;
+    void this.runLoop();
+    return true;
+  }
+
   stop(): void {
     this.status.running = false;
     if (this.timer !== null) (this.o.clearTimer ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>)))(this.timer);
     this.timer = null;
+    this.runLoop = null;
   }
 }
 
@@ -631,8 +667,11 @@ function startPrimaryModeInner(tallyUrl: string, env: Env, deps: PrimaryDeps): P
   queue.start();
   try { mirror.start(); } catch (e) { queue.stop(); throw e; }
   housekeeping.start();
+  /* Speed pass S3: the database's own "an ERP job changed" signal wakes the queue loop at once (queueWake.ts). Not started when a test passes its own
+     client. If the socket never connects, the 30 s poll carries on exactly as before. */
+  const wakeHandle = deps.client ? null : startQueueWake({ wake: () => queue.wake(), log: (l) => log(`[primary queue] ${l}`) });
   return {
-    stop: () => { queue.stop(); mirror.stop(); housekeeping.stop(); },
+    stop: () => { queue.stop(); mirror.stop(); housekeeping.stop(); wakeHandle?.stop(); },
     status: () => ({ mode: "primary", company: k.company, machine: k.machine, queue: queue.status, mirror: mirror.status, housekeeping: housekeeping.status, agent: agent.status }),
   };
 }

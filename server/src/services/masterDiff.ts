@@ -102,3 +102,33 @@ export function sumChanged(parts: ReadonlyArray<number | undefined>): number | u
   }
   return total;
 }
+
+/**
+ * The rows a "write only what differs" pass sends. When nothing differs it is still ONE row (the first), because the web reads the newest
+ * `synced_at` of the table as "how fresh Tally's answer is" (livePriceList.ts, engine/gstMaster.ts): a pass that wrote nothing would leave that
+ * clock stopped while the pull itself was fine. The row is re-sent with its own, unchanged values and a new `synced_at`, so nothing else moves.
+ * `mapped` must carry the fresh `synced_at`. Speed pass S3, 28-Nov-2026.
+ */
+export function withFreshnessStamp<T>(mapped: readonly T[], toWrite: readonly T[]): T[] {
+  if (toWrite.length > 0 || mapped.length === 0) return toWrite.slice();
+  return [mapped[0]];
+}
+
+/**
+ * Run `fn` over `items` with at most `limit` running at once, keeping the results in order. A rejection rejects the whole call (the first one),
+ * like Promise.all. Used for the pre-image reads, which were one request after another: a 513-row table is six requests of 100, and each one
+ * waits for the one before it.
+ */
+export async function mapLimit<I, O>(items: readonly I[], limit: number, fn: (item: I, index: number) => Promise<O>): Promise<O[]> {
+  const out = new Array<O>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return out;
+}

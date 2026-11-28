@@ -15,7 +15,7 @@ import {
   type PriorVersions,
   type EntryCounts,
 } from "./mirrorSignal.js";
-import { diffMasterRows, sumChanged } from "./masterDiff.js";
+import { diffMasterRows, sumChanged, withFreshnessStamp, mapLimit } from "./masterDiff.js";
 
 /** Length of an entry array as stored or mapped; anything else is 0. */
 function entryCount(v: unknown): number {
@@ -162,6 +162,9 @@ export function gstRateRow(
     parent: r.parent || null,
   };
 }
+
+/** How many pre-image reads (100 GUIDs each) run at once. Four keeps a busy Micro database from seeing a burst while cutting six waits to two. */
+const PRE_IMAGE_PARALLEL = 4;
 
 export class SupabaseSync {
   private client: SupabaseClient | null;
@@ -621,9 +624,11 @@ export class SupabaseSync {
     /* H-2: the stored total, so an edit can say old and new (changeEvents.ts). */
     const totals = new Map<string, number | null>();
     const CHUNK = 100;
+    const chunks: string[][] = [];
+    for (let i = 0; i < clean.length; i += CHUNK) chunks.push(clean.slice(i, i + CHUNK));
     try {
-      for (let i = 0; i < clean.length; i += CHUNK) {
-        const chunk = clean.slice(i, i + CHUNK);
+      /* Up to four chunks at once (speed pass S3); a pass over the 300-voucher ceiling was three requests in a row. */
+      const pages = await mapLimit(chunks, PRE_IMAGE_PARALLEL, async (chunk) => {
         const { data, error } = await this.withRetry("select prior alter_id", async () => {
           const res = await this.client!
             .from("tally_vouchers")
@@ -633,11 +638,11 @@ export class SupabaseSync {
           if (res.error && this.isTransient(res.error)) throw res.error;
           return res;
         });
-        if (error) {
-          console.warn(`[Supabase] mirror signals: pre-image read failed (${error.message}) — announcing every voucher this pass`);
-          return null;
-        }
-        for (const row of data ?? []) {
+        if (error) throw new Error(error.message);
+        return data ?? [];
+      });
+      for (const data of pages) {
+        for (const row of data) {
           /* A row with no alter_id is recorded as null, NOT omitted: "the row
              exists but carries no AlterID" and "there is no row" are different
              facts (G7). Both are emitted, but they are not the same thing and
@@ -653,7 +658,7 @@ export class SupabaseSync {
       }
       return { alterIds: held, entries, totals };
     } catch (e: any) {
-      console.warn(`[Supabase] mirror signals: pre-image read threw (${e?.message || e}) — announcing every voucher this pass`);
+      console.warn(`[Supabase] mirror signals: pre-image read failed (${e?.message || e}) — announcing every voucher this pass`);
       return null;
     }
   }
@@ -677,9 +682,11 @@ export class SupabaseSync {
     const guids = Array.from(new Set(rows.map((r) => String(r.guid)).filter(Boolean)));
     const held = new Map<string, Record<string, unknown>>();
     const CHUNK = 100;
+    const chunks: string[][] = [];
+    for (let i = 0; i < guids.length; i += CHUNK) chunks.push(guids.slice(i, i + CHUNK));
     try {
-      for (let i = 0; i < guids.length; i += CHUNK) {
-        const chunk = guids.slice(i, i + CHUNK);
+      /* Four requests at a time rather than one after another (speed pass S3): 513 stock items were six requests in a row, each waiting for the last. */
+      const pages = await mapLimit(chunks, PRE_IMAGE_PARALLEL, async (chunk) => {
         const { data, error } = await this.withRetry(`select prior ${table}`, async () => {
           const res = await this.client!
             .from(table)
@@ -689,15 +696,13 @@ export class SupabaseSync {
           if (res.error && this.isTransient(res.error)) throw res.error;
           return res;
         });
-        if (error) {
-          console.warn(`[Supabase] masters pre-image for ${table} failed (${error.message}) — writing every row, changed unknown`);
-          return null;
-        }
-        for (const row of (data ?? []) as unknown as Record<string, unknown>[]) held.set(String(row.guid), row);
-      }
+        if (error) throw new Error(error.message);
+        return (data ?? []) as unknown as Record<string, unknown>[];
+      });
+      for (const page of pages) for (const row of page) held.set(String(row.guid), row);
       return held;
     } catch (e: any) {
-      console.warn(`[Supabase] masters pre-image for ${table} threw (${e?.message || e}) — writing every row, changed unknown`);
+      console.warn(`[Supabase] masters pre-image for ${table} failed (${e?.message || e}) — writing every row, changed unknown`);
       return null;
     }
   }
@@ -1764,13 +1769,18 @@ export class SupabaseSync {
     if (!this.client || !entries.length) return;
     const t0 = Date.now();
 
+    /* ONE read of what is stored, used twice: by the pull log below, and to write only the rows that differ (speed pass S3, 28-Nov-2026).
+       Measured 28-Nov-2026: every "Sync now" re-sent all 4,276 dated rows in 22 sequential requests, and the log showed 0 changed on 12 pulls
+       in a row. null (could not read, or the read was capped): every row is written, as before. */
+    const prior = await this.priorPriceRows(company);
+
     /* BEFORE the upsert, and that ordering is the whole thing.
        The log records what THIS pull changed, which it can only know by
        comparing against what is stored right now. One line further down and
        the "before" side has already been overwritten with the "after" side,
        and the diff is silently empty on every pull for ever — a failure that
        looks exactly like "nothing ever changes". */
-    await recordPricePull(this.client, company, entries, origin);
+    await recordPricePull(this.client, company, entries, origin, prior);
     const mapped = entries.map((e) => ({
       company,
       item_name: e.itemName,
@@ -1782,10 +1792,51 @@ export class SupabaseSync {
       discount_pct: e.discountPct,
       synced_at: new Date().toISOString(),
     }));
-    await this.batchAndUpsertOn("tally_price_list", mapped, "company,item_name,price_level,effective_from");
+    const keyOf = (r: Record<string, unknown>) => `${r.item_name}|${r.price_level}|${r.effective_from}`;
+    const heldByKey = prior ? new Map(prior.map((r) => [keyOf(r), r] as const)) : null;
+    const diff = diffMasterRows(mapped, heldByKey, keyOf);
+    const toWrite = withFreshnessStamp(mapped, diff.toWrite);
+    await this.batchAndUpsertOn("tally_price_list", toWrite, "company,item_name,price_level,effective_from");
     const items = new Set(entries.map((e) => e.itemName)).size;
-    console.log(`[Supabase] ✓ Synced ${mapped.length} price-list entries (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
-    await this.bumpPriceListSignal(company, items);
+    console.log(
+      `[Supabase] ✓ Synced ${mapped.length} price-list entries` +
+      `${diff.changed !== undefined ? `, ${diff.changed} changed, ${toWrite.length} written` : ""} (${((Date.now() - t0) / 1000).toFixed(1)}s)`,
+    );
+    /* Nothing differs: nobody needs telling. The signal makes every open tab re-read the whole list, so a pull that found nothing new used to
+       cost every tab that read for no reason. Unknown (no pre-image) still announces. */
+    if (diff.changed === undefined || diff.changed > 0) await this.bumpPriceListSignal(company, items);
+  }
+
+  /**
+   * The stored price rows for a company (the columns a pull writes, company included so the comparison sees the whole row), or null when
+   * they cannot be trusted: a failed read, or a read the server cut short (fewer rows than it counted). null makes the caller write every row.
+   */
+  private async priorPriceRows(company: string): Promise<Array<Record<string, unknown>> | null> {
+    if (!this.client) return null;
+    try {
+      const { data, error, count } = await this.withRetry("select prior tally_price_list", async () => {
+        const res = await this.client!
+          .from("tally_price_list")
+          .select("company,item_name,price_level,price_level_raw,effective_from,rate,unit,discount_pct", { count: "exact" })
+          .eq("company", company)
+          .range(0, 19_999);
+        if (res.error && this.isTransient(res.error)) throw res.error;
+        return res;
+      });
+      if (error) {
+        console.warn(`[Supabase] price-list pre-image failed (${error.message}) — writing every row`);
+        return null;
+      }
+      const rows = (data ?? []) as unknown as Array<Record<string, unknown>>;
+      if (typeof count !== "number" || rows.length < count) {
+        console.warn(`[Supabase] price-list pre-image was cut short (${rows.length} of ${count ?? "?"}) — writing every row`);
+        return null;
+      }
+      return rows;
+    } catch (e: any) {
+      console.warn(`[Supabase] price-list pre-image threw (${e?.message || e}) — writing every row`);
+      return null;
+    }
   }
 
   /**
@@ -1874,12 +1925,17 @@ export class SupabaseSync {
     const prior = await this.priorRowsByKey(
       "tally_gst_rates",
       company,
-      "scope,name,effective_from,gst_rate,cgst_rate,sgst_rate,igst_rate,taxability,parent",
+      /* `company` is in the list because the comparison walks every column of the row about to be written: without it the stored side had no
+         company, every row compared as different, and every masters pass reported ~114 changed GST rows that had not moved (found 28-Nov-2026
+         from the live history: changed was 114 on pass after pass with nothing edited). */
+      "company,scope,name,effective_from,gst_rate,cgst_rate,sgst_rate,igst_rate,taxability,parent",
       keyOf,
       ["scope", "name", "effective_from"],
     );
     const diff = diffMasterRows(mapped, prior, keyOf);
-    await this.batchAndUpsertOn("tally_gst_rates", mapped, "company,scope,name,effective_from");
+    /* Write what differs, plus one row stamped now, so the newest synced_at (how fresh Tally's answer is) still moves on every pass. */
+    const toWrite = withFreshnessStamp(mapped, diff.toWrite);
+    await this.batchAndUpsertOn("tally_gst_rates", toWrite, "company,scope,name,effective_from");
     console.log(`[Supabase] ✓ Synced ${mapped.length} GST rate rows${diff.changed !== undefined ? `, ${diff.changed} changed` : ""} (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
     return diff.changed;
   }

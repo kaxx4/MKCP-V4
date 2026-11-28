@@ -52,6 +52,23 @@ export class SyncOrchestrator {
     signal?: AbortSignal,
     onProgress?: (p: SyncProgress) => void
   ): Promise<MastersSyncResult> {
+    return (await this.readMasters(company, signal, onProgress)).finish();
+  }
+
+  /**
+   * The masters pass in two halves (speed pass S3, 28-Nov-2026): everything that needs TALLY (every read, price list and GST included), and
+   * `finish()`, everything that needs the DATABASE (the price-list and GST writes, then the masters upload and its history row).
+   *
+   * Why two: Tally is single-threaded and the database is not. `syncAll` starts `finish()` and goes straight on to the day's Tally read (the
+   * longest wait of a sync, 14 to 22 s on the office machine) while the masters upload runs beside it, instead of the voucher read waiting
+   * for the upload. `syncMastersOnly` runs one straight after the other, exactly as it always did. `finish()` never throws: its failures
+   * land in the result's `errors` and `success`, as before.
+   */
+  async readMasters(
+    company: string,
+    signal?: AbortSignal,
+    onProgress?: (p: SyncProgress) => void
+  ): Promise<{ finish: () => Promise<MastersSyncResult> }> {
     const t0 = Date.now();
     const errors: string[] = [];
 
@@ -130,17 +147,14 @@ export class SyncOrchestrator {
        from Tally and importing a JSON by hand.
 
        Failures are collected, never thrown: a price list that did not come back
-       must not take a masters sync down with it. */
-    /* How many GST rate rows this pass changed. tally_gst_rates is part of the
-       web's dataset, so it rides on the masters history row's `changed`.
-       0 until a write starts; undefined once one starts and cannot report. */
-    let gstChanged: number | undefined = 0;
+       must not take a masters sync down with it. The READS happen now (Tally);
+       the WRITES wait for finish() so they can run beside the next Tally read. */
+    let priceRows: Awaited<ReturnType<typeof fetchPriceList>> | null = null;
+    let gstRows: Awaited<ReturnType<typeof fetchGstRates>> | null = null;
     if (!signal?.aborted) {
       emit("masters", 7, 8, "Fetching price list + GST rates...");
       try {
-        const priceRows = await fetchPriceList(this.tallyUrl, company);
-        await this.supabase.syncPriceList(priceRows, company);
-        console.log(`[MASTERS] ✓ Price list: ${priceRows.length} dated entries`);
+        priceRows = await fetchPriceList(this.tallyUrl, company);
       } catch (e: any) {
         errors.push(`Price list: ${e?.message ?? e}`);
         console.error(`[MASTERS] ✗ Price list: ${e?.message ?? e}`);
@@ -150,71 +164,101 @@ export class SyncOrchestrator {
          by editing the repo and redeploying. Separate try: a price-list failure
          must not cost us the rates, or the other way round. */
       try {
-        const gstRows = await fetchGstRates(this.tallyUrl, company);
-        gstChanged = undefined;
-        gstChanged = await this.supabase.syncGstRates(gstRows, company);
-        console.log(`[MASTERS] ✓ GST rates: ${gstRows.length} declared rates`);
+        gstRows = await fetchGstRates(this.tallyUrl, company);
       } catch (e: any) {
         errors.push(`GST rates: ${e?.message ?? e}`);
         console.error(`[MASTERS] ✗ GST rates: ${e?.message ?? e}`);
       }
     }
 
-    const mastersList = [
-      { metadata: { type: "Company", name: company }, name: company, fystart: 4 },
-      ...groups.tallymessage,
-      ...units.tallymessage,
-      ...stocks.tallymessage,
-      ...ledgers.tallymessage,
-      ...godowns.tallymessage,
-      ...costCentres.tallymessage,
-    ];
+    const finish = async (): Promise<MastersSyncResult> => {
+      /* How many GST rate rows this pass changed. tally_gst_rates is part of the
+         web's dataset, so it rides on the masters history row's `changed`.
+         0 until a write starts; undefined once one starts and cannot report. */
+      let gstChanged: number | undefined = 0;
+      /* The two writes touch different tables, so they run together. */
+      await Promise.all([
+        (async () => {
+          if (!priceRows) return;
+          try {
+            await this.supabase.syncPriceList(priceRows, company);
+            console.log(`[MASTERS] ✓ Price list: ${priceRows.length} dated entries`);
+          } catch (e: any) {
+            errors.push(`Price list: ${e?.message ?? e}`);
+            console.error(`[MASTERS] ✗ Price list: ${e?.message ?? e}`);
+          }
+        })(),
+        (async () => {
+          if (!gstRows) return;
+          try {
+            gstChanged = undefined;
+            gstChanged = await this.supabase.syncGstRates(gstRows, company);
+            console.log(`[MASTERS] ✓ GST rates: ${gstRows.length} declared rates`);
+          } catch (e: any) {
+            errors.push(`GST rates: ${e?.message ?? e}`);
+            console.error(`[MASTERS] ✗ GST rates: ${e?.message ?? e}`);
+          }
+        })(),
+      ]);
 
-    // Defense in depth: an aborted masters pull is partial — never upload it, or we'd
-    // overwrite the cloud masters with a truncated set. Bail out honestly.
-    if (signal?.aborted) {
-      console.error(`[MASTERS] ✗ Aborted before completion — NOT uploading partial masters to Supabase`);
+      const mastersList = [
+        { metadata: { type: "Company", name: company }, name: company, fystart: 4 },
+        ...groups.tallymessage,
+        ...units.tallymessage,
+        ...stocks.tallymessage,
+        ...ledgers.tallymessage,
+        ...godowns.tallymessage,
+        ...costCentres.tallymessage,
+      ];
+
+      // Defense in depth: an aborted masters pull is partial — never upload it, or we'd
+      // overwrite the cloud masters with a truncated set. Bail out honestly.
+      if (signal?.aborted) {
+        console.error(`[MASTERS] ✗ Aborted before completion — NOT uploading partial masters to Supabase`);
+        return {
+          success: false,
+          errors: ["Masters sync aborted before completion — partial data was not uploaded", ...errors],
+          data: { tallymessage: [] },
+          stats: {
+            stockGroups: 0, units: 0, stockItems: 0, ledgers: 0,
+            godowns: 0, costCentres: 0,
+            elapsedSeconds: parseFloat(elapsed),
+          },
+        };
+      }
+
+      // AWAIT the cloud upload (was fire-and-forget). Returning before the upload
+      // finished is what let the web read a half-written dataset and show zero /
+      // only the first day's data on a slow network. If the upload fails we mark
+      // the whole masters sync unsuccessful so the caller doesn't report "done".
+      let uploadOk = true;
+      try {
+        await this.supabase.syncMasters(mastersList, company, { changed: gstChanged });
+      } catch (e: any) {
+        uploadOk = false;
+        errors.push(`Supabase masters upload failed: ${e.message}`);
+        console.error(`[Supabase] Masters sync failed: ${e.message}`);
+      }
+
       return {
-        success: false,
-        errors: ["Masters sync aborted before completion — partial data was not uploaded", ...errors],
-        data: { tallymessage: [] },
+        success: uploadOk && (stocks.tallymessage.length > 0 || ledgers.tallymessage.length > 0),
+        errors: errors.length > 0 ? errors : undefined,
+        data: {
+          tallymessage: mastersList,
+        },
         stats: {
-          stockGroups: 0, units: 0, stockItems: 0, ledgers: 0,
-          godowns: 0, costCentres: 0,
+          stockGroups: groups.tallymessage.length,
+          units: units.tallymessage.length,
+          stockItems: stocks.tallymessage.length,
+          ledgers: ledgers.tallymessage.length,
+          godowns: godowns.tallymessage.length,
+          costCentres: costCentres.tallymessage.length,
           elapsedSeconds: parseFloat(elapsed),
         },
       };
-    }
-
-    // AWAIT the cloud upload (was fire-and-forget). Returning before the upload
-    // finished is what let the web read a half-written dataset and show zero /
-    // only the first day's data on a slow network. If the upload fails we mark
-    // the whole masters sync unsuccessful so the caller doesn't report "done".
-    let uploadOk = true;
-    try {
-      await this.supabase.syncMasters(mastersList, company, { changed: gstChanged });
-    } catch (e: any) {
-      uploadOk = false;
-      errors.push(`Supabase masters upload failed: ${e.message}`);
-      console.error(`[Supabase] Masters sync failed: ${e.message}`);
-    }
-
-    return {
-      success: uploadOk && (stocks.tallymessage.length > 0 || ledgers.tallymessage.length > 0),
-      errors: errors.length > 0 ? errors : undefined,
-      data: {
-        tallymessage: mastersList,
-      },
-      stats: {
-        stockGroups: groups.tallymessage.length,
-        units: units.tallymessage.length,
-        stockItems: stocks.tallymessage.length,
-        ledgers: ledgers.tallymessage.length,
-        godowns: godowns.tallymessage.length,
-        costCentres: costCentres.tallymessage.length,
-        elapsedSeconds: parseFloat(elapsed),
-      },
     };
+
+    return { finish };
   }
 
   // ── Fetch vouchers ────────────────────────────────────────────────────────
@@ -527,16 +571,28 @@ export class SyncOrchestrator {
       }
     }
 
-    // Masters
+    // Masters: read from Tally now; the database half (price list, GST, masters upload) runs beside the voucher read below.
     let mastersResult: MastersSyncResult | null = null;
+    let mastersWriting: Promise<MastersSyncResult> | null = null;
     if (mode !== "vouchers-only") {
-      mastersResult = await this.syncMastersOnly(company, signal, onProgress);
+      const read = await this.readMasters(company, signal, onProgress);
+      mastersWriting = read.finish();
+      /* Only wait for it here when there are no vouchers to read; otherwise it is awaited after them. It is awaited in every case: "done" still
+         means every row is in the database. A rejection can only come from a bug in finish(), which has no throwing path; it is kept off the
+         "unhandled rejection" path until it is awaited. */
+      mastersWriting.catch(() => undefined);
+      if (mode === "masters-only" || !fromDate || !toDate) mastersResult = await mastersWriting;
     }
 
     // Vouchers
     let vouchersResult: VouchersSyncResult | null = null;
-    if (mode !== "masters-only" && fromDate && toDate) {
-      vouchersResult = await this.syncVouchersOnly(company, fromDate, toDate, chunkStrategy, signal, onProgress, { selective: plan.selective === true });
+    try {
+      if (mode !== "masters-only" && fromDate && toDate) {
+        vouchersResult = await this.syncVouchersOnly(company, fromDate, toDate, chunkStrategy, signal, onProgress, { selective: plan.selective === true });
+      }
+    } finally {
+      /* Whatever happened to the voucher half, the masters upload is never left running unobserved. */
+      if (mastersWriting && !mastersResult) mastersResult = await mastersWriting;
     }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);

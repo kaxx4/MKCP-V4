@@ -818,14 +818,48 @@ export function deriveStepState(t: Record<string, any> | null | undefined): { st
   return { state: "ok", note: null };
 }
 
-/** After a swap: copy the mirror's tally-shaped blocks into the swap store. The mirror itself is already swapped, so a failure here is reported, never thrown. */
-async function deriveAfterSwap(store: MirrorStore, runId: string, report: { tally?: Record<string, any> | null; tallyError?: string | null }, log: (l: string) => void): Promise<void> {
+/**
+ * Did this swap move anything in the mirror's voucher rows? Pure. The swap answers with how many rows it inserted, changed, pruned and moved
+ * out of the window; all four at zero means the mirror is exactly what it was. Any of them missing or not a number is "cannot tell" and counts
+ * as moved (the copy runs, as it always did). Speed pass S3, 28-Nov-2026.
+ */
+export function swapMovedMirror(swap: Record<string, unknown> | null | undefined): boolean {
+  if (!swap) return true;
+  let total = 0;
+  for (const k of ["inserted", "changed", "pruned", "moved_out"]) {
+    const v = swap[k];
+    if (typeof v !== "number" || !Number.isFinite(v)) return true;
+    total += v;
+  }
+  return total > 0;
+}
+
+/** Per store: did the last copy into the swap store finish clean in this process? Absent means "not yet this process": the first swap always copies. */
+const LAST_COPY_CLEAN = new WeakMap<object, boolean>();
+
+/**
+ * After a swap: copy the mirror's tally-shaped blocks into the swap store. The mirror itself is already swapped, so a failure here is reported, never thrown.
+ *
+ * Skipped when the swap changed nothing AND the last copy in this process was clean (28-Nov-2026, speed pass S3). The copy (`erp_tally_derive`)
+ * re-reads every mirror row and rebuilds five working tables, 6.2 s on average and 37,847 buffers a call on the live database, and the
+ * incremental run that triggers it comes round every 5 minutes: 2,089 calls, 13,032 s in total, most of them with nothing new to copy. A copy
+ * that failed or was held back is repeated on the next swap whether or not anything moved, so a problem is never hidden by this. The copy has
+ * no timer: it runs when the mirror moved (or it has never run since this process started), and the SQL function is untouched. Only an
+ * INCREMENTAL run can skip; a full run and a one-day re-pull (the rare wide passes) always copy.
+ */
+async function deriveAfterSwap(store: MirrorStore, runId: string, report: { tally?: Record<string, any> | null; tallyError?: string | null }, log: (l: string) => void, swap?: Record<string, unknown> | null): Promise<void> {
+  if (swap !== undefined && !swapMovedMirror(swap) && LAST_COPY_CLEAN.get(store) === true) {
+    log(`run ${runId}: nothing moved in the mirror, so the tally-shaped copy is not repeated`);
+    return;
+  }
+  LAST_COPY_CLEAN.set(store, false);
   try {
     const t0 = Date.now();
     report.tally = await store.deriveTally!();
     const { state, note } = deriveStepState(report.tally);
     if (state !== "ok") { if (state === "failed") report.tallyError = note; log(`tally rows copied with a warning: ${note}`); }
     await store.step(runId, state === "ok" ? "copied the tally-shaped rows for the go-live swap" : `copied the tally-shaped rows for the go-live swap, but ${note}`, state, null, Date.now() - t0, report.tally);
+    LAST_COPY_CLEAN.set(store, state === "ok");
   } catch (e) {
     report.tallyError = e instanceof Error ? e.message : String(e);
     log(`tally rows not derived: ${report.tallyError}`);
@@ -1020,7 +1054,7 @@ async function runMirror(opts: {
     report.state = res.state;
     await store.step(run.run_id, res.state === "swapped" ? "swapped into the mirror" : `refused: ${res.reason}`, res.state === "swapped" ? "ok" : "failed", null, msS, res);
     log(`${kind} run ${run.run_id}: ${res.state} (${JSON.stringify(res)})`);
-    if (res.state === "swapped" && store.deriveTally) await deriveAfterSwap(store, run.run_id, report, log);
+    if (res.state === "swapped" && store.deriveTally) await deriveAfterSwap(store, run.run_id, report, log, kind === "incremental" ? res : undefined);   /* a full run or re-pull always copies: it is the rare, wide pass that would heal any drift */
     return report;
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);

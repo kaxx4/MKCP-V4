@@ -214,6 +214,10 @@ app.post("/api/tally/sync", syncGuard, async (req, res) => {
       progress.onProgress(p);
     });
     await progress.flush();
+    /* Mark the day-book clock for this path too (it only was for /sync-daybook), so the server-side scheduler stands down for half its interval
+       after a web "Sync now" instead of pulling the same day from Tally again minutes later (speed pass S3, 28-Nov-2026). Only a pull that
+       actually read vouchers counts. */
+    if (result.success && mode !== "masters-only" && toDate) noteDaybookSync(company);
     realtime.nudge(); // a person pressed Sync: the next tick looks at vouchers and goes back to the fast rate
     if (!res.writableEnded) res.json(result);
   } catch (e: any) {
